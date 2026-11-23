@@ -49,7 +49,7 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   end
 
   defp migrate_up! do
-    Ecto.Migrator.run(Repo, base_migrations(), :up,
+    Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(base_migrations()), :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -59,7 +59,10 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
     Repo.query!("CREATE TABLE chat_actions (id uuid PRIMARY KEY, request_hash bytea)")
     Repo.query!("CREATE TABLE provider_action_intents (id uuid PRIMARY KEY, request_hash bytea)")
 
-    Ecto.Migrator.run(Repo, [{@version, VersionRequestHashes}], :up,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([{@version, VersionRequestHashes}]),
+      :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -68,7 +71,10 @@ defmodule SymmetryControl.Migrations.VersionRequestHashesTest do
   end
 
   defp migrate_down! do
-    Ecto.Migrator.run(Repo, base_migrations() ++ [{@version, VersionRequestHashes}], :down,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!(base_migrations() ++ [{@version, VersionRequestHashes}]),
+      :down,
       step: 1,
       log: false,
       migration_lock: false,

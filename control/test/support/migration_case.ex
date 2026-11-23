@@ -14,6 +14,8 @@ defmodule SymmetryControl.MigrationCase do
 
   using do
     quote do
+      alias SymmetryControl.MigrationModules
+
       import SymmetryControl.MigrationCase,
         only: [
           with_schema: 2,
@@ -21,37 +23,31 @@ defmodule SymmetryControl.MigrationCase do
           start_schema_repo: 1,
           create_schema!: 1,
           drop_schema!: 1,
-          migrate_all_up!: 0
+          migrate_all_up!: 0,
+          run_private_query!: 2
         ]
     end
   end
 
   @doc """
   Runs `test` against `schema_base` plus a unique suffix, in the dynamic repo's private schema.
-  The order create, start, `put_dynamic_repo`, restore/stop/drop is load-bearing; to observe
-  pre-migration state call `schema_name/1`, `create_schema!/1`, `start_schema_repo/1` and
-  `drop_schema!/1` directly instead.
+  The private Repo is linked to the test process and ExUnit terminates that process with `:shutdown`
+  before `on_exit` runs, so no teardown call can fail over the test's own error; `create_schema!/1`'s
+  registered `on_exit` drop still runs for a failing or killed test. To observe pre-migration state
+  call `schema_name/1`, `create_schema!/1`, `start_schema_repo/1` and `drop_schema!/1` directly.
   """
   def with_schema(schema_base, test) do
     schema = schema_name(schema_base)
 
+    create_schema!(schema)
+    repo = start_schema_repo(schema)
+
+    previous_dynamic_repo = Repo.put_dynamic_repo(repo)
+
     try do
-      create_schema!(schema)
-      repo = start_schema_repo(schema)
-
-      try do
-        previous_dynamic_repo = Repo.put_dynamic_repo(repo)
-
-        try do
-          test.()
-        after
-          Repo.put_dynamic_repo(previous_dynamic_repo)
-        end
-      after
-        GenServer.stop(repo, :normal, 30_000)
-      end
+      test.()
     after
-      drop_schema!(schema)
+      Repo.put_dynamic_repo(previous_dynamic_repo)
     end
   end
 
@@ -88,19 +84,24 @@ defmodule SymmetryControl.MigrationCase do
   """
   def create_schema!(schema) do
     on_exit(fn -> drop_schema!(schema) end)
-    run_schema_ddl!("CREATE SCHEMA #{schema}")
+    run_private_query!("CREATE SCHEMA #{schema}", [])
   end
 
   @doc "Drops `schema` and everything in it, outside the shared sandbox pool."
   def drop_schema!(schema) do
-    run_schema_ddl!("DROP SCHEMA IF EXISTS #{schema} CASCADE")
+    run_private_query!("DROP SCHEMA IF EXISTS #{schema} CASCADE", [])
   end
 
-  defp run_schema_ddl!(statement) do
+  @doc """
+  Runs `statement` with `params` on a fresh private single-connection Repo and stops it. Being off
+  the test's own pools is what makes this the shape for `on_exit` cleanup: the suite Repo cannot run
+  there (no sandbox ownership) and the test's dynamic Repo is already terminating.
+  """
+  def run_private_query!(statement, params) do
     {:ok, repo} = Repo.start_link(private_repo_config())
 
     try do
-      Ecto.Adapters.SQL.query!(repo, statement)
+      Ecto.Adapters.SQL.query!(repo, statement, params)
     after
       GenServer.stop(repo, :normal, 30_000)
     end

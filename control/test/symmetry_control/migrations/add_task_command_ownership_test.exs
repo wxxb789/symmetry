@@ -13,7 +13,10 @@ defmodule SymmetryControl.Migrations.AddTaskCommandOwnershipTest do
     previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
     try do
-      Ecto.Migrator.run(Repo, [{20_260_902_000_000, CreateOrchestrationTables}], :up,
+      Ecto.Migrator.run(
+        Repo,
+        MigrationModules.verified_pairs!([{20_260_902_000_000, CreateOrchestrationTables}]),
+        :up,
         all: true,
         log: false,
         migration_lock: false,
@@ -22,7 +25,10 @@ defmodule SymmetryControl.Migrations.AddTaskCommandOwnershipTest do
 
       historical = insert_historical_rows!()
 
-      Ecto.Migrator.run(Repo, [{20_260_903_000_000, AddTaskCommandOwnership}], :up,
+      Ecto.Migrator.run(
+        Repo,
+        MigrationModules.verified_pairs!([{20_260_903_000_000, AddTaskCommandOwnership}]),
+        :up,
         all: true,
         log: false,
         migration_lock: false,

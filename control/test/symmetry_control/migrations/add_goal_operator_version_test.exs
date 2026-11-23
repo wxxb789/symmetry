@@ -94,7 +94,10 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
   end
 
   defp migrate_operator_version_up! do
-    Ecto.Migrator.run(Repo, [{@migration_version, AddGoalOperatorVersion}], :up,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([{@migration_version, AddGoalOperatorVersion}]),
+      :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -103,7 +106,10 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
   end
 
   defp migrate_operator_version_down! do
-    Ecto.Migrator.run(Repo, [{@migration_version, AddGoalOperatorVersion}], :down,
+    Ecto.Migrator.run(
+      Repo,
+      MigrationModules.verified_pairs!([{@migration_version, AddGoalOperatorVersion}]),
+      :down,
       step: 1,
       log: false,
       migration_lock: false,

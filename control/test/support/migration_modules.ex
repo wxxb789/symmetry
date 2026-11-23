@@ -6,6 +6,27 @@ defmodule SymmetryControl.MigrationModules do
   already loaded this same source, so the recompiles' module-conflict warning is suppressed.
   """
 
+  alias SymmetryControl.Repo.Migrations.AddEngineeringConnections
+  alias SymmetryControl.Repo.Migrations.AddHistoryLookupIndexes
+  alias SymmetryControl.Repo.Migrations.AddMachineEnrollmentReplay
+  alias SymmetryControl.Repo.Migrations.AddProviderActionDispatchOwnership
+  alias SymmetryControl.Repo.Migrations.AddRetryCommands
+  alias SymmetryControl.Repo.Migrations.AddSupervisoryControls
+  alias SymmetryControl.Repo.Migrations.AddTaskAttemptIdentity
+  alias SymmetryControl.Repo.Migrations.AddTaskCommandOwnership
+  alias SymmetryControl.Repo.Migrations.AddTaskRequiredCapabilities
+  alias SymmetryControl.Repo.Migrations.BindWorkItemsToResources
+  alias SymmetryControl.Repo.Migrations.CompleteEngineeringWorkspace
+  alias SymmetryControl.Repo.Migrations.CreateChat
+  alias SymmetryControl.Repo.Migrations.CreateEngineeringWorkspace
+  alias SymmetryControl.Repo.Migrations.CreateOrchestrationTables
+  alias SymmetryControl.Repo.Migrations.CreateProviderActionIntents
+  alias SymmetryControl.Repo.Migrations.EnforceConnectedResourceIdentity
+  alias SymmetryControl.Repo.Migrations.EnforceWorkItemCoherence
+  alias SymmetryControl.Repo.Migrations.SnapshotProviderActionTargets
+  alias SymmetryControl.Repo.Migrations.VersionCommandRequestHashes
+  alias SymmetryControl.Repo.Migrations.VersionRequestHashes
+
   @migrations_dir Path.expand("../../priv/repo/migrations", __DIR__)
   @pairs_key {__MODULE__, :pairs}
 
@@ -37,6 +58,62 @@ defmodule SymmetryControl.MigrationModules do
       :missing -> raise ArgumentError, "compile_all!/0 has not run in this VM"
       pairs -> pairs
     end
+  end
+
+  @doc """
+  The 20 `{version, module}` pairs every goal-0006-era test migrates before its own migration,
+  `CreateOrchestrationTables` through `VersionRequestHashes`. One definition so the files that
+  build on this base cannot drift apart silently.
+  """
+  def base_migrations do
+    verified_pairs!([
+      {20_260_902_000_000, CreateOrchestrationTables},
+      {20_260_903_000_000, AddTaskCommandOwnership},
+      {20_260_903_010_000, AddMachineEnrollmentReplay},
+      {20_260_903_020_000, AddHistoryLookupIndexes},
+      {20_260_904_000_000, CreateEngineeringWorkspace},
+      {20_260_904_010_000, CompleteEngineeringWorkspace},
+      {20_260_904_020_000, BindWorkItemsToResources},
+      {20_260_904_030_000, AddRetryCommands},
+      {20_260_904_040_000, AddTaskAttemptIdentity},
+      {20_260_904_050_000, EnforceWorkItemCoherence},
+      {20_260_905_000_000, AddEngineeringConnections},
+      {20_260_906_000_000, AddTaskRequiredCapabilities},
+      {20_260_906_010_000, CreateProviderActionIntents},
+      {20_260_906_020_000, AddProviderActionDispatchOwnership},
+      {20_260_906_030_000, EnforceConnectedResourceIdentity},
+      {20_260_906_040_000, SnapshotProviderActionTargets},
+      {20_260_906_050_000, AddSupervisoryControls},
+      {20_260_906_060_000, CreateChat},
+      {20_260_906_070_000, VersionCommandRequestHashes},
+      {20_260_907_000_000, VersionRequestHashes}
+    ])
+  end
+
+  @doc """
+  Returns `pairs` unchanged after checking every one against the boot registry's file-derived
+  entry for its module; raises when the version differs or the module has no migration file, so a
+  test cannot migrate or record a version no file on disk carries.
+  """
+  def verified_pairs!(pairs) do
+    registry = Map.new(migrations(), fn {version, module} -> {module, version} end)
+
+    Enum.each(pairs, fn {version, module} ->
+      case Map.fetch(registry, module) do
+        {:ok, ^version} ->
+          :ok
+
+        {:ok, file_version} ->
+          raise ArgumentError,
+                "#{inspect(module)} is recorded at version #{version} but its migration file " <>
+                  "carries #{file_version}"
+
+        :error ->
+          raise ArgumentError, "#{inspect(module)} has no migration file in the boot registry"
+      end
+    end)
+
+    pairs
   end
 
   defp compile!(file), do: {version!(file), migration_module!(file)}

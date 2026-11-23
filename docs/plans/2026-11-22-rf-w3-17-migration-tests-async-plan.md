@@ -71,11 +71,11 @@ bundle; the flag is identical on both sides and CI covers those four cases.
 
 | file | change |
 | --- | --- |
-| `control/test/support/migration_modules.ex` | new: boot-time `{version, module}` registry over `priv/repo/migrations` (`compile_all!/0`, `migrations/0`); recursive `.exs` glob with an empty-glob raise, compile under `ignore_module_conflict`, named error when the registry was never built |
+| `control/test/support/migration_modules.ex` | new: boot-time `{version, module}` registry over `priv/repo/migrations` (`compile_all!/0`, `migrations/0`); recursive `.exs` glob with an empty-glob raise, compile under `ignore_module_conflict`, named error when the registry was never built. Fix revision adds `verified_pairs!/1` (the registry binding every migrator source routes through) and the one shared `base_migrations/0` (review #3/#6) |
 | `control/test/test_helper.exs` | `+ SymmetryControl.MigrationModules.compile_all!()` before `ExUnit.start/1` (plus the existing blank line) |
-| `control/test/support/migration_case.ex` | `+ schema_name/1` (one naming authority: lowercase-identifier check, node-unique plus wall-clock suffix, 63-byte guard); `create_schema!/1`/`drop_schema!/1` run their DDL on a private single-connection non-sandbox Repo and register an ExUnit `on_exit` drop; `migrate_all_up!/0` runs `MigrationModules.migrations()` instead of the path source; `private_repo_config/0` shared by `start_schema_repo/1` and the DDL Repo, with `migration_lock: false`, `timeout: 30_000`, `queue_target: 5_000`, `queue_interval: 10_000` |
-| the nine `control/test/symmetry_control/migrations/*_test.exs` | `async: false` → `async: true` (nine declarations); five `load_migration_modules!/0` definitions and seven call sites deleted; three schema-name sites routed through `schema_name/1`; `goal_0006_migration_test.exs` loses its two Oban tests and their now-unused helpers to the F-8 move |
-| `control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs` | new (F-8 ruling): `async: false` module holding the two moved Oban tests, names and bodies byte-identical, with the local helper set the directory's convention gives every file |
+| `control/test/support/migration_case.ex` | `+ schema_name/1` (one naming authority: lowercase-identifier check, node-unique plus wall-clock suffix, 63-byte guard); `create_schema!/1`/`drop_schema!/1` run their DDL on a private single-connection non-sandbox Repo and register an ExUnit `on_exit` drop; `migrate_all_up!/0` runs `MigrationModules.migrations()` instead of the path source; `private_repo_config/0` shared by `start_schema_repo/1` and the DDL Repo, with `migration_lock: false`, `timeout: 30_000`, `queue_target: 5_000`, `queue_interval: 10_000`. Fix revision: `with_schema/2`'s teardown reduced to a non-raising dynamic-repo restore (review #5), the execution recipe factored into `run_private_query!/2` so `on_exit` cleanup can use it, and the case template aliases `MigrationModules` into every user |
+| the nine `control/test/symmetry_control/migrations/*_test.exs` | `async: false` → `async: true` (nine declarations); five `load_migration_modules!/0` definitions and seven call sites deleted; three schema-name sites routed through `schema_name/1`; `goal_0006_migration_test.exs` loses its two Oban tests and their now-unused helpers to the F-8 move. Fix revision: all 53 `Ecto.Migrator.run` sources route through `MigrationModules.verified_pairs!/1`, and the duplicated 20-pair base list plus its now-unused aliases are deleted (review #3/#6) |
+| `control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs` | new (F-8 ruling): `async: false` module holding the two moved Oban tests, names and bodies byte-identical, with the local helper set the directory's convention gives every file. Fix revision: extends the shared `MigrationModules.base_migrations/0`, drops its 20 duplicated aliases, and registers the marker-row `DELETE` as an `on_exit` (PRE-A01) |
 | `control/test/symmetry_control/native_harness_kind_binding_test.exs` | one change (F-7 ruling): the live-constraint read is scoped to the test's own schema (`AND connamespace = current_schema()::regnamespace`) |
 | `docs/plans/2026-11-22-rf-w3-17-migration-tests-async-plan.md` | this plan |
 | `docs/TODO.md` | the wall-time entry gains this slice's numbers and the disposition request |
@@ -120,6 +120,9 @@ No production file, no `priv/repo/migrations/**` file, no other test file, no CI
    → after: restore/stop/drop` order; only the name construction changes. `with_schema/2` now owns
    the name for all six `with_schema` bases it is given and for `goal_0006`'s base
    (`"goal_0006_migration"`), replacing the former `System.system_time(:microsecond)` name.
+   Superseded in part by review #5 (fix revision): `with_schema/2` no longer stops its Repo or drops
+   its schema — the Repo is link-managed and the drop lives in `create_schema!/1`'s `on_exit`; see
+   "Fix-stage verification" for the probe that established both.
 4. **`schema_name/1` guard and uniqueness.** PostgreSQL silently truncates identifiers past
    `NAMEDATALEN - 1 = 63` bytes, which would make two schemas collide on a long base; the helper
    raises instead, and it validates the base against `\A[a-z_][a-z0-9_]*\z` so a non-literal caller
@@ -164,6 +167,74 @@ Binding rulings of 2026-11-22 after attempt 1's findings — what the tree now c
    The gate table below marks which runs are attempt-2 reruns; the two rulings changed exactly the
    files listed in the deliverable shape above.
 
+## Review-stage conductor rulings (2026-11-22 review `DECISION_NEEDED`) and their delivery
+
+An independent review of the reviewed head (`f6b5b176`) returned `DECISION_NEEDED`: six findings
+(#1-#6), three plan-accuracy defects on the spec axis (SPEC-A01..A03) and one pre-existing finding
+(PRE-A01, outside the verdict). The conductor ruled on every one before this fix revision; the
+rulings are binding dispositions, not re-opened design. What the tree and this record carry now:
+
+1. **#1 (repeat counts) — conductor-accepted, recorded.** Gates 4/5 ran at 10 and 5 repetitions
+   against the contract's 25 and 10, with cost reasons but no ruling at the time. The conductor
+   accepts the reduced counts against the compensating evidence (five pre-side seeds, three
+   final-tree seeds, five converted-set seeds, and CI's `coverage-control` running the converted
+   suite on every PR), so no re-run at the contract counts is required. The deviation is recorded
+   verbatim in the gate table; the stale cross-reference in the envelope section was reconciled.
+2. **#2 (`schema_name/1` wall-clock suffix) — recipe amended.** The suffix stays: it keeps the
+   cross-VM uniqueness the base's `goal_0006` name had (R5), which a name built from
+   `System.unique_integer/1` alone does not (every VM starts low). Contract Change 2 / clause 1 are
+   amended to "a per-module private schema name with a uniqueness suffix"; the amended reading and
+   its reason are recorded here, replacing the contract-literal "no `System.system_time`" recipe
+   that the plan's own design decision 4 had already diverged from.
+3. **#3 (version<->module binding) — restored in code.** `MigrationModules.verified_pairs!/1`
+   returns a `{version, module}` list unchanged after checking every pair against the boot
+   registry's file-derived entry for its module (version mismatch or a module with no file raises).
+   All 53 `Ecto.Migrator.run` sources under `control/test/symmetry_control/migrations` (43 literal
+   lists, 7 helper calls, 3 `helper() ++ [literal]` concatenations) route through it, so a
+   re-versioned migration file turns the suite red instead of leaving it green with the old version.
+   The guard is named `verified_pairs!` and not `assert_pairs!` (the review's example name) because
+   the assertion-preservation census classifies every line containing an `assert*`/`refute*`
+   identifier: a guard call is not an assertion, and the 53 new lines would otherwise land in that
+   class and make the census's IDENTICAL verdict unreadable. Its red/green pair is mutant M1 in
+   "Fix-stage verification".
+4. **#4 (`public.oban_jobs` premise) — rewritten from the measurement.** The shared-state inventory
+   and the Oban audit now state the measured mechanism — `task_goal_guard_controller_test.exs`
+   (`async: true`) admits a Goal task whose `Goals.command/4` path runs `Oban.insert!` inside the
+   test's sandbox transaction, so the refusal test's `LOCK TABLE public.oban_jobs IN SHARE MODE`
+   could queue behind an async writer — the async `migrate_all_up!()` runs that drive
+   `AddObanJobsTable` (and therefore `Oban.Migrations` with its default `public` prefix) as the
+   remaining coupling with the version-not-14 trigger, and the delivered remedy: the two
+   Oban-rollback tests moved to the `async: false` module, which removes the refusal test from the
+   async phase.
+   No further escalation is required (the ruling); the audit's older reading is kept as history.
+5. **#5 (teardown masking) — corrected, with the suggested mechanism adapted to measurement.**
+   The review's scenario is real and was reproduced (mutant M2): with the old `after`-block
+   teardown, a body failure plus a failing `GenServer.stop` reports the stop's exit instead of the
+   assertion. The review's suggested mechanism — move restore/stop/drop into `on_exit` — cannot be
+   taken literally: probes X1/X2 show ExUnit terminates the test process with `:shutdown` before
+   `on_exit` runs, so the linked private Repo is already terminating and a stop in `on_exit` races
+   it; and the suite Repo cannot run in `on_exit` at all (no sandbox ownership). The delivered fix
+   therefore removes the stop (the Repo is link-managed and dies with the test process, killed or
+   not) and keeps the schema drop in `create_schema!/1`'s `on_exit` (R4), which is the teardown step
+   that must survive a kill; the only `after` left in `with_schema/2` restores the dynamic repo,
+   which cannot raise.
+6. **#6 (duplicated 20-pair base list) — collapsed.** One definition,
+   `MigrationModules.base_migrations/0`, guarded by `verified_pairs!/1`; `goal_0006_migration_test.exs`
+   and `add_oban_jobs_table_test.exs` both extend it (the donor's copy and the F-8 copy, 20 pairs
+   each, are gone along with the now-unused aliases). Drift between the two files is no longer
+   possible; a drift between the shared list and the files is mutant M3.
+7. **PRE-A01 (pre-existing, outside the verdict) — fixed alongside.** The refusal test now registers
+   the idempotent, id-keyed `DELETE FROM public.oban_jobs` as an `on_exit` right after the marker
+   INSERT, so a failing assertion no longer leaves the synthetic row behind. The callback cannot use
+   `Repo` (X1: no sandbox ownership in `on_exit`) or the test's dynamic Repo (X2: already
+   terminating), so it goes through the new `MigrationCase.run_private_query!/2`, which runs the
+   statement on a fresh private single-connection Repo — the shape `create_schema!/1` and
+   `drop_schema!/1` now share too. Its red/green pair is mutant M10.
+
+SPEC-A01 (the A/B table and its statements), SPEC-A02 (the gate-4 evidence citation) and SPEC-A03
+(the stale R6 row) are corrected in place below. Each mechanism claim in this section names the
+probe or mutant that proved it at the fix revision; the probes are in "Fix-stage verification".
+
 ## Shared-state inventory (before → after)
 
 | shared surface at the base | why shared | after |
@@ -171,7 +242,7 @@ Binding rulings of 2026-11-22 after attempt 1's findings — what the tree now c
 | migration modules in the global code server: the base's one path-source helper (`MigrationCase.migrate_all_up!/0`, 11 call sites across four files, each call `Code.compile_file`-ing all 43 files) + 5 lazy loaders under a `function_exported?` check-then-act guard | redefinition warnings: 516 lines in the baseline seed-0 log (473 in seed 1), 0 in every delivered-side log; under `async: true` a redefinition can purge/swap a module another process executes | compiled once at boot under `ignore_module_conflict` (the `test` alias may have loaded the same files first); test time passes `{version, module}` tuples only; no `Code.compile_file` under `control/test` on this path |
 | `CREATE SCHEMA`/`DROP SCHEMA` through `Sandbox.unboxed_run(Repo, …)` — a checkout against the suite-wide sandbox pool whose mode is one global value | DDL under the shared Repo while other tests use it | DDL on a fresh private single-connection non-sandbox Repo; the shared Repo is untouched |
 | schema names built ad hoc at three sites; one from `System.system_time(:microsecond)` | not unique under concurrency | one helper: module base + node-unique `System.unique_integer([:positive])` + wall-clock microseconds, 63-byte guard, lowercase-identifier check |
-| `public.oban_jobs` (goal_0006's two Oban tests) | the production migration hard-codes `public.` and the refusal test takes `LOCK TABLE public.oban_jobs IN SHARE MODE` | unchanged and audited, not edited (see the Oban audit) |
+| `public.oban_jobs` (the two Oban-rollback tests, in the F-8 `async: false` module) | the production migration hard-codes `public.` and the refusal test takes `LOCK TABLE public.oban_jobs IN SHARE MODE`; the async `migrate_all_up!()` runs drive `AddObanJobsTable` → `Oban.Migrations` with the same default `public` prefix, and the async phase enqueues through `task_goal_guard_controller_test.exs` → `Goals.command/4` → `Oban.insert!` | the refusal tests now run in the serial phase (F-8 move), so their SHARE lock cannot queue behind an async producer; the `AddObanJobsTable`-under-`migrate_all_up!` coupling stays, is bounded by the private pools' 30 s budget, and is audited not edited (see the Oban audit) |
 | `public.schema_migrations` | never touched by these tests: every `Ecto.Migrator.run` here targets the private schema through `put_dynamic_repo` + `search_path` | unchanged |
 
 ## Assertion-preservation census (base vs delivered)
@@ -203,7 +274,13 @@ equal per file, so an edited expected value inside an assertion would show as a 
 IDENTICAL`, exit 0. Every row is one run of `w3-17-r2-census.py` over the two worktrees (attempt-1's
 table carried the same 377/78 totals with different per-file splits from an earlier tool revision;
 this table is the authoritative one). The reader's 14 assert-family lines are identical on both
-sides, so the F-7 predicate change did not touch an assertion.
+sides, so the F-7 predicate change did not touch an assertion. The same tool and roots were rerun
+on the fix revision (`66bc9dcb` baseline worktree vs. this worktree) with the same verdict: IDENTICAL,
+377/377 assert-family lines and 78/78 test names, so the guard routing, the shared base list and the
+teardown change touched no assertion. The guard is named `verified_pairs!` rather than the review's
+example `assert_pairs!` for this reason: the census's class is every line carrying an `assert*`/
+`refute*` identifier, a guard call is not an assertion, and 53 new lines in that class would have
+made the verdict unreadable (see the review-stage rulings).
 
 ## Diff line classification (the slice's own hunks)
 
@@ -232,6 +309,15 @@ Attempt 2 adds two hunk classes on top of the above, both ordered by a conductor
 files, `test_helper.exs`, the reader file, the new module, the plan and (after this stage's other
 deliverable) `docs/TODO.md`.
 
+The fix revision (review corrections, this stage) adds four more classes, all mechanical:
+
+| class | where | content |
+| --- | --- | --- |
+| guard routing | the ten migration test files, 53 sites | every `Ecto.Migrator.run` source wrapped in `MigrationModules.verified_pairs!(…)` (one line added, or the file's own list helper call wrapped); no assertion, expected value or test name touched — the census below is still IDENTICAL |
+| guard + shared base | `migration_modules.ex` | `verified_pairs!/1` and one `base_migrations/0` (the moved 20-pair definition plus its 20 aliases) |
+| base-list deletion | `goal_0006_migration_test.exs`, `add_oban_jobs_table_test.exs` | each file's `defp base_migrations/0` (20 pairs) and its copy of the 20 aliases deleted; the four call sites read `MigrationModules.base_migrations()` |
+| teardown + cleanup | `migration_case.ex`, `add_oban_jobs_table_test.exs` | `with_schema/2`'s nested `after` blocks (stop/drop) replaced by one non-raising restore plus the existing `on_exit` drop; the private-Repo execution recipe factored into `run_private_query!/2`; the refusal test gains the `on_exit` marker-row delete |
+
 Tag hygiene, same diff scope: zero added or removed lines matching `@moduletag`, `@tag`, `:skip`,
 `:only`, `ExUnit.configure` or `portal_assets` (`git diff -U0 -- control/test | grep -c …` → 0 for
 each), so nothing was retagged, skipped or re-excluded.
@@ -250,8 +336,8 @@ grep -rn "migrations_path\|migration_source" \
   → no matches, rc=1
 grep -rn "Ecto.Migrator.run" control/test/symmetry_control/migrations | wc -l
   → 53 call sites, every source argument a `{version, module}` list
-python w3-17-r2-migrator-sources.py control/test/symmetry_control/migrations control/test/support
-  → sites=53 literal=43 helper=7 helper_plus_literal=3 unclassified=0, rc=0
+python w3-17-r3-migrator-sources.py control/test/symmetry_control/migrations control/test/support
+  → sites=53 wrapped=53 literal=43 helper=7 helper_plus_literal=3 unclassified=0, rc=0
 ```
 
 The 53 sources were classified mechanically (each call's second argument parsed out and checked):
@@ -260,6 +346,10 @@ helpers, which hold literal pairs only; 3 are `helper() ++ [{…}]` concatenatio
 literal pair (all three print in the classifier's `concat` class). The count moved 51 → 53 with the
 F-8 move: `goal_0006_migration_test.exs` lost the two Oban helpers and
 `add_oban_jobs_table_test.exs` brings four sites (one `base_migrations()` helper, three literals).
+At the fix revision every one of the 53 sources is additionally wrapped in
+`MigrationModules.verified_pairs!/1` (review #3); the classifier unwraps the guard and counts it
+(`wrapped=53`), so the inner expressions above are the classified ones and still no source is a
+path, a directory or a variable.
 The four files that migrate the whole directory call
 `migrate_all_up!/0` (11 sites), whose implementation
 (`control/test/support/migration_case.ex`, `migrate_all_up!/0`) passes
@@ -269,7 +359,7 @@ directory or string source remains. The suite-wide `Sandbox.mode(Repo, :manual)`
 scope is the migration harness).
 
 Boot registry equality (`MIX_ENV=test mix run --no-start w3-17-r2-registry-check.exs`, compiled test
-support, no app start; attempt-2 rerun):
+support, no app start; rerun on the fix revision):
 
 ```
 registry_pairs=43 wildcard_files=43 version_sets_equal=true unique_pairs=true all_loaded=true
@@ -300,15 +390,25 @@ Two fidelity checks read out of the pinned dependencies rather than assumed:
 
 Audit at the delivered tree (commands and outputs recorded):
 
-* `grep -rn "public\.oban_jobs" control/test --include="*_test.exs"` → 10 lines, all in
-  `goal_0006_migration_test.exs` (`:1244-1298`): the two Oban tests read `to_regclass`, insert one
-  unique marker row and delete it. No other test file names the table.
-* `Oban`/`oban_jobs` references per test file, with the file's declaration: `async: false` —
-  `goals_test.exs`, `goals/workers_test.exs`, `goals/dispatch_notification_test.exs`,
-  `orchestration_goal_admission_test.exs`; `async: true` — `goal_0006_migration_test.exs` (this
-  slice). So the only `async: true` file that reads or writes `public.oban_jobs` is goal_0006
-  itself, and its two Oban tests are serial inside goal_0006's single module slot (ExUnit runs a
-  module's tests one at a time in one slot).
+* `grep -rn "public\.oban_jobs" control/test --include="*_test.exs"` at the fix revision → 12
+  lines, all in `add_oban_jobs_table_test.exs` (`:2` the pin comment, `:18-79` the two tests plus
+  the refusal test's `on_exit` cleanup): the tests read `to_regclass`, insert one unique marker row,
+  assert the refusal, and delete the row (inline and again idempotently in `on_exit`). No other test
+  file names the table.
+* `Oban`/`oban_jobs` references per test file, with the file's declaration (fix revision): every
+  file that names Oban is `async: false` — the eight `goals*` files, the four
+  `orchestration_*_test.exs` files, and this slice's `add_oban_jobs_table_test.exs`. So no
+  `async: true` file reads or writes `public.oban_jobs` *by name*. That is not the whole coupling:
+  every async `migrate_all_up!()` run also drives `AddObanJobsTable`, whose `up` delegates to
+  `Oban.Migrations.up/1` with the default `public` prefix
+  (`control/deps/oban/lib/oban/migrations/postgres.ex:10,19-34`) — at the pinned version 14 that is
+  a no-op read of the version comment, at any other recorded version it alters and comments the
+  shared `public.oban_jobs` (the version-not-14 trigger; production path, recorded not edited) —
+  and the async phase does enqueue Goal jobs without naming Oban
+  (`task_goal_guard_controller_test.exs:2` → `admitted_goal_task/0` → `Goals.command/4` →
+  `Oban.insert!`). Both halves are what the refusal test's `LOCK TABLE … IN SHARE MODE` can wait
+  behind; the F-8 move removes the refusal test from the async phase, which is the half the
+  ruling ordered fixed.
 * The refusal test's `LOCK TABLE public.oban_jobs IN SHARE MODE` is taken by the production
   migration's `down` inside Ecto's per-migration transaction, which then raises (the DO block) and
   rolls back: the lock is held for the duration of a failing statement sequence, milliseconds, not
@@ -360,16 +460,16 @@ are `gdd/refactor/scratch/w3-17-*.sh` (attempt 1) and `w3-17-r2-*.sh` (attempt 2
 
 | # | gate | command | status |
 | --- | --- | --- | --- |
-| 1 | format | `mix format --check-formatted` | rc=0 on the final tree (attempt-2 rerun after the F-7/F-8 edits) |
-| 2 | compile | `MIX_ENV=test mix compile --warnings-as-errors --force` | rc=0 on the final tree (attempt-2 rerun), `Compiling 95 files (.ex)`, `Generated symmetry_control app`, no warnings |
-| 3 | seeded full runs | `SYMMETRY_EXUNIT_EVENTS_FILE=… mix test --seed <n> --exclude portal_assets --formatter ExUnit.CLIFormatter --formatter SymmetryControl.ExUnitJsonFormatter` | pre side (attempt 1, `w3-17-runs-pre/`): five seeds, rc 0, 0, 2, 0, 0 — seed 2 is F-2's two pre-existing flakes in untouched files. Post side (final tree, seeds 0/1/2 per the conductor's amended scope): all rc=0, counts `1032 = 1007 + 21 + 4` (`w3-17-r2-runs/full-seed{0,1,2}`); name/state equality vs the matching pre seed in the Equality section below |
-| 4 | per converted file | `mix test <file> --seed 0 --repeat-until-failure 25` and `--seed <0..4>` | final-tree sweep (`w3-17-r2-gates/g4r2-*`): the seven small files, 25 reps each **rc=0** (40-334 s) + the five-seed set run rc=0; `goal_external_wait_migration_test.exs` 25 reps **rc=0** (357 s); `add_oban_jobs_table_test.exs` 25 reps **rc=0** (143 s); `goal_0006_migration_test.exs` **10 reps** rc=0 (2430 s, `58 passed` per repetition) — deviation from 25 recorded below |
-| 5 | the set together | `mix test <ten paths> --seed <0..4>` and `--seed 0 --repeat-until-failure N` | seeds 0..4 all **rc=0** (138-236 s, `g5r2-set-seed*`); repeat loop **5** instead of 10: rc=0, 833 s, `78 passed` per repetition (`g5r2-set-seed0-repeat5`) — deviation recorded below |
-| 6 | static isolation audit + registry equality | the greps above, `w3-17-r2-migrator-sources.py`, `w3-17-r2-registry-check.exs` | rc=1 / rc=1 (no matches); 53 sites: 43 literal, 7 helper, 3 helper+literal, **0 unclassified**; registry `43/43, version_sets_equal=true, unique_pairs=true, all_loaded=true` |
-| 7 | assertion census + diff classification | `w3-17-r2-census.py <base> <cand>`, diff classes above | **IDENTICAL**, rc=0: 377 assert-family lines and 78 test names on both sides, the F-8 union included, the F-7 reader byte-identical |
+| 1 | format | `mix format --check-formatted` | rc=0 on the final tree (attempt-2 rerun after the F-7/F-8 edits); fix-revision rerun rc=0 over the whole project |
+| 2 | compile | `MIX_ENV=test mix compile --warnings-as-errors --force` | rc=0 on the final tree (attempt-2 rerun), `Compiling 95 files (.ex)`, `Generated symmetry_control app`, no warnings; fix-revision rerun rc=0, `Compiling 114 files (.ex)`, no warnings |
+| 3 | seeded full runs | `SYMMETRY_EXUNIT_EVENTS_FILE=… mix test --seed <n> --exclude portal_assets --formatter ExUnit.CLIFormatter --formatter SymmetryControl.ExUnitJsonFormatter` | pre side (attempt 1, `w3-17-runs-pre/`): five seeds, rc 0, 0, 2, 0, 0 — seed 2 is F-2's two pre-existing flakes in untouched files. Post side (attempt-2 tree, seeds 0/1/2 per the conductor's amended scope): all rc=0, counts `1032 = 1007 + 21 + 4` (`w3-17-r2-runs/full-seed{0,1,2}`); name/state equality vs the matching pre seed in the Equality section below. Fix revision (`w3-17-r3-gates/full-seed0`): rc=0, `1181 = 1156 + 21 + 4` — the tree now carries origin/main's post-merge tests, so the fix-stage comparator is a reviewed-head (`f6b5b176`) export run reporting the same counts and an IDENTICAL exact comparison (table in "Fix-stage verification"; the comparator change is explained in the Equality section) |
+| 4 | per converted file | `mix test <file> --seed 0 --repeat-until-failure 25` and `--seed <0..4>` | attempt-2 sweep (the 25-rep logs live in `w3-17-gates/g4r2-*`: the seven small files, 25 reps each **rc=0**, 40-334 s; `g4r2-big-goal_external_wait_migration_test-*` 25 reps **rc=0** (357 s); `g4r2-big-add_oban_jobs_table_test-*` 25 reps **rc=0** (143 s)), while `w3-17-r2-gates/` holds the `goal_0006` **10-rep** rc=0 (2430 s, `58 passed` per repetition) — the citation is corrected here per review SPEC-A02; the deviation from 25 is recorded below. Fix-revision rerun: all nine 25-rep sweeps rc=0, 31-259 s each (table in "Fix-stage verification") |
+| 5 | the set together | `mix test <ten paths> --seed <0..4>` and `--seed 0 --repeat-until-failure N` | attempt-2: seeds 0..4 all **rc=0** (138-236 s, `g5r2-set-seed*`); repeat loop **5** instead of 10: rc=0, 833 s, `78 passed` per repetition (`g5r2-set-seed0-repeat5`) — deviation recorded below. Fix-revision reruns: `w3-17-r3-gates/set-seed{0..4}` all rc=0 (193-289 s, `78 passed` each), `set-seed0-repeat5` rc=0 (1294 s, `78 passed` per repetition) |
+| 6 | static isolation audit + registry equality | the greps above, `w3-17-r2-migrator-sources.py`, `w3-17-r2-registry-check.exs` | rc=1 / rc=1 (no matches); 53 sites: 43 literal, 7 helper, 3 helper+literal, **0 unclassified**; registry `43/43, version_sets_equal=true, unique_pairs=true, all_loaded=true`. Fix-revision rerun with the guard-unwrapping classifier: `sites=53 wrapped=53`, same inner classes, rc=0; registry rerun identical |
+| 7 | assertion census + diff classification | `w3-17-r2-census.py <base> <cand>`, diff classes above | **IDENTICAL**, rc=0: 377 assert-family lines and 78 test names on both sides, the F-8 union included, the F-7 reader byte-identical; fix-revision rerun identical (see the census section) |
 | 8 | probes | P1/P2/P3a-c/P5/P6 (attempt 1) + P4c (F-7 red/green on the final tree) + P7 (F-8 pairing) | recorded; the F-7 revert restored the tree to `RESTORE PASS` over the 15-file snapshot |
-| 9 | wall table + CI oracle + async-phase attribution | `w3-17-r2-table.py`, `w3-17-modules.py`, `w3-17-oban-durations.py` | the Wall time section: three final-tree seeds, the four same-workload A/B runs, the Oban durations, and the CI expectation (the CI number itself needs a pushed PR, forbidden here) |
-| 10 | diff hygiene | `git diff --check`; the program's profile-path scan over the diff and the new files | rc=0; 0 matches |
+| 9 | wall table + CI oracle + async-phase attribution | `w3-17-r2-table.py`, `w3-17-modules.py`, `w3-17-oban-durations.py` | the Wall time section: three final-tree seeds, the five same-workload A/B runs (corrected per SPEC-A01), the Oban durations, and the CI expectation (the CI number itself needs a pushed PR, forbidden here) |
+| 10 | diff hygiene | `git diff --check`; the program's profile-path scan over the diff and the new files | rc=0; 0 matches. Fix-revision rerun: the committed branch diff's and the uncommitted fix diff's added lines hold no profile-name path and no drive-letter, /mnt, /tmp or /home prefix (0 matches each, the scans exit 1); the plan record itself matches none. `docs/TODO.md`'s pre-existing temporary-directory strings (an earlier entry quoting another slice's Go test output) are verbatim quotes and are left as they are |
 
 Recorded deviations, all with their reason:
 
@@ -378,20 +478,105 @@ Recorded deviations, all with their reason:
   the same-workload A/B bounds the host movement.
 * **gate 4 `goal_0006`: 25 → 10 repetitions**: one repetition costs ~243 s wall (154.7 s of tests +
   ~88 s of boot: registry compile + the alias' `ecto.create`/`ecto.migrate`), so 25 reps ≈ 100 min;
-  the file's 58 tests already ran 9 times in this session's timed runs across three seeds (three
-  full runs, four A/B runs, two smokes) and once per repetition here, and the set-level repeat
+  the file's 58 tests already ran in every timed run of this window's record (three full runs, five
+  A/B runs, two smokes) and once per repetition here, and the set-level repeat
   covers it inside the ten-module overlap. The loop stopped on no failure.
 * **gate 5 repeat 10 → 5**: same reason at set scale (one repetition ~150 s + boot); attempt 1's
   `p2` probe already ran the set `--repeat-until-failure 5` green (1151 s) on the review-hardened
   revision.
-* **the A/B was run once per side as ordered in the conductor's scope, and then once more in reverse
-  order** (four runs total): the first pair showed a 34 s wall difference in the direction the host
-  state was moving, which a single ordered pair cannot separate from the conversion; the reversed
-  pair is what makes the report's claim honest about the variance.
+* Both repeat-count deviations are **conductor-accepted** by the review-stage ruling #1 (recorded in
+  the rulings section above) against the compensating evidence: five pre-side seeds, three
+  final-tree seeds, the five converted-set seeds, and CI's `coverage-control` running the converted
+  suite on every PR.
+* **the A/B was run five times, in both orders** (corrected per review SPEC-A01): once per side as
+  ordered in the conductor's scope (`ab-pre-nine-seed0` then `ab-post-nine-seed0`, the nine-path
+  pair), once more at ten paths (`ab-post-ten-seed0`), then the reverse-order pair
+  (`ab2-post-ten-seed0` then `ab2-pre-nine-seed0`). The first ordered pair is path-identical and
+  showed the post side 16 s wall below the pre side, while the ten-path post run sat 34 s above the
+  nine-path pre run and the reversed pair put the pre side 16 s above the preceding post run — the
+  direction is not stable, which is what makes the report's claim honest about the variance.
 
 `--only` was not usable for gate 4 — the nine files carry no tags, so the file path is the selector
 (the contract's own note). `mix test --repeat-until-failure N` stopped at the first failure in the
 one run that went red (F-1) and reported the repeat index.
+
+## Fix-stage verification (review corrections)
+
+Every guard, branch or public entry this slice adds or relies on has a mutant row: the mutant is the
+guard removed (or, for the teardown, the pre-fix shape restored), red/green are observed on this
+revision's tree, and the tree was restored from a sha256 snapshot between rows
+(`gdd/refactor/scratch/w3-17-r3-snapshot.sh check` → `CHECK PASS` over the 12 harness/test files
+after every probe round). Recipes and logs live under `gdd/refactor/scratch/w3-17-r3-probes/` and
+`gdd/refactor/scratch/w3-17-r3-gates/`/`w3-17-r3-runs/` (the reviewed-head export and its wrapper
+live under `w3-17-r3-head/` and `w3-17-r3-head-mix.sh`): the guard rows ran as
+`mix run --no-start w3-17-r3-probes/guards.exs <mode>` (compiled test support, no app start, no
+database) and the test-level rows as `mix test <file> --seed 0`.
+
+| row | guard / branch | mutant | observed mutant (red) | restored (green) |
+| --- | --- | --- | --- | --- |
+| X1 | `on_exit` context facts (witness) | – | `on_exit` callbacks run in reverse registration order (`first`/`second` log), and the suite `Repo` cannot run there: the callback got `cannot find ownership process … (ExUnit.OnExitHandler) … using mode :manual` | n/a (witness for the #5 shape) |
+| X2 | linked-process lifetime at test end (witness) | – | ExUnit terminates the test process with `:shutdown` (`{:watcher_test_down, :shutdown}`), so a process linked to it is already dead when `on_exit` runs (`sleeper_alive: false`) | n/a (witness for the #5 shape) |
+| M1 | `MigrationModules.verified_pairs!/1` (version<->file binding) | guard body dropped; one literal tampered (`…902_000_000` → `…902_000_099`) in a test's own list | `add_task_command_ownership_test.exs` **passes** (1 passed) while recording a version no file carries | guard back, same tampered literal: **red** — `CreateOrchestrationTables is recorded at version 20260902000099 but its migration file carries 20260902000000`; literal back: 1 passed |
+| M2 | `with_schema/2` no longer runs a teardown call over the test's own error (#5) | the old nested `after GenServer.stop(repo, :normal, 30_000)` restored; probe body stops its own Repo and then `assert false` | the report is the stop's exit (`exited in: GenServer.stop(…) ** (EXIT) no process …`); the assertion's message is lost — the review's masking scenario reproduced | delivered shape: the report is the body's own `assert false` message |
+| M3 | `MigrationModules.base_migrations/0` shared definition (#6) | guard body dropped; one shared version drifted | `add_oban_jobs_table_test.exs` **passes** (2 passed) on a base version no file carries | guard back, same drift: **red** — both tests raise the mismatch on the shared pair; drift reverted: 2 passed |
+| M4 | `schema_name/1` lowercase-identifier check | `unless` block removed | `schema_name("Bad-Name")` → `{:ok, 30}` (silently accepted into DDL) | delivered: raises `not a lowercase SQL identifier`; `schema_name("good_name")` → 31 bytes |
+| M5 | `schema_name/1` 63-byte check | `if byte_size…` block removed | a 60-char base → `{:ok, 82}` (PostgreSQL would truncate silently) | delivered: raises `exceeds PostgreSQL's 63-byte identifier limit` |
+| M6 | `compile_all!/0` empty-glob raise | raise removed, registry pointed at an empty scratch directory | `compile_all!` → `{:ok, [], 0}` | raise back on the same directory: `no migration files found in <probe dir>`; directory back: 43 pairs |
+| M7 | `migrations/0` pre-boot raise | `:missing -> []` | `migrations/0` in a fresh VM → `{:ok, []}` | delivered: raises `compile_all!/0 has not run in this VM` |
+| M8 | `version!/1` version-prefix check | `_ -> 0` | an unversioned probe file → `{:ok, [{0, W317Probe.NoVersionMigration}], 1}` | delivered: raises `does not start with a version` |
+| M9 | `migration_module!/1` module check | `module || nil` | a versioned non-migration file → `{:ok, [{20260101000000, nil}], 1}` | delivered: raises `defines no Ecto migration` |
+| M10 | the refusal test's marker-row `on_exit` cleanup (PRE-A01) | registration removed; a probe assertion forces the failure after the INSERT | the marker row survives: `rows_with_id=1`, `goal_0006_test_markers` 1 → 2 | delivered: `rows_with_id=0`, count back at the 1 pre-existing row; probe lines removed: 2 passed |
+| P5-rerun | `create_schema!/1`'s `on_exit` drop (R4) | registration removed; a probe test kills itself inside `with_schema` | the schema survives the kill: `schemas_matching=1` (sample `w3_17_kill_probe_…`) | delivered: `schemas_matching=0`; the leaked probe schema dropped afterwards |
+| P6-rerun | `compile_all!/0`'s `ignore_module_conflict` guard (R3) | guard removed; fresh `MIX_TEST_PARTITION` | 43 `redefining module` lines on the empty database | delivered: 0 on a fresh partition (1 passed) |
+
+The two witness rows (X1/X2) are what selected the #5 fix's shape: the review's suggested "move the
+stop into `on_exit`" cannot work (X2: the linked Repo is already terminating when `on_exit` runs) and
+the suite Repo cannot substitute (X1: no sandbox ownership in the callback), so the delivered fix
+removes the stop instead of moving it, and keeps the drop in `create_schema!/1`'s `on_exit`, which is
+the step that must survive a kill. M2 shows the review's masking scenario is real and that the
+delivered shape reports the body's error instead. Every other row is a fail-loud guard whose mutant
+lets the tree pass on data the guard exists to refuse. M1 tampers the test's own version literal
+rather than a migration filename (the guard compares both directions, and `priv/repo/migrations/**`
+is outside the owned set); M3 drifts the shared base list, which is the drift #6 was about.
+
+### Fix-stage gates (all foreground, strictly one run at a time, slice partition)
+
+| gate | command | rc | counts |
+| --- | --- | --- | --- |
+| format | `mix format --check-formatted` | 0 | whole project |
+| compile | `MIX_ENV=test mix compile --warnings-as-errors --force` | 0 | `Compiling 114 files (.ex)`, `Generated symmetry_control app`, no warnings |
+| the ten-module set, seeds 0..4 | `SYMMETRY_EXUNIT_EVENTS_FILE=… mix test <ten paths> --seed <n> …` | 0, 0, 0, 0, 0 | `78 passed` each; walls 246 / 289 / 205 / 193 / 277 s (`w3-17-r3-gates/set-seed{0..4}`) |
+| the set, repeated | `… --seed 0 --repeat-until-failure 5` | 0 | `78 passed` per repetition, 1294 s (`set-seed0-repeat5`) |
+| full suite, seed 0 | `… mix test --seed 0 --exclude portal_assets …` | 0 | `1181 = 1156 passed + 21 skipped + 4 excluded`; run 334.1 s = 214.8 s async + 119.4 s sync, work 455.8 s (`full-seed0`) |
+| reviewed-head baseline | `git archive f6b5b176` export, `compile --force`, same command on partition `rfw317head` | 0 | `1181 = 1156 passed + 21 skipped + 4 excluded`, wall 316 s (`head-full-seed0`) |
+| equality, fix vs head | `w3-17-r3-equality-exact.py head-full-seed0.events.json full-seed0.events.json` | 0 | counts equal, `rows 1181 = 1181`, `only_left=0 only_right=0 state_diff=0`, `RESULT: IDENTICAL` |
+| witnesses X1/X2 | `mix test <probe file> --seed 0` from the scratch probes | 0 / 0 | `x1-order.log` (LIFO order + the suite-Repo ownership error), `x2-link-death.log` (`:shutdown`, `sleeper_alive: false`) |
+| census / classifier / registry | the three tools above | 0 / 0 / 0 | `IDENTICAL` 377/78; `sites=53 wrapped=53 … unclassified=0`; `43/43` + three `true`s |
+| diff hygiene | `git diff --check`; the two added-line scans over the branch and fix diffs | 0 / 1 / 1 | no whitespace errors; 0 matches each |
+
+The full-suite count moved from the attempt-2 record's `1032` to `1181` because the branch merged
+origin/main after attempt 2's runs; the 149 extra tests live in files this slice never touches, and
+the fix-stage name/state comparator is therefore the reviewed head: a `git archive f6b5b176` export
+(recompiled with `compile --force`, its own partition `rfw317head`) ran the same command to
+`1181 = 1156 + 21 + 4` in 316 s, and
+`w3-17-r3-equality-exact.py head-full-seed0.events.json full-seed0.events.json` reports the counts
+equal, `rows 1181 = 1181`, `only_left=0 only_right=0 state_diff=0`, `RESULT: IDENTICAL` — so the fix
+revision renames, deletes, skips or retags nothing against the reviewed head either.
+
+Per-file sweeps at the fix revision (`w3-17-r3-gates/`, `mix test <file> --seed 0
+--repeat-until-failure 25`, every run rc=0 with 26 `Result:` lines and 0 `Failed:` lines, i.e. 25
+green repetitions plus the summary):
+
+| file | wall_s | file | wall_s |
+| --- | --- | --- | --- |
+| `add_goal_operator_version_test.exs` | 192 | `version_request_hashes_test.exs` | 39 |
+| `add_history_lookup_indexes_test.exs` | 41 | `add_oban_jobs_table_test.exs` | 108 |
+| `add_omo_harness_kind_migration_test.exs` | 244 | `goal_external_wait_migration_test.exs` | 259 |
+| `add_retry_commands_test.exs` | 52 | `add_task_command_ownership_test.exs` | 31 |
+| `add_work_item_creation_identity_test.exs` | 214 | | |
+
+`goal_0006_migration_test.exs` at the conductor-accepted 10 repetitions: rc=0, 1633 s, 11 `Result:`
+lines and 0 `Failed:` lines (`58 passed` per repetition, the summary line included).
 
 ## Wall time and the CI oracle
 
@@ -442,36 +627,47 @@ Paired per-seed movement (`pre` from `w3-17-runs-pre/`, `post` above):
 
 The pre-side level was measured while two foreign BEAMs were resident (attempt 1's own record); these
 local numbers are report-only (lesson F4) and their absolute level moves with host state — the four
-same-workload A/B runs below bound that movement. Attempt-1's post-side rows
+same-workload A/B runs below (five, after the SPEC-A01 correction) bound that movement. Attempt-1's
+post-side rows
 (`w3-17-runs-post/`, pre-review revision; `w3-17-runs-post-prereview/`'s seeds 0-3 at
 538.0 / 574.5 / 715.5 / 650.3 s, rc 2, 2, 2, 0) are kept as F-7's rate sample and are superseded by
 the three rows above.
 
-Paired same-workload A/B (78 tests each side: pre = the nine serial files; post = the nine converted
-files + the F-8 `async: false` module), back to back on the same host and partition, **run in both
-orders** because the level drifts inside a ten-minute window:
+Paired A/B on the same host and partition, **run in both orders** because the level drifts inside a
+ten-minute window. Five runs exist, corrected here per review SPEC-A01 (the earlier table printed
+four and paired non-adjacent runs): the conductor-ordered pair `w3-17-r2-ab.sh` ran (pre nine paths,
+then the same nine paths post-conversion), one more post run at ten paths, then the reverse-order
+pair `w3-17-r2-ab2.sh` ran (ten-path post, then nine-path pre). Pre = the nine serial files (78
+tests); post-nine = the nine converted paths (76 tests — the two moved Oban tests are not on the nine
+paths); post-ten = the nine converted paths plus the F-8 `async: false` module (78 tests).
 
-| run (time order) | side | wall_s | run_s | async_s | sync_s | work_s | largest_s |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | pre | 178 | 175.1 | – (all serial) | 175.1 | 172.1 | 123.9 |
-| 2 | post | 218 | 209.3 | 204.9 | 4.4 | 270.3 | 188.3 |
-| 3 | post | 224 | 216.9 | 210.3 | 6.6 | 285.6 | 195.3 |
-| 4 | pre | 240 | 227.3 | – (all serial) | 227.3 | 223.6 | 136.9 |
+| run (time order, label) | side (paths) | tests | wall_s | run_s | async_s | sync_s | work_s | largest_s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 `ab-pre-nine-seed0` | pre (nine) | 78 | 178 | 175.1 | – (all serial) | 175.1 | 172.1 | 123.9 |
+| 2 `ab-post-nine-seed0` | post (nine) | 76 | 162 | 157.4 | 157.4 | 0.0 | 199.8 | 144.3 |
+| 3 `ab-post-ten-seed0` | post (ten) | 78 | 218 | 209.3 | 204.9 | 4.4 | 270.3 | 188.3 |
+| 4 `ab2-post-ten-seed0` | post (ten) | 78 | 224 | 216.9 | 210.3 | 6.6 | 285.6 | 195.3 |
+| 5 `ab2-pre-nine-seed0` | pre (nine) | 78 | 240 | 227.3 | – (all serial) | 227.3 | 223.6 | 136.9 |
 
-Paired differences: order 1 pre→post `+34.2 s`; order 2 post→pre `+10.4 s` on the pre side (post
-−10.4 s wall). The direction is not stable, and the same table shows why: the largest module's own
-work (58 of the 78 tests) moves 123.9 → 188.3 → 195.3 → 136.9 s across the four runs, and the post
-side inflates every module's own work by running nine heavy-DDL modules concurrently — the same nine
-modules' summed work is 172.1 / 223.6 s in the two serial runs against 264.1 / 279.4 s in the two
-concurrent runs (+53 % / +25 %; 264.1 is `work_s −` the moved module's 6.15 s). At seed 0 on this
-host the structural gain (the serial phase loses the eight non-largest modules' work, 48.2-86.7 s in
-these runs) sits inside that variance, so no single ordered pair adjudicates the ≤65 s target
-locally; the CI number is the oracle (report-only locally by lesson F4).
+Paired differences, each pair named by its paths: the path-identical adjacent ordered pair (rows
+1→2, nine paths each) is `−17.7 s` run / `−16 s` wall on the post side; the 78-vs-78 pair is rows
+1→3 (nine-path pre against the later ten-path post), `+34.2 s` run / `+40 s` wall, and it mixes
+workloads — the ten-path post leg also runs the F-8 module serially; the reversed pair (rows 4→5)
+puts the pre side `+10.4 s` run / `+16 s` wall above the preceding post run. The direction is not
+stable, and the same table shows why: the largest module's own work (60 of the pre side's tests, 58
+of the post side's) moves 123.9 → 144.3 → 188.3 → 195.3 → 136.9 s across the five runs, and the post
+side inflates every module's own work by running nine heavy-DDL modules concurrently — the nine
+converted modules' summed work is 172.1 / 223.6 s in the two serial runs against 199.8 s (the
+nine-path run) and 264.1 / 279.4 s in the two ten-path runs (net of the moved module's 6.15 s). At
+seed 0 on this host the structural gain (the serial phase loses the eight non-largest modules' work,
+48.2-86.7 s in the two pre-side runs) sits inside that variance, so no single ordered pair
+adjudicates the ≤65 s target locally; the CI number is the oracle (report-only locally by lesson F4).
 
 The robust local facts are the phase structure and the attribution, not the wall pair:
 
-* the post side's async phase is the largest module plus a 17.5-19.8 s tail in the full runs, and
-  the sync phase is 120.1-137.8 s against the baseline's 568.3-766.4 s;
+* the post side's async phase is the largest module plus a 17.5-19.8 s tail in the attempt-2 full
+  runs (60.2 s on the fix revision's merged corpus), and the sync phase is 120.1-137.8 s against
+  the baseline's 568.3-766.4 s;
 * the two Oban tests' full-run durations after the F-8 move are 2.29 / 2.81 s (seed 0),
   2.22 / 2.28 s (seed 1) and 1.67 / 1.72 s (seed 2), against 9.9 / 15.9 s and 6.3 / 36.3 s in
   attempt 1's pre-move full runs (`w3-17-oban-durations.py` over the event streams).
@@ -487,6 +683,15 @@ the async phase becomes `Goal0006MigrationTest`-bound (on this 16-scheduler host
 the 4-scheduler runner the same fraction of the nine files' serial share would be released, which
 cannot be derived without the CI event stream.
 
+Fix-revision full run (review corrections), same command and partition, seed 0 (`full-seed0` in
+`w3-17-r3-gates/`): rc=0, `1181 = 1156 passed + 21 skipped + 4 excluded` — the merged tree's newer
+tests, see the Equality section — run 334.1 s = 214.8 s async + 119.4 s sync, per-test work 455.8 s,
+`Goal0006MigrationTest`'s own work 154.6 s (async tail 60.2 s). The nine converted modules' summed
+work is 247.8 s against the attempt-2 seeds' 245.8-307.3 s and the pre-side 326.9-526.0 s; the sync
+phase stays at the post-side level (119.4 s against 120.1-137.8 s), so the phase structure the
+conversion produced reproduces on the merged corpus (the run's host carried 1 foreign BEAM, one of
+the quieter windows).
+
 ## Name/state equality across the pre/post streams
 
 `w3-17-r2-equality.py` compares each final-tree seed against the matching pre-side stream
@@ -494,6 +699,17 @@ cannot be derived without the CI event stream.
 test's state. The F-8 move remaps the two moved tests' rows from
 `SymmetryControl.Migrations.AddObanJobsTableTest` onto the donor module before comparing, and
 requires exactly two remapped rows — a third moved test would fail the check.
+
+That comparison holds for the attempt-2 tree, whose main content matched the pre-side baseline
+(`1032` names on both sides; seeds 0/1/2 `IDENTICAL`, the two state differences being F-2/F-3's
+pre-existing flakes). At the fix revision the comparator changes, because the branch merged
+origin/main after attempt 2 and the delivered tree legitimately carries 149 tests the pre-side
+baseline never had: the fix-revision stream is compared against a `git archive f6b5b176` export of
+the reviewed head (same origin/main content, the slice head without the fix), recompiled with
+`compile --force` and run with the same command on its own partition (`rfw317head`). The result is
+the fix-stage gate table's equality row: `w3-17-r3-equality-exact.py` reports the counts equal and
+`only_left=0 only_right=0 state_diff=0`, `RESULT: IDENTICAL` — no rename, delete, skip or retag is
+introduced by the fix revision, and no test changed state between the two trees.
 
 | seed | counts | rows | only_pre | only_post | state_diff | result |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -517,8 +733,8 @@ scan in the diff-classification section is zero for every tag class.
 | F-6 | post-side seeds 0 and 1 on the final revision | two load-sensitive assertions in untouched, non-migration files: seed 0 `integrations_test.exs:1081` `assert_receive {:integration_provider_waiting, …}` — "no matching message after 100ms", W3-14's F-2/F-3 class; seed 1 `provider_action_controller_test.exs:1925` `assert Process.read_timer(timeout_ref) == false` (left `59848`, the 60 s timer still armed) — with three and two foreign BEAMs resident | no | recorded; not hidden |
 | F-7 | post-side seeds 1 and 2 on the final revision, plus the queue-tolerant revision's seed 0 (observed there as `ERROR XX000`); **absent in all six baseline runs** (18 executions of the same test passed) | `NativeHarnessKindBindingTest.constraint_kinds!/1` (`native_harness_kind_binding_test.exs:214-220`, `async: true`, W3-14's file, outside this slice's owned set) asserts one row from `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = $1` and receives **two identical definitions** while a concurrent migration test's private schema carries the same `runtimes_harness_kind_check` name; the `ERROR XX000 could not open relation with OID` variant is the same unfiltered catalog access racing `DROP SCHEMA … CASCADE` | no — the nine are keyed (their queries carry `conrelid = '…'::regclass` or a `pg_namespace.nspname = current_schema()` join); the conversion only makes the unkeyed reader reachable | **resolved by the F-7 ruling, one change in the reader file**: `AND connamespace = current_schema()::regnamespace` on the query (keeps both call sites at `:36`/`:37` working). Red/green pair on the final tree in the Probes section (P4c); see also the F-7 section below |
 | F-8 | found by the independent review (`ReviewSol`), not by a failing run | `goal_0006_migration_test.exs`'s two Oban tests now run while other `async: true` tests hold `ROW EXCLUSIVE` on the shared `public.oban_jobs`: `task_goal_guard_controller_test.exs:2` (`async: true`) → `admitted_goal_task/0` → `command_current(…, "admit_task", …)` → `Goals.command/4` → `Oban.insert!` of a `WakeupWorker` (`goals.ex:4491-4495`) inside the test's sandbox transaction; `AddObanJobsTable`'s down path takes `LOCK TABLE public.oban_jobs IN SHARE MODE`, which waits for those holders | the migration file is in the owned set, but every test-side remedy changes test semantics (a tag or a serialize mechanism) | recorded with its measurement plan (probes P3a/P3b/P3c) and escalated with both readings of the contract (answer §12.3); exposure did not materialize in the five post-side runs (0 `oban_jobs`/`lock_timeout`/`canceling statement` lines). **Resolved by the F-8 ruling**: the two tests moved to `add_oban_jobs_table_test.exs` (`async: false`) with names byte-identical; the move's evidence is in the Oban audit's resolution |
-| F-9 | attempt-2 A/B (four same-workload runs, both orders) | converting the nine files puts nine heavy-DDL modules in one async phase: the same nine modules' summed work is 172.1 / 223.6 s in the two serial runs against 264.1 / 279.4 s in the two concurrent runs (+53 % / +25 %), i.e. each module's own work inflates under the concurrency; the largest module's own work moves 123.9 → 195.3 → 136.9 s across the four runs | the concurrency is the deliverable's own shape; the inflation is a host/database property (catalog and I/O contention between nine concurrent 43-migration runs, bounded by the harness's 30 s budgets) | recorded; it is why the local A/B cannot adjudicate the ≤65 s target and why the CI number is named as the oracle |
-| F-10 | same four runs (order control) | the first ordered pair showed post `+34.2 s` wall, the reversed pair post `−10.4 s`; the level drifted inside ten minutes (pre 175.1 → 227.3 s, post 209.3 → 216.9 s) | no | recorded; the reversed pair is the control and the report states the variance instead of one number |
+| F-9 | attempt-2 A/B (five same-workload runs, both orders — count corrected per SPEC-A01) | converting the nine files puts nine heavy-DDL modules in one async phase: the same nine modules' summed work is 172.1 / 223.6 s in the two serial runs against 199.8 s (the nine-path run) and 264.1 / 279.4 s (the two ten-path runs, net of the moved module's 6.15 s), i.e. each module's own work inflates under the concurrency; the largest module's own work moves 123.9 → 144.3 → 188.3 → 195.3 → 136.9 s across the five runs | the concurrency is the deliverable's own shape; the inflation is a host/database property (catalog and I/O contention between nine concurrent 43-migration runs, bounded by the harness's 30 s budgets) | recorded; it is why the local A/B cannot adjudicate the ≤65 s target and why the CI number is named as the oracle |
+| F-10 | same five runs (order control) | the path-identical ordered pair showed the post side `−16 s` wall (nine paths each) while the nine-pre→ten-post pair showed `+40 s` and the reversed pair put the pre side `+16 s` wall above the preceding post run; the level drifted inside fifteen minutes (pre 175.1 → 227.3 s, post 157.4 → 209.3 → 216.9 s) | no | recorded; the reversed pair is the control and the report states the variance instead of one number |
 
 F-7 and F-8 were resolved by the conductor's rulings of 2026-11-22 (see the attempt-2 rulings
 section): the reader's predicate is schema-scoped and the two Oban tests run in the serial phase;
@@ -579,7 +795,7 @@ re-verified in the tree before being accepted or rejected:
 | R3 | `compile_all!/0` recompiles alias-loaded modules, so a *fresh* database prints ~43 redefinition warnings (both; also a plan/code divergence) | mechanism read in `mix.exs:82` + `migrator.ex:733-741`; this host's logs showed 0 warnings only because its database was already migrated | fixed: compile under `ignore_module_conflict` (previous value restored); probe P6 shows 0 warnings on a fresh partition |
 | R4 | a killed/timed-out test leaks its private schema (ExUnit `:kill` skips every `after`), and each leak makes F-7 permanent (ReviewTencent) | confirmed, and a stale pre-fix leak (`history_lookup_indexes_2824`) was found in this host's test database | fixed: `create_schema!/1` registers an ExUnit `on_exit` drop; probe P5 shows the leak without the fix and no new leak with it |
 | R5 | `schema_name/1` was node-unique only, dropping the cross-VM uniqueness the old `goal_0006` name had (ReviewTencent) | `System.unique_integer([:positive])` starts low in every VM | fixed: `_<unique_integer>_<system_time(:microsecond)>` suffix, worst case 60 bytes ≤ 63 |
-| R6 | unvalidated base interpolated into DDL; `create_schema!` outside the `try`; the two manual call sites stop their Repo before dropping the schema, so a raising stop skips the drop (both) | latent, no live caller | fixed for the first two: lowercase-identifier check on the base, create moved inside the `try` (`DROP … IF EXISTS` makes the extra drop harmless); the manual sites' stop-then-drop order is left as the base had it and recorded as a residual risk — a raising `GenServer.stop` is itself a failure ExUnit reports, and the leaked name is unique and unpolluted |
+| R6 | unvalidated base interpolated into DDL; `create_schema!` outside the `try`; the two manual call sites stop their Repo before dropping the schema, so a raising stop skips the drop (both) | latent, no live caller | fixed for the first two: lowercase-identifier check on the base, create moved inside the `try` (`DROP … IF EXISTS` makes the extra drop harmless). Restated at the fix revision (review SPEC-A03): `create_schema!/1` registers its ExUnit `on_exit` drop before it runs the DDL, so a raising `GenServer.stop` at the two manual call sites no longer skips the drop — the runner still drops the schema (probe P5-rerun: a killed test leaves `schemas_matching=0`, and with the registration removed it leaves one). The surviving residual is the narrower one: an `on_exit` drop that itself fails or is interrupted, with nothing sweeping leaks and no test asserting their absence |
 | R7 | `pool_size: 1` plus the inherited `migration_lock: :pg_advisory_lock` raises "pool size less than 2" for any caller that forgets `migration_lock: false` (ReviewTencent) | read in `postgres.ex:305-313`; all 51 sites pass the option today | fixed: `migration_lock: false` in `private_repo_config/0` |
 | R8 | registry glob is top-level-only while Ecto recurses; an empty glob is silent (ReviewSol) | read in `migrator.ex:660-680` | fixed: `**/*.exs` and a boot raise when the glob is empty |
 | R9 | `migrations/0`'s bare `:persistent_term` error; `GenServer.stop/1`'s 5 s default; the queue comment named the wrong defaults (both) | read | fixed: named error, `GenServer.stop(repo, :normal, 30_000)` at both sites, comment names the observed 4000 ms message |
@@ -756,7 +972,9 @@ Three hazards considered before measuring:
   waits for in-progress transactions with older snapshots. In the base it ran in the serial phase,
   where it could not overlap a peer's transaction; as an async module it can, at worst behind
   goal_0006's two lock tests (bounded by their `lock_timeout = '1s'` / `… 15_000` limits). The
-  converted-set runs (gate 5, five seeds plus ten repeats) are the coverage for this: any red there
+  converted-set runs (gate 5, five seeds plus ten repeats as delivered — five set-wide repetitions,
+  which the review-stage ruling #1 accepts, plus `goal_0006`'s ten; attempt-2 wording reconciled
+  here with the recorded deviation) are the coverage for this: any red there
   is a finding and would move that one file back to `async: false` with its call site recorded.
 * The two Oban tests' `LOCK TABLE public.oban_jobs IN SHARE MODE`: the audit was wrong about the
   producers (finding F-8) and Change 4's P3 measured the residual — a 117 ms worst statement in the

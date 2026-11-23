@@ -1171,9 +1171,10 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       **rf-w3-17 update (2026-11-22, branch `refactor/rf-w3-17-migration-tests-async`, plan
       `docs/plans/2026-11-22-rf-w3-17-migration-tests-async-plan.md`, conductor rulings F-7/F-8):**
       the D9 pin is removed — all nine files declare `async: true`, the test-time migration compile
-      is replaced by a boot registry (`control/test/support/migration_modules.ex`), schema DDL runs
-      on private single-connection Repos, and the two `public.oban_jobs` rollback tests moved to a
-      new `async: false` module
+      is replaced by a boot registry (`control/test/support/migration_modules.ex`), which also binds
+      every test-time `{version, module}` source to the compiled files (`verified_pairs!/1`) and
+      owns the one shared base-migration prefix, schema DDL runs on private single-connection Repos,
+      and the two `public.oban_jobs` rollback tests moved to a new `async: false` module
       (`control/test/symmetry_control/migrations/add_oban_jobs_table_test.exs`) so their
       `LOCK TABLE … IN SHARE MODE` cannot queue behind an async Oban producer. Measured on this
       16-scheduler host, same command and partition (`w3-17-runs-pre/` five seeds,
@@ -1182,11 +1183,16 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       → 219.5 / 198.1 / 173.9 s, now bounded by `Goal0006MigrationTest` alone (its own work
       202.0 / 178.1 / 154.9 s). Counts and name sets equal the baseline (`1032 = 1007 + 21 + 4`; the
       F-8 move remaps two names), and the ten-module set is green at seeds 0-4 plus a 5× repeat,
-      with the seven small files at 25× repeat each and `goal_external_wait` at 25×. Four
-      same-workload nine-file A/B runs in both orders show the local wall difference is not stable
-      (post +34.2 s, then post −10.4 s) while the level drifted inside ten minutes and nine-way
-      concurrency inflates each module's own work (summed +25 %/+53 %), so the local number is
-      report-only (W3-14 lesson F4). **Disposition request:** the conductor rules on D9 and on the
+      with the seven small files at 25× repeat each and `goal_external_wait` at 25×. Five
+      same-workload A/B runs in both orders show the local wall difference is not stable (the
+      path-identical nine-path pair put the post side 16 s wall below the pre side, the
+      nine-pre→ten-post pair sat 40 s above it, and the reversed pair put the pre side 16 s above
+      the preceding post run) while the level drifted inside fifteen minutes and nine-way
+      concurrency inflates each module's own work (summed +16 % to +53 %), so the local number is
+      report-only (W3-14 lesson F4). The review-stage fix revision re-ran the gates on the merged
+      tree (ten-file set seeds 0-4, a 5× set repeat, the per-file sweeps at the accepted counts, one
+      full seed; table in the plan's "Fix-stage verification"). **Disposition request:** the
+      conductor rules on D9 and on the
       ≤65 s target from the CI `coverage-control` number on the PR head (4-scheduler runner,
       baseline 140.2 s = 18.1 s async + 122.0 s sync); the `[INFERENCE]` from these streams — the
       async phase is now `Goal0006MigrationTest`'s own 58-test duration and the released serial time

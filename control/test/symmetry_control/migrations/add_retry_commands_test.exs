@@ -70,7 +70,7 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   defp migrate_up! do
-    Ecto.Migrator.run(Repo, migrations(), :up,
+    Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
       all: true,
       log: false,
       migration_lock: false,
@@ -79,7 +79,7 @@ defmodule SymmetryControl.Migrations.AddRetryCommandsTest do
   end
 
   defp migrate_down! do
-    Ecto.Migrator.run(Repo, migrations(), :down,
+    Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :down,
       step: 1,
       log: false,
       migration_lock: false,

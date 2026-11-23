@@ -30,7 +30,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
     previous_dynamic_repo = Repo.put_dynamic_repo(repo)
 
     try do
-      Ecto.Migrator.run(Repo, migrations(), :up,
+      Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
         all: true,
         log: false,
         migration_lock: false,
@@ -41,7 +41,7 @@ defmodule SymmetryControl.Migrations.AddHistoryLookupIndexesTest do
 
       Repo.query!("DELETE FROM schema_migrations WHERE version = $1", [@migration_version])
 
-      Ecto.Migrator.run(Repo, migrations(), :up,
+      Ecto.Migrator.run(Repo, MigrationModules.verified_pairs!(migrations()), :up,
         all: true,
         log: false,
         migration_lock: false,
