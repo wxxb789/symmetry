@@ -686,7 +686,7 @@ Working directory `daemon/` unless stated; run after all four code edits.
 | focused renamed tests | `go test -count=1 -run 'TestStorelessDaemonTakesEveryStoreNilBranch\|TestStoreCallbackFactoriesRefuseClosingStore\|TestStoreCallbackFactoriesHoldStoreLifetimeReadLock\|TestStoreCallbackFactoriesCloneCallerArguments\|TestStoreCallbackObserversFollowTheHook\|TestPersistProcessAuthorityCallbackDoesNotCallMarkerHook\|TestPersistProcessMarkerReplaysPostRenameUnknownOutcome\|TestCommitSupervisorHandoffCallbackObservesDurableProcessMarker' ./internal/app/` | `ok .../internal/app 1.496s`, exit 0 |
 | host suite | `go test -count=1 -timeout 40m ./internal/app/...` | first attempt exit 1 on the documented host-load timing flake `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline` (local-control GET `context deadline exceeded`, unchanged test; §13 precedent; the attempt overlapped two short WSL probes on this host); that test in isolation `ok .../internal/app 21.914s`, exit 0; clean rerun `ok .../internal/app 205.169s`, `ok .../internal/app/apptest 3.620s`, exit 0 |
 | WSL race | `wsl -d Ubuntu-24.04 -u accept` -> `go test -count=1 -race -timeout 60m ./internal/app/...` | `ok .../internal/app 786.269s`; `ok .../internal/app/apptest 3.285s`; exit 0, no `FAIL`, no data race |
-| host-path / DLP | `git diff \| grep -in 'lhan\|users/\|AppData\|/mnt/\|/home/'`; `git diff \| grep -cP '\\u'` (repo root) | no match, exit 1; 0, exit 1 |
+| host-path / DLP | `git diff \| grep -in` for the account name, the Windows user-profile directory, `AppData` and the `/mnt` and `/home` prefixes; `git diff \| grep -cP '\\u'` (repo root) | no match, exit 1; 0, exit 1 |
 
 ### 15.4 Final bytes of this pass
 
