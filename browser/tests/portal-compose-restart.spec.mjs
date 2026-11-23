@@ -149,7 +149,7 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const cancelledSurface = page.getByRole("dialog", { name: cancelTitle });
     await expect(cancelledSurface.getByRole("heading", { level: 1, name: cancelTitle })).toBeVisible();
     await expect(cancelledSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
-    await expect(cancelledSurface.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelledSurface.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 
     // The post-restart read also renders on the work detail surface; the
     // persisted lifecycle assertions above stay unchanged. The waiting workflow
@@ -160,9 +160,8 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const waitedSurface = page.getByRole("dialog", { name: waitTitle });
     await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
     await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
-    await expect(
-      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
-    ).toContainText("default");
+    const outcomeFacts = waitedSurface.getByRole("region", { name: "Outcome" }).locator("dl.detail-facts");
+    await expect(outcomeFacts.locator("div", { hasText: "Owner" })).toContainText("default");
     await expect(
       waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })

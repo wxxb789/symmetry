@@ -30,14 +30,14 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 | `.github/workflows/ci.yml` | edited | 1,846 → 2,174 | +328/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the fix stage added the planning step's `PHX_HOST` export (+2 lines) and the connection step's trailing canary guard (+12 lines, review F1/F2); the review-fix stage made the three new `/healthz` probes tolerant (`--retry-all-errors`, rulings P0-1/P1-3), restored the provider-call-log canary grep and pinned the full executed sets (rulings P3-5/P3-6, §3.5); the round-2 stage added the CI-only Compose origin override (ruling a, §3.6); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
 | `browser/README.md` | edited | 615 → 613 | +11/−13: the manual matrix intro and rows (§3.4) |
 | `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,443 | +74/−120: the four E6 conversions plus `bindResourceThroughApi` → shared `attachResource` (§7; the latter in the apply stage, simplify F2) |
-| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +17/−23: four helper copies converted (§7) and the round-2 replay-branch fix (§3.6) |
-| `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 205 | +1/−2: `workUrl` converted (§7) |
+| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +27/−33: four helper copies converted (§7), the round-2 replay-branch fix (§3.6) and the round-3 locator scoping (§3.7) |
+| `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 204 | +4/−6: `workUrl` converted (§7) and the round-3 locator scoping (§3.7) |
 | `browser/tests/portal-work-planning.spec.mjs` | edited | 875 | +1/−1: the review-fix stage's replayed-create expectation — the served text, which PR #111 appended the owner-discard note to (ruling P0-2, cited in §3.5); no helper, no title and no other assertion changed |
 | `browser/tests/readable-fixtures.mjs` | **unedited** | 431 | the failure control forbids mutating it; `git diff` is empty |
 | the 7 render-gate specs | **unedited** | — | no rename, no title change |
 | `browser/scripts/run-*.ps1` | **unedited** | 98 / 270 / 250 | each driver stays the local reproduction path; no owned-file clause forced an edit; the isolation suite still passes 7/7 |
 | `browser/playwright.config.mjs`, `browser/package.json` | **unedited** | — | no new reporter, no new script |
-| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 257 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten; the round-2 stage's origin override, replay-branch and mutation wording add nine) |
+| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 275 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten; the round-2 stage's origin override, replay-branch and mutation wording add nine; the round-3 stage's Change 5 and mutation wording add eighteen) |
 | `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md` | new | — | this record |
 | `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` | **unedited** | — | no entry closes; the remaining helper copies are recorded here instead (§8) |
 
@@ -127,6 +127,21 @@ it. The local driver's default target (`http://127.0.0.1:4000`) against a stack 
 `compose.yaml` would hit the same origin rule ("localhost"); the CI path is the verified one
 (§8).
 
+### 3.7 The round-3 locator scoping (PR #260 round-3 ruling)
+
+The daemon spec's four replayed-create evidence assertions were unscoped `getByText(…)` calls
+whose texts the execution timeline legitimately repeats (`TimelineEntry` renders each event
+headline as a `<p>`, and the summary/finding/artifact/test events carry the same strings as the
+accepted-evidence surface), so Playwright's strict mode aborted at the first of them. They are
+now scoped to the `Latest accepted evidence` region, with the asserted text unchanged. The sweep
+covered both compose specs against the failing run's page snapshot and the frontend components:
+the waiting-item `Owner` fact is scoped to the `Outcome` region in both specs
+(`AssignmentSection` renders a second `dl.detail-facts` with the same Owner row, so the unscoped
+locator resolved to two divs), and the control-bar `Retry` locators use `exact: true` (the
+history error state renders a `Retry history` button whose accessible name the substring match
+would also accept). Every other text locator in the two specs was read against the page
+structure and resolves to one element in the state it runs in (§6 row q).
+
 ## 4. Control-flow preservation (lesson 32)
 
 Base-vs-HEAD audit of the three drivers (read in full at the base revision). “Preserved” means the
@@ -135,10 +150,10 @@ phase's observable assertion exists in the wired CI step; deltas are named.
 | family | driver phase (base) | wired carrier | preserved |
 | --- | --- | --- | --- |
 | compose | `docker compose up -d --build` + `curl /portal/login` readiness | step brings up its own named project with the CI-only `PHX_HOST=127.0.0.1` origin override (§3.6); tolerant `/healthz` probe (`--retry-all-errors --retry 90`) + `daemon` service-running loop | yes (probe delta: `/healthz`/`daemon` in place of `/portal/login`, which also serves; carrier delta: the endpoint host is pinned to the documented browser origin, which the driver's `127.0.0.1` default cannot satisfy against the shipped `compose.yaml`) |
-| compose | `SYMMETRY_PORTAL_URL/OPERATOR_TOKEN/COMPOSE_DAEMON` env + `pnpm run test:compose` (desktop) | same env; `test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium` + executed-set assertion | yes (assertion added: a skip is not a verdict; the lost-response replay branch keeps the input route through the second response, §3.6) |
+| compose | `SYMMETRY_PORTAL_URL/OPERATOR_TOKEN/COMPOSE_DAEMON` env + `pnpm run test:compose` (desktop) | same env; `test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium` + executed-set assertion | yes (assertion added: a skip is not a verdict; the lost-response replay branch keeps the input route through the second response, §3.6; the evidence and owner assertions carry the round-3 scoping, §3.7) |
 | compose | `docker compose exec psql` `DC%` record read (`-At -F '|'`, `$LASTEXITCODE` checked) | same query via `docker compose exec -T postgres psql` | yes |
 | compose | eight-table `md5(jsonb_build_object(...))` fingerprint before/after `docker compose restart control` + `/portal/login` re-readiness | SQL ported verbatim; `restart control` under the same two-file model; tolerant `/healthz` (`--retry-all-errors --retry 30`) | yes |
-| compose | `SYMMETRY_COMPOSE_PROJECT_ID/KEY/NAME` + `playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium` | same env; same invocation + executed-set assertion | yes |
+| compose | `SYMMETRY_COMPOSE_PROJECT_ID/KEY/NAME` + `playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium` | same env; same invocation + executed-set assertion | yes (its owner and retry locators carry the same round-3 scoping, §3.7) |
 | compose | (no teardown; the manual stack stays) | `down --volumes --remove-orphans` in an `always()` step | added by P1 |
 | connection | `ecto.drop/create/migrate` with `$LASTEXITCODE` throws | `mix ecto.create` + `mix ecto.migrate` after `mix deps.get`/`mix compile` | created+migrated; the drop is rerun hygiene on a machine where the DB persists — the CI service DB is fresh per run |
 | connection | per-run identity + token mint; empty steering document; `SYMMETRY_FIXTURE_*` + `SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000` + `SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture` | same, minted with `openssl rand` | yes |
@@ -220,6 +235,12 @@ assertion-program 17 tests, actionlint 0 findings, `node --check` on both touche
 `git diff --check` clean, DLP clean — plus `docker compose config` over the override's exact
 heredoc bytes (§6 row n) and the replay-branch shape harness run in real Chromium (§6 row o).
 
+Round-3 stage re-run (PR #260 round-3 ruling, final tree): the same foreground gate set re-run
+— inventory `suites=16 wired=14 manual=2 unclassified=0`, classifier 31 tests, extraction 23
+tests, assertion-program 17 tests, actionlint 0 findings, `node --check` on both compose specs,
+`git diff --check` clean, DLP clean — plus the locator-shape harness in real Chromium over a
+replica of the failing snapshot's structure (§6 row q).
+
 Not run on this host (recorded as missing, never passed):
 
 - the Compose stack and both browser phases (`docker compose up --build --detach`, `docker
@@ -236,6 +257,10 @@ Not run on this host (recorded as missing, never passed):
   stages them needs the workspace install with the recorded feed gaps). The reachable part of
   its contract was re-run — `playwright test --list` over the edited spec collects 36 tests and
   the CLI's JSON leaf titles match the 18-title assertion exactly.
+- the Compose stack in WSL: `wsl.exe -d Ubuntu-24.04 -u accept docker version` resolves the
+  distro's `docker` to the Windows desktop CLI (its contexts target the Windows named pipe) and
+  fails to connect; the distro has no `/var/run/docker.sock`, no `dockerd` and an inactive
+  `docker` service, so the daemon spec cannot run there either.
 - the render gate and the new jobs' end-to-end runs: conductor-verified on the PR.
 
 ## 6. Mutations (judging checks, executed)
@@ -259,6 +284,8 @@ Not run on this host (recorded as missing, never passed):
 | n | the Compose endpoint host vs the browser origin (round-2 ruling a) | `docker compose --project-name … --file compose.yaml config` vs the same plus the daemon step's heredoc extracted byte-for-byte | the merged config differs from the shipped one in exactly the two `PHX_HOST` values (`localhost` → `127.0.0.1`, for `control` and `control-migrate`); services, ports (`127.0.0.1:4000:4000`) and everything else are identical |
 | o | the daemon spec's replay branch (round-2 ruling b) | the branch's shape in real Chromium against a local server (first input POST 202, replay 200): the route kept through the branch (final shape) vs released before it (HEAD shape) | final shape: 1 passed, exit 0; HEAD shape: 1 failed, exit 1 — `Expected: 200` / `Received: undefined` / `Timeout 3000ms exceeded while waiting on the predicate` at the poll, the same `Received: undefined` the round-2 CI log reported; on HEAD bytes `replayStatus`'s only writer is the handler at `:307` while `unroute` sits at `:321`, before the branch at `:322-325` |
 | p | the unmutated shapes of the round-2 changes | the merged config with the override and the final-shape harness | `PHX_HOST=127.0.0.1` for both services; the harness passes |
+| q | the strict-mode locator shapes (round-3 ruling) | a real-Chromium replica of the failing snapshot's structure (dialog, evidence region, timeline, Outcome/Assignment `dl.detail-facts`, `Retry`/`Retry history` buttons): the unreleased shapes vs the final shapes | unreleased: every `toBeVisible` on the four evidence texts, the Owner fact and `Retry` throws `strict mode violation`; final: each scoped/exact locator resolves once and stays visible (2 tests, exit 0) |
+| r | the unmutated round-3 shapes | the same replica with the final locators | 2 passed, exit 0 |
 
 The real reports of (a)/(b) are CI-side; the synthetic reports reproduce the report shape the
 Playwright JSON reporter writes for these specs (file, per-project case state), which is what the
@@ -306,6 +333,10 @@ republished at the final tree.
   config` merges the override in the daemon step's exact bytes, §6 row n); the Phoenix handshake
   itself rests on the same configured-host rule the green planning release demonstrates
   (`PHX_HOST=127.0.0.1` against a `127.0.0.1` origin) and is re-checked by the next CI run.
+- The round-3 locator sweep is verified against a replica of the failing run's snapshot structure
+  plus the frontend components; the compose specs have still never executed past their first
+  abort (the daemon spec aborted at the evidence assertions, the restart spec has never run), so
+  the next CI run is the first full execution of both.
 - Remaining helper copies with no shared counterpart stay in the three wired specs: `columnOf`,
   `moveByKeyboard` (work-planning, compose-daemon, compose-restart), `itemDetail`, `openWork`,
   `fixtureDescription` (compose-daemon), `workItemDetail` (compose-restart). They are
@@ -320,6 +351,6 @@ republished at the final tree.
 
 `git diff --numstat` over the changed files at the final tree (merge base `9aae1af7`): `ci.yml`
 +328/−0 (report-only per D2; the plan's ~+200 estimate), `browser/README.md` +11/−13,
-`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +17/−23,
-`portal-compose-restart.spec.mjs` +1/−2, `portal-work-planning.spec.mjs` +1/−1 — total
-**+432/−159 = +273** tracked lines, plus the plan (257) and this record (325).
+`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +27/−33,
+`portal-compose-restart.spec.mjs` +4/−6, `portal-work-planning.spec.mjs` +1/−1 — total
+**+445/−173 = +272** tracked lines, plus the plan (275) and this record (356).

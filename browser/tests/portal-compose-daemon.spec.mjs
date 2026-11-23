@@ -369,7 +369,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Running", { timeout: 30_000 });
     await cancelDetail.getByRole("button", { name: "Cancel run" }).click();
     await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Cancelled", { timeout: 30_000 });
-    await expect(cancelDetail.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelDetail.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
     const cancelled = await itemDetail(page, cancelItem.id);
     expect(cancelled.work_item.execution).toEqual(expect.objectContaining({ state: "cancelled", generation: 1 }));
     expect(cancelled.raw.timeline).toEqual(
@@ -406,13 +406,14 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await retryEditor.getByRole("button", { name: "Save" }).click();
     await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
     await expect(retryDetail.getByText("Corrected intent is used by generation two.", { exact: false })).toBeVisible();
-    await retryDetail.getByRole("button", { name: "Retry" }).click();
-    await expect(retryDetail.getByText("Completed the requested engineering work", { exact: false })).toBeVisible({
+    await retryDetail.getByRole("button", { name: "Retry", exact: true }).click();
+    const acceptedEvidence = retryDetail.getByRole("region", { name: "Latest accepted evidence" });
+    await expect(acceptedEvidence.getByText("Completed the requested engineering work", { exact: false })).toBeVisible({
       timeout: 30_000
     });
-    await expect(retryDetail.getByText("Verified the requested change", { exact: false })).toBeVisible();
-    await expect(retryDetail.getByText("README.md", { exact: false })).toBeVisible();
-    await expect(retryDetail.getByText("fake-agent verification", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("Verified the requested change", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("README.md", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("fake-agent verification", { exact: false })).toBeVisible();
 
     const retried = await itemDetail(page, retryItem.id);
     expect(retried.work_item.execution.task_id).toBe(failed.work_item.execution.task_id);
@@ -478,7 +479,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     // "Retry available" is the served retry control on its detail.
     const cancelSurface = await openWork(page, cancelItem.id, cancelTitle);
     await expect(cancelSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
-    await expect(cancelSurface.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelSurface.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 
     const persisted = await workspace(page, projectId);
     const persistedProject = persisted.body.projects.find((candidate) => candidate.id === projectId);
@@ -518,9 +519,8 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     const waitedSurface = page.getByRole("dialog", { name: waitTitle });
     await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
     await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
-    await expect(
-      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
-    ).toContainText("default");
+    const outcomeFacts = waitedSurface.getByRole("region", { name: "Outcome" }).locator("dl.detail-facts");
+    await expect(outcomeFacts.locator("div", { hasText: "Owner" })).toContainText("default");
     await expect(
       waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })

@@ -15,8 +15,9 @@ the collection-parity method the conversions below reuse).
 `browser-fixture-linux` job only; the render gate at `:479-556` and its 7-name `--expect-file`
 list stay byte-identical) · `browser/README.md` (the manual matrix) · `browser/tests/*` (only the
 four wired specs, for the E6-deferred conversions, the 2026-11-22 review ruling's one
-replayed-create expectation in `portal-work-planning.spec.mjs` and the round-2 ruling's
-replay-branch fix in `portal-compose-daemon.spec.mjs` — no rename, no title change,
+replayed-create expectation in `portal-work-planning.spec.mjs`, the round-2 ruling's
+replay-branch fix in `portal-compose-daemon.spec.mjs` and the round-3 ruling's strict-mode
+locator scoping in both compose specs — no rename, no title change,
 no render-gate spec, no shared module) · `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` (only if an
 entry closes — none does) · this plan file · `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md`
 (the repo's evidence-record convention, `docs/evidence/rf-w5-08-…` style).
@@ -203,6 +204,20 @@ Remaining spec-local helpers with no shared counterpart (`columnOf`, `moveByKeyb
 they are and are listed in the final report as the recorded remainder; the shared module and the
 render-gate specs are untouched.
 
+## Change 5 — the compose specs' strict-mode locator scoping (round-3 ruling)
+
+The failing run's page snapshot showed the daemon spec's four replayed-create evidence texts
+repeated by the execution timeline (`TimelineEntry` renders each event headline as a `<p>`), so
+the unscoped `getByText` calls tripped Playwright's strict mode at the first of them and every
+later assertion in the F1-F7 flow stayed unexecuted. The assertions are now scoped to the
+`Latest accepted evidence` region with their text unchanged; the waiting-item `Owner` fact is
+scoped to the `Outcome` region in both compose specs (the `Assignment` section renders a second
+`dl.detail-facts` with the same row), and the control-bar `Retry` locators use `exact: true` so
+the history error state's `Retry history` button cannot collide. The rest of both specs' text
+locators were read against the frontend components and resolve to one element in the state each
+runs in; the mutation check is the real-Chromium locator-shape harness described in the evidence
+file.
+
 ## Evidence plan
 
 - Foreground local gates: `python3 scripts/ci/test-ci-changed-path-classifier.py` (the new job's
@@ -231,6 +246,9 @@ render-gate specs are untouched.
   (`localhost` → `127.0.0.1`); (i) the replay-branch shapes in real Chromium — the route kept
   through the branch passes, while HEAD's release-before-branch shape fails at the poll with
   `Received: undefined`.
+  The round-3 ruling adds: (j) a real-Chromium replica of the failing snapshot's structure —
+  every unreleased locator shape strict-fails (`strict mode violation`) while each scoped or
+  exact shape resolves once and stays visible.
 - CI is the slow oracle (green `compose` browser steps, green `browser-fixture-linux`, unchanged
   render gate, the inventory step green): conductor-verified on the PR.
 - Host limitations, recorded with the exact commands: no Docker daemon and no PostgreSQL on this
