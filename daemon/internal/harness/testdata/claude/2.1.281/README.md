@@ -2,7 +2,7 @@
 
 Historical: superseded by `../2.1.322/` under the 2026-11-11 latest-stable
 policy. Owner directive 2026-09-24: track latest client. This directory supersedes
-`../2.1.259/` as the tested Claude Code version.
+`2.1.259` as the tested Claude Code version.
 
 ## Files
 
@@ -14,7 +14,7 @@ policy. Owner directive 2026-09-24: track latest client. This directory supersed
   `--json-schema <schema>` (inline JSON only, no file variant). The probe now
   requires `--json-schema` in help because the candidate transport depends on it.
 - `stream-json.jsonl` is synthetic, Multica-derived framing evidence moved from
-  `../2.1.259/`. The envelope framing it models is unchanged on 2.1.281; its
+  `2.1.259`. The envelope framing it models is unchanged on 2.1.281; its
   result record now carries `structured_output` because terminal success
   requires it. Identifiers, messages and usage values are invented.
 - `structured-output-task-result-success.jsonl` is a sanitized real 2.1.281

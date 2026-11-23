@@ -16,8 +16,8 @@ prove authenticated native execution or advertise a supported adapter.
   `agent_end` whose `willRetry` is false.
 - `version.txt` records `pi --version` from the installed 0.87.1 binary.
 
-Both JSONL files were moved unchanged from `../0.85.1/` after checking that the
-surface they model did not change between the two releases:
+Both JSONL files were moved unchanged from the `0.85.1` capture after checking
+that the surface they model did not change between the two releases:
 
 - upstream `packages/coding-agent/src/modes/rpc/rpc-types.ts` is byte-identical
   at `v0.85.1` and `v0.87.1`;
@@ -28,9 +28,9 @@ surface they model did not change between the two releases:
   the adapter passes or admits (`ValidateRPCProfileArgs`, `--session`,
   `--extension`, `--no-extensions`).
 
-The 0.85.1 real-run records were retired with the `../0.85.1/` directory; they
-were evidence for that binary only. The opt-in test descriptions and environment
-variables still apply; substitute a 0.87.1 executable. See
+The 0.85.1 real-run records were retired; they were evidence for that binary
+only. The opt-in test descriptions and environment variables still apply;
+substitute a 0.87.1 executable. See
 [`native-windows-2026-09-24.md`](native-windows-2026-09-24.md) for this
 directory's recorded invocation and [`../1.5.2/README.md`](../1.5.2/README.md)
 for the current descriptions.

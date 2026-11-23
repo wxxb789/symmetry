@@ -20,9 +20,9 @@ landed, no promotion survives without its own exact-blob evidence.
   `sandbox.type=workspaceWrite`, `networkAccess=false` and no extra writable
   roots. Paths, identifiers and installation metadata were redacted.
 - `app-server-lifecycle.jsonl` and `frames.jsonl` are normalized synthetic
-  framing fixtures moved from `../0.167.1/`. The generated v2 schema bundle is
-  byte-identical, so the method names and DTO shapes they model are unchanged.
-  They are not a raw 0.167.2 turn capture.
+  framing fixtures moved from the `0.167.1` capture. The generated v2 schema
+  bundle is byte-identical, so the method names and DTO shapes they model are
+  unchanged. They are not a raw 0.167.2 turn capture.
 - [Windows native observation](native-windows-2026-11-12.md) records the exact
   binary, the credentialed repository turn, cancellation, artifact, cumulative
   token counters, and the isolated-home read-only rejection.

@@ -14,9 +14,11 @@ Per harness: the two most recent captures, plus any older directory that is
 - the only carrier of a distinct capture a test replays (the claude `2.1.281`
   structured-output captures, read by `claude/stream_test.go`).
 
+Every directory under `testdata/opencode/` also stays, regardless of that list: the tree is
+frozen (W6-04), because its `2.3.0/README.md` is cited by `docs/design/harness.md`.
+
 Retire an older version by deleting its whole directory (a `schema-manifest.json` retires with
 it), after checking `docs/runbooks/` and `docs/design/harness.md` for pins on that version.
-`testdata/opencode/` is frozen: its `2.3.0/README.md` is cited by `docs/design/harness.md`.
 
 ## Adding a version
 

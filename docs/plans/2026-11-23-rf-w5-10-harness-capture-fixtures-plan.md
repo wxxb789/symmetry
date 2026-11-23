@@ -54,8 +54,9 @@ exactly `daemon/internal/harness/testdata/claude/2.1.281/README.md` and
 daemon/internal/harness/testdata/claude/2.1.323` showing only the two READMEs. The staging
 directories' own READMEs say "Historical: superseded by" and "stays in the tree as historical
 evidence" — retiring `2.1.259` with its own README and keeping `2.1.322` leaves those sentences
-true; the `2.1.281` README's "moved from `../2.1.259/`" is a historical statement about provenance
-and stays.
+true; the `2.1.281` README's "moved from `../2.1.259/`" provenance sentence stayed in the
+implement stage and the 2026-11-23 round-1 ruling replaced the retired path with the bare
+version (§8.4).
 
 P5. **TODO bookkeeping.** The item at `docs/TODO.md:95-104` (the claude README reconciliation,
 parked on W5-10) moves to `docs/archive/CLOSED-TODO.md` per the repository contract: the item text
@@ -179,6 +180,10 @@ Every restored file is verified against its base blob (`git rev-parse 2c8c419e:<
   head-present paths, and the gate is run before the stage ends (P6).
 - `docs/design/harness.md` is read-only here; its `:31` codex `0.167.2` sentence and `:247`
   opencode README link stay true because both directories survive.
+- Program-level follow-up (2026-11-23 round-1 ruling, P3-4; not this slice's gate): the
+  profile-path DLP scan matches the forward-slash separator form only and needs the
+  backslash-separated form as well. The branch diff's removed lines carry three profile paths in
+  that form (added lines: none), so the forward-slash-only scan is a false negative for it.
 - Out of scope: production harness/adapter code; `docs/runbooks/**`; `docs/design/harness.md`;
   app-side version strings; new capture collection; `testdata/opencode/**` and `opencode/*_test.go`.
 
@@ -251,3 +256,24 @@ Re-run gates on the settled tree: Windows `go test -count=1 ./internal/harness/.
 (9 packages `ok`, 0 `FAIL`, 23 s); WSL `go test -race -count=1 ./internal/harness/...` exit 0
 (Ubuntu-24.04, go1.27.0; 9 `ok`, 0 `FAIL`, 57 s); fixture census `git ls-tree -r --long` =
 82 / 519,672 + recipe 2,286 = 83 / 521,958; `git diff --check` exit 0.
+
+### 8.4 Round-1 fix (2026-11-23; PR #271 review, rulings P1-1, P3-1 to P3-4)
+
+Prose-only repairs; no capture, `version.txt` or manifest byte and no Go file changed; inside
+every retained `testdata/` directory only `README.md` files differ from the base revision.
+
+| file | change | ruling |
+| --- | --- | --- |
+| `testdata/README.md` | retention rule names the `testdata/opencode/` freeze (W6-04) as an explicit exception | P3-1 |
+| `testdata/pi/1.5.2/README.md` | restored the one-line `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV` description; the retired-link removal stands | P1-1, P3-2 |
+| `testdata/claude/2.1.281/README.md` | retired-directory paths replaced by the bare version | P3-3 |
+| `testdata/pi/0.87.1/README.md` | retired-directory paths removed | P3-3 |
+| `testdata/codex/0.167.2/README.md` | retired-directory path replaced by the bare version | P3-3 |
+
+Fixture census after the round-1 repairs (`git ls-files --cached` with working-tree sizes over
+`daemon/internal/harness/testdata`): **83 files / 522,147 bytes**; the §3 and §8.3 totals predate
+these repairs. `git grep` for each retired version string under `testdata/` returns no path
+pointer; the remaining mentions are recorded payload values inside JSONL captures,
+manifest keys and digest comparisons, and bare historical version names (the hit table is in the
+PR body). The profile-path DLP follow-up is in §7; P3-5 (the review bot's failed run) needs no
+action.

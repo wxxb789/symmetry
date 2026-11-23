@@ -67,7 +67,8 @@ recorded blob for the platform before launching anything.
 ## Opt-in evidence commands
 
 The opt-in evidence environment variables apply to a `1.5.2` executable.
-`TestNativeRepositoryTask` and
+`SYMMETRY_PI_NATIVE_REPOSITORY_TASK_CREDENTIAL_ENV` optionally names one already
+configured credential variable, not its value. `TestNativeRepositoryTask` and
 `TestNativeRepositoryTaskRetainedResume` need an operator-supplied numeric
 loopback OpenAI Responses gateway through
 `SYMMETRY_PI_NATIVE_REPOSITORY_TASK_BASE_URL`;
