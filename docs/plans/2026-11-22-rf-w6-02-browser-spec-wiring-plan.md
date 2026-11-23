@@ -14,8 +14,9 @@ the collection-parity method the conversions below reuse).
 `.github/workflows/ci.yml` (the `compose` job's appended browser steps and the new
 `browser-fixture-linux` job only; the render gate at `:479-556` and its 7-name `--expect-file`
 list stay byte-identical) · `browser/README.md` (the manual matrix) · `browser/tests/*` (only the
-four wired specs, for the E6-deferred conversions and — per the 2026-11-22 review ruling — the
-one replayed-create expectation in `portal-work-planning.spec.mjs` — no rename, no title change,
+four wired specs, for the E6-deferred conversions, the 2026-11-22 review ruling's one
+replayed-create expectation in `portal-work-planning.spec.mjs` and the round-2 ruling's
+replay-branch fix in `portal-compose-daemon.spec.mjs` — no rename, no title change,
 no render-gate spec, no shared module) · `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` (only if an
 entry closes — none does) · this plan file · `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md`
 (the repo's evidence-record convention, `docs/evidence/rf-w5-08-…` style).
@@ -77,9 +78,12 @@ in its `EXIT` trap, so the browser steps provision a second stack under their ow
    `pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium`
    (the runner's browser; the stack itself is built by `docker compose`).
 2. `Run the Compose daemon acceptance on a stack this job provisions` — `docker compose
-   --project-name … --file compose.yaml up --build --detach`, wait for `/healthz` (`curl
-   --retry-all-errors --retry 90`, the drivers' retry pattern) and for the `daemon` service
-   running, then
+   --project-name … --file compose.yaml up --build --detach` with a CI-only `$RUNNER_TEMP`
+   second file pinning `PHX_HOST=127.0.0.1` for `control`/`control-migrate` (round-2 ruling a:
+   the documented target is `127.0.0.1:4000` and the published port binds IPv4 loopback only, so
+   the stack's endpoint host is aligned to the documented origin instead of switching the spec
+   URL to `localhost`), wait for `/healthz` (`curl --retry-all-errors --retry 90`, the drivers'
+   retry pattern) and for the `daemon` service running, then
    `portal-compose-daemon.spec.mjs --project=desktop-chromium` with `SYMMETRY_COMPOSE_DAEMON=1`,
    the driver's URL/token defaults, and the JSON report asserted by
    `assert-playwright-json.py --expect-skipped 0 --expect-project desktop-chromium
@@ -87,8 +91,8 @@ in its `EXIT` trap, so the browser steps provision a second stack under their ow
 3. `Verify the control restart preserves the Compose workspace` — the driver's restart phase,
    ported: identify the `DC%` project with `docker compose exec -T postgres psql`, take the
    driver's eight-table `md5(jsonb_build_object(…))` fingerprint, `docker compose restart
-   control`, wait for `/healthz` (`--retry-all-errors --retry 30`), re-take the fingerprint and
-   require byte equality, then run
+   control` under the same two-file model, wait for `/healthz` (`--retry-all-errors --retry 30`),
+   re-take the fingerprint and require byte equality, then run
    `portal-compose-restart.spec.mjs --project=desktop-chromium` with
    `SYMMETRY_COMPOSE_PROJECT_ID/KEY/NAME` and its own `--expect-file` + title assertion.
 4. `Tear down the Compose acceptance stack` — `if: always()`, the smoke script's cleanup body:
@@ -222,6 +226,11 @@ render-gate specs are untouched.
   the same report; (f) a provider canary in the provider-call log reddens the restored guard
   while the HEAD guard stays green; (g) a socket server resetting its first connections kills
   the HEAD probes (exit 56) while the final `--retry-all-errors` probes retry through and exit 0.
+  The round-2 rulings add: (h) the daemon step's override heredoc, extracted byte-for-byte and
+  merged through `docker compose config`, changes exactly the two `PHX_HOST` values
+  (`localhost` → `127.0.0.1`); (i) the replay-branch shapes in real Chromium — the route kept
+  through the branch passes, while HEAD's release-before-branch shape fails at the poll with
+  `Received: undefined`.
 - CI is the slow oracle (green `compose` browser steps, green `browser-fixture-linux`, unchanged
   render gate, the inventory step green): conductor-verified on the PR.
 - Host limitations, recorded with the exact commands: no Docker daemon and no PostgreSQL on this

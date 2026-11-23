@@ -27,17 +27,17 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 
 | file | status | lines | note |
 | --- | --- | ---: | --- |
-| `.github/workflows/ci.yml` | edited | 1,846 → 2,164 | +318/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the fix stage added the planning step's `PHX_HOST` export (+2 lines) and the connection step's trailing canary guard (+12 lines, review F1/F2); the review-fix stage made the three new `/healthz` probes tolerant (`--retry-all-errors`, rulings P0-1/P1-3), restored the provider-call-log canary grep and pinned the full executed sets (rulings P3-5/P3-6, §3.5); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
+| `.github/workflows/ci.yml` | edited | 1,846 → 2,174 | +328/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the fix stage added the planning step's `PHX_HOST` export (+2 lines) and the connection step's trailing canary guard (+12 lines, review F1/F2); the review-fix stage made the three new `/healthz` probes tolerant (`--retry-all-errors`, rulings P0-1/P1-3), restored the provider-call-log canary grep and pinned the full executed sets (rulings P3-5/P3-6, §3.5); the round-2 stage added the CI-only Compose origin override (ruling a, §3.6); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
 | `browser/README.md` | edited | 615 → 613 | +11/−13: the manual matrix intro and rows (§3.4) |
 | `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,443 | +74/−120: the four E6 conversions plus `bindResourceThroughApi` → shared `attachResource` (§7; the latter in the apply stage, simplify F2) |
-| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +15/−21: four helper copies converted (§7) |
+| `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +17/−23: four helper copies converted (§7) and the round-2 replay-branch fix (§3.6) |
 | `browser/tests/portal-compose-restart.spec.mjs` | edited | 206 → 205 | +1/−2: `workUrl` converted (§7) |
 | `browser/tests/portal-work-planning.spec.mjs` | edited | 875 | +1/−1: the review-fix stage's replayed-create expectation — the served text, which PR #111 appended the owner-discard note to (ruling P0-2, cited in §3.5); no helper, no title and no other assertion changed |
 | `browser/tests/readable-fixtures.mjs` | **unedited** | 431 | the failure control forbids mutating it; `git diff` is empty |
 | the 7 render-gate specs | **unedited** | — | no rename, no title change |
 | `browser/scripts/run-*.ps1` | **unedited** | 98 / 270 / 250 | each driver stays the local reproduction path; no owned-file clause forced an edit; the isolation suite still passes 7/7 |
 | `browser/playwright.config.mjs`, `browser/package.json` | **unedited** | — | no new reporter, no new script |
-| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 248 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten) |
+| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 257 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight; the review-fix stage's probe, executed-set, canary and mutation wording add ten; the round-2 stage's origin override, replay-branch and mutation wording add nine) |
 | `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md` | new | — | this record |
 | `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` | **unedited** | — | no entry closes; the remaining helper copies are recorded here instead (§8) |
 
@@ -109,6 +109,24 @@ frontend unit pin is `planning.test.tsx:203-205`; the stale expectation dates to
 (`5c2e0ada`, 2026-11-17) and was unchanged since (`git log -S` over the spec file). The case
 still asserts one stored work item; the two CI failures were exactly this stale expectation.
 
+### 3.6 The round-2 fixes (PR #260 round-2 rulings)
+
+Two changes at the final tree: (1) the Compose browser steps pass a CI-only override
+(`$RUNNER_TEMP/compose.browser-origin.yaml`, written by the daemon step) that pins `PHX_HOST` to
+`127.0.0.1` for `control` and `control-migrate`, so the endpoint's configured host matches the
+browser origin and the portal WebSocket handshake stops being refused (§6 row n). The ruling's
+fallback applies rather than switching the spec URL to `localhost`: the documented target is
+`http://127.0.0.1:4000` (README: the control plane "is published only to `127.0.0.1:4000`";
+`browser/README.md` states the driver's default target), and `compose.yaml` publishes the port as
+`127.0.0.1:4000:4000` (IPv4 loopback only). `compose.yaml` stays untouched and no
+`allowBrowserError` was added. (2) `portal-compose-daemon.spec.mjs` keeps the input route
+registered through the replay branch: the replay click re-enters the handler, records the second
+response's status in `replayStatus`, and the poll can now be satisfied; the `unroute` moved after
+the branch (§6 row o). The stale comment clause ("when the route is released") was dropped with
+it. The local driver's default target (`http://127.0.0.1:4000`) against a stack from the shipped
+`compose.yaml` would hit the same origin rule ("localhost"); the CI path is the verified one
+(§8).
+
 ## 4. Control-flow preservation (lesson 32)
 
 Base-vs-HEAD audit of the three drivers (read in full at the base revision). “Preserved” means the
@@ -116,10 +134,10 @@ phase's observable assertion exists in the wired CI step; deltas are named.
 
 | family | driver phase (base) | wired carrier | preserved |
 | --- | --- | --- | --- |
-| compose | `docker compose up -d --build` + `curl /portal/login` readiness | step brings up its own named project; tolerant `/healthz` probe (`--retry-all-errors --retry 90`) + `daemon` service-running loop | yes (probe delta: `/healthz`/`daemon` in place of `/portal/login`, which also serves; the tolerance matches the driver's `--retry-all-errors`) |
-| compose | `SYMMETRY_PORTAL_URL/OPERATOR_TOKEN/COMPOSE_DAEMON` env + `pnpm run test:compose` (desktop) | same env; `test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium` + executed-set assertion | yes (assertion added: a skip is not a verdict) |
+| compose | `docker compose up -d --build` + `curl /portal/login` readiness | step brings up its own named project with the CI-only `PHX_HOST=127.0.0.1` origin override (§3.6); tolerant `/healthz` probe (`--retry-all-errors --retry 90`) + `daemon` service-running loop | yes (probe delta: `/healthz`/`daemon` in place of `/portal/login`, which also serves; carrier delta: the endpoint host is pinned to the documented browser origin, which the driver's `127.0.0.1` default cannot satisfy against the shipped `compose.yaml`) |
+| compose | `SYMMETRY_PORTAL_URL/OPERATOR_TOKEN/COMPOSE_DAEMON` env + `pnpm run test:compose` (desktop) | same env; `test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium` + executed-set assertion | yes (assertion added: a skip is not a verdict; the lost-response replay branch keeps the input route through the second response, §3.6) |
 | compose | `docker compose exec psql` `DC%` record read (`-At -F '|'`, `$LASTEXITCODE` checked) | same query via `docker compose exec -T postgres psql` | yes |
-| compose | eight-table `md5(jsonb_build_object(...))` fingerprint before/after `docker compose restart control` + `/portal/login` re-readiness | SQL ported verbatim; `restart control`; tolerant `/healthz` (`--retry-all-errors --retry 30`) | yes |
+| compose | eight-table `md5(jsonb_build_object(...))` fingerprint before/after `docker compose restart control` + `/portal/login` re-readiness | SQL ported verbatim; `restart control` under the same two-file model; tolerant `/healthz` (`--retry-all-errors --retry 30`) | yes |
 | compose | `SYMMETRY_COMPOSE_PROJECT_ID/KEY/NAME` + `playwright test tests/portal-compose-restart.spec.mjs --project=desktop-chromium` | same env; same invocation + executed-set assertion | yes |
 | compose | (no teardown; the manual stack stays) | `down --volumes --remove-orphans` in an `always()` step | added by P1 |
 | connection | `ecto.drop/create/migrate` with `$LASTEXITCODE` throws | `mix ecto.create` + `mix ecto.migrate` after `mix deps.get`/`mix compile` | created+migrated; the drop is rerun hygiene on a machine where the DB persists — the CI service DB is fresh per run |
@@ -194,6 +212,14 @@ jobs), `node --check` on the touched `.mjs`, a Playwright `--list` over the edit
 `git diff --check` clean, DLP clean — plus the synthetic-report assertion runs, the restored
 canary-guard runs and the real-curl probe comparison (§6 rows h–m).
 
+Round-2 stage re-run (PR #260 round-2 rulings, final tree): the same foreground gate set re-run
+— inventory `suites=16 wired=14 manual=2 unclassified=0`, classifier 31 tests, extraction 23
+tests (all 40 bash inline bodies clean under `bash -n`, the 12 PowerShell bodies clean under the
+PowerShell parser; the changed bodies at 37/48/72/47 lines stay under the 80-line ceiling),
+assertion-program 17 tests, actionlint 0 findings, `node --check` on both touched specs,
+`git diff --check` clean, DLP clean — plus `docker compose config` over the override's exact
+heredoc bytes (§6 row n) and the replay-branch shape harness run in real Chromium (§6 row o).
+
 Not run on this host (recorded as missing, never passed):
 
 - the Compose stack and both browser phases (`docker compose up --build --detach`, `docker
@@ -230,6 +256,9 @@ Not run on this host (recorded as missing, never passed):
 | k | a canary in the fixture log; the provider-call log empty; the provider-call log missing | the same guard pair, synthetic logs | both guards exit 1 on each of the three; the clean pair is silent and exit 0 |
 | l | the three changed probes against a socket server that resets its first two accepted connections | the HEAD and final command lines with the URL substituted for the local port | HEAD: exit 56 after one connection (`curl: (56) Recv failure: Connection was reset`); final: exit 0 after three connections, the two resets printed by `--show-error` |
 | m | the unmutated shapes of the review-fix changes | the two full-title invocations against reports carrying exactly the pinned titles; the restored guard against clean logs; the three final probes against a healthy endpoint | exit 0 each |
+| n | the Compose endpoint host vs the browser origin (round-2 ruling a) | `docker compose --project-name … --file compose.yaml config` vs the same plus the daemon step's heredoc extracted byte-for-byte | the merged config differs from the shipped one in exactly the two `PHX_HOST` values (`localhost` → `127.0.0.1`, for `control` and `control-migrate`); services, ports (`127.0.0.1:4000:4000`) and everything else are identical |
+| o | the daemon spec's replay branch (round-2 ruling b) | the branch's shape in real Chromium against a local server (first input POST 202, replay 200): the route kept through the branch (final shape) vs released before it (HEAD shape) | final shape: 1 passed, exit 0; HEAD shape: 1 failed, exit 1 — `Expected: 200` / `Received: undefined` / `Timeout 3000ms exceeded while waiting on the predicate` at the poll, the same `Received: undefined` the round-2 CI log reported; on HEAD bytes `replayStatus`'s only writer is the handler at `:307` while `unroute` sits at `:321`, before the branch at `:322-325` |
+| p | the unmutated shapes of the round-2 changes | the merged config with the override and the final-shape harness | `PHX_HOST=127.0.0.1` for both services; the harness passes |
 
 The real reports of (a)/(b) are CI-side; the synthetic reports reproduce the report shape the
 Playwright JSON reporter writes for these specs (file, per-project case state), which is what the
@@ -273,6 +302,10 @@ republished at the final tree.
 - The planning step's `PHX_HOST` export is what the release's prod runtime config provider fetches
   for every command, `eval` included (`config/runtime.exs:150`); an edit that moved it back onto
   the `start` line alone reintroduces the abort (mutation row f, §6).
+- The Compose origin fix is verified locally at the compose-config level only (`docker compose
+  config` merges the override in the daemon step's exact bytes, §6 row n); the Phoenix handshake
+  itself rests on the same configured-host rule the green planning release demonstrates
+  (`PHX_HOST=127.0.0.1` against a `127.0.0.1` origin) and is re-checked by the next CI run.
 - Remaining helper copies with no shared counterpart stay in the three wired specs: `columnOf`,
   `moveByKeyboard` (work-planning, compose-daemon, compose-restart), `itemDetail`, `openWork`,
   `fixtureDescription` (compose-daemon), `workItemDetail` (compose-restart). They are
@@ -285,8 +318,8 @@ republished at the final tree.
 
 ## 9. dLOC (D2, report-only)
 
-`git diff --numstat` over the changed files at the final tree (PR base `f0448773`): `ci.yml`
-+318/−0 (report-only per D2; the plan's ~+200 estimate), `browser/README.md` +11/−13,
-`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +15/−21,
+`git diff --numstat` over the changed files at the final tree (merge base `9aae1af7`): `ci.yml`
++328/−0 (report-only per D2; the plan's ~+200 estimate), `browser/README.md` +11/−13,
+`portal-connections.spec.mjs` +74/−120, `portal-compose-daemon.spec.mjs` +17/−23,
 `portal-compose-restart.spec.mjs` +1/−2, `portal-work-planning.spec.mjs` +1/−1 — total
-**+420/−157 = +263** tracked lines, plus the plan (248) and this record (292).
+**+432/−159 = +273** tracked lines, plus the plan (257) and this record (325).

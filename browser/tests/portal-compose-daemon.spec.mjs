@@ -289,7 +289,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     // exists) and only the response is dropped, so the browser has no
     // confirmation. The receipt states the unknown outcome — never applied —
     // and the reader's draft survives. If the served waiting signal still
-    // offers the request when the route is released, pressing the same control
+    // offers the request, pressing the same control
     // replays the same browser-minted identity; the run may also have completed
     // already, in which case the faithful snapshot owns the state. Either way
     // the timeline carries exactly one durable input command.
@@ -318,12 +318,12 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       (entry) => entry.source === "command" && entry.data.kind === "provide_input"
     );
     expect(durableInput, "the lost response still left a durable input command").toHaveLength(1);
-    await page.unroute("**/portal/api/work-items/*/input");
     if ((await waitDetail.getByRole("button", { name: "Send" }).count()) === 1) {
       await expect(waitDetail.getByLabel("Response")).toHaveValue("continue");
       await waitDetail.getByRole("button", { name: "Send" }).click();
       await expect.poll(() => replayStatus).toBe(200);
     }
+    await page.unroute("**/portal/api/work-items/*/input");
     await expect(waitDetail.locator(".control-bar .chip")).toHaveText("Completed", { timeout: 30_000 });
     const waited = await itemDetail(page, wait.id);
     expect(waited.work_item.execution).toEqual(

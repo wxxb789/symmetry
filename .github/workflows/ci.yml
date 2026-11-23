@@ -1862,7 +1862,17 @@ jobs:
         run: |
           set -Eeuo pipefail
           project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          compose=(docker compose --project-name "$project" --file compose.yaml)
+          origin_override="$RUNNER_TEMP/compose.browser-origin.yaml"
+          cat > "$origin_override" <<'EOF'
+          services:
+            control:
+              environment:
+                PHX_HOST: 127.0.0.1
+            control-migrate:
+              environment:
+                PHX_HOST: 127.0.0.1
+          EOF
+          compose=(docker compose --project-name "$project" --file compose.yaml --file "$origin_override")
           "${compose[@]}" up --build --detach
           curl --fail --silent --show-error --retry 90 --retry-delay 1 --retry-all-errors http://127.0.0.1:4000/healthz
           for attempt in {1..30}; do
@@ -1893,7 +1903,7 @@ jobs:
         run: |
           set -Eeuo pipefail
           project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          compose=(docker compose --project-name "$project" --file compose.yaml)
+          compose=(docker compose --project-name "$project" --file compose.yaml --file "$RUNNER_TEMP/compose.browser-origin.yaml")
           record=$("${compose[@]}" exec -T postgres psql -U symmetry -d symmetry_dev -At -F '|' \
             -c "SELECT p.id, p.key, p.name FROM projects p WHERE p.key LIKE 'DC%' ORDER BY p.inserted_at DESC LIMIT 1;")
           IFS='|' read -r project_id project_key project_name <<< "$record"
