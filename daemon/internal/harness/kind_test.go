@@ -43,6 +43,24 @@ func TestParseKindMapsEachWireValueToItsInternalKind(t *testing.T) {
 	}
 }
 
+// These strings are persisted in Goal-session state and sent to Control, so changing one
+// is a persisted/wire byte change even though `Kind` is a package-local type.
+func TestKindSpellingsAreThePersistedAndControlBoundBytes(t *testing.T) {
+	for kind, want := range map[Kind]string{
+		KindGeneric:  "generic",
+		KindCodex:    "codex",
+		KindClaude:   "claude",
+		KindPi:       "pi",
+		KindOMP:      "omp",
+		KindOmO:      "omo",
+		KindOpenCode: "opencode",
+	} {
+		if string(kind) != want {
+			t.Fatalf("Kind(%q) = %q, want the persisted spelling %q", kind, string(kind), want)
+		}
+	}
+}
+
 func TestKindPredicatesAnswerTheConfiguredPolicy(t *testing.T) {
 	for kind, want := range map[Kind]struct {
 		nativeGoal       bool

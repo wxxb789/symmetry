@@ -6,9 +6,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// ParseKind maps the configured wire spelling to the internal adapter kind. It
-// is the single wire-to-internal table; config, app and linuxpreflight consume
-// it instead of keeping their own switches.
+// ParseKind maps the configured wire spelling to the internal adapter kind; it is the
+// single wire-to-internal table consumed by config, app and linuxpreflight.
 func ParseKind(value string) (Kind, error) {
 	wire, ok := protocol.ParseHarnessKind(value)
 	if !ok {
@@ -34,8 +33,7 @@ func ParseKind(value string) (Kind, error) {
 	}
 }
 
-// NativeGoal reports whether the kind's launch contract is staged (process
-// identity, then native session handle, then native turn); the generic adapter
+// NativeGoal reports whether the kind's launch contract is staged; the generic adapter
 // deliberately remains outside, and an unknown kind stays fail-closed.
 func (kind Kind) NativeGoal() bool {
 	switch kind {

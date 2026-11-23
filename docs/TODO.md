@@ -1748,3 +1748,16 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       authorization and independent review. Line numbers are the rf-a3 base `b9d4b4a4`; no test
       covers the cross-language boundary today (the app tests use a fake Control client).
       Owner area: daemon app + control goals.
+
+## Retained-resume owner gate still answers by kind list (rf-a3 observation, 2026-11-23)
+
+- [ ] Decide the retained-resume owner gate that still answers by kind list.
+      `daemon/internal/app/native_run.go:2017` (`verifyNativeTaskResultSubject`) admits a
+      retained-resume subject only while the running capability kind is pi/omp/omo. Since the
+      rf-a3 Q1=a change, `admissionLaunchFailure` answers retained resume purely from the
+      capability projection (probe: the truth table's `resume.advertised` rows pass for every
+      kind), so a resume-advertising kind outside pi/omp/omo now passes admission and is then
+      refused by this owner gate — a divergence no test covers (the table pins the admission
+      answer only). Align the gate with the projection answer or record it as the deliberate
+      retained-resume owner allowlist; do not delete the kind list silently. Owner area:
+      daemon app.

@@ -4418,7 +4418,7 @@ func TestGoalAdmissionRejectsProviderAccessBeforeNativeLaunch(t *testing.T) {
 	}
 }
 
-func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
+func TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatal(err)
@@ -4439,10 +4439,8 @@ func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
 		if err := admissionLaunchFailure(admission, projection, access); err == nil {
 			t.Fatalf("%s provider access was accepted without an advertised broker bridge", kind)
 		}
-		// rf-a3 Q1=a: the verified projection's own claim is the only
-		// provider-access gate, so the same projection with the advertised
-		// bridge passes for every kind; the deleted kind list is what used to
-		// refuse it.
+		// The verified projection's own claim is the only provider-access gate, so the
+		// same projection with the advertised bridge passes for every kind.
 		advertised := projection
 		advertised.ProviderAccess = true
 		if err := admissionLaunchFailure(admission, advertised, access); err != nil {

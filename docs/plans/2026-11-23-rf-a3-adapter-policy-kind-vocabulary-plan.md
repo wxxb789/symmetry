@@ -13,8 +13,10 @@ the wire values and every remaining copy is drift-bound to it by a red-able test
 --check` runs inside `contracts:check`; with Q1=a the two app policy sites
 (`admissionLaunchFailure`'s provider-access and retained-resume kind lists) answer only through the
 capability projection, and the base-vs-HEAD truth table differs only in the authorized Q1 sentences
-and the fabricated-projection rows. No wire byte, persisted byte, reason code, error type, write
-order or CI-pinned name changes.
+(whose four retained-resume rows for generic/codex/claude/opencode also flip the inner error class
+from a plain `fmt.Errorf` to the projection's `*harness.CapabilityError`; measured and named in §8)
+and the fabricated-projection rows. No wire byte, persisted byte, reason code, write order or
+CI-pinned name changes.
 
 ## 1. Owned-file re-derivation at dispatch (HEAD `b9d4b4a4`)
 
@@ -31,6 +33,7 @@ order or CI-pinned name changes.
 | `internal/app/goal_admission.go` | provider-access kind list `:49-55`; resume kind list `:71-75` | delete both lists; keep `Require` at `:56-58` and `:76-78` (Q1=a) |
 | `internal/app/goal_admission_tx.go` (`:277` call site only) | `if !nativeGoalHarnessKind(configuredKind)` `:277` | `if !configuredKind.NativeGoal()` |
 | new `internal/app/adapter_policy_truth_table_test.go` | absent | seven-row base-vs-HEAD table; reuses `testVerifiedNativeCapabilities` (`harness_test.go:5017`), the production registry probe (`newHarnessRegistry`) with an absent binary, and the promoted-pi seam (`pi.NewAdapterWithRunner` + `nativeProbeDigestFixtures`, precedent `harness_test.go:465-520`) |
+| `internal/app/harness_test.go` (outside the contract's `Owned files (STRICT)` line; recorded per review R4 in §8.3) | resume-refusal pin `:749-753`; provider-access pin `:4421-4450` | pin updates + the conductor-authorized rename only: substring reason match → typed `taskResultFailureReason`, and the codex/omp/omo arm now also asserts the advertised projection passes; no production change |
 | `internal/control/validation.go` | attach list `:569-573`, text `harness_kind %q is invalid` `:572` | `protocol.ParseHarnessKind`; text unchanged. Recorded: `generic` becomes locally acceptable (the shared parser is the seven wire values; the daemon never sends it and Control still refuses it) |
 | `internal/control/validation_harness_kind_test.go` (repoint only) | literal six-kind iteration `:9-22` | iterate `protocol.HarnessKinds()`; keep the unknown-kind rejection arm |
 | `internal/linuxpreflight/cgroup_linux.go` | `configuredHarnessKind` copy `:23-42`; `nativeGoalHarnessKind` copy `:44-53`; gate `:55-62` (incl. `kind == "generic"`) | delete both copies; `harness.ParseKind` + `kind.NativeGoal()`; the redundant `generic` disjunct drops |
@@ -83,9 +86,15 @@ RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric) // … ×7
 1. **Q1 decision positions.** `admissionLaunchFailure` order is unchanged: observe-purpose →
    `Require(start, events, cancel [, handoff])` → provider access → hard cost → session mode. Only
    the two kind lists inside are deleted; the retained `Require` calls and the
-   `taskResultFailure(resume_rejected, err)` wrapper stay. So decisions, reason codes, error types
-   (`*harness.CapabilityError` inside the `taskResultReasonError` wrapper) and positions are
-   byte-identical; sentences for list-refused kinds become the projection's own reason.
+   `taskResultFailure(resume_rejected, err)` wrapper stay. Decisions, reason codes and positions
+   are byte-identical, and every provider-access refusal already carried the base
+   `*harness.CapabilityError`. Sentences for list-refused kinds become the projection's own reason;
+   for the four list-refused retained-resume kinds (generic, codex, claude, opencode) the inner
+   error class behind `taskResultReasonError` flips from the base plain `fmt.Errorf` to the
+   projection's `*harness.CapabilityError`. The frozen Q1 "error types byte-identical" clause
+   cannot hold with the deleted list while the fabricated resume-advertising rows stay green
+   (mutant M7 reddens exactly those rows), so §8.2 records the delta and the smallest proposed
+   amendment to the clause; the contract file itself is the conductor's.
 2. **Truth-table projections.** Per kind the table records (a) `configuredHarnessKind` answer, (b)
    `NativeGoal()`, (c) `UnavailableProbe()`, and for `admissionLaunchFailure`: (d) provider access
    for the verified-minimal projection, for the same projection with `provider_access=true`, and for
@@ -96,13 +105,16 @@ RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric) // … ×7
    run). Promoted-pi rows use `pi.NewAdapterWithRunner` with the repo's
    `nativeProbeDigestFixtures`, so the one production resume advertiser is exercised promoted
    (Windows) and fail-closed (other platforms).
-3. **Golden shape.** For projection-driven rows the expected sentence is derived from the projection
-   itself (`Require`'s reason = `Unsupported[capability]` or `capability is not verified`) and the
-   expected decision/type are literal; for the verified-minimal rows the sentence is the literal
-   default. The base column is produced by the same test file with only the two predicate calls
-   mechanically shimmed to the base functions (documented diff in `answer.md`, since
-   `Kind.NativeGoal`/`UnavailableProbe` do not exist at base); the base run is expected red on
-   exactly the Q1 text rows plus the fabricated-projection rows.
+3. **Golden shape** (corrected 2026-11-23, review R5). The expected rows are app-package literals:
+   `truthTableExpectedRows` builds every expected sentence from the pinned reason constants
+   (`truthDefaultReason`, `truthCodexStartReason`, …) with literal decisions and types, while
+   `truthTableProductionProjection` feeds only the computed side — so adapter reason-text drift
+   reddens this suite (probe: the literal expectations in
+   `internal/app/adapter_policy_truth_table_test.go`). The base column is produced by the same
+   test file with only the two predicate calls mechanically shimmed to the base functions
+   (documented diff in `answer.md`, since `Kind.NativeGoal`/`UnavailableProbe` do not exist at
+   base); the base run is expected red on exactly the Q1 text rows plus the fabricated-projection
+   rows.
 4. **`control` attach validation.** `ParseHarnessKind` admits `generic` locally where the old
    literal list did not. Authorized by contract Change 1/4 (the test iterates `HarnessKinds()`); it
    cannot change a wire byte (the daemon never sends `generic` on attach) and Control's own gates
@@ -153,10 +165,11 @@ RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric) // … ×7
 
 ## 6. Risks
 
-- **Truth-table projection drift**: the production-probe rows depend on adapters' fail-closed
-  projections with an absent binary; the expectations for those rows are derived from the returned
-  projection, so content drift in an adapter's reason text cannot make this slice's test red — the
-  reason *content* is owned and pinned by each adapter's own package tests.
+- **Truth-table reason pins** (corrected 2026-11-23, review R5): the production-probe rows depend
+  on adapters' fail-closed projections with an absent binary, and their expected sentences are
+  literal constants pinned to each adapter's reason strings — adapter reason-text drift therefore
+  reddens this suite deliberately, while the strings stay owned by each adapter's own package
+  tests.
 - **Base-run shim**: the base column needs a two-call mechanical shim (Go has no feature detection);
   the shim diff ships inside `answer.md` and touches nothing else.
 - **Elixir environment**: Postgres/`deps` may be absent locally; the binding assertion then has a
@@ -199,3 +212,78 @@ RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric) // … ×7
    config that aliases `@symmetry/contracts` to this worktree's `contracts/` (deleted after the
    run). The deviation and its diagnosis are recorded in the stage answer artifact; CI's
    frontend job remains the oracle.
+
+## 8. Fix-stage record (2026-11-23, review findings)
+
+1. **Test-name census (this slice).** Added: `TestAdapterPolicyTruthTable`,
+   `TestAdapterPolicyTruthTablePromotedPi`, `TestAdapterPolicyTruthTablePromotedCodex`
+   (`internal/app/adapter_policy_truth_table_test.go`);
+   `TestParseKindAcceptsExactlyTheWireVocabulary`,
+   `TestParseKindMapsEachWireValueToItsInternalKind`,
+   `TestKindSpellingsAreThePersistedAndControlBoundBytes`,
+   `TestKindPredicatesAnswerTheConfiguredPolicy`
+   (`internal/harness/kind_test.go`); `TestHarnessKindVocabularyMatchesTheContractSchema`,
+   `TestParseHarnessKindAcceptsExactlyTheWireVocabulary`, `TestHarnessKindsReturnsAFreshCopy`
+   (`internal/protocol/harness_kind_test.go`); `TestControlCapabilityMapsEachControlKind`
+   (`internal/harness/control_capability_test.go`); the Elixir case "the contract schema
+   enumerates exactly the wire kind vocabulary". Repointed:
+   `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds` (linuxpreflight),
+   `TestValidateGoalSessionAttachAcceptsEveryConfiguredHarnessKind` (control). Renamed:
+   `TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess` →
+   `TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection` (conductor ruling of
+   2026-11-23; the old assertions stay and the codex/omp/omo arm is strengthened). Updated pins:
+   `internal/app/harness_test.go`'s resume refusal now asserts the typed `resume_rejected` reason
+   instead of a message substring.
+2. **Retained-resume inner error class (review R1; delta measured, clause unsatisfiable).** For
+   generic/codex/claude/opencode the base resume refusal was a plain `fmt.Errorf`
+   (base `2c8c419e:internal/app/goal_admission.go:74-75`); the head refusal returns the
+   projection's `*harness.CapabilityError`. Probe at the final tree:
+   `cd daemon && go test -count=1 -run TestAdapterPolicyTruthTable ./internal/app/` logs
+   `capability_error` on every resume row; mutant M7 (re-adding the pi/omp/omo list) reddens the
+   truth-table rows 0/1/2/6 (generic/codex/claude/opencode: every resume cell reverts to the base
+   plain refusal), so re-adding the list — the only way to restore the base identity for exactly
+   those four kinds — defeats the authorized Q1 change. Smallest proposed amendment (the contract
+   file is conductor-owned; recorded here, not edited): append to the Q1 ruling that the four
+   list-refused retained-resume kinds carry `*harness.CapabilityError` where the base wrapped a
+   plain error, decisions/reason codes/sentences/positions unchanged.
+3. **`internal/app/harness_test.go` owned-set record (review R4).** The file sits outside the
+   contract's `Owned files (STRICT)` line; the §1 table row and the CLOSED-TODO closure text name
+   it as pin-updates-plus-rename only, with no production change.
+4. **C1 type-level evidence (conductor ruling).** Every kind value on the configured path is typed
+   end to end: `config.Runtime.HarnessKind` is validated by `protocol.ParseHarnessKind`, the app's
+   `configuredHarnessKind` returns `harness.Kind` through `harness.ParseKind`, `Capabilities.Kind`
+   is `harness.Kind`, and the Control-bound/persisted payload is `string(capabilities.Kind)`
+   (`internal/app/goal_admission_tx.go:502,518,653,670` → `goal_delivery.go:531`). Set membership
+   is pinned by `harness/kind_test.go` (exactly `protocol.HarnessKinds()`),
+   `protocol/harness_kind_test.go` (schema enum equality) and the Elixir binding case, so a
+   concatenated wire string is refused at validation and cannot be produced by `ParseKind`;
+   `harness/kind_test.go`'s `TestKindSpellingsAreThePersistedAndControlBoundBytes` additionally
+   pins the seven internal spellings that reach persistence and Control, so a renamed internal
+   kind byte fails a test (mutant M10). The Control/persisted path converts one typed value: the
+   four persist sites read
+   `string(daemon.harnessCapabilities.Kind)`, assigned in `probe.go:67` from
+   `registry.Probe(configuredHarnessKind(runtime.HarnessKind))` (probe: a conversion/concat scan
+   over non-test `app`/`linuxpreflight`/`control`, which finds no other kind composition; the only
+   raw wire→internal conversion is the pre-existing `app.go:233` linux-owner predicate, recorded
+   at C3). Known exception, recorded in `docs/TODO.md`: `harness.KindClaude` = `"claude"` is the
+   persisted/Control-bound spelling for claude (Q2 observation).
+5. **Retained-resume owner allowlist recorded (review R6).** `internal/app/native_run.go:2017`
+   (`verifyNativeTaskResultSubject`) keeps its own pi/omp/omo kind list, so the projection is not
+   the only answer on that path; its alignment decision is recorded in `docs/TODO.md`.
+6. **Review-driven cleanups.** Comment blocks over the two-line cap trimmed in
+   `internal/app/adapter_policy_truth_table_test.go`, `internal/app/harness_test.go`,
+   `internal/harness/kind.go` and `internal/protocol/protocol.go`. Review R2 recorded as
+   satisfied at the final tree: the pre-merge formatter config flagged the new assertion line
+   (measured exit 1 by the apply stage; reproduced here with the Styler plugin disabled), while
+   the merged Styler 1.12.2 config keeps the line as-is — `mix format --check-formatted` exits 0
+   under CI's toolchain (Erlang/OTP 29.1.2, Elixir 1.20.4-otp-29; deps from a sibling worktree
+   with an identical `mix.lock`), and `mix format` on the touched file changes nothing.
+7. **Mutant re-runs (fix stage).** M3 (`ParseKind` maps `claude_code`→`KindOpenCode`), M5
+   (`UnavailableProbe` true for codex), M6 (re-added `Kind != pi` provider guard) and M7
+   (re-added pi/omp/omo resume list) each reddened the named tests (M3: `kind_test.go` + truth
+   table; M5: predicate test + truth table; M6: truth table + `PromotedCodex` +
+   `TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection`; M7: truth-table rows
+   0/1/2/6); M10 (`KindOmO` spelling → `omo-v2`) reddened
+   `TestKindSpellingsAreThePersistedAndControlBoundBytes`. Each file was restored
+   sha256-identical before the restored-green re-run (probe: the mutant logs and the `diff -q`
+   restores in the fix-stage scratch dir). M1/M2/M4/M8/M9 rows stand from the apply stage.

@@ -206,9 +206,8 @@ func (capabilities *RuntimeCapabilities) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// HarnessKind is the wire vocabulary of configured harness families. It is the
-// single wire-list owner for the daemon; the contract schema enumerates the
-// same values and a drift test holds this list to it.
+// HarnessKind is the wire vocabulary of configured harness families, the single wire-list
+// owner for the daemon; the contract schema enumerates the same values.
 type HarnessKind string
 
 const (

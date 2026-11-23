@@ -19,18 +19,8 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
-// Contract rf-a3-adapter-policy-kind-vocabulary (Q1=a) kind-by-kind truth table
-// over the seven configured harness kinds. Each row records the configured-kind
-// mapping, both vocabulary predicates and the real admission gate's answer
-// (decision, task-result reason, error type, sentence) for provider access and
-// retained resume against three projections: the package's verified-minimal
-// witness (testVerifiedNativeCapabilities), the production projection the
-// composition root produces on a host without the harness binary, and — for pi
-// and codex — the platform-promoted projection their exported runner seams
-// make deterministic. The linuxpreflight selection column (f) is pinned by
-// TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds in the
-// linuxpreflight package. The base column is the same file with only the two
-// predicate calls shimmed to the pre-refactor app functions.
+// Contract rf-a3 kind-by-kind truth table: each configured harness kind pins its
+// wire-to-internal mapping, both vocabulary predicates and the admission gate's answers.
 
 type truthTableOutcome struct {
 	Decision  string
@@ -56,9 +46,8 @@ const (
 	truthAbsentCommand = "symmetry-a3-missing-harness-binary"
 	truthDefaultReason = "capability is not verified"
 
-	// Fail-closed production projection reasons for a host without the harness
-	// binary. Each string is owned and pinned by its adapter package; the table
-	// binds the daemon gate's observable sentence to them.
+	// Fail-closed production projection reasons, owned and pinned by each adapter
+	// package; the table binds the daemon gate's observable sentence to them.
 	truthCodexStartReason    = "codex version probe failed"
 	truthClaudeStartReason   = "Claude Code executable is unavailable"
 	truthPiStartReason       = "pi version probe failed"
@@ -167,20 +156,16 @@ func truthTableMinimalProjection(t *testing.T, kind harness.Kind) harness.Capabi
 	return testVerifiedNativeCapabilities(kind)
 }
 
-// truthTableAbsentRunner answers every probe command with a fast absent-executable
-// error, so the codex and pi fail-closed projections are deterministic without
-// starting a process; running the same probes against a missing binary makes the
-// bounded-probe classification timing-dependent on some hosts.
+// truthTableAbsentRunner answers every probe command with a fast absent-executable error,
+// so the codex and pi fail-closed projections are deterministic without starting a process.
 type truthTableAbsentRunner struct{}
 
 func (truthTableAbsentRunner) Run(context.Context, string, ...string) ([]byte, error) {
 	return nil, errors.New("harness executable is absent")
 }
 
-// truthTableProductionProjection returns each adapter's own fail-closed
-// projection for an unusable configured command — the projection the daemon
-// holds on a host without the harness binary — through the adapter's exported
-// probe seam where one exists. Reasons are pinned by truthTableExpectedRows.
+// truthTableProductionProjection returns each adapter's fail-closed projection for an
+// unusable configured command, through the adapter's exported probe seam where one exists.
 func truthTableProductionProjection(t *testing.T, kind harness.Kind) harness.Capabilities {
 	t.Helper()
 	absentPath := filepath.Join(t.TempDir(), truthAbsentCommand)

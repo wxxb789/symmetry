@@ -4702,6 +4702,14 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `internal/harness` (rationale in the slice's plan §2): `config` and `control` must consume the
       wire set without pulling `harness`'s execution/platform transitives in.
 
+      Recorded out-of-STRICT-set edits (review R4): `daemon/internal/app/harness_test.go` carries
+      the two pin updates the Q1 deletion forced (`:749-753` resume refusal now asserts the typed
+      `resume_rejected` reason; `:4421-4450` provider-access loop asserts the advertised projection
+      passes for codex/omp/omo) and the conductor-authorized rename to
+      `TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection`; no production code is
+      touched (probe: the file's diff against origin/main on this branch; plan §1 table row and
+      §8.3).
+
 - [ ] `daemon/internal/linuxpreflight/cgroup_linux.go`: `configuredHarnessKind` is a verbatim copy
       of the app-side vocabulary owner (`internal/app/probe.go`) and the config loader's set; the
       package test pins a literal table, not the app-side copy, so drift is undetected. The package
