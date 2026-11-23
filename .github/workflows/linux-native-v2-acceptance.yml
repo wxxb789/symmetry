@@ -102,6 +102,7 @@ jobs:
           SYMMETRY_OPENAI_API_KEY: ${{ secrets.SYMMETRY_LINUX_V2_TEST_OPENAI_API_KEY }}
           SYMMETRY_PI_MODEL: ${{ vars.SYMMETRY_LINUX_V2_TEST_PI_MODEL }}
           SYMMETRY_OPENCODE_MODEL: ${{ vars.SYMMETRY_LINUX_V2_TEST_OPENCODE_MODEL }}
+          SYMMETRY_OPENAI_BASE_URL: ${{ vars.SYMMETRY_LINUX_V2_TEST_OPENAI_BASE_URL }}
         run: |
           set -Eeuo pipefail
           evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
