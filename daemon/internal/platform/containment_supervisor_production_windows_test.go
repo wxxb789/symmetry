@@ -26,6 +26,7 @@ func TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse(t
 	}
 
 	productionBinary := buildProductionDaemonBinary(t)
+	restoreContainmentSupervisorLauncher(t, launchContainmentSupervisorProcess)
 	previousExecutable := os.Args[0]
 	os.Args[0] = productionBinary
 	t.Cleanup(func() { os.Args[0] = previousExecutable })

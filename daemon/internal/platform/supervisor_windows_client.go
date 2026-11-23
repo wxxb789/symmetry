@@ -652,11 +652,6 @@ func launchContainmentSupervisorProcess(job syscall.Handle, targetPID int, targe
 	if job == 0 || targetPID <= 0 || strings.TrimSpace(targetIdentity) == "" {
 		return nil, "", errors.New("containment supervisor requires a Job handle and process identity")
 	}
-	// Go test binaries have their own generated main and cannot dispatch the hidden supervisor mode;
-	// production never matches this suffix and still requires a real independent supervisor.
-	if isGoTestBinary(os.Args[0]) {
-		return noopContainmentSupervisorLease{}, targetIdentity, nil
-	}
 	endpoint, err := newContainmentSupervisorEndpoint(targetPID, targetIdentity)
 	if err != nil {
 		return nil, "", err
@@ -1068,11 +1063,6 @@ func launchContainmentSupervisorProcessWithHandoff(ctx context.Context, job sysc
 	}
 	lease := &processContainmentSupervisorLease{endpoint: endpoint, waiter: waiter, ownerWrite: ownerWrite}
 	return lease, bound, helperIdentity, nil
-}
-
-// Test binaries use a generated test main and must retain the legacy local containment path instead.
-func DurableSupervisorHandoffAvailable() bool {
-	return !isGoTestBinary(os.Args[0])
 }
 
 type processContainmentSupervisorLease struct {

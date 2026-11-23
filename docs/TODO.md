@@ -1375,17 +1375,31 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
 - [ ] Consolidate the Windows pre-authority witness hooks the way rf-w5-01 (2026-11-22, branch
       `refactor/rf-w5-01-witness-converge-in-place`) consolidated the Linux surface. The Windows
       side still reads raw literals with no witness gate —
-      `supervisor_windows_helper.go:554-555` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
-      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1080`
+      `supervisor_windows_helper.go:545-546` (`SYMMETRY_PREAUTHORITY_DROP_FIRST_HELLO_RESPONSE`,
+      `SYMMETRY_PREAUTHORITY_HELLO_RETRY_MARKER`) and `supervisor_windows_client.go:1038`
       (`SYMMETRY_PREAUTHORITY_WRONG_SECRET_MARKER`) — and
       `cmd/symmetry-daemon/preauthority_witness_command_windows.go` enters witness mode from argv
       (`init()` `:26-36`) while setting the same three names for the helper child (`:142-148`).
       Conductor decision A (2026-11-21) scoped rf-w5-01 to the Linux family and left these bytes
-      for W6-03, which already owns the same files and dispatches after rf-w5-01; the Linux half
-      now has one per-use witness-config parser
+      unassigned; W6-03 (the Go-test-binary fork removal) does not deliver this consolidation. The
+      Linux half now has one per-use witness-config parser
       (`daemon/internal/platform/supervisor_linux_witness.go`) behind
       `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
-      conventions coexist until W6-03 lands.
+      conventions coexist. Owner: unassigned.
+
+## Daemon harness: native OpenCode tests run without the in-process containment install (W6-04)
+
+- [ ] The env-gated native OpenCode tests — `internal/harness/opencode/adapter_native_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_SMOKE=1`), `adapter_native_work_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_{SYNTHETIC_TOOL,ADMISSION_REPLAY,RESUME_CAPTURE,REPOSITORY_TASK}=1`)
+      and `adapter_native_terminal_candidate_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE=1`) — launch real processes in-process, so with
+      their gates set they reach the shipped containment route a generated test main cannot
+      dispatch. rf-w6-03 (the Go-test-binary fork removal) installed
+      `execution.UseInProcessContainmentSupervisorForTesting` in every other launching test binary
+      but left `opencode/**` frozen (W6-04 owns it), so this package has no
+      `inprocess_containment_test.go`; add the per-package install with the next `opencode/**`
+      change. Owner: W6-04.
 
 ## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
 
