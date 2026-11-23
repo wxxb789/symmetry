@@ -1,15 +1,19 @@
 package control
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
+)
 
 // Every harness kind the daemon can be configured with must survive goal
 // session attach validation; a kind that is missing here fails locally before
 // any Control request is made.
 func TestValidateGoalSessionAttachAcceptsEveryConfiguredHarnessKind(t *testing.T) {
-	for _, kind := range []string{"codex", "claude_code", "pi", "omp", "omo", "opencode"} {
-		t.Run(kind, func(t *testing.T) {
+	for _, kind := range protocol.HarnessKinds() {
+		t.Run(string(kind), func(t *testing.T) {
 			request := goalSessionRequest()
-			request.HarnessKind = kind
+			request.HarnessKind = string(kind)
 			if err := validateGoalSessionAttach(goalRunID, request); err != nil {
 				t.Fatalf("goal_session_attach with harness_kind %q rejected: %v", kind, err)
 			}

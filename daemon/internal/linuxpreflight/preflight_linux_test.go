@@ -333,17 +333,17 @@ func TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds(t *testing.T)
 		config.RuntimeHarnessOmO:        harness.KindOmO,
 		config.RuntimeHarnessOpenCode:   harness.KindOpenCode,
 	} {
-		kind, err := configuredHarnessKind(configured)
+		kind, err := harness.ParseKind(configured)
 		if err != nil || kind != configuredKind {
-			t.Fatalf("configuredHarnessKind(%q) = (%q, %v), want %q", configured, kind, err, configuredKind)
+			t.Fatalf("harness.ParseKind(%q) = (%q, %v), want %q", configured, kind, err, configuredKind)
 		}
 		wantNative := configuredKind != harness.KindGeneric
-		if got := nativeGoalHarnessKind(kind); got != wantNative {
-			t.Fatalf("nativeGoalHarnessKind(%q) = %v, want %v", kind, got, wantNative)
+		if got := kind.NativeGoal(); got != wantNative {
+			t.Fatalf("harness.Kind(%q).NativeGoal() = %v, want %v", kind, got, wantNative)
 		}
 	}
-	if _, err := configuredHarnessKind("warpdrive"); err == nil || err.Error() != `runtime.harness_kind "warpdrive" is unsupported` {
-		t.Fatalf("configuredHarnessKind(unsupported) = %v, want the exact unsupported-kind refusal", err)
+	if _, err := harness.ParseKind("warpdrive"); err == nil || err.Error() != `runtime.harness_kind "warpdrive" is unsupported` {
+		t.Fatalf("harness.ParseKind(unsupported) = %v, want the exact unsupported-kind refusal", err)
 	}
 }
 

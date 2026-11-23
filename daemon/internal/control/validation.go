@@ -566,9 +566,7 @@ func validateGoalSessionAttach(runID string, request GoalSessionAttachRequest) e
 			return fmt.Errorf("%s must not be empty", field)
 		}
 	}
-	switch request.HarnessKind {
-	case "codex", "claude_code", "pi", "omp", "omo", "opencode":
-	default:
+	if _, ok := protocol.ParseHarnessKind(request.HarnessKind); !ok {
 		return fmt.Errorf("harness_kind %q is invalid", request.HarnessKind)
 	}
 	if request.RepositoryResourceID != nil {
