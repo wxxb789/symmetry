@@ -3114,7 +3114,6 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 			return daemon.persistProcessMarker(key, pid, identity, time.Now().UTC())
 		}),
 	}
-	invocation.MirrorRecorderMembers()
 	invocation, err = owner.BuildInvocation(ctx, key, witness.request.Fence, invocation, callbacks)
 	if err != nil {
 		return fmt.Errorf("build explicit App-owned Linux v2 witness invocation: %w", err)

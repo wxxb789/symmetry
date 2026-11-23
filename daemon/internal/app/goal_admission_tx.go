@@ -753,7 +753,6 @@ func (tx *goalAdmissionTx) buildNativeInvocation(ctx context.Context) error {
 		InitialLeaseSequence:   1,
 		Recorder:               tx.daemon.processRecorder(tx.key, tx.persistNativeProcess),
 	}
-	tx.nativeInvocation.MirrorRecorderMembers()
 	if !tx.linuxV2Required {
 		return nil
 	}

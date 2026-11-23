@@ -197,6 +197,151 @@ func TestMirrorRecorderMembersCallsTheSameRecorderMethods(t *testing.T) {
 	}
 }
 
+func TestMirrorRecorderMembersKeepsAbsentWritesNil(t *testing.T) {
+	var calls []string
+	invocation := Invocation{Recorder: NewRecorder(RecorderFuncs{
+		PersistProcess: func(int, string) error {
+			calls = append(calls, "marker")
+			return nil
+		},
+	})}
+	invocation.MirrorRecorderMembers()
+	if invocation.PrepareSupervisorHandoff != nil || invocation.BindSupervisorHandoff != nil ||
+		invocation.CommitSupervisorHandoff != nil || invocation.RecordSupervisorHandoffStopReceipt != nil ||
+		invocation.ClearSupervisorHandoff != nil || invocation.PersistProcessWithAuthority != nil ||
+		invocation.PersistProcessAuthority != nil || invocation.PersistContainmentStopReceipt != nil ||
+		invocation.PersistContainmentUnproven != nil {
+		t.Fatal("an absent write was mirrored as present")
+	}
+	if err := invocation.PersistProcess(7, "created:7"); err != nil {
+		t.Fatalf("mirrored write error = %v", err)
+	}
+	if !slices.Equal(calls, []string{"marker"}) {
+		t.Fatalf("mirrored write reached %#v, want the recorder method", calls)
+	}
+}
+
+type capabilityRecorder struct {
+	capabilities RecorderCapabilities
+	calls        []string
+}
+
+func (recorder *capabilityRecorder) Capabilities() RecorderCapabilities { return recorder.capabilities }
+
+func (recorder *capabilityRecorder) note(name string) { recorder.calls = append(recorder.calls, name) }
+
+func (recorder *capabilityRecorder) PrepareSupervisorHandoff(authority.SupervisorHandoff) error {
+	recorder.note("prepare")
+	return nil
+}
+
+func (recorder *capabilityRecorder) BindSupervisorHandoff(authority.SupervisorHandoff, int, string) error {
+	recorder.note("bind")
+	return nil
+}
+
+func (recorder *capabilityRecorder) CommitSupervisorHandoff(authority.SupervisorHandoff, time.Time) error {
+	recorder.note("commit")
+	return nil
+}
+
+func (recorder *capabilityRecorder) RecordSupervisorHandoffStopReceipt(authority.SupervisorHandoff, authority.StopReceipt) error {
+	recorder.note("receipt")
+	return nil
+}
+
+func (recorder *capabilityRecorder) ClearSupervisorHandoff(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error {
+	recorder.note("clear")
+	return nil
+}
+
+func (recorder *capabilityRecorder) PersistProcess(int, string) error {
+	recorder.note("marker")
+	return nil
+}
+
+func (recorder *capabilityRecorder) PersistProcessWithAuthority(int, string, *authority.Supervisor) error {
+	recorder.note("atomic")
+	return nil
+}
+
+func (recorder *capabilityRecorder) PersistProcessAuthority(int, string, *authority.Supervisor) error {
+	recorder.note("authority")
+	return nil
+}
+
+func (recorder *capabilityRecorder) PersistContainmentStopReceipt(int, string, authority.StopReceipt) error {
+	recorder.note("stop")
+	return nil
+}
+
+func (recorder *capabilityRecorder) PersistContainmentUnproven(int, string) error {
+	recorder.note("unproven")
+	return nil
+}
+
+func TestRecorderWritesMapsEveryCapabilityToItsMethod(t *testing.T) {
+	complete := &capabilityRecorder{capabilities: RecorderCapabilities{
+		PrepareSupervisorHandoff:           true,
+		BindSupervisorHandoff:              true,
+		CommitSupervisorHandoff:            true,
+		RecordSupervisorHandoffStopReceipt: true,
+		ClearSupervisorHandoff:             true,
+		PersistProcess:                     true,
+		PersistProcessWithAuthority:        true,
+		PersistProcessAuthority:            true,
+		PersistContainmentStopReceipt:      true,
+		PersistContainmentUnproven:         true,
+	}}
+	writes := recorderWrites(complete)
+	if writes.PrepareSupervisorHandoff == nil || writes.BindSupervisorHandoff == nil ||
+		writes.CommitSupervisorHandoff == nil || writes.RecordSupervisorHandoffStopReceipt == nil ||
+		writes.ClearSupervisorHandoff == nil || writes.PersistProcess == nil ||
+		writes.PersistProcessWithAuthority == nil || writes.PersistProcessAuthority == nil ||
+		writes.PersistContainmentStopReceipt == nil || writes.PersistContainmentUnproven == nil {
+		t.Fatal("a true capability was left unmapped")
+	}
+	members := []struct {
+		name string
+		call func() error
+	}{
+		{"prepare", func() error { return writes.PrepareSupervisorHandoff(authority.SupervisorHandoff{}) }},
+		{"bind", func() error { return writes.BindSupervisorHandoff(authority.SupervisorHandoff{}, 7, "bound:7") }},
+		{"commit", func() error { return writes.CommitSupervisorHandoff(authority.SupervisorHandoff{}, time.Unix(1, 0)) }},
+		{"receipt", func() error {
+			return writes.RecordSupervisorHandoffStopReceipt(authority.SupervisorHandoff{}, authority.StopReceipt{})
+		}},
+		{"clear", func() error {
+			return writes.ClearSupervisorHandoff(authority.SupervisorHandoff{}, authority.SupervisorHandoffReleaseProof{})
+		}},
+		{"marker", func() error { return writes.PersistProcess(7, "created:7") }},
+		{"atomic", func() error { return writes.PersistProcessWithAuthority(7, "created:7", nil) }},
+		{"authority", func() error { return writes.PersistProcessAuthority(7, "created:7", nil) }},
+		{"stop", func() error { return writes.PersistContainmentStopReceipt(7, "created:7", authority.StopReceipt{}) }},
+		{"unproven", func() error { return writes.PersistContainmentUnproven(7, "created:7") }},
+	}
+	for _, member := range members {
+		complete.calls = nil
+		if err := member.call(); err != nil {
+			t.Fatalf("fallback write %s error = %v", member.name, err)
+		}
+		if !slices.Equal(complete.calls, []string{member.name}) {
+			t.Fatalf("fallback write %s reached %#v, want its own method", member.name, complete.calls)
+		}
+	}
+	sparse := recorderWrites(&capabilityRecorder{capabilities: RecorderCapabilities{PersistProcess: true}})
+	if sparse.PersistProcess == nil {
+		t.Fatal("a true capability was dropped")
+	}
+	if sparse.PrepareSupervisorHandoff != nil || sparse.BindSupervisorHandoff != nil ||
+		sparse.CommitSupervisorHandoff != nil || sparse.RecordSupervisorHandoffStopReceipt != nil ||
+		sparse.ClearSupervisorHandoff != nil || sparse.PersistProcessWithAuthority != nil ||
+		sparse.PersistProcessAuthority != nil || sparse.PersistContainmentStopReceipt != nil ||
+		sparse.PersistContainmentUnproven != nil {
+		t.Fatal("a false capability was mapped to a write")
+	}
+}
+
 func TestRecorderWritesLaunchExactlyLikeTheFrozenMembers(t *testing.T) {
 	for _, test := range recorderParityCases() {
 		t.Run(test.name, func(t *testing.T) {

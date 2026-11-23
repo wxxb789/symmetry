@@ -97,7 +97,6 @@ type RecorderFuncs struct {
 	PersistContainmentUnproven         func(pid int, identity string) error
 }
 
-// Capabilities reports which writes are present.
 func (writes RecorderFuncs) Capabilities() RecorderCapabilities {
 	return RecorderCapabilities{
 		PrepareSupervisorHandoff:           writes.PrepareSupervisorHandoff != nil,
@@ -121,10 +120,6 @@ func NewRecorder(writes RecorderFuncs) Recorder {
 
 type recorderFuncs struct {
 	RecorderFuncs
-}
-
-func (recorder recorderFuncs) Capabilities() RecorderCapabilities {
-	return recorder.RecorderFuncs.Capabilities()
 }
 
 func (recorder recorderFuncs) PrepareSupervisorHandoff(handoff authority.SupervisorHandoff) error {
@@ -261,21 +256,22 @@ func recorderWrites(recorder Recorder) RecorderFuncs {
 }
 
 // MirrorRecorderMembers sets the frozen OpenCode-facing members to the
-// recorder's method values. daemon/internal/harness/opencode rebuilds an
-// invocation from these members; W6-04 deletes them (docs/TODO.md).
+// recorder's writes, so a false capability stays nil like the legacy absent
+// callback. daemon/internal/harness/opencode rebuilds an invocation from these
+// members; W6-04 deletes them (docs/TODO.md).
 func (invocation *Invocation) MirrorRecorderMembers() {
-	recorder := invocation.Recorder
-	if recorder == nil {
+	if invocation.Recorder == nil {
 		return
 	}
-	invocation.PrepareSupervisorHandoff = recorder.PrepareSupervisorHandoff
-	invocation.BindSupervisorHandoff = recorder.BindSupervisorHandoff
-	invocation.CommitSupervisorHandoff = recorder.CommitSupervisorHandoff
-	invocation.RecordSupervisorHandoffStopReceipt = recorder.RecordSupervisorHandoffStopReceipt
-	invocation.ClearSupervisorHandoff = recorder.ClearSupervisorHandoff
-	invocation.PersistProcess = recorder.PersistProcess
-	invocation.PersistProcessWithAuthority = recorder.PersistProcessWithAuthority
-	invocation.PersistProcessAuthority = recorder.PersistProcessAuthority
-	invocation.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
-	invocation.PersistContainmentUnproven = recorder.PersistContainmentUnproven
+	writes := recorderWrites(invocation.Recorder)
+	invocation.PrepareSupervisorHandoff = writes.PrepareSupervisorHandoff
+	invocation.BindSupervisorHandoff = writes.BindSupervisorHandoff
+	invocation.CommitSupervisorHandoff = writes.CommitSupervisorHandoff
+	invocation.RecordSupervisorHandoffStopReceipt = writes.RecordSupervisorHandoffStopReceipt
+	invocation.ClearSupervisorHandoff = writes.ClearSupervisorHandoff
+	invocation.PersistProcess = writes.PersistProcess
+	invocation.PersistProcessWithAuthority = writes.PersistProcessWithAuthority
+	invocation.PersistProcessAuthority = writes.PersistProcessAuthority
+	invocation.PersistContainmentStopReceipt = writes.PersistContainmentStopReceipt
+	invocation.PersistContainmentUnproven = writes.PersistContainmentUnproven
 }

@@ -32,14 +32,7 @@ func RunBoundedCommand(ctx context.Context, invocation Invocation, maxOutputByte
 	// A bounded probe has no durable owner. Keep the direct invocation and its
 	// process-tree behavior, but prevent inherited persistence hooks or lease
 	// state from turning this ephemeral check into a journal write/watchdog.
-	invocation.CloseInputAfterInitial = true
-	invocation.Recorder = nil
-	invocation.PersistProcess = nil
-	invocation.PersistProcessAuthority = nil
-	invocation.PersistContainmentStopReceipt = nil
-	invocation.InitialLeaseDeadline = 0
-	invocation.InitialLeaseDeadlineAt = time.Time{}
-	invocation.InitialLeaseSequence = 0
+	invocation = ephemeralInvocation(invocation)
 
 	collector := newBoundedOutputCollector(maxOutputBytes)
 	process, startErr := NewRunner().Start(ctx, invocation, collector)
@@ -86,6 +79,17 @@ func RunBoundedCommand(ctx context.Context, invocation Invocation, maxOutputByte
 		return nil, errors.Join(terminationErr, processErr)
 	}
 	return collector.output(), nil
+}
+
+var noDurableWrites = NewRecorder(RecorderFuncs{})
+
+func ephemeralInvocation(invocation Invocation) Invocation {
+	invocation.CloseInputAfterInitial = true
+	invocation.Recorder = noDurableWrites
+	invocation.InitialLeaseDeadline = 0
+	invocation.InitialLeaseDeadlineAt = time.Time{}
+	invocation.InitialLeaseSequence = 0
+	return invocation
 }
 
 func terminateBoundedProcess(process *Process) error {

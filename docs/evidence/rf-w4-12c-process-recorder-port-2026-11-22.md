@@ -14,22 +14,23 @@ Nothing is committed.
 
 | File | sha256 |
 | --- | --- |
-| `daemon/internal/execution/recorder.go` (new) | `adeec17a57b6e58c9f08662ede88497302ff5da6bc9a9fcbb24fcc67172b87ca` |
-| `daemon/internal/execution/runner.go` | `42cf94a0ed2429c46bce4445bab8cd97eb38e98eda3ae082309a1089557b97d7` |
-| `daemon/internal/execution/probe.go` | `cccf4cd590ce921f1a9a53a6cfc11762f0efeaac287b8c31bf1819dac111ba7f` |
+| `daemon/internal/execution/recorder.go` (new) | `ee54071db3eecee2c4af534d2d8594340876bddfd230de5007802ee0815cf973` |
+| `daemon/internal/execution/runner.go` | `eb848fc8a0245460510c009419762c25fda6ab6f2240214ce0fbe5cbec67f667` |
+| `daemon/internal/execution/probe.go` | `72f520aaaeda0bb7f1df8b8aeb0ed05651546d51cc96dde3aaa9d39ae8ef617c` |
+| `daemon/internal/execution/probe_test.go` | `6e63515653a03893394f98b01e634929d3ea4f35e61a7bcae0b6073c71c6d334` |
 | `daemon/internal/execution/process_launcher_linux.go` | `72c58a553a5c9c795199eea74400e2a40f198760630d17d595062822ddb5124d` |
 | `daemon/internal/execution/process_launcher_windows.go` | `8985bdf01f8d639b0afe693a1bfc819f934407e02e802066132056c1528767c9` |
-| `daemon/internal/execution/recorder_test.go` (new) | `f43a383be2b33c453f5838bc4428c6b2a90ac21619859ecb4dc47404260ec7ea` |
+| `daemon/internal/execution/recorder_test.go` (new) | `b339162b49aa60ec11a01d75c4106b3cd7ecc880e4349037cf153682207a0ff0` |
 | `daemon/internal/harness/types.go` | `9765d28b2922acaa39d30d6172d042d2791306e36a4e69b234b4966cf3e35144` |
 | `daemon/internal/harness/staged_driver.go` | `7400de152de00cbf449036a65a35e69e712404875564896eaa35d92705041fdd` |
 | `daemon/internal/harness/frozen_members_test.go` (new) | `6c77cb711ffb5acbbec92ed911303a74198180cd19f96489a0870d5e5118dae0` |
-| `daemon/internal/app/process_recorder.go` (new) | `22f848ffc478aaf2e65ee5d5307a85df9246adb6e96af067ff90631dc10a23b3` |
+| `daemon/internal/app/process_recorder.go` (new) | `e79090c8701d9cc26daaf6c04834cb03ed5462ae15863952c8181baa7dedf739` |
 | `daemon/internal/app/process_recorder_test.go` (new) | `9d462f5af6c33b20b88f7281e21e212c31403862e26b8e6f1b62da26678857c4` |
 | `daemon/internal/app/app.go` | `406ef06b9bfe720cee64e6a39333d76668a1d5a3a70607d458dbb6360129e67b` |
-| `daemon/internal/app/goal_admission_tx.go` | `c69281c5879a550bdc39b375fa154a289e0bf13ce00786e5859b25f87b38904f` |
-| `daemon/internal/app/linux_owner_witness_linux.go` | `1d9d1b3253636e83dfa780c3d9e26f3e4f52a3a8073c076cbe2aaf1c39f89799` |
+| `daemon/internal/app/goal_admission_tx.go` | `54a9c0bca1c5c0af7dc17a763b543773875a0c25b72bca3442e6afcd349a9576` |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `3383fe973e1a41b15ea699eb7fa153b7b84ede16b5e7d814a2564ff9ae021442` |
 | `scripts/ci/omo-control-native-evidence.py` | `ba117e1236629ef233ed39fcf95c997671be3916a991a79eb5d067161eb881b1` |
-| `docs/TODO.md` | `941c929d72f6e2fbe88b5c553683dd1e6cb337c316ef6031ac27a1ab43bc527c` |
+| `docs/TODO.md` | `6c3712ff840a6a51510dd6f6a63e2e5879bff3892987e50acae9c6fe7616d1d5` |
 | `docs/plans/2026-11-22-rf-w4-12c-process-recorder-port-plan.md` | `15962b2b6c9bfecc14012a2ced43fa7c784b1d1d449a4f6545c46b95aac1ae34` |
 | this record | the file you are reading (no self-referential hash) |
 
@@ -39,7 +40,14 @@ Definition grep (paths, not bodies):
 
 ```
 $ rg -n 'type Recorder |type RecorderCapabilities |type RecorderFuncs |func NewRecorder|func invocationWrites|func recorderWrites|func \(invocation \*Invocation\) MirrorRecorderMembers|func PopulateOpencodeRecorderMembers' daemon/internal/execution/recorder.go daemon/internal/harness/staged_driver.go
-PENDING
+daemon/internal/execution/recorder.go:13:type RecorderCapabilities struct {
+daemon/internal/execution/recorder.go:47:type Recorder interface {
+daemon/internal/execution/recorder.go:87:type RecorderFuncs struct {
+daemon/internal/execution/recorder.go:117:func NewRecorder(writes RecorderFuncs) Recorder {
+daemon/internal/execution/recorder.go:198:func invocationWrites(invocation Invocation) RecorderFuncs {
+daemon/internal/execution/recorder.go:219:func recorderWrites(recorder Recorder) RecorderFuncs {
+daemon/internal/execution/recorder.go:262:func (invocation *Invocation) MirrorRecorderMembers() {
+daemon/internal/harness/staged_driver.go:39:func PopulateOpencodeRecorderMembers(request StartRequest) StartRequest {
 ```
 
 `Recorder` carries one method per durable write the runner performed at base
@@ -119,29 +127,26 @@ and its two write sites; `opencode/**` excluded because it is the frozen reader)
 
 ```
 $ rg -n 'invocation\.(Persist|PrepareSupervisorHandoff|BindSupervisorHandoff|CommitSupervisorHandoff|RecordSupervisorHandoffStopReceipt|ClearSupervisorHandoff)' daemon/internal --glob '!*_test.go' --glob '!**/opencode/**' | sed 's|daemon/internal/||'
-execution/probe.go:37:	invocation.PersistProcess = nil
-execution/probe.go:38:	invocation.PersistProcessAuthority = nil
-execution/probe.go:39:	invocation.PersistContainmentStopReceipt = nil
-execution/recorder.go:208:		PrepareSupervisorHandoff:           invocation.PrepareSupervisorHandoff,
-execution/recorder.go:209:		BindSupervisorHandoff:              invocation.BindSupervisorHandoff,
-execution/recorder.go:210:		CommitSupervisorHandoff:            invocation.CommitSupervisorHandoff,
-execution/recorder.go:211:		RecordSupervisorHandoffStopReceipt: invocation.RecordSupervisorHandoffStopReceipt,
-execution/recorder.go:212:		ClearSupervisorHandoff:             invocation.ClearSupervisorHandoff,
-execution/recorder.go:213:		PersistProcess:                     invocation.PersistProcess,
-execution/recorder.go:214:		PersistProcessWithAuthority:        invocation.PersistProcessWithAuthority,
-execution/recorder.go:215:		PersistProcessAuthority:            invocation.PersistProcessAuthority,
-execution/recorder.go:216:		PersistContainmentStopReceipt:      invocation.PersistContainmentStopReceipt,
-execution/recorder.go:217:		PersistContainmentUnproven:         invocation.PersistContainmentUnproven,
-execution/recorder.go:271:	invocation.PrepareSupervisorHandoff = recorder.PrepareSupervisorHandoff
-execution/recorder.go:272:	invocation.BindSupervisorHandoff = recorder.BindSupervisorHandoff
-execution/recorder.go:273:	invocation.CommitSupervisorHandoff = recorder.CommitSupervisorHandoff
-execution/recorder.go:274:	invocation.RecordSupervisorHandoffStopReceipt = recorder.RecordSupervisorHandoffStopReceipt
-execution/recorder.go:275:	invocation.ClearSupervisorHandoff = recorder.ClearSupervisorHandoff
-execution/recorder.go:276:	invocation.PersistProcess = recorder.PersistProcess
-execution/recorder.go:277:	invocation.PersistProcessWithAuthority = recorder.PersistProcessWithAuthority
-execution/recorder.go:278:	invocation.PersistProcessAuthority = recorder.PersistProcessAuthority
-execution/recorder.go:279:	invocation.PersistContainmentStopReceipt = recorder.PersistContainmentStopReceipt
-execution/recorder.go:280:	invocation.PersistContainmentUnproven = recorder.PersistContainmentUnproven
+execution/recorder.go:203:		PrepareSupervisorHandoff:           invocation.PrepareSupervisorHandoff,
+execution/recorder.go:204:		BindSupervisorHandoff:              invocation.BindSupervisorHandoff,
+execution/recorder.go:205:		CommitSupervisorHandoff:            invocation.CommitSupervisorHandoff,
+execution/recorder.go:206:		RecordSupervisorHandoffStopReceipt: invocation.RecordSupervisorHandoffStopReceipt,
+execution/recorder.go:207:		ClearSupervisorHandoff:             invocation.ClearSupervisorHandoff,
+execution/recorder.go:208:		PersistProcess:                     invocation.PersistProcess,
+execution/recorder.go:209:		PersistProcessWithAuthority:        invocation.PersistProcessWithAuthority,
+execution/recorder.go:210:		PersistProcessAuthority:            invocation.PersistProcessAuthority,
+execution/recorder.go:211:		PersistContainmentStopReceipt:      invocation.PersistContainmentStopReceipt,
+execution/recorder.go:212:		PersistContainmentUnproven:         invocation.PersistContainmentUnproven,
+execution/recorder.go:267:	invocation.PrepareSupervisorHandoff = writes.PrepareSupervisorHandoff
+execution/recorder.go:268:	invocation.BindSupervisorHandoff = writes.BindSupervisorHandoff
+execution/recorder.go:269:	invocation.CommitSupervisorHandoff = writes.CommitSupervisorHandoff
+execution/recorder.go:270:	invocation.RecordSupervisorHandoffStopReceipt = writes.RecordSupervisorHandoffStopReceipt
+execution/recorder.go:271:	invocation.ClearSupervisorHandoff = writes.ClearSupervisorHandoff
+execution/recorder.go:272:	invocation.PersistProcess = writes.PersistProcess
+execution/recorder.go:273:	invocation.PersistProcessWithAuthority = writes.PersistProcessWithAuthority
+execution/recorder.go:274:	invocation.PersistProcessAuthority = writes.PersistProcessAuthority
+execution/recorder.go:275:	invocation.PersistContainmentStopReceipt = writes.PersistContainmentStopReceipt
+execution/recorder.go:276:	invocation.PersistContainmentUnproven = writes.PersistContainmentUnproven
 harness/staged_driver.go:29:	invocation.PersistProcess = request.PersistProcess
 harness/staged_driver.go:30:	invocation.PersistProcessAuthority = request.PersistProcessAuthority
 harness/staged_driver.go:31:	invocation.PersistContainmentStopReceipt = request.PersistContainmentStopReceipt
@@ -261,10 +266,30 @@ Five edits, each applied alone to the final tree, run against the named tests, t
 
 m1, m2 and m3 are killed by tests that predate the slice as well, satisfying the R2 amendment.
 
+### 7.1 Apply-stage re-checks (2026-11-23)
+
+The apply stage changed `recorder.go`, `probe.go`, `runner.go` (one comment hunk) and the two
+execution test files, so every mutant whose edit text or killer sits on those bytes was re-run
+alone on the applied tree and then reverted (`sha256sum` of `recorder.go` and `probe.go` restored
+to the §1 values). m1–m3 mutate statements in `persist()`/`persistLegacyIdentity()` and m5 mutates
+`SupervisorHandoffRequested`; those functions are byte-identical to the implement-stage tree, and
+m4b's subject `PopulateOpencodeRecorderMembers` was not touched by apply — those rows still bind
+the same bytes.
+
+| Mutant | Edit | Killer (exit 1) | First red line |
+| --- | --- | --- | --- |
+| mA1a recorder left attached | `ephemeralInvocation` drops `invocation.Recorder = noDurableWrites` | `TestRunBoundedCommandDoesNotInvokeRecorderWrites`, `TestEphemeralInvocationRemovesEveryDurableWrite` | `RunBoundedCommand() invoked 1 durable writes`; `ephemeral strip left durable writes: {Prepare…Commit:true, PersistProcess:true, PersistProcessWithAuthority:true, PersistContainmentStopReceipt:true, PersistContainmentUnproven:true}` |
+| mA1b pre-D2 strip | `ephemeralInvocation` restores `Recorder = nil` plus the three legacy clears | `TestEphemeralInvocationRemovesEveryDurableWrite` (the recorder-run test passes, since the recorder itself is nil) | `ephemeral strip left durable writes: {Prepare:true Bind:true Commit:true RecordSupervisorHandoffStopReceipt:true Clear:true PersistProcessWithAuthority:true PersistContainmentUnproven:true}` (7 writes alive) |
+| mA2 pre-D1 mirror | `MirrorRecorderMembers` restores the unconditional method-value body | `TestMirrorRecorderMembersKeepsAbsentWritesNil` (m4a's killer still passes) | `an absent write was mirrored as present` |
+| mA3 wrong-method fallback | `recorderWrites`: `writes.PersistProcessAuthority = recorder.PersistProcessWithAuthority` | `TestRecorderWritesMapsEveryCapabilityToItsMethod` | `fallback write authority reached []string{"atomic"}, want its own method` |
+| m4a re-expressed | `MirrorRecorderMembers`: `invocation.PersistProcessAuthority = writes.PersistProcessWithAuthority` | `TestMirrorRecorderMembersCallsTheSameRecorderMethods` | `frozen member authority reached []string{"atomic"}, want the same recorder method` |
+
 ## 8. Gates
 
 Every row ran in the foreground on this host except the WSL and coverage rows, which ran alone (no
-other suite on the host while either ran).
+other suite on the host while either ran). The apply stage (2026-11-23, §12) re-ran every row
+against the applied tree; the numbers below are the apply-stage observations (the three
+callback-name greps are byte-identical, §3).
 
 | Gate (working directory) | Exit | Output |
 | --- | --- | --- |
@@ -278,31 +303,41 @@ other suite on the host while either ran).
 | `GOOS=windows go build ./...` (`daemon/`) | 0 | — |
 | `GOOS=darwin go build ./...` (`daemon/`) | 0 | — |
 | `GOOS=linux GOARCH=arm64 go build ./...` (`daemon/`) | 0 | — |
-| `go test -count=1 -timeout 1800s ./internal/execution/... ./internal/harness/... ./internal/app/...` (Windows, `daemon/`) | 0 | 12 packages `ok`: execution 13.091s, harness 3.606s, claude 16.702s, codex 18.275s, linejson 1.213s, omo 9.531s, omp 9.463s, opencode 0.779s, pi 9.721s, probeconformance 11.025s, app 371.886s, apptest 18.868s |
-| `python3 scripts/ci/test-omo-control-native-evidence.py` (R9, `git root`) | 0 | `Ran 15 tests in 22.890s / OK` |
+| `go test -count=1 -timeout 1800s ./internal/execution/... ./internal/harness/... ./internal/app/...` (Windows, `daemon/`) | 0 | 12 packages `ok`: execution 20.556s, harness 1.861s, claude 20.228s, codex 22.042s, linejson 1.271s, omo 12.609s, omp 12.535s, opencode 1.522s, pi 12.250s, probeconformance 9.962s, app 386.786s, apptest 11.118s |
+| `python3 scripts/ci/test-omo-control-native-evidence.py` (R9, `git root`) | 0 | `Ran 15 tests in 25.490s / OK` |
 | `git diff --name-only` (scope, `git root`) | 0 | §9 |
-| `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race -timeout 3000s ./internal/execution/... ./internal/harness/... ./internal/app/... ./internal/platform/...` (`/mnt/q/repos/wt-w4-12c-process-recorder/symmetry/daemon`) | 0 | 13 packages `ok`: execution 24.411s, harness 1.382s, claude 26.595s, codex 37.039s, linejson 1.095s, omo 15.042s, omp 40.733s, opencode 4.024s, pi 9.142s, probeconformance 8.187s, app 801.501s, apptest 3.629s, platform 61.889s; no race report |
-| coverage pass (`go test -covermode=count -coverprofile=…` for `./internal/execution/`, `./internal/harness/`, `./internal/app/`, Windows) | 0 | execution 53.8% (base 53.0%), harness 71.1% (base 70.7%), app 75.3% (base 75.2%); per-file deltas below |
+| `wsl -d Ubuntu-24.04 -u accept` → `go test -count=1 -race -timeout 3000s ./internal/execution/... ./internal/harness/... ./internal/app/... ./internal/platform/...` (`/mnt/q/repos/wt-w4-12c-process-recorder/symmetry/daemon`) | 0 | 13 packages `ok`: execution 26.470s, harness 1.163s, claude 27.453s, codex 39.375s, linejson 1.172s, omo 17.161s, omp 42.540s, opencode 5.676s, pi 12.642s, probeconformance 8.280s, app 741.095s, apptest 3.900s, platform 59.133s; no race report |
+| coverage pass (`go test -covermode=count -coverprofile=…` for `./internal/execution/`, `./internal/harness/`, `./internal/app/`, Windows) | 0 | execution 54.1% (base 53.0%), harness 71.1% (base 70.7%), app 75.2% (base 75.2%); per-file deltas below |
 
 Coverage delta for every touched file (statements covered/total; the base side comes from a
 throwaway worktree at `f0448773`, so the base bytes are the code the contract was authored against;
 that worktree was removed afterwards):
 
-| File | Base | HEAD |
-| --- | --- | --- |
-| `daemon/internal/execution/runner.go` | 629/1169 (53.8%) | 635/1167 (54.4%) |
-| `daemon/internal/execution/probe.go` | 74/86 (86.0%) | 75/87 (86.2%) |
-| `daemon/internal/execution/process_launcher_windows.go` | 16/102 (15.7%) | 18/104 (17.3%) |
-| `daemon/internal/execution/recorder.go` (new) | no profile | 43/76 (56.6%) |
-| `daemon/internal/harness/types.go` | 44/72 (61.1%) | 44/72 (61.1%) |
-| `daemon/internal/harness/staged_driver.go` | 47/47 (100.0%) | 55/55 (100.0%) |
-| `daemon/internal/app/app.go` | 829/1148 (72.2%) | 833/1149 (72.5%) |
-| `daemon/internal/app/goal_admission_tx.go` | 582/816 (71.3%) | 580/813 (71.3%) |
-| `daemon/internal/app/process_recorder.go` (new) | no profile | 2/2 (100.0%) |
+| File | Base | Implement stage | Applied (2026-11-23) |
+| --- | --- | --- | --- |
+| `daemon/internal/execution/runner.go` | 629/1169 (53.8%) | 635/1167 (54.4%) | 636/1167 (54.5%) |
+| `daemon/internal/execution/probe.go` | 74/86 (86.0%) | 75/87 (86.2%) | 74/86 (86.0%) |
+| `daemon/internal/execution/process_launcher_windows.go` | 16/102 (15.7%) | 18/104 (17.3%) | 18/104 (17.3%) |
+| `daemon/internal/execution/recorder.go` (new) | no profile | 43/76 (56.6%) | 46/75 (61.3%) |
+| `daemon/internal/harness/types.go` | 44/72 (61.1%) | 44/72 (61.1%) | 44/72 (61.1%) |
+| `daemon/internal/harness/staged_driver.go` | 47/47 (100.0%) | 55/55 (100.0%) | 55/55 (100.0%) |
+| `daemon/internal/app/app.go` | 829/1148 (72.2%) | 833/1149 (72.5%) | 831/1149 (72.3%) |
+| `daemon/internal/app/goal_admission_tx.go` | 582/816 (71.3%) | 580/813 (71.3%) | 579/812 (71.3%) |
+| `daemon/internal/app/process_recorder.go` (new) | no profile | 2/2 (100.0%) | 2/2 (100.0%) |
+
+Apply-stage reading: `recorder.go`'s statement count drops by one (the deleted `recorderFuncs.Capabilities`
+forwarder) and its covered count rises by three — the new apply tests cover the whole
+`recorderWrites` fallback path (`go tool cover -func`: `recorderWrites` 8.0% at implement stage →
+100.0% applied). `probe.go` loses one statement and one covered statement: the D2 strip rewrite
+replaces eight assignments with the `ephemeralInvocation` call (`100.0%`) plus the helper's five
+assignments and return. `app.go`'s bytes are unchanged from the implement-stage row (same §1
+sha256); its 833→831 covered difference is run-to-run variation in timing-dependent paths, not a
+code change.
 
 `process_launcher_linux.go` and `linux_owner_witness_linux.go` are Linux-only files with no Windows
 profile rows at base or HEAD (their behaviour is exercised by the WSL row above); the new test files
-carry no profile rows by construction, and no touched file's coverage dropped.
+carry no profile rows by construction, and the applied-stage movements are the statement-shape
+changes above, not uncovered additions.
 
 ## 9. Scope
 
@@ -350,9 +385,40 @@ Line counts (`git diff --numstat` for the modified files, `wc -l` for the new on
 `harness/frozen_members_test.go` 112, `app/process_recorder_test.go` 209 (tests, +711),
 `docs/plans/...` 201, this record.
 
+Apply stage (2026-11-23, working tree against the committed slice; §12): the same owned set stays,
+plus `daemon/internal/execution/probe_test.go` (the F6 test lives in the existing probe test file).
+
+```
+$ git diff --name-only
+daemon/internal/app/goal_admission_tx.go
+daemon/internal/app/linux_owner_witness_linux.go
+daemon/internal/app/process_recorder.go
+daemon/internal/execution/probe.go
+daemon/internal/execution/probe_test.go
+daemon/internal/execution/recorder.go
+daemon/internal/execution/recorder_test.go
+daemon/internal/execution/runner.go
+
+$ git diff --numstat
+0	1	daemon/internal/app/goal_admission_tx.go
+0	1	daemon/internal/app/linux_owner_witness_linux.go
+2	3	daemon/internal/app/process_recorder.go
+12	8	daemon/internal/execution/probe.go
+54	0	daemon/internal/execution/probe_test.go
+15	19	daemon/internal/execution/recorder.go
+145	0	daemon/internal/execution/recorder_test.go
+3	3	daemon/internal/execution/runner.go
+```
+
+Post-apply line counts: `execution/recorder.go` 277, `execution/recorder_test.go` 535,
+`execution/probe.go` 183, `execution/probe_test.go` 260, `app/process_recorder.go` 25,
+`app/goal_admission_tx.go` 1454, `app/linux_owner_witness_linux.go` 3896, `execution/runner.go`
+2672.
+
 No path is under `daemon/internal/harness/opencode/`; `git diff origin/main...HEAD | grep -i "users/"`
-is empty; no committed byte contains a backslash followed by `u` (checked with
-`rg -n '\\u'` over every changed and new file); the new files are LF (`file` reports `ASCII text`).
+matches only this record's own quoted command; no committed byte contains a backslash followed by `u` (checked with
+`rg -n '\\u'` over every changed and new file; the only match is this record's own quoted command);
+the new files are LF (`file` reports `ASCII text`).
 
 ## 10. As-built deviations from the plan
 
@@ -376,3 +442,42 @@ is empty; no committed byte contains a backslash followed by `u` (checked with
   launch (`recorderWrites`); the app and both construction paths use `NewRecorder`, which avoids it.
 - The base coverage profile was taken from a throwaway worktree at `f0448773` (removed after the
   measurement); no repository file depends on it.
+
+## 12. Apply-stage amendments (2026-11-23)
+
+The accepted findings of the simplify stage
+(`state/gdd/runs/2026-11-23/symmetry-rf-w4-12c-process-recorder-port-simplif/answer.md`) were
+applied to the merged slice (`51178508`, uncommitted working tree). Every finding was accepted;
+only F8's option (b) was not applied, because the finding itself records it as conflicting with the
+plan §8 decision (no method value per write) and requiring conductor sign-off — option (a), the
+fallback-mapping test, is in.
+
+- F1: the `Invocation` mirror comment names every reader (opencode, grant-less direct constructions,
+  test doubles replacing the launch seam); same 4 lines, no code change.
+- F2/F3: the `recorderFuncs.Capabilities` forwarder and the duplicated method comment are deleted;
+  the promoted `RecorderFuncs.Capabilities` keeps `recorderFuncs` satisfying `Recorder`
+  (`NewRecorder(writes).Capabilities()` in `recorder_test.go` still pins the value).
+- F4: `processRecorder`'s doc comment is three lines.
+- F5: the duplicate `MirrorRecorderMembers()` calls in `goal_admission_tx.go` and the Linux-only
+  witness are deleted; between them and `PopulateOpencodeRecorderMembers` no reader exists, and the
+  populate mirrors the request copy the adapters read.
+- F6: `probe_test.go` adds `TestRunBoundedCommandDoesNotInvokeRecorderWrites` (an attached recorder
+  must stay at zero calls) and `TestEphemeralInvocationRemovesEveryDurableWrite` (a fully mirrored
+  invocation strips to zero capabilities).
+- F7/D1: `MirrorRecorderMembers` mirrors `recorderWrites(recorder)`, so a false capability stays
+  nil like the legacy absent callback and `recorderFuncs` mirrors allocate no method value;
+  `TestMirrorRecorderMembersKeepsAbsentWritesNil` pins it.
+- F8(a): `TestRecorderWritesMapsEveryCapabilityToItsMethod` pins the `recorderWrites` fallback
+  mapping (all ten present → each field calls its own method; sparse capabilities → only the true
+  ones are mapped).
+- D2: `RunBoundedCommand` strips through `ephemeralInvocation` and the package-level
+  `noDurableWrites = NewRecorder(RecorderFuncs{})`; the recorder is replaced, not merely nil'd, so a
+  mirrored invocation can no longer keep a live write. The three legacy member clears are gone; the
+  §4 grep shows `probe.go` no longer appears there.
+- D3: the §2 grep output replaced the `PENDING` placeholder.
+
+Refreshed at their single source by this stage: §1 hashes, §2 grep, §4 grep, §7.1 mutants, §8 gate
+rows and coverage table, §9 scope and line counts. Not re-run: the base-side coverage worktree
+(removed at implement stage; the base column is unchanged by construction). The advisory
+`golangci-lint run ./internal/execution/... ./internal/harness/...` stays at the recorded 105
+issues.

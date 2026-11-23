@@ -6,9 +6,8 @@ import (
 )
 
 // processRecorder binds one run's key to the persist*Callback factories, so each
-// durable write of that launch performs exactly the Store mutation, fence check,
-// replay and error wrapping the callback it replaces performed. persistProcess is
-// the site-specific process-marker write.
+// durable write performs exactly the Store mutation, fence check, replay and error
+// wrapping the callback it replaces performed.
 func (daemon *daemon) processRecorder(key state.RunKey, persistProcess func(pid int, identity string) error) execution.Recorder {
 	persistAuthority := daemon.persistProcessAuthorityCallback(key)
 	return execution.NewRecorder(execution.RecorderFuncs{

@@ -114,9 +114,9 @@ type Invocation struct {
 	// back to the frozen OpenCode-facing members below.
 	Recorder Recorder
 	// The members below mirror Recorder's writes. They stay populated for
-	// daemon/internal/harness/opencode, which rebuilds its invocation from these
-	// members, and are read only through a rebuilt invocation without a recorder.
-	// W6-04 deletes them with their population (docs/TODO.md).
+	// daemon/internal/harness/opencode, grant-less direct constructions and test
+	// doubles that replace the launch seam. W6-04 deletes them with their
+	// population (docs/TODO.md).
 	PrepareSupervisorHandoff           func(authority.SupervisorHandoff) error
 	BindSupervisorHandoff              func(authority.SupervisorHandoff, int, string) error
 	CommitSupervisorHandoff            func(authority.SupervisorHandoff, time.Time) error

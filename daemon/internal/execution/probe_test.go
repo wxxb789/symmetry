@@ -134,6 +134,60 @@ func TestRunBoundedCommandDoesNotInstallDurableCallbacks(t *testing.T) {
 	}
 }
 
+func TestRunBoundedCommandDoesNotInvokeRecorderWrites(t *testing.T) {
+	var calls atomic.Int32
+	record := func() { calls.Add(1) }
+	invocation := helperInvocation("args", "no-journal")
+	invocation.Recorder = NewRecorder(RecorderFuncs{
+		PrepareSupervisorHandoff:           func(authority.SupervisorHandoff) error { record(); return nil },
+		BindSupervisorHandoff:              func(authority.SupervisorHandoff, int, string) error { record(); return nil },
+		CommitSupervisorHandoff:            func(authority.SupervisorHandoff, time.Time) error { record(); return nil },
+		RecordSupervisorHandoffStopReceipt: func(authority.SupervisorHandoff, authority.StopReceipt) error { record(); return nil },
+		ClearSupervisorHandoff: func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error {
+			record()
+			return nil
+		},
+		PersistProcess:                func(int, string) error { record(); return nil },
+		PersistProcessWithAuthority:   func(int, string, *authority.Supervisor) error { record(); return nil },
+		PersistProcessAuthority:       func(int, string, *authority.Supervisor) error { record(); return nil },
+		PersistContainmentStopReceipt: func(int, string, authority.StopReceipt) error { record(); return nil },
+		PersistContainmentUnproven:    func(int, string) error { record(); return nil },
+	})
+
+	output, err := RunBoundedCommand(context.Background(), invocation, 1024)
+	if err != nil {
+		t.Fatalf("RunBoundedCommand() error = %v", err)
+	}
+	if string(output) != "no-journal" {
+		t.Fatalf("output = %q, want no-journal", output)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("RunBoundedCommand() invoked %d durable writes", calls.Load())
+	}
+}
+
+func TestEphemeralInvocationRemovesEveryDurableWrite(t *testing.T) {
+	invocation := helperInvocation("args", "no-journal")
+	invocation.Recorder = NewRecorder(RecorderFuncs{
+		PrepareSupervisorHandoff:           func(authority.SupervisorHandoff) error { return nil },
+		BindSupervisorHandoff:              func(authority.SupervisorHandoff, int, string) error { return nil },
+		CommitSupervisorHandoff:            func(authority.SupervisorHandoff, time.Time) error { return nil },
+		RecordSupervisorHandoffStopReceipt: func(authority.SupervisorHandoff, authority.StopReceipt) error { return nil },
+		ClearSupervisorHandoff:             func(authority.SupervisorHandoff, authority.SupervisorHandoffReleaseProof) error { return nil },
+		PersistProcess:                     func(int, string) error { return nil },
+		PersistProcessWithAuthority:        func(int, string, *authority.Supervisor) error { return nil },
+		PersistProcessAuthority:            func(int, string, *authority.Supervisor) error { return nil },
+		PersistContainmentStopReceipt:      func(int, string, authority.StopReceipt) error { return nil },
+		PersistContainmentUnproven:         func(int, string) error { return nil },
+	})
+	invocation.MirrorRecorderMembers()
+
+	stripped := ephemeralInvocation(invocation)
+	if capabilities := invocationWrites(stripped).Capabilities(); capabilities != (RecorderCapabilities{}) {
+		t.Fatalf("ephemeral strip left durable writes: %+v", capabilities)
+	}
+}
+
 type postWaitDeadlineContext struct {
 	calls      atomic.Int32
 	deadlineAt int32
