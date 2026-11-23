@@ -1,9 +1,9 @@
 defmodule SymmetryControlWeb.HealthController do
   use SymmetryControlWeb, :controller
 
-  require Logger
-
   alias SymmetryControl.Health
+
+  require Logger
 
   def show(conn, _params) do
     case Health.check(Health.default_checks()) do

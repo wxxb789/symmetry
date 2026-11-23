@@ -8,12 +8,19 @@ defmodule SymmetryControl.Workspaces do
 
   import Ecto.Query
 
-  alias SymmetryControl.Integrations.{ChangeAction, Connection}
+  alias SymmetryControl.Integrations.ChangeAction
+  alias SymmetryControl.Integrations.Connection
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Notifier, Runtime, Scheduler, Task}
+  alias SymmetryControl.Orchestration.Notifier
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Scheduler
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Repo
   alias SymmetryControl.Schemas.VersionedChangeset
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem, WorkItemEligibility}
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
+  alias SymmetryControl.Workspaces.WorkItemEligibility
 
   @active_execution_states [
     "queued",
@@ -50,18 +57,19 @@ defmodule SymmetryControl.Workspaces do
           | {:error, :not_found | :invalid_request | :stale | Ecto.Changeset.t()}
   def update_project(project_id, attrs) when is_map(attrs) do
     if valid_uuid?(project_id) do
-      Repo.transaction(fn ->
+      fn ->
         project = lock_project(project_id)
 
         with {:ok, attrs} <- expect_version(project, attrs),
              :ok <- project_mutation_allowed(project, attrs),
-             changeset <- Project.update_changeset(project, attrs),
+             changeset = Project.update_changeset(project, attrs),
              :ok <- project_archive_allowed(project, changeset) do
           changeset |> VersionedChangeset.update_with_stale_error() |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       {:error, :not_found}
@@ -72,10 +80,10 @@ defmodule SymmetryControl.Workspaces do
           {:ok, ProjectResource.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def create_resource(project_id, attrs) when is_map(attrs) do
     if valid_uuid?(project_id) do
-      Repo.transaction(fn ->
+      fn ->
         project = lock_project(project_id)
-        ensure_active_project(project) |> require_ok!()
-        attrs = prepare_resource_attrs(attrs) |> unwrap_or_rollback()
+        project |> ensure_active_project() |> require_ok!()
+        attrs = attrs |> prepare_resource_attrs() |> unwrap_or_rollback()
 
         project
         |> Ecto.build_assoc(:resources)
@@ -83,7 +91,8 @@ defmodule SymmetryControl.Workspaces do
         |> validate_registered_reference()
         |> Repo.insert()
         |> unwrap_or_rollback()
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       {:error, :not_found}
@@ -94,24 +103,23 @@ defmodule SymmetryControl.Workspaces do
           {:ok, ProjectResource.t()} | {:error, :not_found | Ecto.Changeset.t()}
   def update_resource(resource_id, attrs) when is_map(attrs) do
     if valid_uuid?(resource_id) do
-      Repo.transaction(fn ->
+      fn ->
         resource = lock_resource_with_project(resource_id)
-        ensure_active_project(resource.project) |> require_ok!()
+        resource.project |> ensure_active_project() |> require_ok!()
 
         with {:ok, attrs} <- expect_version(resource, attrs),
              {:ok, attrs} <- prepare_resource_attrs(attrs, resource),
-             changeset <-
-               ProjectResource.update_changeset(
-                 resource,
-                 Map.drop(attrs, [:project_id, "project_id"])
-               )
+             changeset =
+               resource
+               |> ProjectResource.update_changeset(Map.drop(attrs, [:project_id, "project_id"]))
                |> validate_registered_reference(),
              :ok <- resource_identity_change_allowed(resource, changeset) do
           changeset |> VersionedChangeset.update_with_stale_error() |> unwrap_or_rollback()
         else
           {:error, reason} -> Repo.rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       {:error, :not_found}
@@ -122,7 +130,7 @@ defmodule SymmetryControl.Workspaces do
           {:ok, ProjectResource.t()} | {:error, :not_found | :invalid_request | :stale}
   def delete_resource(resource_id, expected_version) do
     if valid_uuid?(resource_id) do
-      Repo.transaction(fn ->
+      fn ->
         resource = lock_resource_with_project(resource_id)
 
         with :ok <- ensure_active_project(resource.project),
@@ -135,7 +143,8 @@ defmodule SymmetryControl.Workspaces do
         else
           {:error, reason} -> Repo.rollback(reason)
         end
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       {:error, :not_found}
@@ -151,9 +160,9 @@ defmodule SymmetryControl.Workspaces do
          {:ok, creation_id} <- work_item_creation_id(attrs) do
       # The project row is locked FOR UPDATE, which serializes same-project creates, so the
       # identity lookup below cannot race another create carrying the same identity.
-      Repo.transaction(fn ->
+      fn ->
         project = lock_project(project_id)
-        ensure_active_project(project) |> require_ok!()
+        project |> ensure_active_project() |> require_ok!()
 
         case find_work_item_by_creation_id(project.id, creation_id) do
           {:replayed, existing} ->
@@ -177,7 +186,8 @@ defmodule SymmetryControl.Workspaces do
 
             {:created, changeset |> Repo.insert() |> unwrap_or_rollback()}
         end
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_creation_transaction()
     else
       false -> {:error, :not_found}
@@ -191,13 +201,13 @@ defmodule SymmetryControl.Workspaces do
     if valid_uuid?(work_item_id) do
       with {:ok, work_item} <- fetch(WorkItem, work_item_id),
            :ok <- ensure_legacy_work_item(work_item) do
-        Repo.transaction(fn ->
+        fn ->
           work_item = lock_work_item_with_project(work_item_id)
-          ensure_active_project(work_item.project) |> require_ok!()
+          work_item.project |> ensure_active_project() |> require_ok!()
 
           with {:ok, attrs} <- expect_version(work_item, attrs),
                :ok <- ensure_legacy_work_item(work_item),
-               changeset <-
+               changeset =
                  WorkItem.update_changeset(
                    work_item,
                    attrs
@@ -213,7 +223,8 @@ defmodule SymmetryControl.Workspaces do
           else
             {:error, reason} -> Repo.rollback(reason)
           end
-        end)
+        end
+        |> Repo.transaction()
         |> unwrap_transaction()
       end
     else
@@ -232,10 +243,10 @@ defmodule SymmetryControl.Workspaces do
          true <- valid_uuid?(work_item_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item) do
-      Repo.transaction(fn ->
+      fn ->
         project_id = work_item_project_id(work_item_id)
         project = lock_project(project_id)
-        ensure_active_project(project) |> require_ok!()
+        project |> ensure_active_project() |> require_ok!()
 
         locked_items =
           Repo.all(
@@ -246,7 +257,7 @@ defmodule SymmetryControl.Workspaces do
           )
 
         work_item = Enum.find(locked_items, &(&1.id == work_item_id)) || Repo.rollback(:not_found)
-        ensure_legacy_work_item(work_item) |> require_ok!()
+        work_item |> ensure_legacy_work_item() |> require_ok!()
         if work_item.lock_version != expected_version, do: Repo.rollback(:stale)
 
         items = Enum.sort_by(locked_items, &{&1.position, &1.number, &1.id})
@@ -265,7 +276,8 @@ defmodule SymmetryControl.Workspaces do
         persist_positions(target_items, status)
 
         Repo.get!(WorkItem, work_item.id)
-      end)
+      end
+      |> Repo.transaction()
       |> unwrap_transaction()
     else
       false -> {:error, :not_found}
@@ -313,8 +325,7 @@ defmodule SymmetryControl.Workspaces do
 
   @spec launch_work_item(Ecto.UUID.t(), String.t(), keyword()) ::
           {:ok, map(), :created | :replayed} | {:error, atom() | Ecto.Changeset.t()}
-  def launch_work_item(work_item_id, action_id, opts)
-      when is_binary(action_id) and is_list(opts) do
+  def launch_work_item(work_item_id, action_id, opts) when is_binary(action_id) and is_list(opts) do
     with :ok <- validate_action_id(action_id),
          true <- valid_uuid?(work_item_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
@@ -322,8 +333,8 @@ defmodule SymmetryControl.Workspaces do
       result =
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
-          ensure_legacy_work_item(work_item) |> require_ok!()
-          ensure_active_project(work_item.project) |> require_ok!()
+          work_item |> ensure_legacy_work_item() |> require_ok!()
+          work_item.project |> ensure_active_project() |> require_ok!()
 
           launch_locked_work_item(work_item, opts)
         end)
@@ -351,7 +362,7 @@ defmodule SymmetryControl.Workspaces do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item),
-         work_item <- preload_binding(work_item),
+         work_item = preload_binding(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, command, disposition} <-
            Orchestration.create_command(
@@ -380,7 +391,7 @@ defmodule SymmetryControl.Workspaces do
     with :ok <- validate_action_id(action_id),
          {:ok, work_item} <- fetch(WorkItem, work_item_id),
          :ok <- ensure_legacy_work_item(work_item),
-         work_item <- preload_binding(work_item),
+         work_item = preload_binding(work_item),
          task_id when is_binary(task_id) <- work_item.orchestration_task_id,
          {:ok, task_before} <- Orchestration.task_snapshot(task_id),
          {:ok, command, disposition} <-
@@ -419,7 +430,7 @@ defmodule SymmetryControl.Workspaces do
       result =
         Repo.transaction(fn ->
           work_item = lock_work_item_with_project(work_item_id)
-          WorkItemEligibility.retry_gate(work_item) |> require_ok!()
+          work_item |> WorkItemEligibility.retry_gate() |> require_ok!()
 
           task_id = work_item.orchestration_task_id || Repo.rollback(:state_conflict)
 
@@ -502,8 +513,7 @@ defmodule SymmetryControl.Workspaces do
     project = if Ecto.assoc_loaded?(work_item.project), do: work_item.project
 
     %{
-      agent_profile:
-        present(work_item.agent_profile) || (project && project.default_agent_profile),
+      agent_profile: present(work_item.agent_profile) || (project && project.default_agent_profile),
       workspace: present(work_item.workspace) || (project && project.default_workspace),
       required_capabilities:
         Orchestration.retry_required_capabilities(
@@ -573,17 +583,16 @@ defmodule SymmetryControl.Workspaces do
   @spec fetch_work_item(Ecto.UUID.t()) :: {:ok, WorkItem.t()} | {:error, :not_found}
   def fetch_work_item(work_item_id), do: fetch(WorkItem, work_item_id)
 
-  defp launch_locked_work_item(%WorkItem{orchestration_task_id: task_id} = work_item, opts)
-       when is_binary(task_id) do
+  defp launch_locked_work_item(%WorkItem{orchestration_task_id: task_id} = work_item, opts) when is_binary(task_id) do
     case Orchestration.task_snapshot(task_id) do
       {:ok, task} ->
         required = required_capabilities_for(work_item, opts)
 
-        unless is_map(required) and
-                 Enum.all?(required, fn {key, value} ->
-                   Map.get(task.task.required_capabilities, to_string(key)) == value
-                 end),
-               do: Repo.rollback(:idempotency_conflict)
+        if !(is_map(required) and
+               Enum.all?(required, fn {key, value} ->
+                 Map.get(task.task.required_capabilities, to_string(key)) == value
+               end)),
+           do: Repo.rollback(:idempotency_conflict)
 
         {%{work_item: work_item, task: task}, :replayed, false}
 
@@ -593,14 +602,14 @@ defmodule SymmetryControl.Workspaces do
   end
 
   defp launch_locked_work_item(%WorkItem{project: project} = work_item, opts) do
-    WorkItemEligibility.start(work_item) |> require_ok!()
+    work_item |> WorkItemEligibility.start() |> require_ok!()
 
     agent_profile = present(work_item.agent_profile) || project.default_agent_profile
     workspace = present(work_item.workspace) || project.default_workspace
 
     attrs = execution_attrs(work_item, agent_profile, workspace)
     required = required_capabilities_for(work_item, opts)
-    unless is_map(required), do: Repo.rollback(:invalid_request)
+    if !is_map(required), do: Repo.rollback(:invalid_request)
     attrs = Map.update!(attrs, :required_capabilities, &Map.merge(required, &1))
 
     case Orchestration.submit_task(attrs, "portal-work-item-#{work_item.id}") do
@@ -712,9 +721,7 @@ defmodule SymmetryControl.Workspaces do
     if "changes" in capabilities do
       with {:ok, source_branch} <- ChangeAction.normalize_branch(work_item.branch),
            {:ok, target_branch} <-
-             ChangeAction.normalize_branch(
-               work_item.repository_resource.metadata["default_branch"]
-             ) do
+             ChangeAction.normalize_branch(work_item.repository_resource.metadata["default_branch"]) do
         input =
           input
           |> Map.put("source_branch", source_branch)
@@ -739,8 +746,7 @@ defmodule SymmetryControl.Workspaces do
     end
   end
 
-  defp maybe_put_external_work_item(input, %WorkItem{external_work_item_resource_id: nil}),
-    do: input
+  defp maybe_put_external_work_item(input, %WorkItem{external_work_item_resource_id: nil}), do: input
 
   defp maybe_put_external_work_item(input, work_item) do
     Map.put(input, "external_work_item", %{
@@ -754,8 +760,7 @@ defmodule SymmetryControl.Workspaces do
 
   defp maybe_put_ci_resource(input, %WorkItem{ci_resource_id: nil}), do: input
 
-  defp maybe_put_ci_resource(input, work_item),
-    do: Map.put(input, "ci_resource_id", work_item.ci_resource_id)
+  defp maybe_put_ci_resource(input, work_item), do: Map.put(input, "ci_resource_id", work_item.ci_resource_id)
 
   defp execution_goal(%WorkItem{description: description, title: title}) do
     case present(description) do
@@ -782,11 +787,9 @@ defmodule SymmetryControl.Workspaces do
 
   defp select_project([], _selected_project_id), do: nil
 
-  defp select_project(projects, nil),
-    do: Enum.find(projects, &(&1.status == "active")) || List.first(projects)
+  defp select_project(projects, nil), do: Enum.find(projects, &(&1.status == "active")) || List.first(projects)
 
-  defp select_project(projects, selected_project_id),
-    do: Enum.find(projects, &(&1.id == selected_project_id))
+  defp select_project(projects, selected_project_id), do: Enum.find(projects, &(&1.id == selected_project_id))
 
   defp fetch(schema, id) when is_binary(id) do
     with {:ok, id} <- Ecto.UUID.cast(id),
@@ -858,7 +861,7 @@ defmodule SymmetryControl.Workspaces do
   defp project_mutation_allowed(%Project{status: "active"}, _attrs), do: :ok
 
   defp project_mutation_allowed(%Project{status: "archived"}, attrs) do
-    keys = attrs |> Map.keys() |> Enum.map(&to_string/1) |> MapSet.new()
+    keys = attrs |> Map.keys() |> MapSet.new(&to_string/1)
     requested_status = Map.get(attrs, :status) || Map.get(attrs, "status")
 
     if requested_status == "active" and MapSet.subset?(keys, MapSet.new(["status"])),
@@ -955,14 +958,7 @@ defmodule SymmetryControl.Workspaces do
     )
   end
 
-  defp validate_project_resource(
-         changeset,
-         field,
-         project_id,
-         kind,
-         error_message,
-         resources
-       ) do
+  defp validate_project_resource(changeset, field, project_id, kind, error_message, resources) do
     case Ecto.Changeset.get_field(changeset, field) do
       nil ->
         changeset
@@ -978,10 +974,7 @@ defmodule SymmetryControl.Workspaces do
     end
   end
 
-  defp provider_owned_fields_editable(
-         %WorkItem{external_work_item_resource_id: resource_id},
-         changeset
-       )
+  defp provider_owned_fields_editable(%WorkItem{external_work_item_resource_id: resource_id}, changeset)
        when is_binary(resource_id) do
     if Enum.any?(
          Map.keys(changeset.changes),
@@ -1042,10 +1035,10 @@ defmodule SymmetryControl.Workspaces do
                    lock: "FOR SHARE"
                ) do
           kind = attr_value(attrs, :kind, resource && resource.kind)
-          ensure_connection_capability(connection, kind) |> require_ok!()
+          connection |> ensure_connection_capability(kind) |> require_ok!()
 
-          SymmetryControl.Integrations.validate_resource_reference(
-            connection,
+          connection
+          |> SymmetryControl.Integrations.validate_resource_reference(
             kind,
             attr_value(attrs, :external_ref, resource && resource.external_ref)
           )
@@ -1130,11 +1123,11 @@ defmodule SymmetryControl.Workspaces do
   defp work_item_status(attrs), do: attr_value(attrs, :status, "backlog")
 
   defp next_position(project_id, status) do
-    Repo.one(
-      from item in WorkItem,
-        where: item.project_id == ^project_id and item.status == ^status,
-        select: max(item.position)
+    from(item in WorkItem,
+      where: item.project_id == ^project_id and item.status == ^status,
+      select: max(item.position)
     )
+    |> Repo.one()
     |> case do
       nil -> 0
       position -> position + 1
@@ -1218,8 +1211,7 @@ defmodule SymmetryControl.Workspaces do
     end
   end
 
-  defp attr_present?(attrs, key),
-    do: Map.has_key?(attrs, key) or Map.has_key?(attrs, Atom.to_string(key))
+  defp attr_present?(attrs, key), do: Map.has_key?(attrs, key) or Map.has_key?(attrs, Atom.to_string(key))
 
   defp attr_value(attrs, key, default) do
     cond do
@@ -1231,8 +1223,7 @@ defmodule SymmetryControl.Workspaces do
 
   defp put_creation_id(attrs, nil), do: attrs
 
-  defp put_creation_id(attrs, creation_id),
-    do: VersionedChangeset.put_attr(attrs, :creation_id, creation_id)
+  defp put_creation_id(attrs, creation_id), do: VersionedChangeset.put_attr(attrs, :creation_id, creation_id)
 
   # A replay returns the row the first attempt created; only a real insert is `:created`.
   defp unwrap_creation_transaction({:ok, {:created, work_item}}), do: {:ok, work_item}

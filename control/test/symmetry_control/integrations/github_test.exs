@@ -68,8 +68,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
           "authorization" => "Bearer gho_github-token",
           "x-github-api-version" => "2026-03-10"
         },
-        response:
-          {:ok, 200, %{}, %{"login" => "octocat", "html_url" => "https://github.com/octocat"}}
+        response: {:ok, 200, %{}, %{"login" => "octocat", "html_url" => "https://github.com/octocat"}}
       },
       %{
         method: :get,
@@ -132,8 +131,8 @@ defmodule SymmetryControl.Integrations.GitHubTest do
 
   test "does not invent GitHub issue timestamps when updated_at is missing or malformed" do
     issues = [
-      issue_response(1) |> Map.delete("updated_at"),
-      issue_response(2) |> Map.put("updated_at", "not-a-timestamp")
+      1 |> issue_response() |> Map.delete("updated_at"),
+      2 |> issue_response() |> Map.put("updated_at", "not-a-timestamp")
     ]
 
     HTTPStub.expect([
@@ -311,8 +310,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
       %{
         method: :get,
         url_contains: "page=2",
-        response:
-          {:ok, 200, %{}, [%{"user" => %{"login" => "reviewer"}, "state" => "CHANGES_REQUESTED"}]}
+        response: {:ok, 200, %{}, [%{"user" => %{"login" => "reviewer"}, "state" => "CHANGES_REQUESTED"}]}
       }
     ])
 
@@ -492,13 +490,13 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         method: :post,
         url_contains: "/repos/acme/symmetry/pulls",
         body_assertion: fn body ->
-          unless body == %{
-                   "head" => "codex/goal-3",
-                   "base" => "main",
-                   "title" => "Connect providers",
-                   "body" => "Typed action"
-                 },
-                 do: raise("unexpected pull request body")
+          if body != %{
+               "head" => "codex/goal-3",
+               "base" => "main",
+               "title" => "Connect providers",
+               "body" => "Typed action"
+             },
+             do: raise("unexpected pull request body")
         end,
         response:
           {:ok, 201, %{},
@@ -551,7 +549,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         method: :patch,
         url_contains: "/repos/acme/symmetry/pulls/18",
         body_assertion: fn body ->
-          unless body == %{"title" => "Connect providers", "body" => "Reconciled body"},
+          if body != %{"title" => "Connect providers", "body" => "Reconciled body"},
             do: raise("existing pull request was not reconciled")
         end,
         response:
@@ -609,7 +607,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         method: :patch,
         url_contains: "/repos/acme/symmetry/pulls/18",
         body_assertion: fn body ->
-          unless body == %{"title" => "Connect providers", "body" => "Reconciled body"},
+          if body != %{"title" => "Connect providers", "body" => "Reconciled body"},
             do: raise("raced pull request was not reconciled")
         end,
         response: {:ok, 200, %{}, existing}
@@ -678,7 +676,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         method: :patch,
         url_contains: "/repos/acme/symmetry/pulls/18",
         body_assertion: fn body ->
-          unless body == %{"title" => "Updated title", "body" => "Updated body"},
+          if body != %{"title" => "Updated title", "body" => "Updated body"},
             do: raise("unexpected pull request update")
         end,
         response:
@@ -801,13 +799,14 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         "\n\n<!-- symmetry-provider-action:v1:#{historical_binding["action_id"]}:#{historical_digest} -->"
 
     historical_pull_request =
-      bound_pull_request(historical_binding, historical_body)
+      historical_binding
+      |> bound_pull_request(historical_body)
       |> Map.merge(%{"state" => "closed", "merged_at" => nil})
 
-    HTTPStub.expect(
-      bound_reads(historical_binding, [historical_pull_request])
-      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
-    )
+    historical_binding
+    |> bound_reads([historical_pull_request])
+    |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    |> HTTPStub.expect()
 
     assert {:ok, %{status: :confirmed, delivery: %{pull_request_state: "closed"}}} =
              GitHub.readback_action(
@@ -828,14 +827,16 @@ defmodule SymmetryControl.Integrations.GitHubTest do
         "\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
 
     new_pull_request =
-      bound_pull_request(binding, body)
+      binding
+      |> bound_pull_request(body)
       |> Map.merge(%{
         "number" => 19,
         "html_url" => "https://github.com/acme/symmetry/pull/19"
       })
 
     HTTPStub.expect(
-      (bound_reads(binding, [])
+      (binding
+       |> bound_reads([])
        |> List.update_at(2, &Map.put(&1, :url_contains, "state=open"))) ++
         [
           %{
@@ -876,20 +877,22 @@ defmodule SymmetryControl.Integrations.GitHubTest do
     body = dispatched_unknown_body(resource, binding)
 
     closed_pull_request =
-      bound_pull_request(binding, body)
+      binding
+      |> bound_pull_request(body)
       |> Map.merge(%{"state" => "closed", "merged_at" => nil})
 
     open_pull_request =
-      bound_pull_request(binding, body)
+      binding
+      |> bound_pull_request(body)
       |> Map.merge(%{
         "number" => 19,
         "html_url" => "https://github.com/acme/symmetry/pull/19"
       })
 
-    HTTPStub.expect(
-      bound_reads(binding, [closed_pull_request, open_pull_request])
-      |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
-    )
+    binding
+    |> bound_reads([closed_pull_request, open_pull_request])
+    |> List.update_at(2, &Map.put(&1, :url_contains, "state=all"))
+    |> HTTPStub.expect()
 
     assert {:ok, %{status: :unconfirmed}} =
              GitHub.readback_action(bound_connection(), resource, "change.upsert", binding, [])
@@ -937,8 +940,7 @@ defmodule SymmetryControl.Integrations.GitHubTest do
           %{
             method: :post,
             url_contains: "/pulls",
-            response:
-              {:ok, 201, %{}, put_in(pull_request, ["head", "sha"], String.duplicate("b", 40))}
+            response: {:ok, 201, %{}, put_in(pull_request, ["head", "sha"], String.duplicate("b", 40))}
           }
         ]
     )
@@ -989,7 +991,8 @@ defmodule SymmetryControl.Integrations.GitHubTest do
           "\n\n<!-- symmetry-provider-action:v1:#{binding["action_id"]}:#{digest} -->"
 
       wrong_pull_request =
-        bound_pull_request(binding, body)
+        binding
+        |> bound_pull_request(body)
         |> Map.merge(%{
           "number" => 19,
           "html_url" => "https://github.com/acme/symmetry/pull/19"

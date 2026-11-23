@@ -7,8 +7,7 @@ defmodule SymmetryControlWeb.ErrorJSON do
 
   def render("404.json", _assigns), do: error("not_found", "resource was not found")
 
-  def render(<<"5", _status::binary-size(2), ".json">>, _assigns),
-    do: error("internal_error", "internal server error")
+  def render(<<"5", _status::binary-size(2), ".json">>, _assigns), do: error("internal_error", "internal server error")
 
   def render(_template, _assigns), do: error("invalid_request", "request is invalid")
 

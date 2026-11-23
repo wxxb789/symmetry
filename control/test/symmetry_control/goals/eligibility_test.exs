@@ -1,8 +1,10 @@
 defmodule SymmetryControl.Goals.EligibilityTest do
   use SymmetryControl.OrchestrationCase, async: false
 
-  alias SymmetryControl.Goals.{Eligibility, Goal}
-  alias SymmetryControl.Orchestration.{Runtime, Task}
+  alias SymmetryControl.Goals.Eligibility
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-09 09:00:00.000000Z]
@@ -248,13 +250,15 @@ defmodule SymmetryControl.Goals.EligibilityTest do
     expected = Enum.sort([plan_id, active_id])
 
     query_ids =
-      Eligibility.candidate_task_query(@now, nil)
+      @now
+      |> Eligibility.candidate_task_query(nil)
       |> Repo.all()
       |> Enum.map(& &1.task_id)
       |> Enum.sort()
 
     page_ids =
-      Eligibility.next_goal_task_candidate_page(@now, nil)
+      @now
+      |> Eligibility.next_goal_task_candidate_page(nil)
       |> Enum.map(& &1.task_id)
       |> Enum.sort()
 

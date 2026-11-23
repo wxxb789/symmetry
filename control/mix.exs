@@ -55,7 +55,8 @@ defmodule SymmetryControl.MixProject do
       # ExJsonSchema 0.11.5 is a stable release compatible with the existing
       # Decimal 3.x dependency and all supported Elixir versions in this project.
       {:ex_json_schema, "~> 0.11.5"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:styler, "~> 1.12", only: [:dev, :test], runtime: false}
     ]
   end
 

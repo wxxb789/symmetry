@@ -118,20 +118,16 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
     end
   end
 
-  defp parse_profiles(profiles) when is_map(profiles),
-    do: profiles |> Map.to_list() |> parse_profiles()
+  defp parse_profiles(profiles) when is_map(profiles), do: profiles |> Map.to_list() |> parse_profiles()
 
   defp parse_profiles(profiles) when is_function(profiles, 0) do
-    try do
-      profiles.() |> parse_profiles()
-    rescue
-      _ -> {:error, :invalid_validation_profile_registry}
-    end
+    parse_profiles(profiles.())
+  rescue
+    _ -> {:error, :invalid_validation_profile_registry}
   end
 
   defp parse_profiles(profiles) when is_list(profiles) do
-    profiles
-    |> Enum.reduce_while({:ok, %{}}, fn
+    Enum.reduce_while(profiles, {:ok, %{}}, fn
       {name, fields}, {:ok, parsed} ->
         with {:ok, name} <- profile_name(name),
              false <- Map.has_key?(parsed, name),
@@ -156,8 +152,7 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
          {:ok, digest} <- profile_digest(Map.get(fields, "profile_digest")),
          {:ok, enabled} <- enabled(Map.get(fields, "enabled")),
          {:ok, runtime_ids} <- runtime_ids(Map.get(fields, "allowed_runtime_ids")) do
-      {:ok,
-       %{kind: kind, profile_digest: digest, enabled: enabled, allowed_runtime_ids: runtime_ids}}
+      {:ok, %{kind: kind, profile_digest: digest, enabled: enabled, allowed_runtime_ids: runtime_ids}}
     else
       false -> {:error, {:invalid_validation_profile, name}}
       {:error, {:invalid_validation_profile, _} = reason} -> {:error, reason}
@@ -165,12 +160,10 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
     end
   end
 
-  defp normalize_fields(fields, name) when is_map(fields),
-    do: fields |> Map.to_list() |> normalize_fields(name)
+  defp normalize_fields(fields, name) when is_map(fields), do: fields |> Map.to_list() |> normalize_fields(name)
 
   defp normalize_fields(fields, name) when is_list(fields) do
-    fields
-    |> Enum.reduce_while({:ok, %{}}, fn
+    Enum.reduce_while(fields, {:ok, %{}}, fn
       {key, value}, {:ok, normalized} ->
         with {:ok, key} <- profile_field(key),
              false <- Map.has_key?(normalized, key) do
@@ -199,8 +192,7 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
 
   defp ensure_kind(%{kind: kind}, _name, kind), do: :ok
 
-  defp ensure_kind(_, name, _expected_kind),
-    do: {:error, {:validation_profile_kind_mismatch, name}}
+  defp ensure_kind(_, name, _expected_kind), do: {:error, {:validation_profile_kind_mismatch, name}}
 
   defp profile_references(contract) do
     case value(contract, :predicates) do
@@ -265,8 +257,7 @@ defmodule SymmetryControl.Goals.ValidationProfiles do
 
   defp profile_field(_), do: {:error, :invalid_profile_field}
 
-  defp normalize_kind(kind) when kind in [:check, :review, "check", "review"],
-    do: {:ok, Map.fetch!(@profile_kinds, kind)}
+  defp normalize_kind(kind) when kind in [:check, :review, "check", "review"], do: {:ok, Map.fetch!(@profile_kinds, kind)}
 
   defp normalize_kind(_), do: {:error, :invalid_profile_kind}
 

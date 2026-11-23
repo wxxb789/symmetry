@@ -1,8 +1,6 @@
 defmodule SymmetryControl.Orchestration.Claims do
   @moduledoc false
 
-  @minimum_lease_duration_ms 30_000
-
   import Ecto.Query
 
   import SymmetryControl.Goals.Eligibility,
@@ -14,18 +12,20 @@ defmodule SymmetryControl.Orchestration.Claims do
       value: 2
     ]
 
+  alias SymmetryControl.Goals
   alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Goals.HarnessSession
+  alias SymmetryControl.Integrations.ProviderAccess
+  alias SymmetryControl.Orchestration.Assignment
   alias SymmetryControl.Orchestration.Machine
-  alias SymmetryControl.Repo
   alias SymmetryControl.Orchestration.Run
   alias SymmetryControl.Orchestration.Runtime
   alias SymmetryControl.Orchestration.Task
-  alias SymmetryControl.Workspaces.WorkItem
-  alias SymmetryControl.Goals
-  alias SymmetryControl.Integrations.ProviderAccess
   alias SymmetryControl.Orchestration.TaskReads
-  alias SymmetryControl.Orchestration.Assignment
+  alias SymmetryControl.Repo
+  alias SymmetryControl.Workspaces.WorkItem
+
+  @minimum_lease_duration_ms 30_000
 
   @spec claim(Ecto.UUID.t(), map(), keyword()) :: {:ok, Run.t()} | {:error, atom()}
   def claim(run_id, request, opts \\ []) do
@@ -74,7 +74,7 @@ defmodule SymmetryControl.Orchestration.Claims do
          {:ok, _lease_duration_ms} <- lease_duration_ms(opts),
          {:ok, :legacy} <- claim_owner(run_id) do
       result =
-        Repo.transaction(fn ->
+        fn ->
           case prepare_claim_in_transaction(run_id, request, opts, nil) do
             {:replayed, %{run: run}} ->
               run
@@ -85,7 +85,8 @@ defmodule SymmetryControl.Orchestration.Claims do
             {:new, _claim_context} ->
               rollback(:goal_authority_required)
           end
-        end)
+        end
+        |> Repo.transaction()
         |> case do
           {:ok, {:created, run}} -> {:created, run}
           {:ok, run} -> {:replayed, run}
@@ -138,8 +139,7 @@ defmodule SymmetryControl.Orchestration.Claims do
   @doc false
   @spec commit_new_claim_in_transaction(map(), keyword()) ::
           {:created, Run.t()} | {:error, atom()}
-  def commit_new_claim_in_transaction(claim_context, opts)
-      when is_map(claim_context) and is_list(opts) do
+  def commit_new_claim_in_transaction(claim_context, opts) when is_map(claim_context) and is_list(opts) do
     with true <- Repo.in_transaction?(),
          %DateTime{} = current <- Map.get(claim_context, :current),
          {:ok, lease_duration_ms} <- lease_duration_ms(opts) do
@@ -265,7 +265,7 @@ defmodule SymmetryControl.Orchestration.Claims do
         candidate_expiry = DateTime.add(current, lease_duration_ms, :millisecond)
 
         lease_expires_at =
-          if DateTime.compare(run.lease_expires_at, candidate_expiry) == :lt,
+          if DateTime.before?(run.lease_expires_at, candidate_expiry),
             do: candidate_expiry,
             else: run.lease_expires_at
 
@@ -288,9 +288,9 @@ defmodule SymmetryControl.Orchestration.Claims do
     valid? =
       run.state in ["claimed", "running", "paused", "waiting_for_input", "cancelling"] and
         not is_nil(run.lease_expires_at) and
-        DateTime.compare(run.lease_expires_at, current) == :gt
+        DateTime.after?(run.lease_expires_at, current)
 
-    unless valid?, do: rollback(:ownership_lost)
+    if !valid?, do: rollback(:ownership_lost)
   end
 
   @doc false
@@ -309,7 +309,7 @@ defmodule SymmetryControl.Orchestration.Claims do
       static_fence_matches?(task, run, fence) and
         runtime.connection_epoch == value(fence, :runtime_epoch)
 
-    unless valid?, do: rollback(:ownership_lost)
+    if !valid?, do: rollback(:ownership_lost)
   end
 
   @doc false
@@ -321,7 +321,7 @@ defmodule SymmetryControl.Orchestration.Claims do
     task = lock_task(task_id)
     notify_claim_task_locked(opts, task)
     run = Repo.one!(from run in Run, where: run.id == ^run_id, lock: "FOR UPDATE")
-    unless run.task_id == task.id, do: rollback(:ownership_lost)
+    if run.task_id != task.id, do: rollback(:ownership_lost)
     runtime = lock_runtime(run.runtime_id)
     {task, run, runtime}
   end
@@ -374,14 +374,14 @@ defmodule SymmetryControl.Orchestration.Claims do
   end
 
   defp ensure_goal_work_item_ownership!(goal, item, task) do
-    unless goal_work_item_owned?(goal, item, task),
+    if !goal_work_item_owned?(goal, item, task),
       do: rollback(:ownership_lost)
   end
 
   @doc false
   def ensure_current_goal_execution!(goal, item, task) do
     ensure_goal_work_item_ownership!(goal, item, task)
-    unless goal_task_current?(goal, task), do: rollback(:ownership_lost)
+    if !goal_task_current?(goal, task), do: rollback(:ownership_lost)
   end
 
   @doc false
@@ -391,13 +391,7 @@ defmodule SymmetryControl.Orchestration.Claims do
     ensure_current_goal_execution!(goal, item, task)
   end
 
-  defp ensure_requested_session_claim_binding!(
-         %Task{requested_session_id: nil},
-         _runtime,
-         _item,
-         _run
-       ),
-       do: :ok
+  defp ensure_requested_session_claim_binding!(%Task{requested_session_id: nil}, _runtime, _item, _run), do: :ok
 
   defp ensure_requested_session_claim_binding!(task, runtime, item, run) do
     repository_resource_id =
@@ -418,9 +412,9 @@ defmodule SymmetryControl.Orchestration.Claims do
           lock: "FOR UPDATE"
       )
 
-    unless (session && run.harness_session_id == session.id) and
-             run.harness_binding_id == session.binding_id,
-           do: rollback(:ownership_lost)
+    if !((session && run.harness_session_id == session.id) and
+           run.harness_binding_id == session.binding_id),
+       do: rollback(:ownership_lost)
   end
 
   defp replayed_claim?(task, run, runtime, request, current) do
@@ -431,46 +425,34 @@ defmodule SymmetryControl.Orchestration.Claims do
       run.state in ["claimed", "cancelling"] and run.claim_id == value(request, :claim_id) and
       run.claimed_runtime_epoch == value(request, :runtime_epoch) and
       not is_nil(run.lease_expires_at) and
-      DateTime.compare(run.lease_expires_at, current) == :gt
+      DateTime.after?(run.lease_expires_at, current)
   end
 
   defp lock_goal(goal_id),
-    do:
-      Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE") ||
-        rollback(:not_found)
+    do: Repo.one(from goal in Goal, where: goal.id == ^goal_id, lock: "FOR UPDATE") || rollback(:not_found)
 
   @doc false
   def lock_work_item(work_item_id),
-    do:
-      Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE") ||
-        rollback(:not_found)
+    do: Repo.one(from item in WorkItem, where: item.id == ^work_item_id, lock: "FOR UPDATE") || rollback(:not_found)
 
   @doc false
   def lock_machine(machine_id),
-    do:
-      Repo.one(from machine in Machine, where: machine.id == ^machine_id, lock: "FOR UPDATE") ||
-        rollback(:not_found)
+    do: Repo.one(from machine in Machine, where: machine.id == ^machine_id, lock: "FOR UPDATE") || rollback(:not_found)
 
   @doc false
   def lock_task(task_id),
-    do:
-      Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE") ||
-        rollback(:not_found)
+    do: Repo.one(from task in Task, where: task.id == ^task_id, lock: "FOR UPDATE") || rollback(:not_found)
 
   @doc false
   def lock_current_run(task),
     do:
       Repo.one(
-        from run in Run,
-          where: run.task_id == ^task.id and run.generation == ^task.current_generation,
-          lock: "FOR UPDATE"
+        from run in Run, where: run.task_id == ^task.id and run.generation == ^task.current_generation, lock: "FOR UPDATE"
       ) || rollback(:not_found)
 
   @doc false
   def lock_runtime(runtime_id),
-    do:
-      Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR UPDATE") ||
-        rollback(:not_found)
+    do: Repo.one(from runtime in Runtime, where: runtime.id == ^runtime_id, lock: "FOR UPDATE") || rollback(:not_found)
 
   @doc false
   def persist_insert(changeset) do
@@ -511,13 +493,13 @@ defmodule SymmetryControl.Orchestration.Claims do
   def rollback(reason), do: Repo.rollback(reason)
 
   @doc false
-  def now(opts),
-    do: opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
+  def now(opts), do: opts |> Keyword.get(:now, DateTime.utc_now()) |> DateTime.truncate(:microsecond)
 
   defp lease_duration_ms(opts) do
     duration =
       Keyword.get_lazy(opts, :lease_duration_ms, fn ->
-        Application.fetch_env!(:symmetry_control, :orchestration)
+        :symmetry_control
+        |> Application.fetch_env!(:orchestration)
         |> Keyword.fetch!(:lease_duration_ms)
       end)
 
@@ -527,8 +509,7 @@ defmodule SymmetryControl.Orchestration.Claims do
   end
 
   @doc false
-  def stamp_insert(changeset, current),
-    do: Ecto.Changeset.change(changeset, inserted_at: current, updated_at: current)
+  def stamp_insert(changeset, current), do: Ecto.Changeset.change(changeset, inserted_at: current, updated_at: current)
 
   @doc false
   def stamp_update(changeset, current), do: Ecto.Changeset.change(changeset, updated_at: current)
@@ -549,8 +530,7 @@ defmodule SymmetryControl.Orchestration.Claims do
   end
 
   @doc false
-  def emit(event, metadata),
-    do: :telemetry.execute([:symmetry_control, :orchestration | event], %{count: 1}, metadata)
+  def emit(event, metadata), do: :telemetry.execute([:symmetry_control, :orchestration | event], %{count: 1}, metadata)
 
   @doc false
   @spec claim_run(Ecto.UUID.t(), map(), keyword()) ::
@@ -582,24 +562,20 @@ defmodule SymmetryControl.Orchestration.Claims do
     end)
   end
 
-  defp claim_with_owner(:goal, run_id, request, opts),
-    do: Goals.claim_with_disposition(run_id, request, opts)
+  defp claim_with_owner(:goal, run_id, request, opts), do: Goals.claim_with_disposition(run_id, request, opts)
 
-  defp claim_with_owner(:legacy, run_id, request, opts),
-    do: claim_with_disposition(run_id, request, opts)
+  defp claim_with_owner(:legacy, run_id, request, opts), do: claim_with_disposition(run_id, request, opts)
 
   defp claim_run_result({:ok, {run, task, provider_access, :created}}) do
     emit_claimed(run)
     {:ok, {run, task, provider_access}}
   end
 
-  defp claim_run_result({:ok, {run, task, provider_access, :replayed}}),
-    do: {:ok, {run, task, provider_access}}
+  defp claim_run_result({:ok, {run, task, provider_access, :replayed}}), do: {:ok, {run, task, provider_access}}
 
   defp claim_run_result(error), do: error
 
-  defp provider_access_for_claim(_scope, :replayed, run, task),
-    do: ProviderAccess.replay_claim_access(run, task)
+  defp provider_access_for_claim(_scope, :replayed, run, task), do: ProviderAccess.replay_claim_access(run, task)
 
   defp provider_access_for_claim({:ok, scope}, :created, run, task) do
     with {:ok, provider_access} <- ProviderAccess.issue(scope, run, task),

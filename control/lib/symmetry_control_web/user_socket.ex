@@ -2,6 +2,7 @@ defmodule SymmetryControlWeb.UserSocket do
   use Phoenix.Socket
 
   alias SymmetryControl.Orchestration
+
   channel "daemon:*", SymmetryControlWeb.DaemonChannel
 
   @impl true

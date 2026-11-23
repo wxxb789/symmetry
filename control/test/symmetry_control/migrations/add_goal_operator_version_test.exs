@@ -147,7 +147,7 @@ defmodule SymmetryControl.Migrations.AddGoalOperatorVersionMigrationTest do
       [
         project_id,
         "operator-version-project-#{System.unique_integer([:positive])}",
-        "OV#{System.unique_integer([:positive])}" |> String.slice(0, 8)
+        String.slice("OV#{System.unique_integer([:positive])}", 0, 8)
       ]
     )
 

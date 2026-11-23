@@ -41,15 +41,15 @@ defmodule SymmetryControl.Goals.Budget do
     if reservation do
       accounting = task_accounting(task, reservation)
 
-      if reservation.state != accounting.reservation_state do
+      if reservation.state == accounting.reservation_state do
+        false
+      else
         reservation
         |> GoalBudgetReservation.settle_changeset(accounting.reservation_state)
         |> stamp_update(now(opts))
         |> Repo.update!()
 
         true
-      else
-        false
       end
     else
       false
@@ -111,7 +111,8 @@ defmodule SymmetryControl.Goals.Budget do
     reservations_by_task = Map.new(reservations, &{&1.task_id, &1})
 
     accounting =
-      Repo.all(from(task in Task, where: task.goal_id == ^goal.id))
+      from(task in Task, where: task.goal_id == ^goal.id)
+      |> Repo.all()
       |> Enum.map(fn task -> task_accounting(task, Map.get(reservations_by_task, task.id)) end)
 
     unknown? = Enum.any?(accounting, & &1.unknown?)
@@ -125,8 +126,7 @@ defmodule SymmetryControl.Goals.Budget do
 
       limit ->
         committed =
-          accounting
-          |> Enum.reduce(0, fn task, total ->
+          Enum.reduce(accounting, 0, fn task, total ->
             total + task.known_cost_microusd + task.remaining_liability_microusd
           end)
 
@@ -157,20 +157,19 @@ defmodule SymmetryControl.Goals.Budget do
       )
 
     effective_usage_by_run =
-      Repo.all(
-        from(usage in RunUsage,
-          join: run in Run,
-          on: run.id == usage.run_id,
-          where: run.task_id == ^task.id,
-          select: {run.id, usage.id, usage.supersedes_id, usage.cost_microusd, usage.cost_basis}
-        )
+      from(usage in RunUsage,
+        join: run in Run,
+        on: run.id == usage.run_id,
+        where: run.task_id == ^task.id,
+        select: {run.id, usage.id, usage.supersedes_id, usage.cost_microusd, usage.cost_basis}
       )
+      |> Repo.all()
       |> Enum.group_by(&elem(&1, 0), fn {_run_id, id, supersedes_id, cost, basis} ->
         {id, supersedes_id, cost, basis}
       end)
       |> Map.new(fn {run_id, rows} -> {run_id, latest_usage_rows(rows)} end)
 
-    leaves = Map.values(effective_usage_by_run) |> List.flatten()
+    leaves = effective_usage_by_run |> Map.values() |> List.flatten()
 
     known_cost_microusd =
       leaves
@@ -257,13 +256,13 @@ defmodule SymmetryControl.Goals.Budget do
   def admission_limits!(payload, opts) do
     supplied = value(payload, :limits, %{})
 
-    unless is_map(supplied) and only_known_keys?(supplied, ["max_turns", "deadline_at"]),
+    if !(is_map(supplied) and only_known_keys?(supplied, ["max_turns", "deadline_at"])),
       do: rollback(:invalid_request)
 
     max_turns = value(supplied, :max_turns, 1)
-    deadline_at = value(supplied, :deadline_at, DateTime.add(now(opts), 15 * 60, :second))
+    deadline_at = value(supplied, :deadline_at, DateTime.shift(now(opts), minute: 15))
 
-    unless is_integer(max_turns) and max_turns > 0 and max_turns <= 9_007_199_254_740_991,
+    if !(is_integer(max_turns) and max_turns > 0 and max_turns <= 9_007_199_254_740_991),
       do: rollback(:invalid_request)
 
     deadline_at =
@@ -301,7 +300,7 @@ defmodule SymmetryControl.Goals.Budget do
           policy_nonnegative_integer(revision.execution_policy, "per_run_cost_limit_microusd") ||
             rollback(:strict_budget_requires_reservation)
 
-        unless value(revision.execution_policy, "hard_cost_limit_required", false) == true do
+        if value(revision.execution_policy, "hard_cost_limit_required", false) != true do
           rollback(:strict_budget_requires_reservation)
         end
 
@@ -320,8 +319,7 @@ defmodule SymmetryControl.Goals.Budget do
     end
   end
 
-  defp multiply_microusd!(left, right)
-       when is_integer(left) and left >= 0 and is_integer(right) and right > 0 do
+  defp multiply_microusd!(left, right) when is_integer(left) and left >= 0 and is_integer(right) and right > 0 do
     if left == 0 or right <= div(@max_microusd, left),
       do: left * right,
       else: rollback(:invalid_request)

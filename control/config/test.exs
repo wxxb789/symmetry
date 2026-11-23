@@ -1,5 +1,22 @@
 import Config
 
+# Print only warnings and errors during test
+config :logger, level: :warning
+
+# Initialize plugs at runtime for faster test compilation
+config :phoenix, :plug_init_mode, :runtime
+
+# Sort query params output of verified routes for robust url comparisons
+config :phoenix,
+  sort_verified_routes_query_params: true
+
+# Goal tests submit durable wakeup/control jobs while keeping execution disabled.
+config :symmetry_control, Oban,
+  repo: SymmetryControl.Repo,
+  queues: false,
+  plugins: false,
+  testing: :manual
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used
@@ -24,8 +41,12 @@ config :symmetry_control, SymmetryControlWeb.Endpoint,
   secret_key_base: "yG7VzZSqQAx23FDg5ioDlYmYOZxehP5ykyftVrBbrHzYEVd7P7RC4t+33pfd5Fsf",
   server: false
 
-# Print only warnings and errors during test
-config :logger, level: :warning
+config :symmetry_control, :contracts, directory: Path.expand("../../contracts", __DIR__)
+
+config :symmetry_control, :integrations,
+  syncer_enabled: false,
+  sync_interval_ms: 300_000,
+  provider_action_recovery_interval_ms: :infinity
 
 config :symmetry_control, :orchestration,
   enrollment_token: "test-enrollment-token",
@@ -39,24 +60,3 @@ config :symmetry_control, :orchestration,
   request_hash_write_mode: :legacy,
   reaper_enabled: false,
   scheduler_enabled: false
-
-config :symmetry_control, :integrations,
-  syncer_enabled: false,
-  sync_interval_ms: 300_000,
-  provider_action_recovery_interval_ms: :infinity
-
-config :symmetry_control, :contracts, directory: Path.expand("../../contracts", __DIR__)
-
-# Goal tests submit durable wakeup/control jobs while keeping execution disabled.
-config :symmetry_control, Oban,
-  repo: SymmetryControl.Repo,
-  queues: false,
-  plugins: false,
-  testing: :manual
-
-# Initialize plugs at runtime for faster test compilation
-config :phoenix, :plug_init_mode, :runtime
-
-# Sort query params output of verified routes for robust url comparisons
-config :phoenix,
-  sort_verified_routes_query_params: true

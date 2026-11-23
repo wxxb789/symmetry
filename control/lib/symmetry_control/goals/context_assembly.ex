@@ -73,15 +73,15 @@ defmodule SymmetryControl.Goals.ContextAssembly do
   end
 
   defp sanitize_machine_context(value) when is_map(value) do
-    Map.new(value, fn {key, nested} -> {key, sanitize_machine_context(nested)} end)
+    value
+    |> Map.new(fn {key, nested} -> {key, sanitize_machine_context(nested)} end)
     |> Enum.reject(fn {key, _value} ->
       (is_atom(key) or is_binary(key)) and sensitive_document_key?(key)
     end)
     |> Map.new()
   end
 
-  defp sanitize_machine_context(value) when is_list(value),
-    do: Enum.map(value, &sanitize_machine_context/1)
+  defp sanitize_machine_context(value) when is_list(value), do: Enum.map(value, &sanitize_machine_context/1)
 
   defp sanitize_machine_context(value), do: value
 
@@ -99,7 +99,7 @@ defmodule SymmetryControl.Goals.ContextAssembly do
          true <- document["snapshot_id"] == snapshot.id,
          true <- document["goal_id"] == goal.id,
          true <- document["goal_revision"] == snapshot.goal_revision,
-         true <- document["work_item_id"] == if(item, do: item.id, else: nil),
+         true <- document["work_item_id"] == if(item, do: item.id),
          true <- document["content_hash"] == context_digest(snapshot.content_hash),
          true <- document["content_hash"] == expected_hash,
          true <-
@@ -192,15 +192,7 @@ defmodule SymmetryControl.Goals.ContextAssembly do
 
   @doc false
 
-  def planning_context_snapshot_document(
-        goal,
-        revision,
-        resource,
-        subject,
-        snapshot_id,
-        inserted_at,
-        handoff_source
-      ) do
+  def planning_context_snapshot_document(goal, revision, resource, subject, snapshot_id, inserted_at, handoff_source) do
     byte_budget = value(revision.context_manifest || %{}, "byte_budget", 32_768)
 
     approved_goal = %{
@@ -212,8 +204,7 @@ defmodule SymmetryControl.Goals.ContextAssembly do
 
     work_contract = %{
       "title" => "Plan the approved Goal",
-      "description" =>
-        "Produce a bounded PlanProposal for the approved Goal. This does not approve or admit work.",
+      "description" => "Produce a bounded PlanProposal for the approved Goal. This does not approve or admit work.",
       "purpose" => "plan",
       "acceptance" => Decisions.planning_acceptance_contract(),
       "validation_bindings" => [],
@@ -325,26 +316,17 @@ defmodule SymmetryControl.Goals.ContextAssembly do
     ]
 
     sources = sources ++ handoff_context_source(handoff_source, inserted_at)
-    source_kinds = sources |> Enum.map(& &1["source_kind"]) |> MapSet.new()
+    source_kinds = MapSet.new(sources, & &1["source_kind"])
 
-    unless is_list(required_kinds) and
-             Enum.all?(required_kinds, &MapSet.member?(source_kinds, &1)) do
+    if !(is_list(required_kinds) and
+           Enum.all?(required_kinds, &MapSet.member?(source_kinds, &1))) do
       rollback(:required_context_source_missing)
     end
 
     sources
   end
 
-  defp context_sources!(
-         goal,
-         revision,
-         item,
-         subject,
-         approved_goal,
-         work_contract,
-         inserted_at,
-         handoff_source
-       ) do
+  defp context_sources!(goal, revision, item, subject, approved_goal, work_contract, inserted_at, handoff_source) do
     observed_at = DateTime.to_iso8601(inserted_at)
     required_kinds = value(revision.context_manifest || %{}, "required_source_kinds", [])
 
@@ -398,10 +380,10 @@ defmodule SymmetryControl.Goals.ContextAssembly do
     ]
 
     sources = sources ++ handoff_context_source(handoff_source, inserted_at)
-    source_kinds = sources |> Enum.map(& &1["source_kind"]) |> MapSet.new()
+    source_kinds = MapSet.new(sources, & &1["source_kind"])
 
-    unless is_list(required_kinds) and
-             Enum.all?(required_kinds, &MapSet.member?(source_kinds, &1)) do
+    if !(is_list(required_kinds) and
+           Enum.all?(required_kinds, &MapSet.member?(source_kinds, &1))) do
       rollback(:required_context_source_missing)
     end
 
@@ -436,38 +418,37 @@ defmodule SymmetryControl.Goals.ContextAssembly do
 
   defp advisory_recall(goal, revision, item, subject) do
     if value(revision.context_manifest || %{}, "include_advisory_recall", false) == true do
-      Repo.all(
-        from(snapshot in ContextSnapshot,
-          join: source_item in WorkItem,
-          on: source_item.id == snapshot.work_item_id,
-          join: task in Task,
-          on: task.context_snapshot_id == snapshot.id,
-          where:
-            snapshot.goal_id == ^goal.id and
-              source_item.repository_resource_id == ^item.repository_resource_id and
-              task.state not in ^@nonterminal_task_states,
-          order_by: [
-            asc:
-              fragment(
-                "CASE WHEN ? = ? THEN 0 ELSE 1 END",
-                snapshot.work_item_id,
-                type(^item.id, :binary_id)
-              ),
-            desc: snapshot.goal_revision,
-            desc: snapshot.inserted_at,
-            asc: snapshot.id
-          ],
-          limit: 256,
-          select: %{
-            id: snapshot.id,
-            work_item_id: snapshot.work_item_id,
-            goal_revision: snapshot.goal_revision,
-            content_hash: snapshot.content_hash,
-            payload: snapshot.payload,
-            inserted_at: snapshot.inserted_at
-          }
-        )
+      from(snapshot in ContextSnapshot,
+        join: source_item in WorkItem,
+        on: source_item.id == snapshot.work_item_id,
+        join: task in Task,
+        on: task.context_snapshot_id == snapshot.id,
+        where:
+          snapshot.goal_id == ^goal.id and
+            source_item.repository_resource_id == ^item.repository_resource_id and
+            task.state not in ^@nonterminal_task_states,
+        order_by: [
+          asc:
+            fragment(
+              "CASE WHEN ? = ? THEN 0 ELSE 1 END",
+              snapshot.work_item_id,
+              type(^item.id, :binary_id)
+            ),
+          desc: snapshot.goal_revision,
+          desc: snapshot.inserted_at,
+          asc: snapshot.id
+        ],
+        limit: 256,
+        select: %{
+          id: snapshot.id,
+          work_item_id: snapshot.work_item_id,
+          goal_revision: snapshot.goal_revision,
+          content_hash: snapshot.content_hash,
+          payload: snapshot.payload,
+          inserted_at: snapshot.inserted_at
+        }
       )
+      |> Repo.all()
       |> Enum.map(fn snapshot ->
         %{
           "resource_id" => item.repository_resource_id,
@@ -523,9 +504,8 @@ defmodule SymmetryControl.Goals.ContextAssembly do
 
   defp stabilize_mandatory_context_size(document, byte_budget, previous \\ nil, attempts \\ 0)
 
-  defp stabilize_mandatory_context_size(_document, _byte_budget, _previous, attempts)
-       when attempts >= 16,
-       do: rollback(:context_budget_exceeded)
+  defp stabilize_mandatory_context_size(_document, _byte_budget, _previous, attempts) when attempts >= 16,
+    do: rollback(:context_budget_exceeded)
 
   defp stabilize_mandatory_context_size(document, byte_budget, previous, attempts) do
     bytes = byte_size(Jason.encode!(document))
@@ -547,23 +527,10 @@ defmodule SymmetryControl.Goals.ContextAssembly do
     end
   end
 
-  defp stabilize_optional_context_size(
-         document,
-         byte_budget,
-         mandatory_bytes,
-         previous \\ nil,
-         attempts \\ 0
-       )
+  defp stabilize_optional_context_size(document, byte_budget, mandatory_bytes, previous \\ nil, attempts \\ 0)
 
-  defp stabilize_optional_context_size(
-         _document,
-         _byte_budget,
-         _mandatory_bytes,
-         _previous,
-         attempts
-       )
-       when attempts >= 16,
-       do: rollback(:context_budget_exceeded)
+  defp stabilize_optional_context_size(_document, _byte_budget, _mandatory_bytes, _previous, attempts)
+       when attempts >= 16, do: rollback(:context_budget_exceeded)
 
   defp stabilize_optional_context_size(document, byte_budget, mandatory_bytes, previous, attempts) do
     bytes = byte_size(Jason.encode!(document))
@@ -593,23 +560,21 @@ defmodule SymmetryControl.Goals.ContextAssembly do
   end
 
   @doc false
-  def context_digest(<<_::binary-size(32)>> = digest),
-    do: "sha256:" <> Base.encode16(digest, case: :lower)
+  def context_digest(<<_::binary-size(32)>> = digest), do: "sha256:" <> Base.encode16(digest, case: :lower)
 
   def context_digest(value) when is_binary(value) do
-    if Regex.match?(~r/^sha256:[0-9a-f]{64}$/, value), do: value, else: nil
+    if Regex.match?(~r/^sha256:[0-9a-f]{64}$/, value), do: value
   end
 
   def context_digest(_value), do: nil
 
   defp context_decisions(goal_id, revision) do
-    Repo.all(
-      from(decision in GoalDecision,
-        where: decision.goal_id == ^goal_id and decision.goal_revision == ^revision,
-        order_by: [asc: decision.inserted_at, asc: decision.id],
-        select: %{id: decision.id, action_hash: decision.action_hash, state: decision.state}
-      )
+    from(decision in GoalDecision,
+      where: decision.goal_id == ^goal_id and decision.goal_revision == ^revision,
+      order_by: [asc: decision.inserted_at, asc: decision.id],
+      select: %{id: decision.id, action_hash: decision.action_hash, state: decision.state}
     )
+    |> Repo.all()
     |> Enum.map(fn decision ->
       %{
         "decision_id" => decision.id,
@@ -622,27 +587,26 @@ defmodule SymmetryControl.Goals.ContextAssembly do
   defp context_evidence(goal_id, revision, work_item_id, subject) do
     subject_hash = RequestHash.canonical(subject)
 
-    Repo.all(
-      from(evidence in RunEvidence,
-        join: run in Run,
-        on: run.id == evidence.run_id,
-        join: task in Task,
-        on: task.id == run.task_id,
-        where:
-          task.goal_id == ^goal_id and task.goal_revision == ^revision and
-            task.work_item_id == ^work_item_id and
-            task.purpose == "validate" and task.state == "completed" and
-            run.generation == task.current_generation and run.state == "completed" and
-            evidence.verdict == "passed" and evidence.subject_hash == ^subject_hash,
-        order_by: [asc: evidence.inserted_at, asc: evidence.id],
-        select: %{
-          id: evidence.id,
-          subject_hash: evidence.subject_hash,
-          verdict: evidence.verdict,
-          payload: evidence.payload
-        }
-      )
+    from(evidence in RunEvidence,
+      join: run in Run,
+      on: run.id == evidence.run_id,
+      join: task in Task,
+      on: task.id == run.task_id,
+      where:
+        task.goal_id == ^goal_id and task.goal_revision == ^revision and
+          task.work_item_id == ^work_item_id and
+          task.purpose == "validate" and task.state == "completed" and
+          run.generation == task.current_generation and run.state == "completed" and
+          evidence.verdict == "passed" and evidence.subject_hash == ^subject_hash,
+      order_by: [asc: evidence.inserted_at, asc: evidence.id],
+      select: %{
+        id: evidence.id,
+        subject_hash: evidence.subject_hash,
+        verdict: evidence.verdict,
+        payload: evidence.payload
+      }
     )
+    |> Repo.all()
     |> Enum.map(fn evidence ->
       %{
         "evidence_id" => evidence.id,
@@ -654,18 +618,17 @@ defmodule SymmetryControl.Goals.ContextAssembly do
   end
 
   defp context_failed_attempts(goal_id, revision, work_item_id) do
-    Repo.all(
-      from(run in Run,
-        join: task in Task,
-        on: task.id == run.task_id,
-        where:
-          task.goal_id == ^goal_id and task.goal_revision == ^revision and
-            task.work_item_id == ^work_item_id and
-            run.state == "failed",
-        order_by: [asc: run.inserted_at, asc: run.id],
-        select: %{task_id: task.id, run_id: run.id, inserted_at: run.inserted_at}
-      )
+    from(run in Run,
+      join: task in Task,
+      on: task.id == run.task_id,
+      where:
+        task.goal_id == ^goal_id and task.goal_revision == ^revision and
+          task.work_item_id == ^work_item_id and
+          run.state == "failed",
+      order_by: [asc: run.inserted_at, asc: run.id],
+      select: %{task_id: task.id, run_id: run.id, inserted_at: run.inserted_at}
     )
+    |> Repo.all()
     |> Enum.map(fn run ->
       %{
         "task_id" => run.task_id,

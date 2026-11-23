@@ -3,12 +3,19 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
 
   alias Oban.Job
   alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.Goal
+  alias SymmetryControl.Goals.GoalBudgetReservation
+  alias SymmetryControl.Goals.GoalEvent
+  alias SymmetryControl.Goals.HarnessSession
   alias SymmetryControl.Goals.ReadModel
-  alias SymmetryControl.Goals.{Goal, GoalBudgetReservation, GoalEvent, HarnessSession}
   alias SymmetryControl.Goals.Workers.SettleTaskWorker
   alias SymmetryControl.Orchestration
-  alias SymmetryControl.Orchestration.{Command, Run, Runtime, Task}
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
+  alias SymmetryControl.Orchestration.Command
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @now ~U[2026-09-09 09:00:00.000000Z]
 
@@ -202,7 +209,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
 
     Repo.update_all(
       from(task in Task, where: task.id == ^target_task.id),
-      set: [inserted_at: DateTime.add(@now, 1, :second)]
+      set: [inserted_at: DateTime.shift(@now, second: 1)]
     )
 
     _different_machine = enroll_and_register_runtime("handoff-other-machine", handoff?: true)
@@ -238,7 +245,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
         repository_resource_id: source_item.repository_resource_id
       )
 
-    assert {:ok, assigned_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert {:ok, assigned_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 1))
     assert assigned_run.task_id == target_task.id
     assert assigned_run.runtime_id == eligible_runtime.id
 
@@ -271,7 +278,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
         project_id: first_item.project_id,
         repository_id: first_item.repository_resource_id,
         requested_session_id: session.id,
-        inserted_at: DateTime.add(@now, 1, :second)
+        inserted_at: DateTime.shift(@now, second: 1)
       )
 
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
@@ -341,7 +348,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
 
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
 
-    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.add(@now, 1, :second))
+    assert {:ok, second_run} = Orchestration.assign_one(now: DateTime.shift(@now, second: 1))
     assert second_run.task_id == second_task.id
     refute second_run.harness_binding_id == first_binding_id
 
@@ -357,7 +364,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                first_run.id,
                first_fence,
                stop,
-               now: DateTime.add(@now, 1, :second)
+               now: DateTime.shift(@now, second: 1)
              )
 
     assert %{state: "busy", active_run_id: ^active_run_id, binding_id: ^second_binding_id} =
@@ -380,13 +387,13 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     session = Repo.get!(HarnessSession, task.requested_session_id)
     assert {:ok, run} = Orchestration.assign_one(now: @now)
     fence = goal_claim(run, retained_runtime, @now)
-    expired_at = DateTime.add(@now, 30, :second)
+    expired_at = DateTime.shift(@now, second: 30)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
     assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
 
     assert {:error, :no_assignment} =
-             Orchestration.assign_one(now: DateTime.add(expired_at, 1, :second))
+             Orchestration.assign_one(now: DateTime.shift(expired_at, second: 1))
 
     assert {:ok, %{state: "failed"}} =
              Orchestration.transition(
@@ -395,7 +402,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                "failed",
                %{"reason" => "terminal receipt without durable session stop"},
                Ecto.UUID.generate(),
-               now: DateTime.add(expired_at, 1, :second)
+               now: DateTime.shift(expired_at, second: 1)
              )
 
     assert %{state: "unavailable", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
@@ -410,7 +417,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                  local_handle_id: session.local_handle_id,
                  binding_id: run.harness_binding_id
                },
-               now: DateTime.add(expired_at, 1, :second)
+               now: DateTime.shift(expired_at, second: 1)
              )
 
     assert %{state: "available", active_run_id: nil} = Repo.get!(HarnessSession, session.id)
@@ -435,9 +442,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     pause_action_id = Ecto.UUID.generate()
 
@@ -479,9 +484,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "running"}} =
-             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "running", %{}, Ecto.UUID.generate(), now: @now)
 
     action_id = Ecto.UUID.generate()
     insert_goal_event(goal_id, action_id, 1, "pause")
@@ -519,23 +522,23 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     assert run.task_id == task.id
     _fence = goal_claim(run, runtime, @now)
 
-    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.add(@now, 30, :second))
+    assert %{expired_runs: 1} = Orchestration.expire(now: DateTime.shift(@now, second: 30))
 
     assert {:ok, exhausted} = Orchestration.fetch_task(task.id)
     assert exhausted.state == "failed"
     assert exhausted.attempt_generation == 1
 
     assert {:error, :no_assignment} =
-             Orchestration.assign_one(now: DateTime.add(@now, 31, :second))
+             Orchestration.assign_one(now: DateTime.shift(@now, second: 31))
 
     assert [job] = settlement_jobs(task.id, run.id, run.generation)
     assert job.args == %{"task_id" => task.id, "run_id" => run.id, "generation" => run.generation}
-    assert job.scheduled_at == DateTime.add(@now, 510, :second)
+    assert job.scheduled_at == DateTime.shift(@now, second: 510)
 
     assert {:ok, fetched_run} = Orchestration.fetch_run(run.id)
     assert fetched_run.state == "failed"
     assert fetched_run.failure["reason"] == "lease_expired"
-    assert runtime.id != nil
+    assert runtime.id
 
     enable_goal_rollout()
     assert :ok = SettleTaskWorker.perform(job)
@@ -555,9 +558,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     fence = goal_claim(run, runtime, @now)
 
     assert {:ok, %{state: "failed"}} =
-             Orchestration.transition(run.id, fence, "failed", %{"stage" => "test"}, uuid(1),
-               now: @now
-             )
+             Orchestration.transition(run.id, fence, "failed", %{"stage" => "test"}, uuid(1), now: @now)
 
     assert {:error, :goal_authority_required} =
              Orchestration.retry_task(
@@ -574,7 +575,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     assert Repo.aggregate(from(command in Command, where: command.task_id == ^task.id), :count) ==
              0
 
-    assert settlement_jobs(task.id, run.id, 1) |> length() == 1
+    assert task.id |> settlement_jobs(run.id, 1) |> length() == 1
   end
 
   test "stale delivery after automatic retry cannot create another settlement job" do
@@ -583,7 +584,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     assert {:ok, first_run} = Orchestration.assign_one(now: @now)
     fence = goal_claim(first_run, runtime, @now)
 
-    expiry = DateTime.add(@now, 30, :second)
+    expiry = DateTime.shift(@now, second: 30)
     assert %{expired_runs: 1} = Orchestration.expire(now: expiry)
 
     assert {:ok, _snapshot} =
@@ -599,7 +600,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                "completed",
                %{"summary" => "stale"},
                uuid(2),
-               now: DateTime.add(expiry, 1, :second)
+               now: DateTime.shift(expiry, second: 1)
              )
 
     assert [] == settlement_jobs(task.id, first_run.id, 1)
@@ -619,7 +620,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     admission_key = Ecto.UUID.generate()
     reservation_id = Ecto.UUID.generate()
     repository_id = Keyword.get(opts, :repository_id, Ecto.UUID.generate())
-    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate(), else: nil
+    validation_of_task_id = if purpose == "validate", do: Ecto.UUID.generate()
     validation_bindings = Keyword.get(opts, :validation_bindings, [])
     policy = Keyword.get(opts, :execution_policy, execution_policy(max_run_attempts))
     allowed_runtime_ids = Map.get(policy, "allowed_runtime_ids", [])
@@ -632,27 +633,29 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     task_inserted_at = Keyword.get(opts, :inserted_at, @now)
 
     task_input =
-      %{
-        "subject" => %{
-          "resource_id" => repository_id,
-          "commit" => String.duplicate("a", 40),
-          "tree_digest" => "sha256:" <> String.duplicate("b", 64)
-        }
-      }
-      |> then(fn input ->
-        if requested_session_id do
-          input
-          |> Map.put("session_mode", "resume")
-          |> Map.put("requested_session_id", requested_session_id)
-        else
-          input
+      then(
+        %{
+          "subject" => %{
+            "resource_id" => repository_id,
+            "commit" => String.duplicate("a", 40),
+            "tree_digest" => "sha256:" <> String.duplicate("b", 64)
+          }
+        },
+        fn input ->
+          if requested_session_id do
+            input
+            |> Map.put("session_mode", "resume")
+            |> Map.put("requested_session_id", requested_session_id)
+          else
+            input
+          end
         end
-      end)
+      )
 
     task_input =
       Map.put(task_input, "limits", %{
         "max_turns" => 1,
-        "deadline_at" => DateTime.to_iso8601(DateTime.add(@now, 15 * 60, :second)),
+        "deadline_at" => DateTime.to_iso8601(DateTime.shift(@now, minute: 15)),
         "max_cost_microusd" =>
           if(strict_budget?,
             do: Integer.to_string(Map.fetch!(policy, "per_run_cost_limit_microusd"))
@@ -672,9 +675,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                  )
                end
 
-               unless Repo.exists?(
-                        from(resource in ProjectResource, where: resource.id == ^repository_id)
-                      ) do
+               if !Repo.exists?(from(resource in ProjectResource, where: resource.id == ^repository_id)) do
                  Repo.query!(
                    """
                    INSERT INTO project_resources (
@@ -715,7 +716,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                  [db_uuid(goal_id), Jason.encode!(policy), @now]
                )
 
-               unless planning? do
+               if !planning? do
                  Repo.query!(
                    """
                    INSERT INTO work_items (
@@ -943,7 +944,8 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
       end)
 
     adapter =
-      native_adapter(harness_kind, harness_version, adapter_version, 1)
+      harness_kind
+      |> native_adapter(harness_version, adapter_version, 1)
       |> put_in(["operations", "resume"], resume?)
       |> put_in(["operations", "handoff"], handoff?)
       |> put_in(["operations", "hard_cost_limit"], hard_cost_limit?)
@@ -953,27 +955,29 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
                machine_id,
                Ecto.UUID.generate(),
                [
-                 %{
-                   runtime_key: "goal-admission-#{label}",
-                   name: "Goal admission #{label}",
-                   capacity: capacity,
-                   agent_profile: "codex",
-                   workspace: "primary",
-                   harness_kind: harness_kind,
-                   harness_version: harness_version,
-                   adapter_version: adapter_version,
-                   adapter_protocol_version: 1,
-                   capabilities: %{
-                     "structured_input" => true,
-                     "interactive" => true,
-                     "adapter" => adapter
-                   }
-                 }
-                 |> then(fn specification ->
-                   if is_nil(repository_resource_id),
-                     do: specification,
-                     else: Map.put(specification, :repository_resource_id, repository_resource_id)
-                 end)
+                 then(
+                   %{
+                     runtime_key: "goal-admission-#{label}",
+                     name: "Goal admission #{label}",
+                     capacity: capacity,
+                     agent_profile: "codex",
+                     workspace: "primary",
+                     harness_kind: harness_kind,
+                     harness_version: harness_version,
+                     adapter_version: adapter_version,
+                     adapter_protocol_version: 1,
+                     capabilities: %{
+                       "structured_input" => true,
+                       "interactive" => true,
+                       "adapter" => adapter
+                     }
+                   },
+                   fn specification ->
+                     if is_nil(repository_resource_id),
+                       do: specification,
+                       else: Map.put(specification, :repository_resource_id, repository_resource_id)
+                   end
+                 )
                ],
                now: @now
              )
@@ -1007,7 +1011,7 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
       generation: 1,
       state: "completed",
       assigned_at: @now,
-      assignment_expires_at: DateTime.add(@now, 60, :second)
+      assignment_expires_at: DateTime.shift(@now, minute: 1)
     })
     |> Repo.insert!()
   end
@@ -1082,6 +1086,5 @@ defmodule SymmetryControl.OrchestrationGoalAssignmentTest do
     "P" <> Integer.to_string(rem(System.unique_integer([:positive]), 9_999_999))
   end
 
-  defp uuid(number),
-    do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
+  defp uuid(number), do: "00000000-0000-0000-0000-" <> String.pad_leading(Integer.to_string(number), 12, "0")
 end

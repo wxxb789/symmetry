@@ -42,10 +42,10 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
 
   test "terminal transitions accept the fixed eight minute grace boundary after lease expiry" do
     for {label, current, expected} <- [
-          {:before_expiry, DateTime.add(@now, 29, :second), :ok},
-          {:inside_grace, DateTime.add(@now, 509, :second), :ok},
-          {:grace_boundary, DateTime.add(@now, 510, :second), :ok},
-          {:outside_grace, DateTime.add(@now, 511, :second), :terminal_grace_expired}
+          {:before_expiry, DateTime.shift(@now, second: 29), :ok},
+          {:inside_grace, DateTime.shift(@now, second: 509), :ok},
+          {:grace_boundary, DateTime.shift(@now, second: 510), :ok},
+          {:outside_grace, DateTime.shift(@now, second: 511), :terminal_grace_expired}
         ] do
       %{machine: machine} = enroll_machine()
       agent_profile = "terminal-grace-#{label}"
@@ -130,13 +130,13 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
              )
 
     assert {:ok, reconnected_runtime} =
-             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.add(@now, 1, :second))
+             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.shift(@now, second: 1))
 
     assert reconnected_runtime.id == runtime.id
     assert reconnected_runtime.connection_epoch == runtime.connection_epoch + 1
 
     assert {:error, :ownership_lost} =
-             Orchestration.renew_lease(run.id, fence, now: DateTime.add(@now, 1, :second))
+             Orchestration.renew_lease(run.id, fence, now: DateTime.shift(@now, second: 1))
 
     assert {:error, :ownership_lost} =
              Orchestration.append_events(
@@ -151,7 +151,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                    occurred_at: @now
                  }
                ],
-               now: DateTime.add(@now, 1, :second)
+               now: DateTime.shift(@now, second: 1)
              )
 
     assert {:error, :ownership_lost} =
@@ -161,11 +161,11 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                "waiting_for_input",
                %{},
                Ecto.UUID.generate(),
-               now: DateTime.add(@now, 1, :second)
+               now: DateTime.shift(@now, second: 1)
              )
 
-    expired_at = DateTime.add(@now, 30, :second)
-    terminal_at = DateTime.add(expired_at, 1, :second)
+    expired_at = DateTime.shift(@now, second: 30)
+    terminal_at = DateTime.shift(expired_at, second: 1)
     transition_id = Ecto.UUID.generate()
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
@@ -187,7 +187,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                "completed",
                %{"summary" => "terminal after re-registration"},
                transition_id,
-               now: DateTime.add(terminal_at, 1, :second)
+               now: DateTime.shift(terminal_at, second: 1)
              )
 
     acknowledgement_id = Ecto.UUID.generate()
@@ -207,7 +207,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                fence,
                "applied",
                acknowledgement_id,
-               now: DateTime.add(terminal_at, 1, :second)
+               now: DateTime.shift(terminal_at, second: 1)
              )
 
     assert {:ok, %{state: "completed", current_generation: 1}} =
@@ -247,9 +247,9 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
              )
 
     assert {:ok, reconnected_runtime} =
-             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.add(@now, 1, :second))
+             re_register_runtime(runtime, Ecto.UUID.generate(), DateTime.shift(@now, second: 1))
 
-    expired_at = DateTime.add(@now, 30, :second)
+    expired_at = DateTime.shift(@now, second: 30)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
 
@@ -270,7 +270,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                "completed",
                %{},
                Ecto.UUID.generate(),
-               now: DateTime.add(expired_at, 1, :second)
+               now: DateTime.shift(expired_at, second: 1)
              )
 
     assert {:error, :ownership_lost} =
@@ -279,7 +279,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                fence,
                "applied",
                Ecto.UUID.generate(),
-               now: DateTime.add(expired_at, 1, :second)
+               now: DateTime.shift(expired_at, second: 1)
              )
 
     assert {:ok, %{state: "assigned", current_generation: 2}} =
@@ -288,7 +288,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
 
   test "a replacement generation fences an expired generation's terminal delivery" do
     {task, run, runtime, fence} = terminal_grace_fixture("replacement-generation")
-    expired_at = DateTime.add(@now, 30, :second)
+    expired_at = DateTime.shift(@now, second: 30)
 
     assert %{expired_runs: 1} = Orchestration.expire(now: expired_at)
 
@@ -305,7 +305,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                "completed",
                %{},
                Ecto.UUID.generate(),
-               now: DateTime.add(expired_at, 1, :second)
+               now: DateTime.shift(expired_at, second: 1)
              )
 
     assert {:ok, %{current_generation: generation}} = Orchestration.fetch_task(task.id)
@@ -717,9 +717,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
     {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "task-1", now: @now)
 
     {:ok, unaffected, :created} =
-      Orchestration.submit_task(task_attrs(goal: "unrelated"), "task-2",
-        now: DateTime.add(@now, 1, :microsecond)
-      )
+      Orchestration.submit_task(task_attrs(goal: "unrelated"), "task-2", now: DateTime.add(@now, 1, :microsecond))
 
     {:ok, run} = Orchestration.assign_one(now: @now)
     fence = claim(run, runtime, @now)
@@ -749,7 +747,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
 
     assert command.run_id == run.id
 
-    later = DateTime.add(@now, 31, :second)
+    later = DateTime.shift(@now, second: 31)
     assert %{expired_runs: 1} = Orchestration.expire(now: later)
 
     assert {:ok, %{state: "completed"}} =
@@ -832,7 +830,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
     {:ok, old_command, :created} =
       Orchestration.provide_input(task.id, %{"choice" => "old"}, "input-1", now: @now)
 
-    later = DateTime.add(@now, 31, :second)
+    later = DateTime.shift(@now, second: 31)
     assert %{expired_runs: 1} = Orchestration.expire(now: later)
 
     assert {:ok, _snapshot} =
@@ -919,7 +917,7 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
                now: @now
              )
 
-    later = DateTime.add(@now, 31, :second)
+    later = DateTime.shift(@now, second: 31)
     assert %{expired_runs: 1} = Orchestration.expire(now: later)
 
     assert {:ok, _} =
@@ -990,8 +988,8 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
   end
 
   defp re_register_runtime(runtime, daemon_instance_id, current) do
-    Orchestration.register_runtimes(
-      runtime.machine_id,
+    runtime.machine_id
+    |> Orchestration.register_runtimes(
       daemon_instance_id,
       [
         %{
@@ -1069,7 +1067,8 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
 
   defp with_dedicated_orchestration_repo(test) do
     config =
-      Application.fetch_env!(:symmetry_control, Repo)
+      :symmetry_control
+      |> Application.fetch_env!(Repo)
       |> Keyword.merge(name: nil, pool: DBConnection.ConnectionPool, pool_size: 3)
 
     {:ok, repo} = Repo.start_link(config)
@@ -1183,11 +1182,11 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
     after
       state = Process.get(state_key, %{holder_done: false, requester_done: false})
 
-      unless state.requester_done do
+      if !state.requester_done do
         drain_task(requester)
       end
 
-      unless state.holder_done do
+      if !state.holder_done do
         send(lock_holder.pid, :release_run_lock)
 
         case drain_task(lock_holder) do
@@ -1212,32 +1211,28 @@ defmodule SymmetryControl.OrchestrationTransitionsTest do
   end
 
   defp task_boundary(fun) do
-    try do
-      fun.()
-    rescue
-      error -> {:task_error, error}
-    catch
-      kind, reason -> {:task_exit, kind, reason}
-    end
+    fun.()
+  rescue
+    error -> {:task_error, error}
+  catch
+    kind, reason -> {:task_exit, kind, reason}
   end
 
   defp drain_task(task) do
-    try do
-      case Task.yield(task, 1_000) do
-        {:ok, result} ->
-          {:completed, result}
+    case Task.yield(task, 1_000) do
+      {:ok, result} ->
+        {:completed, result}
 
-        {:exit, reason} ->
-          {:terminated, reason}
+      {:exit, reason} ->
+        {:terminated, reason}
 
-        nil ->
-          case Task.shutdown(task, :brutal_kill) do
-            {:ok, result} -> {:completed, result}
-            _ -> :unfinished
-          end
-      end
-    catch
-      :exit, _reason -> :unfinished
+      nil ->
+        case Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> {:completed, result}
+          _ -> :unfinished
+        end
     end
+  catch
+    :exit, _reason -> :unfinished
   end
 end

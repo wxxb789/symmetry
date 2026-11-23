@@ -6,11 +6,9 @@ defmodule SymmetryControlWeb.TaskHistoryController do
 
   def events(conn, _params), do: collection(conn, "events", &Orchestration.list_task_events/2)
 
-  def transitions(conn, _params),
-    do: collection(conn, "transitions", &Orchestration.list_task_transitions/2)
+  def transitions(conn, _params), do: collection(conn, "transitions", &Orchestration.list_task_transitions/2)
 
-  def commands(conn, _params),
-    do: collection(conn, "commands", &Orchestration.list_task_commands/2)
+  def commands(conn, _params), do: collection(conn, "commands", &Orchestration.list_task_commands/2)
 
   def timeline(conn, _params) do
     task_id = Map.fetch!(conn.path_params, "task_id")

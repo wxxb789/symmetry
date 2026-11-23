@@ -1,10 +1,13 @@
 defmodule SymmetryControlWeb.PortalJSON do
   @moduledoc false
 
+  alias Ecto.Association.NotLoaded
   alias SymmetryControl.Orchestration
   alias SymmetryControl.Orchestration.Task
   alias SymmetryControl.Workspaces
-  alias SymmetryControl.Workspaces.{ProjectResource, WorkItem, WorkItemEligibility}
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
+  alias SymmetryControl.Workspaces.WorkItemEligibility
   alias SymmetryControlWeb.Protocol
 
   def workspace(model) do
@@ -117,9 +120,7 @@ defmodule SymmetryControlWeb.PortalJSON do
   end
 
   defp project_blocked({:ok, model}) do
-    entries =
-      model.snapshot.projects
-      |> Enum.flat_map(&blocked_work_items/1)
+    entries = Enum.flat_map(model.snapshot.projects, &blocked_work_items/1)
 
     %{entries: entries, unavailable: nil}
   end
@@ -131,7 +132,7 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   # The workspace snapshot hydrates work items for the selected project only, so
   # an unloaded association means "not read", never "no blocked work".
-  defp blocked_work_items(%{work_items: %Ecto.Association.NotLoaded{}}), do: []
+  defp blocked_work_items(%{work_items: %NotLoaded{}}), do: []
 
   defp blocked_work_items(%{work_items: work_items} = project) when is_list(work_items) do
     work_items
@@ -177,8 +178,7 @@ defmodule SymmetryControlWeb.PortalJSON do
       project_name: project_name,
       updated_at: iso8601(Map.get(projection, :updated_at)),
       revision: goal_revision(Map.get(projection, :revision)),
-      decisions:
-        Enum.map(Map.get(projection, :decisions, []), &goal_decision(decision_versions, &1)),
+      decisions: Enum.map(Map.get(projection, :decisions, []), &goal_decision(decision_versions, &1)),
       accepted_outcomes: Enum.map(Map.get(projection, :accepted_outcomes, []), &goal_outcome/1),
       external_waits: Enum.map(Map.get(projection, :external_waits, []), &goal_external_wait/1)
     })
@@ -186,8 +186,7 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   defp goal_revision(nil), do: nil
 
-  defp goal_revision(revision),
-    do: %{revision | inserted_at: iso8601(revision.inserted_at)}
+  defp goal_revision(revision), do: %{revision | inserted_at: iso8601(revision.inserted_at)}
 
   defp goal_decision(decision_versions, decision) do
     Map.merge(decision, %{
@@ -247,10 +246,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     }
   end
 
-  def work_item_detail(
-        %{work_item: work_item, task: task, timeline: timeline} = snapshot,
-        projection
-      ) do
+  def work_item_detail(%{work_item: work_item, task: task, timeline: timeline} = snapshot, projection) do
     task_snapshot = (projection && projection.execution) || task
     task_dto = task_snapshot && Protocol.task(task_snapshot)
     raw_page = timeline_page(task_snapshot, timeline, Map.get(snapshot, :next_before))
@@ -410,8 +406,7 @@ defmodule SymmetryControlWeb.PortalJSON do
 
     finished_at =
       if run && task.state in ["completed", "failed", "cancelled"],
-        do: run.updated_at,
-        else: nil
+        do: run.updated_at
 
     %{
       state_since: iso8601(task.updated_at),
@@ -533,8 +528,7 @@ defmodule SymmetryControlWeb.PortalJSON do
 
   # The manual branch serves neither `provider` nor `recorded_at`: those members
   # exist only where a provider owns the value.
-  defp resolve_delivery(%{manual_value: manual_value} = descriptor)
-       when is_binary(manual_value) and manual_value != "" do
+  defp resolve_delivery(%{manual_value: manual_value} = descriptor) when is_binary(manual_value) and manual_value != "" do
     %{value: manual_value, source: "manual", generation: nil}
     |> Map.put(descriptor.field, manual_value)
     |> normalize_delivery(descriptor.fallback)
@@ -552,8 +546,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     |> normalize_delivery(descriptor.fallback)
   end
 
-  defp resolve_delivery(%{field: :url}),
-    do: %{value: nil, url: nil, status: nil, source: "none", generation: nil}
+  defp resolve_delivery(%{field: :url}), do: %{value: nil, url: nil, status: nil, source: "none", generation: nil}
 
   defp resolve_delivery(%{field: :status, fallback: fallback}),
     do: %{value: fallback, url: nil, status: fallback, source: "none", generation: nil}
@@ -676,7 +669,7 @@ defmodule SymmetryControlWeb.PortalJSON do
     end)
   end
 
-  defp loaded(%Ecto.Association.NotLoaded{}), do: []
+  defp loaded(%NotLoaded{}), do: []
   defp loaded(values), do: values
 
   # Keys arrive in two spellings: the wire string (the result JSON is string-keyed after its

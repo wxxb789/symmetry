@@ -19,22 +19,23 @@ defmodule SymmetryControl.Schemas.VersionedChangeset do
 
   # Only a malformed expected version is `:invalid_request`: `nil` from a locked re-read
   # (row deleted mid-transaction) keeps the base `:stale` verdict.
-  def matches_version(_record, expected) when is_integer(expected),
-    do: {:error, :stale}
+  def matches_version(_record, expected) when is_integer(expected), do: {:error, :stale}
 
   def matches_version(_record, _expected), do: {:error, :invalid_request}
 
   @spec update_with_stale_error(Ecto.Changeset.t()) ::
           {:ok, struct()} | {:error, :stale | :state_conflict | Ecto.Changeset.t()}
   def update_with_stale_error(changeset) do
-    Repo.update(changeset, stale_error_field: :lock_version, stale_error_message: "is stale")
+    changeset
+    |> Repo.update(stale_error_field: :lock_version, stale_error_message: "is stale")
     |> normalize_stale_result()
   end
 
   @spec delete_with_stale_error(Ecto.Changeset.t()) ::
           {:ok, struct()} | {:error, :stale | :state_conflict | Ecto.Changeset.t()}
   def delete_with_stale_error(changeset) do
-    Repo.delete(changeset, stale_error_field: :lock_version, stale_error_message: "is stale")
+    changeset
+    |> Repo.delete(stale_error_field: :lock_version, stale_error_message: "is stale")
     |> normalize_stale_result()
   end
 

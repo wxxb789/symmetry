@@ -22,9 +22,8 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   def authenticate(connection), do: Support.auth().azure_devops_headers(connection)
 
   @impl true
-  def validate_resource_reference(_connection, "work_tracking", reference)
-      when is_binary(reference) and reference != "",
-      do: :ok
+  def validate_resource_reference(_connection, "work_tracking", reference) when is_binary(reference) and reference != "",
+    do: :ok
 
   def validate_resource_reference(_connection, "repository", reference) do
     case repository_parts(reference) do
@@ -40,15 +39,10 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def validate_resource_reference(_connection, _kind, _reference),
-    do: {:error, :invalid_request}
+  def validate_resource_reference(_connection, _kind, _reference), do: {:error, :invalid_request}
 
   @doc false
-  def validate_pull_request_url(
-        %{account_ref: organization},
-        %{kind: "repository", external_ref: reference},
-        url
-      ) do
+  def validate_pull_request_url(%{account_ref: organization}, %{kind: "repository", external_ref: reference}, url) do
     with {:ok, {project, repository}} <- repository_parts(reference),
          {:ok, _id} <- pull_request_id(url, organization, project, repository) do
       :ok
@@ -57,8 +51,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def validate_pull_request_url(_connection, _resource, _url),
-    do: {:error, :invalid_pull_request_url}
+  def validate_pull_request_url(_connection, _resource, _url), do: {:error, :invalid_pull_request_url}
 
   def check(connection), do: Support.check(__MODULE__, connection)
 
@@ -75,8 +68,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def sync_resource(connection, resource),
-    do: Support.sync_resource(__MODULE__, connection, resource)
+  def sync_resource(connection, resource), do: Support.sync_resource(__MODULE__, connection, resource)
 
   @impl true
   def sync_resource(connection, %{kind: "work_tracking", external_ref: project}, headers) do
@@ -129,13 +121,11 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def sync_resource(_connection, _resource, _headers),
-    do: {:error, :unsupported_resource}
+  def sync_resource(_connection, _resource, _headers), do: {:error, :unsupported_resource}
 
   @impl true
   def execute(connection, %{kind: "repository"} = resource, work_item, operation, input, headers)
-      when operation in ["change.upsert", "change.update"] and is_map(work_item) and
-             is_map(input) do
+      when operation in ["change.upsert", "change.update"] and is_map(work_item) and is_map(input) do
     with true <- "changes" in connection.capabilities || {:error, :capability_not_granted},
          {:ok, {project, repository}} <- repository_parts(resource.external_ref),
          :ok <- ChangeAction.validate_keys(operation, input) do
@@ -143,18 +133,9 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  def execute(_connection, _resource, _work_item, _operation, _input, _headers),
-    do: {:error, :invalid_request}
+  def execute(_connection, _resource, _work_item, _operation, _input, _headers), do: {:error, :invalid_request}
 
-  defp execute_change(
-         connection,
-         project,
-         repository,
-         _work_item,
-         "change.upsert",
-         input,
-         headers
-       ) do
+  defp execute_change(connection, project, repository, _work_item, "change.upsert", input, headers) do
     with {:ok, source} <- ChangeAction.branch(input, "source_branch"),
          {:ok, target} <- ChangeAction.branch(input, "target_branch"),
          {:ok, title} <- ChangeAction.title(input),
@@ -177,15 +158,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp execute_change(
-         connection,
-         project,
-         repository,
-         work_item,
-         "change.update",
-         input,
-         headers
-       ) do
+  defp execute_change(connection, project, repository, work_item, "change.update", input, headers) do
     with {:ok, title} <- ChangeAction.title(input),
          {:ok, body} <- ChangeAction.body(input),
          {:ok, pull_request_id} <-
@@ -205,8 +178,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     do: Support.sync_delivery(__MODULE__, connection, resource, work_item)
 
   @impl true
-  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers),
-    do: {:ok, nil}
+  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, _headers), do: {:ok, nil}
 
   def sync_delivery(connection, resource, work_item, headers) do
     with {:ok, {project, repository}} <- repository_parts(resource.external_ref),
@@ -401,17 +373,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp maybe_create_pull_request(
-         nil,
-         connection,
-         project,
-         repository,
-         source,
-         target,
-         title,
-         body,
-         headers
-       ) do
+  defp maybe_create_pull_request(nil, connection, project, repository, source, target, title, body, headers) do
     case request(
            :post,
            pull_requests_path(connection, project, repository),
@@ -444,17 +406,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp maybe_create_pull_request(
-         pull_request,
-         connection,
-         project,
-         repository,
-         _source,
-         _target,
-         title,
-         body,
-         headers
-       )
+  defp maybe_create_pull_request(pull_request, connection, project, repository, _source, _target, title, body, headers)
        when is_map(pull_request) do
     with {:ok, {pull_request_id, _status, _url}} <-
            pull_request_details(pull_request, connection.account_ref, project, repository) do
@@ -467,17 +419,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp replay_after_create_conflict(
-         connection,
-         project,
-         repository,
-         source,
-         target,
-         title,
-         body,
-         headers,
-         create_error
-       ) do
+  defp replay_after_create_conflict(connection, project, repository, source, target, title, body, headers, create_error) do
     case find_pull_request(connection, project, repository, source, target, headers) do
       {:ok, pull_request} when is_map(pull_request) ->
         maybe_create_pull_request(
@@ -498,41 +440,41 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
   end
 
   defp delivery(pull_request, organization, project, repository) when is_map(pull_request) do
-    with {:ok, {id, status, url}} <-
-           pull_request_details(pull_request, organization, project, repository) do
-      provider_data = %{
-        "pull_request_id" => id,
-        "pull_request_state" => status
-      }
+    case pull_request_details(pull_request, organization, project, repository) do
+      {:ok, {id, status, url}} ->
+        provider_data = %{
+          "pull_request_id" => id,
+          "pull_request_state" => status
+        }
 
-      provider_data =
-        case get_in(pull_request, ["lastMergeSourceCommit", "commitId"]) do
-          commit_id when is_binary(commit_id) and commit_id != "" ->
-            Map.put(provider_data, "commit_id", commit_id)
+        provider_data =
+          case get_in(pull_request, ["lastMergeSourceCommit", "commitId"]) do
+            commit_id when is_binary(commit_id) and commit_id != "" ->
+              Map.put(provider_data, "commit_id", commit_id)
 
-          _missing ->
-            provider_data
-        end
+            _missing ->
+              provider_data
+          end
 
-      {:ok,
-       %{
-         pull_request_url: url,
-         pull_request_state: pull_request_state(status),
-         updated_at: Support.now(),
-         provider_data: provider_data
-       }}
-    else
-      _invalid -> {:error, :invalid_provider_response}
+        {:ok,
+         %{
+           pull_request_url: url,
+           pull_request_state: pull_request_state(status),
+           updated_at: Support.now(),
+           provider_data: provider_data
+         }}
+
+      _invalid ->
+        {:error, :invalid_provider_response}
     end
   end
 
-  defp delivery(_pull_request, _organization, _project, _repository),
-    do: {:error, :invalid_provider_response}
+  defp delivery(_pull_request, _organization, _project, _repository), do: {:error, :invalid_provider_response}
 
   defp pull_request_details(pull_request, organization, project, repository) do
     with id when is_integer(id) <- pull_request["pullRequestId"],
          status when is_binary(status) <- pull_request["status"],
-         url <-
+         url =
            get_in(pull_request, ["_links", "web", "href"]) ||
              "https://dev.azure.com/#{organization}/#{Support.segment(project)}/_git/#{Support.segment(repository)}/pullrequest/#{id}",
          {:ok, ^id} <- pull_request_id(url, organization, project, repository) do
@@ -567,16 +509,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     build_pages(connection, project, selector, commit_ids, headers, nil, [], MapSet.new())
   end
 
-  defp build_pages(
-         connection,
-         project,
-         selector,
-         commit_ids,
-         headers,
-         continuation_token,
-         matches,
-         seen_tokens
-       ) do
+  defp build_pages(connection, project, selector, commit_ids, headers, continuation_token, matches, seen_tokens) do
     params =
       selector
       |> build_filter()
@@ -651,8 +584,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     %{"repositoryId" => repository, "repositoryType" => "TfsGit"}
   end
 
-  defp build_filter({:definition, definition_id}),
-    do: %{"definitions" => Integer.to_string(definition_id)}
+  defp build_filter({:definition, definition_id}), do: %{"definitions" => Integer.to_string(definition_id)}
 
   defp ci_metadata(project, definition, builds) do
     %{
@@ -782,8 +714,7 @@ defmodule SymmetryControl.Integrations.Providers.AzureDevOps do
     end
   end
 
-  defp pull_request_id(_url, _organization, _project, _repository),
-    do: {:error, :invalid_pull_request_url}
+  defp pull_request_id(_url, _organization, _project, _repository), do: {:error, :invalid_pull_request_url}
 
   defp action_pull_request_id(input, work_item, organization, project, repository) do
     linked_url = ChangeAction.linked_pull_request_url(work_item)

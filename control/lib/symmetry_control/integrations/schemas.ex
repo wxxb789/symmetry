@@ -1,5 +1,7 @@
 defmodule SymmetryControl.Integrations.Connection do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Workspaces.ProjectResource
@@ -24,8 +26,7 @@ defmodule SymmetryControl.Integrations.Connection do
     field :lock_version, :integer, default: 1
     has_many :resources, ProjectResource
 
-    has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent,
-      foreign_key: :connection_id
+    has_many :provider_action_intents, SymmetryControl.Integrations.ProviderActionIntent, foreign_key: :connection_id
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -153,12 +154,18 @@ defmodule SymmetryControl.Integrations.Connection do
 end
 
 defmodule SymmetryControl.Integrations.ProviderActionIntent do
+  @moduledoc false
   use Ecto.Schema
+
   import Ecto.Changeset
 
   alias SymmetryControl.Integrations.Connection
-  alias SymmetryControl.Orchestration.{Run, Runtime, Task}
-  alias SymmetryControl.Workspaces.{Project, ProjectResource, WorkItem}
+  alias SymmetryControl.Orchestration.Run
+  alias SymmetryControl.Orchestration.Runtime
+  alias SymmetryControl.Orchestration.Task
+  alias SymmetryControl.Workspaces.Project
+  alias SymmetryControl.Workspaces.ProjectResource
+  alias SymmetryControl.Workspaces.WorkItem
 
   @states ["accepted", "executing", "succeeded", "failed", "unknown"]
   @operations ["resource.sync", "change.upsert", "change.update"]

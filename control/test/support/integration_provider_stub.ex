@@ -7,20 +7,10 @@ defmodule SymmetryControl.Integrations.ProviderStub do
 
   @impl true
   def validate_resource_reference(%{provider: "github"} = connection, kind, reference),
-    do:
-      SymmetryControl.Integrations.Providers.GitHub.validate_resource_reference(
-        connection,
-        kind,
-        reference
-      )
+    do: SymmetryControl.Integrations.Providers.GitHub.validate_resource_reference(connection, kind, reference)
 
   def validate_resource_reference(%{provider: "azure_devops"} = connection, kind, reference),
-    do:
-      SymmetryControl.Integrations.Providers.AzureDevOps.validate_resource_reference(
-        connection,
-        kind,
-        reference
-      )
+    do: SymmetryControl.Integrations.Providers.AzureDevOps.validate_resource_reference(connection, kind, reference)
 
   @impl true
   def check(%{name: "Forbidden"}, :stub_auth), do: {:error, {:http, 403, "forbidden"}}
@@ -99,8 +89,7 @@ defmodule SymmetryControl.Integrations.ProviderStub do
      }}
   end
 
-  def sync_resource(connection, %{kind: kind} = resource, :stub_auth)
-      when kind in ["repository", "ci"] do
+  def sync_resource(connection, %{kind: kind} = resource, :stub_auth) when kind in ["repository", "ci"] do
     {:ok,
      %{
        resource: %{
@@ -112,8 +101,7 @@ defmodule SymmetryControl.Integrations.ProviderStub do
   end
 
   @impl true
-  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, :stub_auth),
-    do: {:ok, nil}
+  def sync_delivery(_connection, _resource, %{pull_request_url: nil}, :stub_auth), do: {:ok, nil}
 
   def sync_delivery(%{name: "Malformed delivery"}, _resource, work_item, :stub_auth) do
     {:ok,
@@ -191,12 +179,9 @@ defmodule SymmetryControl.Integrations.ProviderStub do
 
   defp resource_url("github", external_ref), do: "https://github.com/" <> external_ref
 
-  defp resource_url("azure_devops", external_ref),
-    do: "https://dev.azure.com/acme/" <> external_ref
+  defp resource_url("azure_devops", external_ref), do: "https://dev.azure.com/acme/" <> external_ref
 
-  defp provider_pull_request_url("github"),
-    do: "https://github.com/acme/symmetry/pull/42"
+  defp provider_pull_request_url("github"), do: "https://github.com/acme/symmetry/pull/42"
 
-  defp provider_pull_request_url("azure_devops"),
-    do: "https://dev.azure.com/acme/symmetry/_git/symmetry/pullrequest/42"
+  defp provider_pull_request_url("azure_devops"), do: "https://dev.azure.com/acme/symmetry/_git/symmetry/pullrequest/42"
 end

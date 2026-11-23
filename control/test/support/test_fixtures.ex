@@ -1,4 +1,5 @@
 defmodule SymmetryControl.TestFixtures do
+  @moduledoc false
   import ExUnit.Assertions
 
   alias SymmetryControl.Goals
@@ -38,15 +39,17 @@ defmodule SymmetryControl.TestFixtures do
 
   def register_runtime(machine, now, opts \\ []) do
     spec =
-      %{
-        runtime_key: Keyword.get(opts, :runtime_key, "default"),
-        name: Keyword.get(opts, :name, "Local Codex"),
-        capacity: Keyword.get(opts, :capacity, 1),
-        agent_profile: Keyword.get(opts, :agent_profile, "codex"),
-        workspace: Keyword.get(opts, :workspace, "primary"),
-        capabilities: Keyword.get(opts, :capabilities, %{})
-      }
-      |> Map.merge(Keyword.get(opts, :extra, %{}))
+      Map.merge(
+        %{
+          runtime_key: Keyword.get(opts, :runtime_key, "default"),
+          name: Keyword.get(opts, :name, "Local Codex"),
+          capacity: Keyword.get(opts, :capacity, 1),
+          agent_profile: Keyword.get(opts, :agent_profile, "codex"),
+          workspace: Keyword.get(opts, :workspace, "primary"),
+          capabilities: Keyword.get(opts, :capabilities, %{})
+        },
+        Keyword.get(opts, :extra, %{})
+      )
 
     daemon_instance_id = Keyword.get(opts, :daemon_instance_id, @daemon_instance_id)
 
@@ -168,8 +171,7 @@ defmodule SymmetryControl.TestFixtures do
           work_item_id: Map.get(payload, :work_item_id, Map.get(payload, "work_item_id")),
           subject_hash: nil,
           proposal: %{
-            kind:
-              Map.get(payload, :dependency_operation, Map.get(payload, "dependency_operation")),
+            kind: Map.get(payload, :dependency_operation, Map.get(payload, "dependency_operation")),
             depends_on_id: Map.get(payload, :depends_on_id, Map.get(payload, "depends_on_id"))
           }
         }

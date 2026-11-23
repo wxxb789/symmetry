@@ -22,8 +22,7 @@ defmodule SymmetryControl.Integrations.ChangeAction do
     end
   end
 
-  def normalize_caller_input(operation, input)
-      when operation in ["change.upsert", "change.update"] and is_map(input) do
+  def normalize_caller_input(operation, input) when operation in ["change.upsert", "change.update"] and is_map(input) do
     with :ok <- validate_allowed_keys(input, @caller_keys),
          {:ok, title} <- title(input),
          {:ok, body} <- body(input) do
