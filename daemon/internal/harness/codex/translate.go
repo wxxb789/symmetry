@@ -64,7 +64,7 @@ func notificationDedupeKey(message rpcEnvelope) string {
 		if json.Unmarshal(message.Params, &params) != nil || params.ThreadID == "" || params.Turn.ID == "" {
 			return ""
 		}
-		return "turn-started:" + params.ThreadID + ":" + params.Turn.ID
+		return turnStartedDedupeKey(params.ThreadID, params.Turn.ID)
 	case appServerEventItemStarted, appServerEventItemCompleted:
 		threadID, turnID, item, ok := itemNotificationIdentity(message.Params)
 		if !ok {
@@ -74,16 +74,28 @@ func notificationDedupeKey(message rpcEnvelope) string {
 		if !ok {
 			return ""
 		}
-		return "item:" + message.Method + ":" + threadID + ":" + turnID + ":" + itemID
+		return itemLifecycleDedupeKey(message.Method, threadID, turnID, itemID)
 	case appServerEventTurnCompleted:
 		var completed turnCompletedParams
 		if json.Unmarshal(message.Params, &completed) != nil || completed.ThreadID == "" || completed.Turn.ID == "" {
 			return ""
 		}
-		return "terminal:" + completed.ThreadID + ":" + completed.Turn.ID
+		return terminalDedupeKey(completed.ThreadID, completed.Turn.ID)
 	default:
 		return ""
 	}
+}
+
+func turnStartedDedupeKey(threadID, turnID string) string {
+	return "turn-started:" + threadID + ":" + turnID
+}
+
+func itemLifecycleDedupeKey(method, threadID, turnID, itemID string) string {
+	return "item:" + method + ":" + threadID + ":" + turnID + ":" + itemID
+}
+
+func terminalDedupeKey(threadID, turnID string) string {
+	return "terminal:" + threadID + ":" + turnID
 }
 
 func notificationDigestKey(method, threadID, turnID string, raw json.RawMessage) string {

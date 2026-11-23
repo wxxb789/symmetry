@@ -26,9 +26,9 @@ Every file stays ≤ 1,500 L. `wc -l` before/after is in the implement report.
 | File | Owns |
 | --- | --- |
 | `codex/adapter.go` | wire constants + package error vars, `Adapter`, `Start`, process/transport lifecycle (`LaunchTransport`, `launchWatcher`, `retainStartFailure*`, `queuePreReadyOutput`, `failProcessOutputBeforeReady`, `failFraming`, `handleProcessOutput*`), session surface (`Open`, `OpenNativeSession`, `StartTurn`, `AdmitNativeTurn`, `Control`, `Wait`, `WaitTurn`, `Close`, `closeOnce`, `CloseNativeSession`, `watchProcess`), session state core (`emit*`, `complete*`, `signalTurnObserved*`, `currentResult`, `sessionError*`, `rememberNativeFailureReason`, `failureReasonOr`, `partialProcessResult*`, `ensureUsable`, `matches*`, `hasTerminalResult`, `markTerminalSeen`, `resultKindForTurn`) |
-| `codex/cancel_state.go` | `cancelAttemptState`/`cancelAttempt`/`pendingInterruptedTerminal` types, `cancelTracker` (14 transitions), the cancel-flow session methods (`acquireCancelAttempt`, `beginCancelAttempt`, `markCancelAttemptWritten`, `failCancelAttempt`, `acceptCancelAttempt`, `rejectCancelAttempt`, `finishCancelAttempt`, `waitCancelAttempt`, `executeCancelAttempt`, `isExplicitCancelRejection`, `deferInterruptedTerminal`, `failDeferredCancelOnProcessExit`) |
+| `codex/cancel_state.go` | `cancelAttemptState`/`cancelAttempt`/`pendingInterruptedTerminal` types, `cancelTracker` (14 transitions), the cancel-flow session methods (`acquireCancelAttempt`, `beginCancelAttempt`, `markCancelAttemptWritten`, `failCancelAttempt`, `acceptCancelAttempt`, `rejectCancelAttempt`, `finishCancelAttempt`, `waitCancelAttempt`, `executeCancelAttempt`, `performCancelAttempt` — apply stage F4 — `isExplicitCancelRejection`, `deferInterruptedTerminal`, `failDeferredCancelOnProcessExit`) |
 | `codex/rpc_session.go` | `retiredRPC`, `rpcCorrelator` + `rpcResolution`, `stagedNotification`, frame dispatch (`handleFrame`, `handleServerRequest`, `handleResponseWithOutputLock`, `handleNotification*`), notification staging/dedupe/replay/overflow (`stageTurnNotification`, `drainPendingTurnNotifications`, `closeReplayBarrierLocked`, `waitForTurnReplay`, `preparePendingTurnReplayAfterProcessExit`, `failPendingTurnNotificationOverflow`, `markNotification*`, `failNotificationOverflow`, `stageThreadStarted`), call plumbing (`call`, `callWithHooks`, `finishRPCResponse`, `notify`, `writeInput`, `removePending`, `retirePending`), terminal pipeline (`handleTurnCompleted`, `settlePendingInterruptedTerminal*`, `resolvePendingCallsAfterTerminal`, `publishTurnTerminal`) |
-| `codex/translate.go` | pure mappings, no session state: `resultKindForTurn`, `nativeItemIsTool`, `nativeItemID`, `itemLifecycleEventKind`, `isTurnNotification`, `notificationDedupeKey`, `notificationDigestKey`, `summarizeProcessFailure`, `capabilityForControl`, `validJSONObject`, `buildTurnPrompt`, `missingResultSummary`, `completedTerminalKind` |
+| `codex/translate.go` | pure mappings, no session state: `resultKindForTurn`, `nativeItemIsTool`, `nativeItemID`, `itemLifecycleEventKind`, `isTurnNotification`, `notificationDedupeKey`, `turnStartedDedupeKey`/`itemLifecycleDedupeKey`/`terminalDedupeKey` (apply stage F6), `notificationDigestKey`, `summarizeProcessFailure`, `capabilityForControl`, `validJSONObject`, `buildTurnPrompt`, `missingResultSummary`, `completedTerminalKind` |
 
 Move mechanics: `nativeSession` keeps its name and all other fields; the six cancel fields become
 `session.cancelTracker.<field>` (the field cannot be named `cancel` — `nativeSession.cancel` is the
@@ -46,15 +46,15 @@ transition code, not a format string, so the non-test string-literal multiset do
 
 | # | Transition | Callers (after the split) |
 | --- | --- | --- |
-| 1 | `acquire() (id, owner, done)` | `session.acquireCancelAttempt` ← `Control`, `closeOnce`, `beginCancelAttempt` (tests) |
+| 1 | `acquire() (id, owner, done)` | `session.acquireCancelAttempt` ← `performCancelAttempt` (`Control`/`closeOnce`; apply stage F4), `beginCancelAttempt` (tests) |
 | 2 | `bindRPC(rpcID)` | `callWithHooks` (interrupt request registration) |
 | 3 | `forgetRPC(rpcID) uint64` | `handleResponseWithOutputLock`, `settlePendingInterruptedTerminalLocked`, `resolvePendingCallsAfterTerminal`, `removePending`, `retirePending` |
 | 4 | `observeResponse(attemptID)` | `handleResponseWithOutputLock` (found and retired branches) |
 | 5 | `markWritten(id)` | `session.markCancelAttemptWritten` ← `executeCancelAttempt`'s `afterWrite` |
-| 6 | `accept(id)` | `session.acceptCancelAttempt` ← `Control`, `closeOnce`; `handleResponseWithOutputLock` |
-| 7 | `reject(id)` | `session.rejectCancelAttempt` ← `Control`, `closeOnce`; `handleResponseWithOutputLock` |
-| 8 | `fail(id)` | `session.failCancelAttempt` ← `Control`, `closeOnce` |
-| 9 | `finish(id, err)` | `session.finishCancelAttempt` ← `Control`, `closeOnce` |
+| 6 | `accept(id)` | `session.acceptCancelAttempt` ← `performCancelAttempt` (`Control`/`closeOnce`); `handleResponseWithOutputLock` |
+| 7 | `reject(id)` | `session.rejectCancelAttempt` ← `performCancelAttempt` (`Control`/`closeOnce`); `handleResponseWithOutputLock` |
+| 8 | `fail(id)` | `session.failCancelAttempt` ← `performCancelAttempt` (`Control`/`closeOnce`) |
+| 9 | `finish(id, err)` | `session.finishCancelAttempt` ← `performCancelAttempt` (`Control`/`closeOnce`) |
 | 10 | `deferTerminal(terminal)` | `session.deferInterruptedTerminal` ← `handleTurnCompleted` |
 | 11 | `takeDeferredTerminal(id)` | `handleResponseWithOutputLock`, `failCancelAttempt`, `failDeferredCancelOnProcessExit` |
 | 12 | `reset()` | `failProcessOutputBeforeReady`, `failFraming` |
@@ -189,6 +189,9 @@ re-pin TODO (probe tests are not owned by this contract — left in `docs/TODO.m
 Every file is under 1,500 L; every other file in the package is untouched (`framing.go` 205,
 `rpc.go` 562, `schema.go` 475, `probe.go` 315, and the native/live/sandbox tests).
 
+Post-apply sizes (after the simplify apply of 2026-11-23) are in section 17.1; the numbers above are
+the implement-stage record.
+
 ## 10. Lock-site table before/after
 
 Script: per-function `.Lock()` sequence, base `adapter.go` vs HEAD's four source files
@@ -236,6 +239,9 @@ clears with the cancel clears differently from base; `retirePending` reads the b
 
 ## 12. Error-string and literal multiset
 
+Post-apply numbers are in section 17.1; the paragraph below is the implement-stage record.
+
+
 `rg -o '"[^"]*"'` over the eight non-test `codex/*.go` files, base vs HEAD: the raw diff is 18 lines
 and every one is an import-path literal whose count scales with the file count. Excluding import
 blocks, the literal multiset is exactly equal: 682 literals, 391 distinct, zero differing counts
@@ -248,6 +254,10 @@ and purpose notes. No base comment was reworded or deleted. Test comments: base 
 holds 10 `//` lines and the four split files hold 10 (0/5/2/3), so the split lost none.
 
 ## 13. Control-flow audit (base vs HEAD token diff, go/printer canonicalised)
+
+The apply stage's delta to this audit (three functions) is in section 17.1; the table below is the
+implement-stage record.
+
 
 Declaration comparison over all non-test files: 0 base declarations missing except the nine
 intentionally removed `*Locked`/`*IDLocked` helpers, 24 changed declarations (all in the plan's
@@ -292,6 +302,9 @@ No test was deleted, so no deletion needs a mutant.
 
 ## 16. Gates (all foreground, working directory `daemon/`)
 
+This table is the implement-stage run; the apply-stage rerun is in section 17.2.
+
+
 | gate | result |
 | --- | --- |
 | `gofmt -l internal/harness/codex` | empty (exit 0) |
@@ -315,3 +328,121 @@ No test was deleted, so no deletion needs a mutant.
 | slow oracle (CI daemon race job) | conductor-verified on the PR |
 | repo gate for the touched closure document: `python scripts/ci/check-citation-existence.py --base HEAD --head <scratch tree commit>` | exit 0, "1 changed document(s) pass the path and symbol check (524 path citation(s))"; run against a dangling scratch commit `ed724979` built from the working tree with a temporary `GIT_INDEX_FILE` (no branch, index or ref touched) |
 | repo gate for records: `python scripts/ci/check-record-cleanliness.py --base HEAD --head ed724979` | exit 0, "no record added or modified … nothing to check" (`docs/evaluations/**`, `docs/evidence/**` untouched) |
+
+## 17. Apply stage — accepted simplify findings (2026-11-23)
+
+The simplify pass over `e13450bc..2571fd56` (external GDD artifact) produced 21 findings; this stage
+dispositions them under the conductor brief's rule — accept every finding inside the owned set that
+does not weaken tests, types, validation or permissions. `F` numbers are the simplify report's.
+
+| # | finding | disposition | change |
+| --- | --- | --- | --- |
+| F1 | dead `blockingFakeNativeProcess.WriteInput` override | applied | override deleted from `adapter_support_test.go`; the embedded fake still satisfies the process seam |
+| F2 | dead `wantAttempts` fixture field | applied | field deleted from `cancel_state_test.go` |
+| F3 | `cancelAttempt.terminalInterrupted` write-only in production | applied as a debt record | `docs/TODO.md` entry naming the write and read sites; no code change (deleting the field would rewrite the frozen tracker assertions) |
+| F4 | the 17-line cancel-attempt sequence duplicated in `Control` and `closeOnce` | applied | `session.performCancelAttempt(ctx, threadID, turnID)` in `cancel_state.go`; both callers keep their own context/timeout and `cancel()` handling |
+| F5 | found/retired interrupt settlement duplicated in `handleResponseWithOutputLock` | applied | one settlement block entered per resolution; `forgetRPC` stays in the found branch and the retired branch keeps its `cancelAttempt != 0` guard |
+| F6 | dedupe keys re-derived inline in the notification handlers | applied | `turnStartedDedupeKey`/`itemLifecycleDedupeKey`/`terminalDedupeKey` in `translate.go`, called by both `notificationDedupeKey` and the handlers, so the replay comparison has one source |
+| F7 | overflow escalation repeated at five notification sites | applied | `markNotificationDeduplicated(frame, preDedupeKey, key)`; `rememberNativeFailureReason` stays after the seen check and before the emit |
+| F8 | unreachable `Written` disjunct in `resolvePendingInterrupt` | not applied | the disjunct is a deliberately preserved base guard (section 3 records it as kept), and removing a state guard is a validation reduction; a conductor ruling is requested |
+| F9–F11, F13, F14 | test-side duplication: local `controlResult` ×4, deferred-terminal introspection ×2, the -32001 envelope ×4 and its assertion ×3, the inline adapter literal ×2, the delta fixture ×4, repeated wire payloads | applied | shared `controlResult`, `assertDeferredIncomplete`, `interruptRejectionResponse`, `assertRejectedNonApplied`, `adapterFor`, `deltaNotification`, `initializeReply`, `turnStartedNotification`, `statusChangedNotification` |
+| F12 note | the finding's literal replacement `fakeAdapter(process.fakeNativeProcess)` | applied with correction | that call returns the embedded fake, dropping the blocking override: tried at one site, `TestBlockedRPCWriteIsCancelledAndDoesNotLeak` failed after the 30 s guard ("Open() did not enter blocked native write"), then reverted; `adapterFor(process, process.fakeNativeProcess)` returns the wrapper and attaches the sink to the embedded fake |
+| F14 note | the finding listed four initialize replies | corrected | six existed (two more in `rpc_session_test.go`); all six call `initializeReply()` |
+| F15 | `Control` goroutine scaffolding in 11 tests | not applied | optional per the finding; one helper across the three shapes changes the channel structure of 11 CI-pinned cancel tests, whose goroutine/channel behaviour is frozen; conductor's call |
+| F16 | overflow summary asserted through the code-under-test variable | applied | `rpc_session_test.go` asserts the literal `"Codex pending turn notification buffer overflow"` (the `adapter.go` text) |
+| F17 | `TestFramingFailureSettlesWaitWithoutDiagnosticSink` asserted no diagnostic at all | applied | the sink is captured and the test now asserts no diagnostic event was recorded; the framing-failure path emits no sink event at all, so this is a negative pin on the absence of a diagnostic (no positive control) |
+| F18 | owner-file scan used a hand-written field map | applied | field names derive from the parsed `cancelTracker` struct; an empty field set fails the test instead of scanning nothing |
+| F19 | section 9 recorded `cancel_state_test.go` at 682 L | applied | the recorded number was wrong (697 L at `2571fd56`); post-apply sizes are in 17.1 |
+| F20 | "no session" wording versus `TestCancelProcessExitSettlesDeferredTerminal` | rejected | the wording lives in the contract's clause 5, outside the owned set; a conductor wording ruling is requested |
+| F21 | "each case with a recorded red mutant" versus seven group-level mutants | rejected | contract interpretation, outside the owned set; a conductor ruling is requested |
+
+### 17.1 Post-apply measurements (single source — supersedes the counts in sections 9, 12 and 13)
+
+`wc -l` after the apply (`daemon/internal/harness/codex/`):
+
+| file | implement | apply |
+| --- | --- | --- |
+| `adapter.go` | 1,331 | 1,300 |
+| `cancel_state.go` | 405 | 426 |
+| `rpc_session.go` | 889 | 889 |
+| `translate.go` | 167 | 179 |
+| `adapter_test.go` | 1,296 | 1,283 |
+| `cancel_test.go` | 493 | 472 |
+| `rpc_session_test.go` | 848 | 834 |
+| `adapter_support_test.go` | 609 | 624 |
+| `cancel_state_test.go` | 697 (recorded as 682) | 704 |
+| `translate_test.go` | 396 | 396 |
+
+Every file stays under 1,500 L.
+
+Literal multiset (`rg -o '"[^"]*"'`, import blocks excluded, the eight non-test `codex/*.go` files):
+base 682 / 391 distinct → apply 674 / 391 distinct. The only differing keys are F6's single-sourcing:
+`"turn-started:"` 2→1, `"item:"` 2→1, `"terminal:"` 2→1 and `":"` 13→8 (the five inline
+concatenations removed). The error-string multiset (`errors.New` and `fmt.Errorf` first arguments) is
+unchanged: 69 occurrences / 61 distinct, with `errors.New` 52 and `fmt.Errorf` 19 in both trees.
+
+Declaration oracle (`go/parser` + `go/printer` canonicalised, per-name SHA-256 prefix; scratch `canon`
+tool; "changed" = same name, different canonical text), non-test files: base `adapter.go` 159
+declarations → apply 197; **9 missing** = the nine intentional `*Locked` helper removals, **26
+changed**, **47 new** (`cancelTracker` and its 14 transitions, `rpcCorrelator`/`rpcResolution`, the
+typed hook, the pure helpers, and the apply's `performCancelAttempt`, `markNotificationDeduplicated`,
+`turnStartedDedupeKey`, `itemLifecycleDedupeKey`, `terminalDedupeKey`). Test declarations, base
+`adapter_test.go` 137 → the apply's six test files 176: **1 missing** =
+`(*blockingFakeNativeProcess).WriteInput` (F1), **25 changed** (the five recorded field-path edits plus
+the apply's fixture and assertion substitutions), **40 new** (the 22 new tests, the tracker/translate
+test helpers and the apply's nine shared test helpers).
+
+Control-flow audit delta (section 13's rows re-derived with `canon func` and unified diff; this method
+counts diff hunks, not the implement stage's token regions): `Control` was byte-identical to base and
+now carries 1 hunk (the extracted sequence replaced by one call), `closeOnce` was 1 region and now
+carries 2 hunks, `handleResponseWithOutputLock` now carries 3 hunks versus base (the merged settlement
+block). Every other section 13 row is unchanged by the apply.
+
+Lock-site table (section 10) re-derived (`locks.awk`: per-function `.Lock()`/`.RLock()` token sequence,
+base `adapter.go` versus the apply's four source files): 58 functions at base, 58 at apply, all 58
+sequences byte-equal; `performCancelAttempt` carries no lock site. Cancel-state write sequences
+(section 11) are untouched by the apply — none of F4–F7 moves a cancel-field write — and the committed
+scan still reports zero writes to the six tracker fields outside `cancel_state.go`.
+
+Test names and skips (section 14) are unchanged by the apply: `go test -list '.*'` reports 138 names
+with no duplicates, and all 84 `Test*` functions of base `adapter_test.go` are present.
+
+Mutants re-checked on the applied tree, both reverted: M6 (a cancel-field write added at
+`rpc_session.go:887`) turns `TestCancelFieldsWrittenOnlyInOwnerFile` red through the derived field set
+("rpc_session.go:887 writes cancelTracker.deferredTerminal outside cancel_state.go"); M7
+(`"turn-started:"` → `"turnStarted:"` in the new `turnStartedDedupeKey`) turns
+`TestNotificationDedupeKey/turn_started` red. M1–M5 mutate declarations the apply does not touch.
+
+### 17.2 Apply-stage gate results (working directory `daemon/`)
+
+| gate | result |
+| --- | --- |
+| `gofmt -l internal/harness/codex` | empty (exit 0, 0 bytes of output) |
+| `go vet ./...` | exit 0 |
+| `GOOS=linux go build ./...` / `GOOS=windows go build ./...` | exit 0 / exit 0 |
+| `go test -list '.*' ./internal/harness/codex/` | 138 names, 0 duplicates, 0 lost |
+| `go test -count=1 ./internal/harness/codex/` | ok (16.132 s; 16.022 s inside the harness run) |
+| `git diff --check` | exit 0 |
+| `go test -count=1 ./internal/harness/...` (Windows) | exit 0, 9/9 packages ok (section 17.3) |
+| WSL `-race` harness + app | exit 0, 11/11 packages ok (section 17.3) |
+| repository gates (citation existence, record cleanliness) | exit 0 / exit 0, "nothing to check" (section 17.3) |
+
+### 17.3 Apply-stage suite reruns
+
+Windows `go test -count=1 ./internal/harness/...`: exit 0, 9/9 packages ok (`harness` 2.988 s,
+`claude` 13.610 s, `codex` 16.022 s, `linejson` 1.094 s, `omo` 5.124 s, `omp` 5.795 s, `opencode`
+0.594 s, `pi` 5.620 s, `probeconformance` 9.505 s). The diff adds no `t.Skip`.
+
+WSL `go test -count=1 -race -timeout 30m -skip TestOutputBackpressureRecoversWithOneTruncationMarker
+./internal/harness/... ./internal/app/...`: exit 0, 11/11 packages ok (`codex` 36.363 s, `app`
+368.385 s, `app/apptest` 3.474 s; wall 428.53 s) — the same documented `-skip`/`-timeout` pair the
+implement stage used to get past the repository's known slowest test under `-race` (that test is
+untouched here). No verbose SKIP list was captured in this run; the diff adds no `t.Skip`.
+
+Repository gates against a dangling scratch commit built from the applied working tree with a
+temporary `GIT_INDEX_FILE` (`66db65e81050`, no branch, index or ref touched; `HEAD` stays
+`2571fd56de44`): `python scripts/ci/check-citation-existence.py --base HEAD --head 66db65e81050` →
+exit 0, "no audited document added or modified … nothing to check" (this stage changes only
+`codex/**`, the plan and `docs/TODO.md`, none of them in the gate's audited corpus, unlike the
+implement stage's `CLOSED-TODO.md` change); `python scripts/ci/check-record-cleanliness.py --base
+HEAD --head 66db65e81050` → exit 0, "no record added or modified … nothing to check".

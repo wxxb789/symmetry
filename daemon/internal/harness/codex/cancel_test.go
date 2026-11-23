@@ -11,6 +11,37 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
+type controlResult struct {
+	receipt harness.ControlReceipt
+	err     error
+}
+
+func interruptRejectionResponse(interruptID uint64) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0",
+		"id":      interruptID,
+		"error":   map[string]any{"code": -32001, "message": "turn is no longer interruptible"},
+	}
+}
+
+func assertRejectedNonApplied(t *testing.T, control controlResult, label string) {
+	t.Helper()
+	if control.err == nil || control.receipt.Outcome == harness.ControlApplied {
+		t.Fatalf("%s = %+v, want failed non-applied control", label, control)
+	}
+}
+
+func assertDeferredIncomplete(t *testing.T, native *nativeSession, when string) {
+	t.Helper()
+	native.mutex.Lock()
+	deferred := native.cancelTracker.deferredTerminal != nil
+	completed := native.result != nil
+	native.mutex.Unlock()
+	if !deferred || completed {
+		t.Fatalf("terminal state %s = deferred:%t completed:%t, want deferred and incomplete", when, deferred, completed)
+	}
+}
+
 func TestControlCancelAwaitsTerminalInterruptedTurn(t *testing.T) {
 	process := newFakeNativeProcess()
 	adapter := fakeAdapter(process)
@@ -64,14 +95,7 @@ func TestControlCancelMarksCancellationBeforeInterruptResponse(t *testing.T) {
 	}()
 	interrupt := process.nextRequest(t)
 	process.emitJSON(t, completedNotification("thread-1", "turn-1", "interrupted", validTaskResultJSON(t, "progress")))
-	native := session.(*nativeSession)
-	native.mutex.Lock()
-	deferred := native.cancelTracker.deferredTerminal != nil
-	completed := native.result != nil
-	native.mutex.Unlock()
-	if !deferred || completed {
-		t.Fatalf("terminal state before interrupt response = deferred:%t completed:%t, want deferred and incomplete", deferred, completed)
-	}
+	assertDeferredIncomplete(t, session.(*nativeSession), "before interrupt response")
 	process.reply(t, interrupt.ID, map[string]any{})
 	process.finish(execution.Result{PID: 42, ExitCode: 0})
 	result, err := session.Wait(context.Background())
@@ -95,10 +119,6 @@ func TestControlCancelDefersInterruptedTerminalUntilRejection(t *testing.T) {
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Defer terminal until rejection.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	type controlResult struct {
-		receipt harness.ControlReceipt
-		err     error
-	}
 	controlDone := make(chan controlResult, 1)
 	go func() {
 		receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "deferred-rejection", Kind: harness.ControlCancel})
@@ -108,25 +128,12 @@ func TestControlCancelDefersInterruptedTerminalUntilRejection(t *testing.T) {
 	if err := process.emitJSON(t, completedNotification("thread-1", "turn-1", "interrupted", validTaskResultJSON(t, "progress"))); err != nil {
 		t.Fatalf("emit interrupted terminal: %v", err)
 	}
-	native := session.(*nativeSession)
-	native.mutex.Lock()
-	deferred := native.cancelTracker.deferredTerminal != nil
-	completed := native.result != nil
-	native.mutex.Unlock()
-	if !deferred || completed {
-		t.Fatalf("terminal state after interrupt-before-rejection = deferred:%t completed:%t, want deferred and incomplete", deferred, completed)
-	}
-	if err := process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      interrupt.ID,
-		"error":   map[string]any{"code": -32001, "message": "turn is no longer interruptible"},
-	}); err != nil {
+	assertDeferredIncomplete(t, session.(*nativeSession), "after interrupt-before-rejection")
+	if err := process.emitJSON(t, interruptRejectionResponse(interrupt.ID)); err != nil {
 		t.Fatalf("emit late interrupt rejection: %v", err)
 	}
 	control := <-controlDone
-	if control.err == nil || control.receipt.Outcome == harness.ControlApplied {
-		t.Fatalf("rejected cancel result = %+v, want failed non-applied control", control)
-	}
+	assertRejectedNonApplied(t, control, "rejected cancel result")
 	process.finish(execution.Result{PID: 42, ExitCode: 0})
 	result, err := session.Wait(context.Background())
 	if err != nil {
@@ -143,27 +150,17 @@ func TestRejectedCancelDoesNotClassifyIndependentInterruptedTurnAsCancelled(t *t
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Reject cancellation explicitly.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	type controlResult struct {
-		receipt harness.ControlReceipt
-		err     error
-	}
 	controlDone := make(chan controlResult, 1)
 	go func() {
 		receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "rejected-cancel", Kind: harness.ControlCancel})
 		controlDone <- controlResult{receipt: receipt, err: err}
 	}()
 	interrupt := process.nextRequest(t)
-	if err := process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      interrupt.ID,
-		"error":   map[string]any{"code": -32001, "message": "turn is no longer interruptible"},
-	}); err != nil {
+	if err := process.emitJSON(t, interruptRejectionResponse(interrupt.ID)); err != nil {
 		t.Fatalf("emit interrupt rejection: %v", err)
 	}
 	control := <-controlDone
-	if control.err == nil || control.receipt.Outcome == harness.ControlApplied {
-		t.Fatalf("rejected cancel result = %+v, want failed non-applied control", control)
-	}
+	assertRejectedNonApplied(t, control, "rejected cancel result")
 
 	process.emitJSON(t, completedNotification("thread-1", "turn-1", "interrupted", validTaskResultJSON(t, "progress")))
 	process.finish(execution.Result{PID: 42, ExitCode: 0})
@@ -182,21 +179,13 @@ func TestInterruptRejectionBeforeSameChunkInterruptedTerminalWinsClassification(
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Order rejection before terminal.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	type controlResult struct {
-		receipt harness.ControlReceipt
-		err     error
-	}
 	controlDone := make(chan controlResult, 1)
 	go func() {
 		receipt, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "same-chunk-rejection", Kind: harness.ControlCancel})
 		controlDone <- controlResult{receipt: receipt, err: err}
 	}()
 	interrupt := process.nextRequest(t)
-	errorRaw, err := json.Marshal(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      interrupt.ID,
-		"error":   map[string]any{"code": -32001, "message": "turn is no longer interruptible"},
-	})
+	errorRaw, err := json.Marshal(interruptRejectionResponse(interrupt.ID))
 	if err != nil {
 		t.Fatalf("encode interrupt rejection: %v", err)
 	}
@@ -209,9 +198,7 @@ func TestInterruptRejectionBeforeSameChunkInterruptedTerminalWinsClassification(
 		t.Fatalf("emit same-chunk rejection and terminal: %v", err)
 	}
 	control := <-controlDone
-	if control.err == nil || control.receipt.Outcome == harness.ControlApplied {
-		t.Fatalf("same-chunk rejected cancel result = %+v, want failed non-applied control", control)
-	}
+	assertRejectedNonApplied(t, control, "same-chunk rejected cancel result")
 	process.finish(execution.Result{PID: 42, ExitCode: 0})
 	result, err := session.Wait(context.Background())
 	if err != nil {
@@ -251,10 +238,6 @@ func TestConcurrentControlCancelSharesOneInterruptAttempt(t *testing.T) {
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Share cancellation.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	type controlResult struct {
-		receipt harness.ControlReceipt
-		err     error
-	}
 	results := make(chan controlResult, 2)
 	for _, commandID := range []string{"cancel-a", "cancel-b"} {
 		go func(commandID string) {
@@ -406,11 +389,7 @@ func TestLateValidInterruptRejectionRetiresUnknownCancelAttempt(t *testing.T) {
 	if err := <-controlDone; err == nil {
 		t.Fatal("Control(cancel) succeeded after its response timed out")
 	}
-	if err := process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      interrupt.ID,
-		"error":   map[string]any{"code": -32001, "message": "turn is no longer interruptible"},
-	}); err != nil {
+	if err := process.emitJSON(t, interruptRejectionResponse(interrupt.ID)); err != nil {
 		t.Fatalf("late valid rejection = %v", err)
 	}
 	process.emitJSON(t, completedNotification("thread-1", "turn-1", "interrupted", validTaskResultJSON(t, "progress")))

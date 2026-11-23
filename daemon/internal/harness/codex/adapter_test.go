@@ -52,13 +52,8 @@ func TestAdapterStagesNativeTransportAndRequiresMatchingStructuredCompletion(t *
 	}
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Write the bounded change.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": map[string]any{"status": "idle"},
-	})
-	process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta,
-		"params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "working"},
-	})
+	process.emitJSON(t, statusChangedNotification("idle"))
+	process.emitJSON(t, deltaNotification("working"))
 	process.emitJSON(t, map[string]any{
 		"jsonrpc": "2.0", "method": appServerEventThreadTokenUsage,
 		"params": map[string]any{
@@ -603,7 +598,7 @@ func TestOpenUsesOnlyExplicitNativeModelAndChecksReturnedIdentity(t *testing.T) 
 				opened <- err
 			}()
 			initialize := process.nextRequest(t)
-			process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+			process.reply(t, initialize.ID, initializeReply())
 			_ = process.nextNotification(t)
 			thread := process.nextRequest(t)
 			if thread.Params.Model != test.configured {
@@ -646,8 +641,8 @@ func TestOpenRefusesAConcurrentOpenWithTheFrozenText(t *testing.T) {
 	if _, err := session.Open(context.Background()); err == nil || err.Error() != "codex native session is already opening" {
 		t.Fatalf("concurrent Open() error = %v, want the frozen already-opening text", err)
 	}
-	process.emitJSON(t, map[string]any{"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": map[string]any{"status": "idle"}})
-	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+	process.emitJSON(t, statusChangedNotification("idle"))
+	process.reply(t, initialize.ID, initializeReply())
 	_ = process.nextNotification(t)
 	thread := process.nextRequest(t)
 	process.reply(t, thread.ID, map[string]any{
@@ -681,12 +676,7 @@ func TestOpenRejectsSandboxDowngrade(t *testing.T) {
 		opened <- err
 	}()
 	initialize := process.nextRequest(t)
-	process.reply(t, initialize.ID, map[string]any{
-		"userAgent":      "codex-test",
-		"codexHome":      "C:/redacted",
-		"platformFamily": "windows",
-		"platformOs":     "windows",
-	})
+	process.reply(t, initialize.ID, initializeReply())
 	_ = process.nextNotification(t)
 	thread := process.nextRequest(t)
 	process.reply(t, thread.ID, map[string]any{
@@ -759,10 +749,7 @@ func TestSinkFailureCannotProduceNativeSuccess(t *testing.T) {
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Persist events.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 
-	err := process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta,
-		"params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "cannot persist"},
-	})
+	err := process.emitJSON(t, deltaNotification("cannot persist"))
 	if err == nil || !strings.Contains(err.Error(), "journal unavailable") {
 		t.Fatalf("sink failure = %v", err)
 	}

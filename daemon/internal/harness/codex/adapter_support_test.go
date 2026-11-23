@@ -48,8 +48,8 @@ func completeOpen(t *testing.T, process *fakeNativeProcess, session harness.Stag
 	if initialize.Method != appServerMethodInitialize || initialize.Params.ClientInfo.Name != "symmetry" || initialize.Params.ClientInfo.Version != "1" {
 		t.Fatalf("initialize request = %+v", initialize)
 	}
-	process.emitJSON(t, map[string]any{"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": map[string]any{"status": "idle"}})
-	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+	process.emitJSON(t, statusChangedNotification("idle"))
+	process.reply(t, initialize.ID, initializeReply())
 	initialized := process.nextNotification(t)
 	if initialized.Method != appServerMethodInitialized || initialized.Params != nil {
 		t.Fatalf("initialized notification = %+v", initialized)
@@ -114,10 +114,14 @@ func completeTurnStart(t *testing.T, process *fakeNativeProcess, session harness
 }
 
 func fakeAdapter(process *fakeNativeProcess) *Adapter {
+	return adapterFor(process, process)
+}
+
+func adapterFor(process nativeProcess, sinkTarget *fakeNativeProcess) *Adapter {
 	return &Adapter{
 		executable: "codex-test",
 		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
-			process.sink = sink
+			sinkTarget.sink = sink
 			return process, nil
 		},
 	}
@@ -185,6 +189,29 @@ func deltaNotification(delta string) map[string]any {
 	return map[string]any{
 		"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta,
 		"params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": delta},
+	}
+}
+
+func initializeReply() map[string]any {
+	return map[string]any{
+		"userAgent":      "codex-test",
+		"codexHome":      "C:/redacted",
+		"platformFamily": "windows",
+		"platformOs":     "windows",
+	}
+}
+
+func turnStartedNotification() map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0", "method": appServerEventTurnStarted,
+		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}},
+	}
+}
+
+func statusChangedNotification(status string) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0", "method": "remoteControl/status/changed",
+		"params": map[string]any{"status": status},
 	}
 }
 
@@ -353,18 +380,6 @@ func (process *fakeNativeProcess) WriteInputContext(ctx context.Context, input [
 		return err
 	}
 	return process.WriteInput(input)
-}
-
-func (process *blockingFakeNativeProcess) WriteInput(input []byte) error {
-	process.mutex.Lock()
-	process.writeCount++
-	shouldBlock := process.writeCount >= process.blockAfter
-	process.mutex.Unlock()
-	if shouldBlock {
-		process.writeOnce.Do(func() { close(process.writeStarted) })
-		<-process.unblockWrite
-	}
-	return process.fakeNativeProcess.WriteInput(input)
 }
 
 func (process *blockingFakeNativeProcess) WriteInputContext(ctx context.Context, input []byte) error {

@@ -615,23 +615,7 @@ func (session *nativeSession) Control(ctx context.Context, request harness.Contr
 	session.mutex.Lock()
 	threadID, turnID := session.threadID, session.turnID
 	session.mutex.Unlock()
-	attemptID, owner, done := session.acquireCancelAttempt()
-	var interruptErr error
-	if owner {
-		interruptErr = session.executeCancelAttempt(ctx, attemptID, threadID, turnID)
-		if interruptErr != nil {
-			if isExplicitCancelRejection(interruptErr) {
-				session.rejectCancelAttempt(attemptID)
-			} else {
-				session.failCancelAttempt(attemptID)
-			}
-		} else {
-			session.acceptCancelAttempt(attemptID)
-		}
-		session.finishCancelAttempt(attemptID, interruptErr)
-	} else {
-		interruptErr = session.waitCancelAttempt(ctx, attemptID, done)
-	}
+	interruptErr := session.performCancelAttempt(ctx, threadID, turnID)
 	if interruptErr != nil {
 		return harness.ControlReceipt{
 			CommandID:  request.CommandID,
@@ -730,22 +714,7 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	var interruptErr error
 	if active && strings.TrimSpace(threadID) != "" && strings.TrimSpace(turnID) != "" {
 		interruptContext, cancel := context.WithTimeout(ctx, nativeInterruptTimeout)
-		attemptID, owner, done := session.acquireCancelAttempt()
-		if owner {
-			interruptErr = session.executeCancelAttempt(interruptContext, attemptID, threadID, turnID)
-			if interruptErr != nil {
-				if isExplicitCancelRejection(interruptErr) {
-					session.rejectCancelAttempt(attemptID)
-				} else {
-					session.failCancelAttempt(attemptID)
-				}
-			} else {
-				session.acceptCancelAttempt(attemptID)
-			}
-			session.finishCancelAttempt(attemptID, interruptErr)
-		} else {
-			interruptErr = session.waitCancelAttempt(interruptContext, attemptID, done)
-		}
+		interruptErr = session.performCancelAttempt(interruptContext, threadID, turnID)
 		cancel()
 	}
 	session.mutex.Lock()

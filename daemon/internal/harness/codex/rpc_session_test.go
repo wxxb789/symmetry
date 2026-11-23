@@ -50,7 +50,7 @@ func TestThreadStartedBeforeStartResponseStaysBehindJournalBarrier(t *testing.T)
 		errResult <- err
 	}()
 	initialize := process.nextRequest(t)
-	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+	process.reply(t, initialize.ID, initializeReply())
 	_ = process.nextNotification(t)
 	thread := process.nextRequest(t)
 	if err := process.emitJSON(t, map[string]any{
@@ -236,8 +236,8 @@ func TestTurnNotificationsBeforeStartResponseReplayAfterTurnIDIsKnown(t *testing
 	if turn.Method != appServerMethodTurnStart {
 		t.Fatalf("turn request = %+v", turn)
 	}
-	process.emitJSON(t, map[string]any{"jsonrpc": "2.0", "method": appServerEventTurnStarted, "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}}})
-	process.emitJSON(t, map[string]any{"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta, "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "finalizing"}})
+	process.emitJSON(t, turnStartedNotification())
+	process.emitJSON(t, deltaNotification("finalizing"))
 	process.emitJSON(t, completedNotification("thread-1", "turn-1", "completed", validTaskResultJSON(t, "progress")))
 	if sink.has(harness.EventTaskResult) {
 		t.Fatal("pre-response terminal escaped before turn/start established the native turn id")
@@ -272,10 +272,7 @@ func TestDuplicatePreTurnNotificationsDeduplicateBeforeStageCapacity(t *testing.
 		started <- session.StartTurn(context.Background(), harness.TurnRequest{Goal: "Deduplicate before staging capacity.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
 	}()
 	turn := process.nextRequest(t)
-	turnStarted := map[string]any{
-		"jsonrpc": "2.0", "method": appServerEventTurnStarted,
-		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}},
-	}
+	turnStarted := turnStartedNotification()
 	usage := map[string]any{
 		"jsonrpc": "2.0", "method": appServerEventThreadTokenUsage,
 		"params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "tokenUsage": map[string]any{
@@ -392,7 +389,7 @@ func TestPendingTurnNotificationOverflowFailsClosed(t *testing.T) {
 	if result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != "unknown_outcome" {
 		t.Fatalf("overflow result = %+v, want unknown_outcome failure", result)
 	}
-	if !strings.Contains(result.Summary, errPendingTurnEventOverflow.Error()) {
+	if !strings.Contains(result.Summary, "Codex pending turn notification buffer overflow") {
 		t.Fatalf("overflow summary = %q, want fatal cause", result.Summary)
 	}
 	if sink.hasDiagnostic("pending_turn_event_overflow") {
@@ -511,7 +508,8 @@ func TestIncompleteTrailingFrameReplacesEarlierTerminalSuccess(t *testing.T) {
 
 func TestFramingFailureSettlesWaitWithoutDiagnosticSink(t *testing.T) {
 	process := newFakeNativeProcess()
-	session := startNativeSession(t, fakeAdapter(process), &recordingHarnessSink{})
+	sink := &recordingHarnessSink{}
+	session := startNativeSession(t, fakeAdapter(process), sink)
 	native := session.(*nativeSession)
 	failed := make(chan error, 1)
 	go func() {
@@ -526,6 +524,9 @@ func TestFramingFailureSettlesWaitWithoutDiagnosticSink(t *testing.T) {
 	}
 	if err := <-failed; err == nil {
 		t.Fatal("failFraming() returned nil")
+	}
+	if sink.has(harness.EventDiagnostic) {
+		t.Fatalf("framing failure emitted a diagnostic event: %#v", sink.events)
 	}
 }
 
@@ -677,8 +678,8 @@ func TestDuplicateMatchingNativeNotificationsDoNotRepeatIdentifiedEvents(t *test
 	session := startNativeSession(t, fakeAdapter(process), sink)
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Deduplicate native replay.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
-	turnStarted := map[string]any{"jsonrpc": "2.0", "method": appServerEventTurnStarted, "params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}}}
-	delta := map[string]any{"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta, "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "same"}}
+	turnStarted := turnStartedNotification()
+	delta := deltaNotification("same")
 	nativeError := map[string]any{"jsonrpc": "2.0", "method": appServerEventError, "params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "willRetry": false, "error": map[string]any{"message": "limit", "codexErrorInfo": "rateLimitExceeded"}}}
 	process.emitJSON(t, turnStarted)
 	process.emitJSON(t, turnStarted)
@@ -703,10 +704,7 @@ func TestNativeSinkEventsDoNotExposeRawProtocolIdentityOrFrames(t *testing.T) {
 	session := startNativeSession(t, fakeAdapter(process), sink)
 	_ = completeOpen(t, process, session)
 	completeTurnStart(t, process, session, harness.TurnRequest{Goal: "Sanitize native events.", Context: json.RawMessage(`{"snapshot":"canonical"}`)})
-	process.emitJSON(t, map[string]any{
-		"jsonrpc": "2.0", "method": appServerEventTurnStarted,
-		"params": map[string]any{"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "items": []any{}, "status": "inProgress"}},
-	})
+	process.emitJSON(t, turnStartedNotification())
 	process.emitJSON(t, map[string]any{
 		"jsonrpc": "2.0", "method": appServerEventAgentMessageDelta,
 		"params": map[string]any{"threadId": "thread-1", "turnId": "turn-1", "itemId": "item-secret", "delta": "visible"},
@@ -746,13 +744,7 @@ func TestNativeSinkEventsDoNotExposeRawProtocolIdentityOrFrames(t *testing.T) {
 
 func TestBlockedRPCWriteIsCancelledAndDoesNotLeak(t *testing.T) {
 	process := newBlockingFakeNativeProcess()
-	adapter := &Adapter{
-		executable: "codex-test",
-		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
-			process.sink = sink
-			return process, nil
-		},
-	}
+	adapter := adapterFor(process, process.fakeNativeProcess)
 	session := startNativeSession(t, adapter, &recordingHarnessSink{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -781,13 +773,7 @@ func TestBlockedRPCWriteIsCancelledAndDoesNotLeak(t *testing.T) {
 func TestOpenInitializedNotificationUsesOpenContextDeadline(t *testing.T) {
 	process := newBlockingFakeNativeProcess()
 	process.blockAfter = 2
-	adapter := &Adapter{
-		executable: "codex-test",
-		startProcess: func(_ context.Context, _ execution.Invocation, sink execution.Sink) (nativeProcess, error) {
-			process.sink = sink
-			return process, nil
-		},
-	}
+	adapter := adapterFor(process, process.fakeNativeProcess)
 	session := startNativeSession(t, adapter, &recordingHarnessSink{})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -797,7 +783,7 @@ func TestOpenInitializedNotificationUsesOpenContextDeadline(t *testing.T) {
 		opened <- err
 	}()
 	initialize := process.nextRequest(t)
-	process.reply(t, initialize.ID, map[string]any{"userAgent": "codex-test", "codexHome": "C:/redacted", "platformFamily": "windows", "platformOs": "windows"})
+	process.reply(t, initialize.ID, initializeReply())
 	select {
 	case <-process.writeStarted:
 	case <-time.After(testHangGuard):

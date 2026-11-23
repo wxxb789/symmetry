@@ -183,30 +183,22 @@ func (session *nativeSession) handleResponseWithOutputLock(frame Frame, message 
 	resolution := session.rpc.resolve(id)
 	var deferredTerminal *pendingInterruptedTerminal
 	var deferredKind harness.ResultKind
+	attemptID := resolution.cancelAttempt
+	settle := resolution.found && resolution.method == appServerMethodTurnInterrupt
 	if resolution.found {
-		attemptID := session.cancelTracker.forgetRPC(id)
-		if resolution.method == appServerMethodTurnInterrupt {
-			session.cancelTracker.observeResponse(attemptID)
-		}
-		if hasError && rpcErrorErr == nil && resolution.method == appServerMethodTurnInterrupt {
+		attemptID = session.cancelTracker.forgetRPC(id)
+	} else if resolution.retired && resolution.method == appServerMethodTurnInterrupt && attemptID != 0 {
+		settle = true
+	}
+	if settle {
+		session.cancelTracker.observeResponse(attemptID)
+		if hasError && rpcErrorErr == nil {
 			deferredTerminal, deferredKind = session.cancelTracker.reject(attemptID)
-		} else if hasError && resolution.method == appServerMethodTurnInterrupt {
+		} else if hasError {
 			deferredTerminal, deferredKind = session.cancelTracker.takeDeferredTerminal(attemptID)
-		}
-		if hasResult && resolution.method == appServerMethodTurnInterrupt && validateRPCResult(resolution.method, message.Result) == nil {
+		} else if hasResult && validateRPCResult(resolution.method, message.Result) == nil {
 			session.cancelTracker.accept(attemptID)
 			deferredTerminal, deferredKind = session.cancelTracker.takeDeferredTerminal(attemptID)
-		}
-	}
-	if !resolution.found && resolution.retired && resolution.method == appServerMethodTurnInterrupt && resolution.cancelAttempt != 0 {
-		session.cancelTracker.observeResponse(resolution.cancelAttempt)
-		if hasError && rpcErrorErr == nil {
-			deferredTerminal, deferredKind = session.cancelTracker.reject(resolution.cancelAttempt)
-		} else if hasError {
-			deferredTerminal, deferredKind = session.cancelTracker.takeDeferredTerminal(resolution.cancelAttempt)
-		} else if hasResult && validateRPCResult(resolution.method, message.Result) == nil {
-			session.cancelTracker.accept(resolution.cancelAttempt)
-			deferredTerminal, deferredKind = session.cancelTracker.takeDeferredTerminal(resolution.cancelAttempt)
 		}
 	}
 	session.mutex.Unlock()
@@ -298,9 +290,9 @@ func (session *nativeSession) handleNotificationWithStaging(ctx context.Context,
 		if err != nil {
 			return session.diagnostic(frame, "unverified_usage", "Codex token usage counters are not verified: "+err.Error())
 		}
-		seen, markErr := session.markNotificationForReplay(preDedupeKey, notificationDigestKey(message.Method, params.ThreadID, params.TurnID, message.Params))
+		seen, markErr := session.markNotificationDeduplicated(frame, preDedupeKey, notificationDigestKey(message.Method, params.ThreadID, params.TurnID, message.Params))
 		if markErr != nil {
-			return session.failNotificationOverflow(frame)
+			return markErr
 		}
 		if !seen {
 			return nil
@@ -313,9 +305,9 @@ func (session *nativeSession) handleNotificationWithStaging(ctx context.Context,
 		if err := json.Unmarshal(message.Params, &params); err != nil || !session.matches(params.ThreadID, params.Turn.ID) {
 			return session.diagnostic(frame, "unrelated_native_event", "turn/started does not match the active Codex turn")
 		}
-		seen, markErr := session.markNotificationForReplay(preDedupeKey, "turn-started:"+params.ThreadID+":"+params.Turn.ID)
+		seen, markErr := session.markNotificationDeduplicated(frame, preDedupeKey, turnStartedDedupeKey(params.ThreadID, params.Turn.ID))
 		if markErr != nil {
-			return session.failNotificationOverflow(frame)
+			return markErr
 		}
 		if !seen {
 			return nil
@@ -330,9 +322,9 @@ func (session *nativeSession) handleNotificationWithStaging(ctx context.Context,
 		if !validItem {
 			return session.diagnostic(frame, "malformed_native_item", "native item lifecycle event has no item id")
 		}
-		seen, markErr := session.markNotificationForReplay(preDedupeKey, "item:"+message.Method+":"+threadID+":"+turnID+":"+itemID)
+		seen, markErr := session.markNotificationDeduplicated(frame, preDedupeKey, itemLifecycleDedupeKey(message.Method, threadID, turnID, itemID))
 		if markErr != nil {
-			return session.failNotificationOverflow(frame)
+			return markErr
 		}
 		if !seen {
 			return nil
@@ -343,9 +335,9 @@ func (session *nativeSession) handleNotificationWithStaging(ctx context.Context,
 		if err := json.Unmarshal(message.Params, &params); err != nil || !session.matches(params.ThreadID, params.TurnID) {
 			return session.diagnostic(frame, "unrelated_native_event", "native error does not match the active Codex turn")
 		}
-		seen, markErr := session.markNotificationForReplay(preDedupeKey, notificationDigestKey(message.Method, params.ThreadID, params.TurnID, message.Params))
+		seen, markErr := session.markNotificationDeduplicated(frame, preDedupeKey, notificationDigestKey(message.Method, params.ThreadID, params.TurnID, message.Params))
 		if markErr != nil {
-			return session.failNotificationOverflow(frame)
+			return markErr
 		}
 		if !seen {
 			return nil
@@ -550,9 +542,9 @@ func (session *nativeSession) handleTurnCompleted(frame Frame, raw json.RawMessa
 	if err := json.Unmarshal(raw, &completed); err != nil || !session.matches(completed.ThreadID, completed.Turn.ID) {
 		return session.diagnostic(frame, "unrelated_native_event", "turn/completed does not match the active Codex turn")
 	}
-	seen, markErr := session.markNotificationForReplay(preDedupeKey, "terminal:"+completed.ThreadID+":"+completed.Turn.ID)
+	seen, markErr := session.markNotificationDeduplicated(frame, preDedupeKey, terminalDedupeKey(completed.ThreadID, completed.Turn.ID))
 	if markErr != nil {
-		return session.failNotificationOverflow(frame)
+		return markErr
 	}
 	if !seen {
 		return session.diagnostic(frame, "duplicate_terminal_event", "Codex turn already has a terminal result")
@@ -847,6 +839,14 @@ func (session *nativeSession) markNotificationForReplay(preDedupeKey, key string
 		return true, nil
 	}
 	return session.markNotification(key)
+}
+
+func (session *nativeSession) markNotificationDeduplicated(frame Frame, preDedupeKey, key string) (bool, error) {
+	seen, err := session.markNotificationForReplay(preDedupeKey, key)
+	if err != nil {
+		return false, session.failNotificationOverflow(frame)
+	}
+	return seen, nil
 }
 
 func (session *nativeSession) failNotificationOverflow(frame Frame) error {

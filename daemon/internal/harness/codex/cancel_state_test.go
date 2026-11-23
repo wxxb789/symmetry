@@ -264,14 +264,13 @@ func TestCancelRPCBindingsTrackAttempts(t *testing.T) {
 
 func TestCancelResolvePendingInterrupt(t *testing.T) {
 	cases := []struct {
-		name         string
-		rpcID        uint64
-		bound        bool
-		apply        func(tracker *cancelTracker, id uint64)
-		status       string
-		wantOutcome  interruptRPCOutcome
-		wantMarked   bool
-		wantAttempts uint64
+		name        string
+		rpcID       uint64
+		bound       bool
+		apply       func(tracker *cancelTracker, id uint64)
+		status      string
+		wantOutcome interruptRPCOutcome
+		wantMarked  bool
 	}{
 		{name: "intent suspends", rpcID: 21, bound: true, apply: func(*cancelTracker, uint64) {}, status: "interrupted", wantOutcome: interruptRPCSuspended, wantMarked: true},
 		{name: "written suspends", rpcID: 21, bound: true, apply: (*cancelTracker).markWritten, status: "interrupted", wantOutcome: interruptRPCSuspended, wantMarked: true},
@@ -534,22 +533,14 @@ func TestCancelViolationHookFiresOnIllegalTransitions(t *testing.T) {
 	}
 }
 
-var cancelTrackerFields = map[string]bool{
-	"pendingCancelAttempts": true,
-	"cancelRequested":       true,
-	"nextCancelAttempt":     true,
-	"cancelAttempts":        true,
-	"cancelFlight":          true,
-	"deferredTerminal":      true,
-}
-
 func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("read package directory: %v", err)
 	}
 	fset := token.NewFileSet()
-	writes := map[string]int{}
+	files := map[string]*ast.File{}
+	var names []string
 	for _, entry := range entries {
 		name := entry.Name()
 		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
@@ -559,21 +550,29 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		if name == "cancel_state.go" {
-			assertCancelTrackerShape(t, file)
-		}
+		files[name] = file
+		names = append(names, name)
+	}
+	owner, ok := files["cancel_state.go"]
+	if !ok {
+		t.Fatal("cancel_state.go is missing from the package")
+	}
+	cancelTrackerFields := assertCancelTrackerShape(t, owner)
+	writes := map[string]int{}
+	for _, name := range names {
+		file := files[name]
 		ast.Inspect(file, func(node ast.Node) bool {
 			switch typed := node.(type) {
 			case *ast.AssignStmt:
 				for _, target := range typed.Lhs {
-					recordCancelFieldWrite(t, fset, name, target, writes)
+					recordCancelFieldWrite(t, fset, name, target, writes, cancelTrackerFields)
 				}
 			case *ast.IncDecStmt:
-				recordCancelFieldWrite(t, fset, name, typed.X, writes)
+				recordCancelFieldWrite(t, fset, name, typed.X, writes, cancelTrackerFields)
 			case *ast.CallExpr:
 				ident, ok := typed.Fun.(*ast.Ident)
 				if ok && ident.Name == "delete" && len(typed.Args) == 1 {
-					recordCancelFieldWrite(t, fset, name, typed.Args[0], writes)
+					recordCancelFieldWrite(t, fset, name, typed.Args[0], writes, cancelTrackerFields)
 				}
 			case *ast.CompositeLit:
 				if ident, ok := typed.Type.(*ast.Ident); ok && ident.Name == "cancelTracker" {
@@ -603,9 +602,9 @@ func TestCancelFieldsWrittenOnlyInOwnerFile(t *testing.T) {
 	}
 }
 
-func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, target ast.Expr, writes map[string]int) {
+func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, target ast.Expr, writes map[string]int, fields map[string]bool) {
 	t.Helper()
-	field, ok := cancelTrackerFieldAccess(target)
+	field, ok := cancelTrackerFieldAccess(target, fields)
 	if !ok {
 		return
 	}
@@ -615,7 +614,7 @@ func recordCancelFieldWrite(t *testing.T, fset *token.FileSet, name string, targ
 	writes[field]++
 }
 
-func cancelTrackerFieldAccess(target ast.Expr) (string, bool) {
+func cancelTrackerFieldAccess(target ast.Expr, fields map[string]bool) (string, bool) {
 	for {
 		switch typed := target.(type) {
 		case *ast.IndexExpr:
@@ -631,7 +630,7 @@ func cancelTrackerFieldAccess(target ast.Expr) (string, bool) {
 		break
 	}
 	selector, ok := target.(*ast.SelectorExpr)
-	if !ok || !cancelTrackerFields[selector.Sel.Name] {
+	if !ok || !fields[selector.Sel.Name] {
 		return "", false
 	}
 	switch base := selector.X.(type) {
@@ -647,9 +646,10 @@ func cancelTrackerFieldAccess(target ast.Expr) (string, bool) {
 	return "", false
 }
 
-func assertCancelTrackerShape(t *testing.T, file *ast.File) {
+func assertCancelTrackerShape(t *testing.T, file *ast.File) map[string]bool {
 	t.Helper()
 	methods := map[string]bool{}
+	fields := map[string]bool{}
 	ast.Inspect(file, func(node ast.Node) bool {
 		switch typed := node.(type) {
 		case *ast.FuncDecl:
@@ -672,6 +672,9 @@ func assertCancelTrackerShape(t *testing.T, file *ast.File) {
 				t.Fatal("cancelTracker is not a struct")
 			}
 			for _, field := range structure.Fields.List {
+				for _, name := range field.Names {
+					fields[name.Name] = true
+				}
 				switch fieldType := field.Type.(type) {
 				case *ast.Ident:
 					if strings.Contains(fieldType.Name, "Mutex") {
@@ -686,6 +689,9 @@ func assertCancelTrackerShape(t *testing.T, file *ast.File) {
 		}
 		return true
 	})
+	if len(fields) == 0 {
+		t.Fatal("cancelTracker has no fields to scan")
+	}
 	if len(methods) > 14 {
 		t.Fatalf("cancelTracker exposes %d methods, want at most the 14 named transitions: %v", len(methods), methods)
 	}
@@ -694,4 +700,5 @@ func assertCancelTrackerShape(t *testing.T, file *ast.File) {
 			t.Fatalf("cancelTracker is missing the %s transition", transition)
 		}
 	}
+	return fields
 }

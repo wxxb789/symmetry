@@ -110,6 +110,14 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       adapter concepts) could not cover it: its strict owned set excludes `codex/probe.go` and
       `codex/probe_test.go`, so the re-pin needs the slice that next owns the probe's tests.
 
+- [ ] `cancelAttempt.terminalInterrupted` (`daemon/internal/harness/codex/cancel_state.go:27`) is
+      write-only in production: the write paths are `cancel_state.go:240` and `:271`, and the only
+      readers are two test assertions (`cancel_state_test.go:183`, `:303`). Base
+      `e13450bc:adapter.go` carried the same write-only field, so the rf-w5-16 split did not introduce
+      it; removing it means rewriting the frozen tracker assertions, which is a contract change rather
+      than a tidy-up (rf-w5-16 simplify finding 3, recorded by the apply stage 2026-11-23). Owner area:
+      codex adapter.
+
 ## Build-tag parity (arm64 oracle)
 
 - [ ] `GOOS=linux GOARCH=arm64 go vet ./...` cannot pass until

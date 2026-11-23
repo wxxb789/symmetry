@@ -365,6 +365,27 @@ func (session *nativeSession) waitCancelAttempt(ctx context.Context, attemptID u
 	}
 }
 
+func (session *nativeSession) performCancelAttempt(ctx context.Context, threadID, turnID string) error {
+	attemptID, owner, done := session.acquireCancelAttempt()
+	var interruptErr error
+	if owner {
+		interruptErr = session.executeCancelAttempt(ctx, attemptID, threadID, turnID)
+		if interruptErr != nil {
+			if isExplicitCancelRejection(interruptErr) {
+				session.rejectCancelAttempt(attemptID)
+			} else {
+				session.failCancelAttempt(attemptID)
+			}
+		} else {
+			session.acceptCancelAttempt(attemptID)
+		}
+		session.finishCancelAttempt(attemptID, interruptErr)
+	} else {
+		interruptErr = session.waitCancelAttempt(ctx, attemptID, done)
+	}
+	return interruptErr
+}
+
 func (session *nativeSession) deferInterruptedTerminal(terminal *pendingInterruptedTerminal) bool {
 	session.mutex.Lock()
 	defer session.mutex.Unlock()
