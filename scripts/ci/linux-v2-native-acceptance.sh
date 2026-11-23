@@ -17,6 +17,7 @@ fail() {
 : "${SYMMETRY_OPERATOR_TOKEN:?an isolated Control operator token is required}"
 : "${GH_TOKEN:?a secret-backed GitHub OAuth token is required by Control}"
 : "${SYMMETRY_OPENAI_API_KEY:?B-only native OpenAI credentials are required}"
+: "${SYMMETRY_OPENAI_BASE_URL:?the OpenAI-compatible provider base URL must be configured}"
 : "${SYMMETRY_PI_MODEL:?the pinned Pi model must be configured}"
 : "${SYMMETRY_OPENCODE_MODEL:?the pinned OpenCode model must be configured}"
 : "${GITHUB_REPOSITORY:?the source repository identity is required}"
@@ -56,6 +57,7 @@ printf 'Credentialed manual acceptance selected %s at %s.\n' "$GITHUB_REF" "$GIT
 [[ "$GH_TOKEN" == gho_* ]] || fail 'Control requires a gho_-class GitHub OAuth token; the hosted GITHUB_TOKEN is not an accepted provider credential'
 [[ "$SYMMETRY_PI_MODEL" =~ ^[A-Za-z0-9._-]+$ ]] || fail 'the Pi model name is not a supported token'
 [[ "$SYMMETRY_OPENCODE_MODEL" =~ ^[A-Za-z0-9._-]+$ ]] || fail 'the OpenCode model name is not a supported token'
+[[ "$SYMMETRY_OPENAI_BASE_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._/-]*)?$ ]] || fail 'the OpenAI-compatible base URL is not a supported HTTPS URL'
 [[ "$(uname -m)" == x86_64 ]] || fail 'the production Linux owner runtime is amd64 only'
 [[ "$(ps -p 1 -o comm= | tr -d '[:space:]')" == systemd ]] || fail 'the hosted Linux runner must use systemd as PID 1'
 [[ -d /run/systemd/system && -f /sys/fs/cgroup/cgroup.controllers ]] || fail 'the hosted runner must provide systemd and unified cgroup v2'
@@ -508,6 +510,7 @@ b_native_credential_directories=(
 )
 b_native_credential_files=(
   "$B_HOME/.pi/agent/settings.json" "$B_HOME/.pi/agent/auth.json" \
+  "$B_HOME/.pi/agent/models.json" \
   "$B_HOME/.config/opencode/opencode.json" "$B_HOME/.local/share/opencode/auth.json"
 )
 if [[ "$native_containment_kind" == codex ]]; then
@@ -895,7 +898,7 @@ opencode_repository_id=$(jq --exit-status --raw-output .opencode_repository_reso
 
 python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \
   "$B_CLONE_ROOT" "$SEED_ROOT" "$DAEMON_SERVICE_STATE_DIR" "$PI_SHARE" "$SYMMETRY_PI_MODEL" \
-  "$SYMMETRY_OPENCODE_MODEL" "$native_api_key_file" "$pi_repository_id" \
+  "$SYMMETRY_OPENCODE_MODEL" "$SYMMETRY_OPENAI_BASE_URL" "$native_api_key_file" "$pi_repository_id" \
   "$opencode_repository_id" "$fixture_identity_suffix" \
   "$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$SYNTHETIC_GOAL_CLEANUP_SEEDS" \
   "$SYNTHETIC_GOAL_CLEANUP_CLONES" <<'PY'
@@ -905,7 +908,7 @@ import sys
 
 (
     fixture_root, a_home, repository,
-    clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, api_key_file,
+    clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url, api_key_file,
     pi_repository_id, opencode_repository_id, fixture_identity_suffix,
     synthetic_source, synthetic_seeds, synthetic_clones,
 ) = sys.argv[1:]
@@ -1036,10 +1039,69 @@ else:
     (private_home / ".pi/agent/auth.json").write_text(
         json.dumps({"openai": {"type": "api_key", "key": api_key}}), encoding="utf-8"
     )
-    (private_home / ".config/opencode/opencode.json").write_text(
-        json.dumps({"$schema": "https://opencode.ai/config.json", "model": f"openai/{opencode_model}", "autoupdate": False}),
+    (private_home / ".pi/agent/models.json").write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "openai": {
+                        "baseUrl": openai_base_url,
+                        "models": [
+                            {
+                                "id": pi_model,
+                                "api": "openai-completions",
+                                "reasoning": True,
+                                "thinkingLevelMap": {"minimal": "low"},
+                            }
+                        ],
+                    }
+                }
+            }
+        ),
         encoding="utf-8",
     )
+    (private_home / ".config/opencode/opencode.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://opencode.ai/config.json",
+                "model": f"openai/{opencode_model}",
+                "small_model": f"openai/{opencode_model}",
+                "autoupdate": False,
+                "provider": {
+                    "openai": {
+                        "options": {"baseURL": openai_base_url},
+                        "models": {opencode_model: {"name": opencode_model}},
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    pi_routing = json.loads((private_home / ".pi/agent/models.json").read_text(encoding="utf-8"))
+    opencode_routing = json.loads(
+        (private_home / ".config/opencode/opencode.json").read_text(encoding="utf-8")
+    )
+    pi_openai = pi_routing.get("providers", {}).get("openai", {})
+    if pi_openai.get("baseUrl") != openai_base_url:
+        raise SystemExit(
+            f"pi models.json must route providers.openai.baseUrl to {openai_base_url!r}: "
+            f"{pi_openai.get('baseUrl')!r}"
+        )
+    if not any(
+        entry.get("id") == pi_model and entry.get("api") == "openai-completions"
+        for entry in pi_openai.get("models", [])
+    ):
+        raise SystemExit(
+            f"pi models.json must carry a {pi_model!r} entry with api openai-completions: "
+            f"{pi_openai.get('models')!r}"
+        )
+    opencode_openai = opencode_routing.get("provider", {}).get("openai", {})
+    if opencode_openai.get("options", {}).get("baseURL") != openai_base_url:
+        raise SystemExit(
+            "opencode.json must route provider.openai.options.baseURL to "
+            f"{openai_base_url!r}: {opencode_openai.get('options', {}).get('baseURL')!r}"
+        )
+    if not opencode_routing.get("small_model"):
+        raise SystemExit(f"opencode.json must set small_model: {opencode_routing.get('small_model')!r}")
     (private_home / ".local/share/opencode/auth.json").write_text(
         json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
     )
