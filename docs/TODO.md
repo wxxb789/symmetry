@@ -106,7 +106,17 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       relocation deleted the root registry-seam case that exercised a nil context end to end, no
       HEAD test covers that guard text — the shared entry guard stays pinned by
       `TestRunBoundedProbeRejectsNilContext`
-      (`daemon/internal/harness/bounded_probe_test.go`). Owner: W5-16 (codex adapter concepts).
+      (`daemon/internal/harness/bounded_probe_test.go`). Owner: unassigned — rf-w5-16 (codex
+      adapter concepts) could not cover it: its strict owned set excludes `codex/probe.go` and
+      `codex/probe_test.go`, so the re-pin needs the slice that next owns the probe's tests.
+
+- [ ] `cancelAttempt.terminalInterrupted` (`daemon/internal/harness/codex/cancel_state.go:27`) is
+      write-only in production: the write paths are `cancel_state.go:234` and `:265`, and the only
+      readers are two test assertions (`cancel_state_test.go:183`, `:337`). Base
+      `e13450bc:adapter.go` carried the same write-only field, so the rf-w5-16 split did not introduce
+      it; removing it means rewriting the frozen tracker assertions, which is a contract change rather
+      than a tidy-up (rf-w5-16 simplify finding 3, recorded by the apply stage 2026-11-23). Owner area:
+      codex adapter.
 
 ## Build-tag parity (arm64 oracle)
 
