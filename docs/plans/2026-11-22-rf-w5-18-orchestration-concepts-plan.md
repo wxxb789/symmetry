@@ -74,7 +74,7 @@ stage's changes plus the doc-block move of finding F6.)
   `valid_validation_binding?/1`, `canonical_runtime_uuid?/1`, `goal_subject_matches_resource?/2`,
   `runtime_matches_goal_resource?/3`, `runtime_allowed_for_task?/2`, `task_allowed_runtime_ids/1`,
   `handoff_source_machine_matches?/2`) plus the shared map/UUID vocabulary those predicates read
-  (`value/2,3`, `valid_uuid?/1`, `exact_map_keys?/2`, `map_key?/2`). It depends on schemas and
+  (`value/2,3`, `valid_uuid?/1`, `exact_map_keys?/2`). It depends on schemas and
   `Repo` only — no Goals facade, no Orchestration module.
 - **No other public Orchestration API change**: no function added to the facade, none removed, no
   arity or return-shape change. `claim_run/3` lives on `Orchestration.Claims` and is exercised by
@@ -111,13 +111,13 @@ vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, no
 
 | module | functions |
 | --- | --- |
-| `Orchestration.Registry` | native_harness_kind?/1, native_harness_kinds/0, enroll_machine/3, authenticate_machine/1, register_runtimes/4, heartbeat/4, heartbeat_runtime/3, machine_owns_runtime?/2, machine_owns_run?/2, machine_owns_command?/2, valid_runtime_specification?/1, valid_runtime_capabilities_schema?/2, legacy_contract_fallback?/2, goals_rollout_disabled?/0, valid_runtime_repository_resource?/1, ensure_runtime_repository_resource!/1, ensure_runtime_repository_binding_change_safe!/2, valid_boolean_capability?/2, valid_runtime_adapter_metadata?/2, runtime_metadata_present?/1, valid_runtime_metadata?/1, valid_registered_adapter?/4, adapter_matches_runtime_metadata?/2, valid_adapter_operations?/1, generic_adapter_operations_allowed?/2, native_capabilities_match_adapter?/3, legacy_supervisory_runtime?/1, nonempty_bounded_text?/2, digest/1, secure_compare/2, owned?/4, jsonb_compatible?/1, jsonb_key_compatible?/1, valid_active_run?/1, snapshot_for/2, nonempty_text?/1 |
+| `Orchestration.Registry` | native_harness_kind?/1, native_harness_kinds/0, enroll_machine/3, authenticate_machine/1, register_runtimes/4, heartbeat/4, heartbeat_runtime/3, machine_owns_runtime?/2, machine_owns_run?/2, machine_owns_command?/2, valid_runtime_specification?/1, valid_runtime_capabilities_schema?/2, legacy_contract_fallback?/2, goals_rollout_disabled?/0, valid_runtime_repository_resource?/1, ensure_runtime_repository_resource!/1, ensure_runtime_repository_binding_change_safe!/2, valid_boolean_capability?/2, valid_runtime_adapter_metadata?/2, runtime_metadata_present?/1, valid_runtime_metadata?/1, valid_registered_adapter?/4, adapter_matches_runtime_metadata?/2, valid_adapter_operations?/1, generic_adapter_operations_allowed?/2, native_capabilities_match_adapter?/3, legacy_supervisory_runtime?/1, nonempty_bounded_text?/2, digest/1, secure_compare/2, owned?/4, jsonb_compatible?/1, jsonb_key_compatible?/1, valid_active_run?/1, snapshot_for/2, nonempty_text?/1, map_key?/2 |
 | `Orchestration.Assignment` | assignment_target/1, assign_one/1, assign_one_goal/3, assign_one_goal/4, assign_goal_candidate_page/4, try_assign_goal_candidate/4, try_lock_goal_assignment_chain/1, try_lock_goal_project/1, try_lock_goal/1, try_lock_work_item/1, try_lock_goal_task_item/1, try_lock_task/1, assign_one_legacy/3, assign_task_to_runtime!/5, runtime_has_capacity?/1, runtime_available_at?/2, next_assignable_legacy_task_and_runtime/1, runtime_matches_binding/0, next_goal_runtime/3, restrict_to_requested_session/3, restrict_to_handoff_source_machine/2, reserve_requested_session!/5, release_reserved_session!/2, mark_reserved_session_unavailable!/2, goal_runtime_matches?/3, native_goal_adapter_requirement/0, native_goal_resume_requirement/0, native_goal_handoff_requirement/0, native_goal_session_requirement/1, native_goal_adapter_capable?/2, strict_budget_capability_requirement/1, strict_budget_task?/1, runtime_matches_task?/2, assign_all/1, assign_all/2 |
 | `Orchestration.Claims` | claim/3, claim_owner/1, claim_with_disposition/3, prepare_claim_in_transaction/4, commit_new_claim_in_transaction/2, prepare_claim_locked/5, commit_new_claim!/3, emit_claimed/1, renew_lease/3, ensure_fence!/5, ensure_static_fence!/4, lock_chain/2, notify_claim_task_locked/2, lock_goal_chain/1, ensure_goal_work_item_ownership!/3, ensure_current_goal_execution!/3, ensure_current_goal_execution_if_present!/3, ensure_requested_session_claim_binding!/4, replayed_claim?/5, lock_goal/1, lock_work_item/1, lock_machine/1, lock_task/1, lock_current_run/1, lock_runtime/1, lock_execution_chain/1, lease_duration_ms/1, valid_claim_request?/1, valid_fence?/1, insert_ignoring_conflict/3, persist_insert/1, persist_update/1, now/1, rollback/1, stamp_insert/2, stamp_update/2, emit/2, claim_run/3 (new) |
 | `Orchestration.Transitions` | append_events/4, transition/6, transition_once!/9, apply_goal_pause_transition_in_transaction/6, expire/1, expire_run/2, expire_offline_runtimes/1, reconcile/4, reconcile_runtime/4, emit_transition/2, lock_transition_chain/2, ensure_transition_fence!/6, ensure_transition_static_fence!/5, ensure_terminal_fence!/5, within_terminal_grace?/2, ensure_terminal_static_fence!/3, valid_transition?/2, validate_transition!/2, transition_response/2, apply_supervisory_transition!/6, ensure_goal_pause_command_current!/4, ensure_current_goal_control_action!/4, goal_control_idempotency_key/3, pending_pause?/1, transition_origin_state/1, ensure_cancelled_transition_authority!/2, validate_decision_packet!/2, valid_decision?/1, validate_decision_choice!/4, task_attrs_for_transition/3, task_attrs_for_expiry/5, next_retry_generation/1, goal_attempt_limit_exhausted?/2, fail_task_for_attempt_limit!/2, attempt_limit_failure/1, lease_expired_failure/0, restore_expired_attempt_generation/2, enqueue_goal_task_terminal!/4, goal_task_terminal_receipt/2, settlement_job_args/1, notify_goal_task_terminal/3, ensure_expired_run_can_settle_task!/2, reject_pending_commands!/3, event_replay/2, event_body/1, valid_event?/1, valid_journal?/1, goal_owned_run?/1, ensure_current_goal_transition_authority!/4 |
 | `Orchestration.Commands` | create_command/5, create_goal_control_command/8, create_goal_control_command_in_transaction/3, request_cancel/2, request_task_cancel/2, provide_input/4, retry_task/4, create_or_replay_locked_command!/7, create_new_command!/7, insert_command!/8, acknowledge_command/5, ensure_goal_control_task_ownership!/3, ensure_goal_control_run_envelope!/2, ensure_expected_generation!/2, ensure_expected_waiting!/3, normalize_command_payload/2, command_request_hash/3, command_request_body/3, ensure_command_replay!/4, lock_task_command/2, legacy_cancel_idempotency_key/1, valid_command_request?/2, retry_required_capabilities/2 |
 | `Orchestration.TaskReads` | submit_task/3, fetch_task/1, fetch_run/1, fetch_runtime/1, runtime_snapshots/0, runtime_snapshot/1, fetch_command/1, task_snapshot/1, control_capabilities/4, adapter_operation_supported?/2, retryable_attempt?/1, retry_runtime_eligible_task_ids/1, retry_runtime_eligible?/1, retry_binding_row/1, retry_adapter_requirement/0, list_task_events/2, list_task_transitions/2, list_task_commands/2, task_timeline/2, runtime_read_models/1, runtime_read_model/1, add_active_run/2, finish_runtime_read_model/1, current_waiting_context/2, latest_task_command/1, with_history_task/4, history_limit/1, history_position/2, validate_history_position/1, validate_timeline_position/1, after_position/2, page_query/2, page_with_next/3, entry_position/1, task_timeline_events/3, task_timeline_transitions/3, task_timeline_commands/3, timeline_before_position/3, timeline_precedes?/2, work_snapshot/3, daemon_runtime_snapshot/3, share_runtime/1, share_task/1, pending_supervisory_transition?/1, normalize_task_attrs/1, valid_task_attrs?/1 |
-| `Goals.Eligibility` | candidate_task_query/2, next_goal_task_candidate_page/2, goal_task_current?/2, planning_task?/1, goal_task_repository_resource_id/2, goal_work_item_owned?/3, goal_task_assignable?/2, validation_runtime_allowed?/2, validation_runtime_ids_for_task/1, validation_binding_runtime_ids/1, intersect_validation_binding_runtime_ids/1, valid_validation_binding?/1, canonical_runtime_uuid?/1, goal_subject_matches_resource?/2, runtime_matches_goal_resource?/3, runtime_allowed_for_task?/2, task_allowed_runtime_ids/1, handoff_source_machine_matches?/2, value/2, value/3, valid_uuid?/1, exact_map_keys?/2, map_key?/2 |
+| `Goals.Eligibility` | candidate_task_query/2, next_goal_task_candidate_page/2, goal_task_current?/2, planning_task?/1, goal_task_repository_resource_id/2, goal_work_item_owned?/3, goal_task_assignable?/2, validation_runtime_allowed?/2, validation_runtime_ids_for_task/1, validation_binding_runtime_ids/1, intersect_validation_binding_runtime_ids/1, valid_validation_binding?/1, canonical_runtime_uuid?/1, goal_subject_matches_resource?/2, runtime_matches_goal_resource?/3, runtime_allowed_for_task?/2, task_allowed_runtime_ids/1, handoff_source_machine_matches?/2, value/2, value/3, valid_uuid?/1, exact_map_keys?/2 |
 
 ## Implementation decisions the accepted plan leaves open (recorded)
 
@@ -165,6 +165,19 @@ vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, no
      `secure_compare/2`, `owned?/4`, `nonempty_bounded_text?/2` and `snapshot_for/2` (the
      heartbeat payload builder) → `Registry`, the module every other concept module can import
      without a back edge.
+   - **Recorded waiver (fix stage 2026-11-22, review finding R-16)**: `nonempty_text?/1`
+     (`registry.ex:310`) and `valid_boolean_capability?/2` (`registry.ex:450-455`) stay in
+     `Registry` although no Registry function calls either. Call sites at the fix-stage tree
+     (probe `fix1-callers.out`, `rg -n`): `nonempty_text?/1` — `transitions.ex` 958, 967, 969,
+     970 (two calls on 970), `commands.ex` 731; `valid_boolean_capability?/2` —
+     `task_reads.ex` 872. Design 1's dominant-caller default is waived here: `Registry` is the
+     split's shared validation-vocabulary home (its other members already have cross-concept
+     callers — `jsonb_compatible?/1` in `commands.ex`, `registry.ex`, `task_reads.ex`,
+     `transitions.ex`; `legacy_supervisory_runtime?/1` in `assignment.ex`, `commands.ex`,
+     `task_reads.ex`; `snapshot_for/2` in `registry.ex`, `task_reads.ex`, `transitions.ex`) and
+     every concept module already imports it, so hosting them adds no edge; moving a generic
+     predicate to whichever concept currently calls it most would re-couple the vocabulary to
+     that concept. Deviation recorded rather than silently held.
    - `share_runtime/1`/`share_task/1` → `TaskReads` (read-side share locks: `daemon_runtime_snapshot/3`,
      `task_snapshot/1`, `reconcile_runtime/4` callers).
 5. **Three qualified back-edge call sites** (recorded body deviations; everything else uses
@@ -173,7 +186,7 @@ vocabulary, listed in the `Goals.Eligibility` row. `claim_run/3` is new code, no
    `runtime_matches_task?(` → `Assignment.runtime_matches_task?(` (base line 2122); in the new
    seam, `TaskReads.task_snapshot(run.task_id)`. `Claims` therefore imports nothing from
    `Assignment`/`TaskReads`; the three calls are runtime dependencies. Every other module pair is
-   one-directional (`Assignment → Registry → {Claims, TaskReads}`, `TaskReads → {Assignment,
+   one-directional (`Assignment → Registry → Claims`, `TaskReads → {Assignment,
    Claims, Registry}`, `Commands → Transitions → …`) and imports are emitted with the exact called
    arities, so no module needs a runtime call to a sibling except these three.
 6. **`@type retry_binding` + its `@typedoc`** are kept in the facade (the public `@spec`s of
@@ -261,7 +274,8 @@ Everything below is measured on the delivered working tree (uncommitted; base `6
 Raw outputs: `docs/evidence/rf-w5-18-orchestration-concepts-2026-11-22.md` and the scratch
 directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
 
-1. **Module set, delivered** (`wc -l`): facade 266; `Registry` 669, `Assignment` 640, `Claims`
+1. **Module set, slice head** (`wc -l`, pre-apply; the applied-revision table is in "Slice
+   shape" and the evidence record): facade 266; `Registry` 669, `Assignment` 640, `Claims`
    607, `Transitions` 1188, `Commands` 808, `TaskReads` 909, `Goals.Eligibility` 307. No module
    over 1,500 L; `daemon_controller.ex` 529 L. Decision 1 (Expiry folded into `Transitions`)
    stands: the folded module stays under the cap and the R0 deletion test found no invariant or
@@ -272,7 +286,7 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
    inside the seam from `opts`. The controller's claim region calls it and nothing else; its
    transition region is untouched (O11).
 3. **Qualified back edges (decision 5, upheld)**: three call sites are module-qualified —
-   `Assignment.goal_runtime_matches?/3` and `Assignment.runtime_matches_task?/3` inside
+   `Assignment.goal_runtime_matches?/3` and `Assignment.runtime_matches_task?/2` inside
    `Claims.commit_new_claim!/3`, and `TaskReads.task_snapshot/1` in the seam. Every other module
    pair is a compile-time import along the DAG.
 4. **`candidate_task_query/2` (decision 11, upheld)**: the base `next_goal_task_candidate_page/2`
@@ -293,7 +307,7 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
    (`# Pause application remains an Orchestration-owned transition until the separate Goal pause
    authority slice moves that boundary.`) was dropped under comment policy 4, and the
    controller's `# Scope locking precedes a new claim ...` paragraph moved verbatim into
-   `Claims.claim_run/3` (`claims.ex:565`). No hazard comment lost its reason.
+   `Claims.claim_run/3` (`claims.ex:570-571`). No hazard comment lost its reason.
 8. **SQL and lock evidence**: six base/head capture pairs (two controller paths, two direct-claim
    paths, one assignment path, one lock-pin path) — identical statement counts, identical lock
    sequences, identical non-INSERT SQL, identical canonical INSERT column→value mappings. Raw
@@ -303,9 +317,9 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
    rules are in the evidence record.
 9. **Test files**: eight split files (two renamed in the apply stage from their `_b` placeholders
    to `orchestration_goal_assignment_test.exs` and `orchestration_goal_transitions_test.exs`,
-   simplify finding F3; title multiset intact: 0 deleted, +64 new titles) and seven
-   new interface files with 65 cases (the `map_key?/2` case moved out of the eligibility
-   vocabulary case, F5); the largest file is 1,278 L. Six warnings the split left
+   simplify finding F3; title multiset intact: 0 deleted) and seven
+   new interface files with 66 cases (+64 at the slice head, +1 by the `map_key?/2` case of F5,
+   +1 by the fix stage's R-21 case); the largest file is 1,280 L. Six warnings the split left
    behind (two now-unused helpers, three unused aliases, two never-used default arguments) were
    removed; the suite runs warning-free.
 10. **`mix credo --strict`, measured (deviation from the evidence plan's "must not rise")**: slice
@@ -331,3 +345,12 @@ directory `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (not committed).
     five recorded deviations) re-ran at the applied revision; the committed head's two rotted
     `CLOSED-TODO.md` citations were pinned per the citation gate's prescription. Numbers:
     evidence record sections 2, 3, 7, 8, 12.
+14. **Fix stage (2026-11-22, review findings R-01–R-25)**: `Claims.claim_run/3`'s `@spec` third
+    element gained `| nil` (R-01); `Assignment.assign_all/2` returned to `defp` (R-15, restoring
+    the base visibility); the seam gained one case pinning "no claimed event unless the claim
+    committed" (R-21) with red mutant `m-c6`; the five split files' second `@now` gained a
+    shadowing-hazard comment (R-19); the plan/evidence corrections R-02–R-14, R-17, R-18 and the
+    R-16 waiver above. R-20, R-23, R-25 are no-action findings; R-22 needs a conductor-side
+    contract note (O11 narrows clause 3's `claim_owner` sentence to the claim path) and R-24's
+    `docs/evidence` path is the repo convention that stands for clause 2's `answer.md`. Numbers:
+    evidence record section 13.

@@ -14,9 +14,9 @@ and is the revision the gates in section 8 ran on.
 
 Plan: `docs/plans/2026-11-22-rf-w5-18-orchestration-concepts-plan.md` (function → module table,
 recorded decisions, implementation record). Worktrees: this one
-(`Q:/repos/wt-w5-18-orchestration-concepts/symmetry`, branch
+(`<worktree>`, branch
 `refactor/rf-w5-18-orchestration-concepts`) and the disposable base checkout
-(`Q:/repos/wt-w5-18-base/symmetry`, `66bc9dcb`). Raw instrument output lives in
+(`<base-worktree>`, `66bc9dcb`). Raw instrument output lives in
 `<HOST-PATH>/.local/state/gdd/scratch/w5-18/` (scratch, not committed); every number below names
 its file.
 
@@ -26,15 +26,15 @@ Subject identity (sha256 of delivered working-tree files):
 |---|---|
 | `control/lib/symmetry_control/orchestration.ex` | `04da42479d9e3d9ce1028307ee00855173d90f790be8153d03b3d1bcc19a732d` |
 | `control/lib/symmetry_control/orchestration/registry.ex` | `175333c8f35479956c5428e0d3926abec20038513c38f9024e3cfbf0094ed608` |
-| `control/lib/symmetry_control/orchestration/assignment.ex` | `fc85c8a84de57d05ab31eafd65dc96e44e44f0c6f4786c1af13a976c8f8754ba` |
-| `control/lib/symmetry_control/orchestration/claims.ex` | `8bdd66c456a94dd2b5e1ef1294ecaf8773ef9ce0c0c9f5ee94df488c11b82b70` |
+| `control/lib/symmetry_control/orchestration/assignment.ex` | `d33b16a59be0d14c31d7c02aefecb06707b8ad5c3501ec054b018f896a25a50c` |
+| `control/lib/symmetry_control/orchestration/claims.ex` | `7e56815780747d3ed4a45dbb3091d681b2fa0ee0f7f76f5383ae97a2bf712428` |
 | `control/lib/symmetry_control/orchestration/transitions.ex` | `9cd24bcfd8eaff9837711241ad43067a69031562911846e23763b540ffad628d` |
 | `control/lib/symmetry_control/orchestration/commands.ex` | `cd173273ef9ca444e9f6fe982f152bb428bc0b174e192d723a69dd1f9fbd72bc` |
 | `control/lib/symmetry_control/orchestration/task_reads.ex` | `ecbecb6c5695420a8348f0f28ef268e64337335b7fa38ffd4c1fa3571f2065cc` |
 | `control/lib/symmetry_control/goals/eligibility.ex` | `6af1110370af1745316f11ae27c901c20336c137c9b159db55ed5805fb981e24` |
 | `control/test/symmetry_control/orchestration/registry_test.exs` | `7894530af18f92b7e04671e142904dd4935c09482f5adfa4e8e96d0b8c21d3d3` |
 | `control/test/symmetry_control/orchestration/assignment_test.exs` | `6e2b33db979ecc6170c7c394692e46ac3c1ce66c9ebef432e0bf47d184ecb40c` |
-| `control/test/symmetry_control/orchestration/claims_test.exs` | `181e30cdfe61608a5535abe4d164f08bb54903071b29b1c90c884c8a88c8b9f1` |
+| `control/test/symmetry_control/orchestration/claims_test.exs` | `363f8f2019304f8232e9e57ab836cfafbc8767a1b0b7e077007a72ee67fdcdab` |
 | `control/test/symmetry_control/orchestration/transitions_test.exs` | `7ac3e3c6393105804f0f955dd22ea107bd9927e8181d7f0f20d1d6cdbeb26f12` |
 | `control/test/symmetry_control/orchestration/commands_test.exs` | `f351431d6aa09dceaa98d479c68224faf93b35e97da0a0c4a97f1aacbf7fbcdb` |
 | `control/test/symmetry_control/orchestration/task_reads_test.exs` | `66a5e861baed3a0d221b32e6a04557c99cc867f8d2c39d88d02a5594cd77e1ee` |
@@ -42,9 +42,11 @@ Subject identity (sha256 of delivered working-tree files):
 | `control/test/symmetry_control/orchestration_goal_assignment_test.exs` | `7d7b94fe03f1c2283be9a6259906de4858eb7b55e833ee349697a92e76dac12b` |
 | `control/test/symmetry_control/orchestration_goal_transitions_test.exs` | `3ca4abbd293915f7c5e6382d8e5f5c5c7837582202eefd6465dfe92a9c45e98d` |
 
-(`hashes-owner.txt` in the scratch directory; the test-file hashes were re-verified after the
-red-mutant batch, section 7. The apply stage's per-finding diff is `apply1.diff` and the final
-row hashes of the table are those on the applied tree.)
+(sha256 from `fix1-hashes.txt` in the scratch directory, which holds this table's 17 checksums at
+the fix-stage tree; the pre-fix revision of this table referenced `hashes-owner.txt`, which held
+the pre-apply hashes. The red-mutant batch of section 7 re-ran at the fix-stage tree and its
+restoration is proven by `mutants/fix1-restore-check.out` — 14/14 `OK`, exit 0. The apply stage's
+per-finding diff is `apply1.diff`.)
 
 ## 1. Deliverable shape (files, counts)
 
@@ -59,10 +61,10 @@ row hashes of the table are those on the applied tree.)
 | `control/lib/symmetry_control/orchestration/task_reads.ex` | new | 874 | task submit/retry, snapshots, timelines |
 | `control/lib/symmetry_control/goals/eligibility.ex` | new | 301 | goal candidate query + locked-row recheck + runtime constraints |
 | `control/lib/symmetry_control_web/controllers/daemon_controller.ex` | edited | 586 → 529 | claim region replaced by the seam; transition region untouched |
-| `control/test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs` | new (split) | 1,256 / 1,139 / 1,087 / 1,278 / 1,243 / 1,183 / 990 / 875 | base titles verbatim, multiset preserved; two files renamed from their `_b` placeholders (F3) |
-| `control/test/symmetry_control/orchestration_{registry,assignment,claims,transitions,commands,task_reads}_test.exs` | new | 151 / 171 / 356 / 329 / 335 / 156 | 65 new interface cases (64 at the slice head; +1 by F5) |
+| `control/test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs` | new (split) | 1,258 / 1,141 / 1,087 / 1,280 / 1,243 / 1,183 / 992 / 877 | base titles verbatim, multiset preserved; two files renamed from their `_b` placeholders (F3); +2 L in five files for the R-19 `@now` comments |
+| `control/test/symmetry_control/orchestration/{registry,assignment,claims,transitions,commands,task_reads}_test.exs` | new | 151 / 171 / 377 / 329 / 335 / 156 | 66 new interface cases (64 at the slice head; +1 by F5, +1 by R-21) |
 | `control/test/symmetry_control/goals/eligibility_test.exs` | new | 446 | truth table + seeded query |
-| `docs/plans/2026-11-22-rf-w5-18-orchestration-concepts-plan.md` | new | 298 | plan + implementation record |
+| `docs/plans/2026-11-22-rf-w5-18-orchestration-concepts-plan.md` | new | 356 | plan + implementation record (the fewer-line pre-fix figure 298 was a pre-apply measurement) |
 | `docs/evidence/rf-w5-18-orchestration-concepts-2026-11-22.md` | new | — | this record (own line count not self-measured) |
 | `docs/TODO.md` | edited | +3 entries | duplicated `ContextSnapshot` read, three attribute copies, `retry_binding` type copy |
 
@@ -121,8 +123,8 @@ because their content moved into the eight split files with the title multiset p
   (`ProviderAccess`, `Repo`).
 - **Goal policy**: no goal predicate remains under `orchestration/`. The Design 2 (a)-(c) set lives
   in `Goals.Eligibility` (`candidate_task_query/2`, `goal_task_assignable?/2`,
-  `goal_task_current?/2`, `planning_task?/1`, `goal_work_item_owned?/3`, `goal_runtime_matches?/3`,
-  the four runtime-constraint predicates). The scope pin's exceptions stay in Orchestration:
+  `goal_task_current?/2`, `planning_task?/1`, `goal_work_item_owned?/3`, the four
+  runtime-constraint predicates). The scope pin's exceptions stay in Orchestration:
   `goal_attempt_limit_exhausted?/2` (Transitions, retry path) and `native_goal_adapter_capable?/2`
   with the runtime-metadata capability checks (Assignment) — both recorded in the plan, decision 2.
   Evidence that the concepts only *consume* the policy: `assignment.ex:16` and `claims.ex:11`
@@ -132,14 +134,13 @@ because their content moved into the eight split files with the title multiset p
   (`grep -rn "def goal_task_repository_resource_id\|def task_allowed_runtime_ids\|def
   validation_runtime_ids_for_task\|def candidate_task_query" lib/symmetry_control/orchestration/*.ex`
   returns nothing); the only composite that stays under `orchestration/` is
-  `Assignment.goal_runtime_matches?/3` (`assignment.ex:521`), which composes the Eligibility
+  `Assignment.goal_runtime_matches?/3` (`assignment.ex:520`), which composes the Eligibility
   constraints with the runtime-metadata capability checks the plan classified as
   Orchestration-owned. The controller keeps no owner branch on the claim path: `:goal`/`:legacy`
   appears once in `daemon_controller.ex` (`:187`, the untouched transition fork, O11).
 - **Declaration census** (`census.py`): every base function group is owned by exactly one head
   module; zero groups lost, zero duplicated. Strings and single-quoted atoms compare 1:1
-  (110/110 and 151/151, zero dropped, zero added); the added tokens are the new `claim_run/3`
-  helpers' own atoms.
+  (110/110 and 151/151, zero dropped, zero added).
   Independently re-derived here (`census-functions.py`, 264 base `(name, primary arity)` keys):
   264/264 have exactly one owner among the seven modules, 51 of them also delegated from the
   facade, 0 duplicated, 0 unplaced. The two censuses use different arity models (the children's
@@ -154,7 +155,9 @@ because their content moved into the eight split files with the title multiset p
   three module-qualified back edges are the only call-shape changes; each is recorded with its base
   line in the plan (decision 5). The apply stage's three body deviations preserve the branch order
   they touch (a predicate extraction and an attribute-to-function read), and the SQL/lock probe
-  set confirms their effect is statement- and lock-neutral (section 3).
+  set confirms their effect is statement- and lock-neutral (section 3). The fix stage's R-15
+  change (`Assignment.assign_all/2` back to `defp`, restoring the base visibility) touches the
+  clause keyword only, not the body (`fix1-code.diff`), so the token-identity result stands.
 
 ## 3. Generated SQL and lock sequences (Design 4 gate)
 
@@ -169,9 +172,9 @@ Six probes, each `mix test <file>:<line>` on the same test in both trees:
 | A `A_http_goal_claim` | `provider_action_controller_test.exs:500` (goal claim, HTTP) | 105/105 | yes | yes | yes (26) |
 | A-pin `A_lock_pin` | `provider_action_controller_test.exs:403` (lock-order pin) | 91/91 | yes | yes | yes (24) |
 | B `B_http_legacy_claim` | `protocol_controller_test.exs:605` (legacy claim, HTTP) | 40/40 | yes | yes | yes (11) |
-| C `C_goals_claim_direct` | `orchestration_goal_admission_test.exs:1397` → `orchestration_claims_test.exs:413` | 31/31 | 30/31 | yes | yes (11) |
+| C `C_goals_claim_direct` | `orchestration_goal_admission_test.exs:1397` → `orchestration_claims_test.exs:415` | 31/31 | 30/31 | yes | yes (11) |
 | D `D_orchestration_claim_direct` | `orchestration_test.exs:10` → `orchestration_transitions_test.exs:8` | 32/32 | 31/32 | yes | yes (8) |
-| assignment `assignment_goal` | `orchestration_goal_admission_test.exs:695` → `orchestration_assignment_test.exs:115` | 56/56 | 53/56 | yes | yes (21) |
+| assignment `assignment_goal` | `orchestration_goal_admission_test.exs:695` → `orchestration_assignment_test.exs:117` | 56/56 | 53/56 | yes | yes (21) |
 
 Raw files: `capture-compare4.out` (per-probe verdicts), `capture-locks.out` (full lock lists per
 probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py`, `compare4.py`.
@@ -224,6 +227,10 @@ probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py
   INSERT column-order differences are unchanged (same column set and row mapping). The fence fold
   (`Claims.static_fence_matches?/3`) and the `Registry.native_harness_kinds/0` consumption are
   SQL- and lock-neutral on every probed path.
+- Fix-stage note (2026-11-22): the probes were **not re-run** — the fix stage's only source
+  changes are `Claims.claim_run/3`'s `@spec` line (R-01) and `Assignment.assign_all/2`'s
+  `def`→`defp` keyword (R-15), neither on a probed path or statement (`fix1-code.diff`); the
+  capture claims above therefore remain the last measurement and their revision is unchanged.
 
 ## 4. String, atom and comment census
 
@@ -236,7 +243,8 @@ probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py
   `:goal_authority_required`, `:invalid_request`, `:not_found`, `:no_assignment`,
   `:state_conflict`, `:unauthenticated`, `:capacity_exhausted`).
 - Comments: 13 paragraphs at base in `orchestration.ex`; 13 across the facade and seven modules,
-  with seven removed/added pairs (`comment_census.py`):
+  seven removed and seven added: six reworded pairs, one dropped paragraph and one paragraph
+  moved in from the controller (`comment_census.py`):
   1. candidate-scan keyset paragraph — reworded to the 98-column wrap, same why;
   2. goal-less runtime eligibility paragraph — reworded, same why (the base's caller names
      `next_assignable_legacy_task_and_runtime/1` are no longer spelled out);
@@ -250,7 +258,7 @@ probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py
   One paragraph is *added* to the lib set because it moved out of the controller verbatim:
   `# Scope locking precedes a new claim to preserve the established / # Goal -> resource lock
   order. A replay ignores a now-stale scope result.` now sits at
-  `control/lib/symmetry_control/orchestration/claims.ex:565` and is gone from
+  `control/lib/symmetry_control/orchestration/claims.ex:570-571` and is gone from
   `daemon_controller.ex`. No hazard comment lost its reason.
   The apply stage moved the seven public `@doc` blocks of section 2 back onto the facade
   delegates from the `@moduledoc false` concept modules (finding F6); it changes no `#` comment,
@@ -261,9 +269,10 @@ probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py
 - New + split tests, one run, `MIX_TEST_PARTITION=rf-w5-18`:
   `sh rf-w5-18-mix.sh test test/symmetry_control/orchestration/ test/symmetry_control/goals/eligibility_test.exs
   test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs`
-  → `Result: 190 passed`, exit 0, zero compiler warnings (`apply-targeted1.log`; the slice-head run
-  was `Result: 189 passed` in `testrun4.out`). The 190 = 65 new interface cases (the `map_key?`
-  case added by finding F5) + 125 moved cases.
+  → `Result: 191 passed`, exit 0, zero compiler warnings (`fix1-targeted1.log`; the applied-revision
+  run was `Result: 190 passed` in `apply-targeted1.log`, the slice-head run `Result: 189 passed` in
+  `testrun4.out`). The 191 = 66 new interface cases (the `map_key?` case of finding F5 and the
+  R-21 case of the fix stage) + 125 moved cases.
 - Two interface-suite bugs of the workers' test files were found by this run and fixed here: the
   claims fixture inserted a goal revision whose `execution_policy` violated
   `goal_revisions_execution_policy_v1` (now the same policy map the split files use), and the
@@ -276,46 +285,52 @@ probe), `cap-base/`, `cap-head/` (the captures), comparison scripts `compare2.py
 
 - Base `test "` titles in `orchestration_test.exs` (39) + `orchestration_goal_admission_test.exs`
   (77): 116. Titles across the eight split files: 116. Multiset comparison (counters, not sets):
-  0 missing, 0 extra, no rename — the split carried every title and body verbatim.
-- The head suite total 190 = 116 (split files) + 65 (new interface files) + 9 (the pre-existing
+  0 missing, 0 extra, no rename — the split carried every title and body verbatim
+  (`fix1-title-multiset.diff`, 0 lines).
+- The head suite total 191 = 116 (split files) + 66 (new interface files) + 9 (the pre-existing
   `orchestration/scheduler_test.exs` and `orchestration/capability_scheduling_test.exs`, untouched).
   The base run of the two original files was 116 passed (`base-warnings.out`), matching the split
-  count. The slice's own title delta is the +64 new interface cases (+1 by finding F5).
+  count. The slice's own title delta is the +66 new interface cases (+64 at the slice head, +1 by
+  finding F5, +1 by R-21).
 - Tree-wide check: `git grep -c '^\s*test "' 66bc9dcb -- control/test` sums to **1,022** base test
   titles; the committed slice head `6a89405e` holds **1,169** (the slice's +64 plus the deltas the
-  two `origin/main` merges carried, out of this slice's attribution) and the applied working tree
-  holds **1,170** (+1: the `map_key?` case of finding F5). The slice-attributable delta is the +64
-  new interface cases; the two renamed split files (F3) keep every title, so clause 3's
+  two `origin/main` merges carried, out of this slice's attribution); the fix-stage working tree
+  holds **1,171** (+1: the `map_key?` case of finding F5, +1: the R-21 case; `fix1-titles.out`).
+  The slice-attributable delta is the +66 new interface cases; the two renamed split files (F3)
+  keep every title, so clause 3's
   "weakened, renamed or deleted test" control holds tree-wide, not only in the split files.
 
 ## 7. Red-mutant records (clause 1, Design 5)
 
 One deliberate mutant per new case. Each mutant is a minimal exact-string replacement in the module
-under test (`mutants/mutations.jsonl`; 52 single-line, 13 multi-line), applied by
+under test (`mutants/mutations.jsonl`; 52 single-line, 14 multi-line), applied by
 `mutants/apply_mutation.py` with an assertion that the old string occurs exactly once, run as
 `sh rf-w5-18-mix.sh test <that module's test file>` (`mutants/run_mutant.sh`, `timeout 900`), and
 followed by restoring the module from `mutants/baseline/` and re-checking its sha256.
 
-- 65 mutants, 65 runs (one row per mutant) at the applied revision: the apply stage refreshed the
-  baseline copies to the final tree and re-ran every record; `m-r9` (the moved `map_key?/2`) is
-  new, and `m-tr9`'s first refreshed run failed to compile because its replacement string still
-  carried the pre-F1 `def` (the record now says `defp`), so the run was repeated.
+- 66 mutants, 66 runs (one row per mutant) at the fix-stage tree: the fix stage refreshed the
+  baseline copies of the two module files it touched (`claims.ex`, `assignment.ex`) and re-ran
+  every record, including the new `m-c6`; the apply stage had re-run the pre-fix 65 the same way
+  (`mutants/run-results.txt`; the apply batch is archived at `run-results.apply.txt`), and
+  `m-tr9`'s first refreshed apply-stage run failed to compile because its replacement string still
+  carried the pre-F1 `def` (the record now says `defp`), so that run was repeated.
 - Every final run exited 2 and failed its intended case; the failure header
   (`<n>) test <title> (<Module>)`) and the `Result: n/m passed` line are in `mutants/mutant-<id>.log`.
-- Kill distribution: 62 mutants kill exactly one case, 2 kill two (`m-tr4`, `m-e2`), 1 kills five
+- Kill distribution: 63 mutants kill exactly one case, 2 kill two (`m-tr4`, `m-e2`), 1 kills five
   (`m-e13`, the shared `value/valid_uuid?/exact_map_keys?` vocabulary; the `map_key?` assertions
-  moved to `registry_test.exs` and are covered by `m-r9`) — 71 case-kills over the 65 cases.
+  moved to `registry_test.exs` and are covered by `m-r9`) — 72 case-kills over the 66 cases.
   **0 UNKILLED** (`mutants/coverage.tsv`).
-- Per file: registry 9/9, assignment 10/10, claims 5/5, transitions 9/9, commands 8/8,
+- Per file: registry 9/9, assignment 10/10, claims 6/6, transitions 9/9, commands 8/8,
   task_reads 10/10, eligibility 14/14.
 - Independent recheck for this record: the case titles parsed from every `mutant-<id>.log` with
   `^\s*[0-9]+\) test (.+?) \(([A-Za-z0-9_.]+)\)$` equal the titles recorded in `run-results.txt`
   for that mutant (3 rows differ only in the separator between multi-kill titles), their union is
-  exactly the 65 `coverage.tsv` titles, and no coverage row names a mutant whose log does not fail
+  exactly the 66 `coverage.tsv` titles, and no coverage row names a mutant whose log does not fail
   that case.
-- Restoration: `RESTORED-OK` on all 65 rows, and a fresh sha256 check of the 7 module files and 7
-  test files against `mutants/hashes-before-owner.txt` prints 14 matches (exit 0) after the batch,
-  so the delivered tree is bit-identical to the pre-batch tree (the refreshed baseline copies).
+- Restoration: `RESTORED-OK` on all 66 rows, and a fresh sha256 check of the 7 module files and 7
+  test files against `mutants/hashes-before-fix1.txt` prints 14 `OK` (exit 0,
+  `mutants/fix1-restore-check.out`) after the batch, so the delivered tree is bit-identical to the
+  pre-batch tree (the refreshed baseline copies).
   No `*.bak`, `*.orig` or `*~` file was left in the worktree, and the batch wrote only under the
   scratch directory.
 - Uninformative mutants removed rather than kept: in the pre-apply batch the `m-r5` first candidate
@@ -326,7 +341,8 @@ followed by restoring the module from `mutants/baseline/` and re-checking its sh
 | specimen | module | mutation | run and killing case |
 |---|---|---|---|
 | `m-r1` | `registry.ex` | `Repo.get_by(Machine, token_digest: digest(token))` → `digest("machine-token")` | `Result: 8/9 passed`, kills `authenticate_machine resolves a fresh enrollment token and rejects unknown tokens` |
-| `m-c1` | `claims.ex` | `emit_claimed(run)` → `:ok` inside `claim_run_result/1` | `Result: 4/5 passed`, kills `claim_run claims a legacy run without provider access` |
+| `m-c1` | `claims.ex` | `emit_claimed(run)` → `:ok` inside `claim_run_result/1` | `Result: 5/6 passed`, kills `claim_run claims a legacy run without provider access` |
+| `m-c6` | `claims.ex` | `emit_claimed(run)` moved inside the claim transaction (R-21) | `Result: 5/6 passed`, kills `claim_run rolls back the claim and emits nothing when provider-access persistence fails`; the pre-fix 5 cases left it green (`fix1-m-c6-preproof.log`) |
 | `m-a1` | `assignment.ex` | the assignment changeset's `state: "assigned"` → `"claimed"` | `Result: 9/10 passed`, kills `assign_one assigns a queued legacy task and moves it to assigned` |
 | `m-t1` | `task_reads.ex` | idempotency-hit branch `do: {task, :replayed}` → `{task, :created}` | `Result: 9/10 passed`, kills `submit_task creates a queued task and replays the same request` |
 | `m-cm1` | `commands.ex` | `create_command` skips the replay lookup | `Result: 7/8 passed`, kills `create_command cancels queued work and replays the same idempotency key` |
@@ -346,32 +362,32 @@ toolchain and the local PostgreSQL. Runs were serialized; raw logs in
 
 | gate | command | exit | result |
 |---|---|---:|---|
-| format | `mix format --check-formatted` | 0 | no output (`format.out`; applied revision `apply-format.out`, 0 bytes) |
-| compile | `mix compile --warnings-as-errors` | 0 | no warnings (`compile-wae.out`; applied-revision runs `apply-compile1.log` — `Compiling 8 files (.ex)` — and `apply-compile.out` after the last edit) |
-| xref, compile-connected | `mix xref graph --format cycles --label compile-connected` | 0 | `No cycles found` (`xref-cc.out`; applied revision `apply-xref-cc.out`); base identical, exit 0 (`base-xref-cc.out`) |
-| xref, plain cycles | `mix xref graph --format cycles` | 0 | slice head: 2 cycles — 47 modules (the goals ↔ orchestration runtime cycle that now contains the six concept modules) and the 4-module schema cycle (`xref-plain.out`); applied revision: 2 cycles — 56 + 4 (`apply-xref-plain.out`), the growth being main's goals-module split merged at `6a89405e`; base: 3 cycles — 25 + 11 + 4 (`base-xref-plain.out`). The split merges base's 25- and 11-module runtime cycles into one, so no runtime cycle is added and the count falls; the contract's expected `Orchestration.Claims ↔ Goals` cycle is inside the 56-module list |
-| targeted suite | `mix test test/symmetry_control/orchestration/ test/symmetry_control/goals/eligibility_test.exs test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs` | 0 | `Result: 190 passed` (`apply-targeted1.log`; the slice-head run was `Result: 189 passed`, `targeted.out`) |
-| CI e2e file, default env | `mix test test/symmetry_control/provider_broker_e2e_test.exs` | 0 | `Result: 0 tests, 4 skipped` — the file carries `@moduletag skip: System.get_env("SYMMETRY_PROVIDER_BROKER_E2E") != "1"` (`e2e.out`; applied revision identical, `apply-e2e.out`) |
-| CI e2e file, enabled | `SYMMETRY_PROVIDER_BROKER_E2E=1 mix test test/symmetry_control/provider_broker_e2e_test.exs` | 2 then 0 | slice head: first run `3/4 passed` (one sandbox `DBConnection.ConnectionError`), two re-runs `4 passed` each (`e2e-env.out`, reruns); applied revision: `4 passed` on the first run, exit 0 (`apply-e2e-env.out`) — the flake did not recur. Base with the same env: `4 passed`, exit 0 (`base-e2e-env.out`) |
+| format | `mix format --check-formatted` | 0 | no output (`format.out`; applied revision `apply-format.out`, 0 bytes; fix-stage revision `fix1-format.out`, 0 bytes) |
+| compile | `mix compile --warnings-as-errors` | 0 | no warnings (`compile-wae.out`; applied-revision runs `apply-compile1.log` — `Compiling 8 files (.ex)` — and `apply-compile.out` after the last edit; fix-stage run `fix1-compile.out` — `Compiling 1 file (.ex)`, the file the last mutant batch restored) |
+| xref, compile-connected | `mix xref graph --format cycles --label compile-connected` | 0 | `No cycles found` (`xref-cc.out`; applied revision `apply-xref-cc.out`; fix-stage revision `fix1-xref-cc.out`); base identical, exit 0 (`base-xref-cc.out`) |
+| xref, plain cycles | `mix xref graph --format cycles` | 0 | slice head: 2 cycles — 47 modules (the goals ↔ orchestration runtime cycle that now contains the six concept modules) and the 4-module schema cycle (`xref-plain.out`); applied revision: 2 cycles — 56 + 4 (`apply-xref-plain.out`), the growth being main's goals-module split merged at `6a89405e`; fix-stage revision: 2 cycles — 56 + 4 (`fix1-xref-plain.out`), unchanged; base: 3 cycles — 25 + 11 + 4 (`base-xref-plain.out`). The split merges base's 25- and 11-module runtime cycles into one, so no runtime cycle is added and the count falls; the contract's expected `Orchestration.Claims ↔ Goals` cycle is inside the 56-module list |
+| targeted suite | `mix test test/symmetry_control/orchestration/ test/symmetry_control/goals/eligibility_test.exs test/symmetry_control/orchestration_{registry,assignment,goal_assignment,claims,transitions,goal_transitions,commands,task_reads}_test.exs` | 0 | `Result: 191 passed` (`fix1-targeted1.log`; applied revision `Result: 190 passed`, `apply-targeted1.log`; the slice-head run was `Result: 189 passed`, `targeted.out`) |
+| CI e2e file, default env | `mix test test/symmetry_control/provider_broker_e2e_test.exs` | 0 | `Result: 0 tests, 4 skipped` — the file carries `@moduletag skip: System.get_env("SYMMETRY_PROVIDER_BROKER_E2E") != "1"` (`e2e.out`; applied revision identical, `apply-e2e.out`; fix-stage revision identical, `fix1-e2e.out`) |
+| CI e2e file, enabled | `SYMMETRY_PROVIDER_BROKER_E2E=1 mix test test/symmetry_control/provider_broker_e2e_test.exs` | 2 then 0 | slice head: first run `3/4 passed` (one sandbox `DBConnection.ConnectionError`), two re-runs `4 passed` each (`e2e-env.out`, reruns); applied revision: `4 passed` on the first run, exit 0 (`apply-e2e-env.out`); fix-stage revision: `4 passed` on the first run, exit 0 (`fix1-e2e-env.out`) — the flake did not recur. Base with the same env: `4 passed`, exit 0 (`base-e2e-env.out`) |
 | full control suite | `mix test` | 2 | slice head `Result: 1069/1075 passed, 21 skipped`, 6 failed (`full-control.out`); applied revision `Result: 1155/1159 passed, 21 skipped`, 4 failed (`apply-full-control.out`). The 4 are `SymmetryControlWeb.PortalControllerTest` asset tests: this worktree has no `control/priv/static/portal` bundle (the directory is absent) because the CI control job downloads it (`actions/download-artifact@v8`, `name: portal-assets`, `path: control/priv/static/portal`, `.github/workflows/ci.yml` control job); the same four fail in the base checkout run alone (`base-portal.out`, `Result: 9/13 passed`). The two `SymmetryControl.Migrations.Goal0006MigrationTest` sandbox/DB-order flakes of the slice-head run did not recur; re-running that file also passes (`failed-files-head.out`). Not green in this environment, for causes that are not the change |
 | base full suite (cross-check) | `rf-w5-18-base-mix.sh test` | not obtained | The detached run wrote `Running ExUnit with seed: 465308` and 53 test dots, then produced no further output for 15+ minutes with no exit line (stalled on the base partition database); it was killed and is superseded by the individual base reproductions above (`base-portal.out` 4 failures, `base-e2e-env.out` 4 passed, `base-xref-cc.out` / `base-xref-plain.out`). Raw partial output kept in `base-full-control.out` |
-| credo `--strict` | `mix credo --strict` | 30 | slice head 553 issues (5 warnings / 362 refactoring / 95 readability / 91 design; 4,465 mods/funs) (`credo-head.out`); applied revision 552 issues (5 / 362 / 93 / 92; 4,516) (`apply-credo.out`); base 500 (5 / 357 / 82 / 56; 4,323) (`credo-base.out`). Deviation analysed in the plan's implementation record item 10; not a contract gate |
-| doc-citation gate | `python scripts/ci/check-citation-existence.py --base 66bc9dcb --head HEAD` | 1 then 0 | at the committed head `6a89405e` the gate refuses two stale citations in `docs/archive/CLOSED-TODO.md` (:851, :872) that name the oracle file this slice deleted; the apply stage pinned both as `git show 66bc9dcb:<path>` per the gate's prescription and re-ran the gate against a verification head carrying the repair (`b9150150`, built with a scratch index; no ref moved): exit 0, `1 changed document(s) pass the path and symbol check (521 path citation(s))` (`apply-citations.out`; the slice-head run was "nothing to check", `citations.out`) |
-| whitespace | `git diff --check` | 0 | 0 lines (`diff-check.out`; applied revision `apply-diff-check.out`, 0 lines) |
-| DLP: host paths | profile-path pattern grep (the `C:` drive followed by the user-profile directory segment) over the files the apply stage wrote | 1 (no matches) | 0 matches (`dlp-paths.out`; re-run at the applied revision over the apply-stage files and the repaired archive lines: 0 matches. Untouched historical lines of `docs/archive/CLOSED-TODO.md` carry the pattern from earlier archive entries, outside this stage's writes) |
-| DLP: backslash + `u` sequence | literal two-character pattern grep (backslash followed by the letter `u`) over the files the apply stage wrote | 1 (no matches) | 0 matches (`dlp-backslash-u.out`; re-run at the applied revision: 0 matches in the apply-stage files and in the repaired archive lines; earlier archive entries keep their historical escape prose untouched) |
-| `wc -l` | section 1 | — | every file ≤ 1,500 L (`wc-l.txt`) |
-| red mutants | section 7 | — | 65/65 cases killed, 0 UNKILLED, 65/65 restored (`mutants/`) |
+| credo `--strict` | `mix credo --strict` | 30 | slice head 553 issues (5 warnings / 362 refactoring / 95 readability / 91 design; 4,465 mods/funs) (`credo-head.out`); applied revision 552 issues (5 / 362 / 93 / 92; 4,516) (`apply-credo.out`); fix-stage revision 552 (5 / 362 / 93 / 92; 4,519) (`fix1-credo.out`) — the issue count did not rise; base 500 (5 / 357 / 82 / 56; 4,323) (`credo-base.out`). Deviation analysed in the plan's implementation record item 10; not a contract gate |
+| doc-citation gate | `python scripts/ci/check-citation-existence.py --base 66bc9dcb --head <verification-head>` | 1 then 0 | at the committed head `6a89405e` the gate refuses two stale citations in `docs/archive/CLOSED-TODO.md` (:851, :872) that name the oracle file this slice deleted (`apply-citations.out` is that exit-1 run, per review R-11); the apply stage pinned both as `git show 66bc9dcb:<path>` per the gate's prescription, and the fix stage re-ran the gate against a verification head carrying the repair plus the R-12 re-pin (`a53d2da3`, built with a scratch index; no ref moved; its audited `CLOSED-TODO.md` content is the shipped one): exit 0, `1 changed document(s) pass the path and symbol check (521 path citation(s))` (`fix1-citations.out`; the slice-head run was "nothing to check", `citations.out`) |
+| whitespace | `git diff --check` | 0 | 0 lines (`diff-check.out`; applied revision `apply-diff-check.out`, 0 lines; fix-stage revision `fix1-diff-check.out`, 0 lines) |
+| DLP: host paths | profile-path pattern grep (drive followed by the user-profile directory segment) over the branch delta and the fix-stage writes | 1 (no matches) | committed branch delta `git diff origin/main...HEAD`: 0 profile-path hits; fix-stage delta `git diff HEAD`: 0; added lines of the final tree delta (worktree vs merge-base `54026392`): 0 host-absolute-path hits over the full pattern set; the two slice records in full: 0 (`fix1-dlp.out`, `fix1-dlp-paths.out`; the pattern's own literals are not written out here to keep this row from matching itself. Untouched historical lines of `docs/archive/CLOSED-TODO.md` and main-only files this branch does not carry keep the pattern, outside this stage's writes) |
+| DLP: backslash + `u` sequence | literal two-character pattern grep (backslash followed by the letter `u`) over the fix-stage writes | 1 (no matches) | 0 matches (`dlp-backslash-u.out`; fix-stage re-run `fix1-dlp.out`: 0 matches in the fix-stage lib/test/doc writes; earlier archive entries keep their historical escape prose untouched) |
+| `wc -l` | section 1 | — | every file ≤ 1,500 L (`wc-l.txt`; fix-stage revision `fix1-wc-l.txt` — the largest is the folded `Transitions` at 1,181 L) |
+| red mutants | section 7 | — | 66/66 cases killed, 0 UNKILLED, 66/66 restored (`mutants/`; restore proof `mutants/fix1-restore-check.out`) |
 
 ## 9. Contract clause mapping
 
 | clause | evidence |
 |---|---|
 | 1 — facade ≤ 1,500 L over the named concepts; no goal predicate under `orchestration/`; controller off the `:goal \| :legacy` fork; byte-identical SQL/locks/transactions/atoms/telemetry; new interface tests green with red mutants; split with preserved title multiset; targeted, e2e and full suites green | sections 1, 2, 3, 5, 6, 7, 8 |
-| 2 — judging artifact with the named tables | this record (function → module table in the plan, SQL and lock tables in section 3, cycles and declaration outputs in section 8, comment census in section 4, title multiset in section 6, `wc -l` in section 1 and 8, red mutants in section 7, suite outputs in sections 5 and 8) |
+| 2 — judging artifact with the named tables | this record (function → module table in the plan, SQL and lock tables in section 3, cycles and declaration outputs in section 8, comment census in section 4, title multiset in section 6, `wc -l` in section 1 and 8, red mutants in section 7, suite outputs in sections 5 and 8). The clause names the artifact `answer.md`; the slice delivers it as `docs/evidence/rf-w5-18-orchestration-concepts-2026-11-22.md` per the repo's evidence convention (no `answer.md` exists in any goal) — the R-24 confirmation |
 | 3 — failure control | sections 2 (declaration census, control-flow audit), 3 (SQL/locks), 4 (strings/comments), 8 (xref cycles); no deleted or renamed test (section 6) |
 | 4 — out of scope respected | `provider_access.ex`, `goals.ex`, `run_fence.ex`, scheduler/reconciler/notifier untouched (`git status` section 8); the duplicated `ContextSnapshot` read recorded in `docs/TODO.md`; `core.md`/`data.md` untouched |
-| 5 — evidence plan | sections 3-8 |
+| 5 — evidence plan | sections 3-8, 13 |
 | 6 — mergeable alone | no behaviour change (sections 3, 5, 8); dependencies #189/#184 merged at `66bc9dcb` |
 
 ## 10. Residual risks and limits
@@ -408,6 +424,9 @@ toolchain and the local PostgreSQL. Runs were serialized; raw logs in
   compile-connected cycle), the three remaining attribute copies (Elixir cannot import attributes), the
   `retry_binding` type copy (the two modules' specs reference it), the controller's transition
   fork (O11).
+- The fix stage's scoped simplification: `Assignment.assign_all/2` returned to `defp` (review
+  R-15) — no consumer outside the module, restoring the base visibility; re-verified by compile,
+  compile-connected xref, the targeted suite and the mutant batch (sections 7, 8, 13).
 
 
 ## 12. Apply stage (2026-11-22, simplify findings F1–F9 / D1–D9)
@@ -449,3 +468,48 @@ body-identity claim — 242 of the 247 base groups token-identical, five deviati
 (section 2). The title multiset over the eight split files is unchanged (116 = 116), the tree-wide
 totals moved by the +1 `map_key?` case (section 6), and every file stays under the 1,500 L cap
 (section 1).
+
+## 13. Fix stage (2026-11-22, review findings R-01–R-25)
+
+The review of `54026392..1028605b` raised 25 findings (3 P2, 22 P3) against the slice. This stage
+fixes R-01–R-19 and records the rest; every coordinate below is measured at the fix-stage tree, and
+the source delta is `fix1-code.diff` (8 files, 33 insertions and 2 deletions: two lib lines changed
+and the rest tests; the doc edits are the remainder of the fix-stage diff).
+
+| finding | change | probe |
+|---|---|---|
+| R-01 | `claims.ex:557`: the `claim_run/3` `@spec` third tuple element became `map() \| nil` | the pre-existing case asserts the nil arm (`claims_test.exs:27`, `assert provider_access == nil`); `ProviderAccess.issue/3` returns `{:ok, nil}` for a task without provider access (`provider_access.ex:686-690`) and `replay_claim_access/2` returns `{:ok, nil}` for a `kind: none` snapshot (`provider_access.ex:751-770`); the toolchain has no Dialyzer (no dialyxir in `control/mix.exs`) |
+| R-02 | plan: `map_key?/2` added to the `Orchestration.Registry` row of the function → module table (line 114) and struck from the `Goals.Eligibility` API-shape paragraph (line 77) | `rg -n 'def map_key' control/lib` → only `registry.ex:622-625`; the plan's own move record (lines 152, 340) unchanged |
+| R-03 | evidence section 2 "Goal policy": `goal_runtime_matches?/3` struck from the `Goals.Eligibility` function list | `rg -n 'def goal_runtime_matches' control/lib` → only `assignment.ex:520`; the same bullet already recorded the composite as Orchestration-owned |
+| R-04 | evidence section 1 interface-test row: path gained the `/orchestration/` segment (`control/test/symmetry_control/orchestration/{…}_test.exs`) | the row's counts are those files' `wc -l` (`fix1-wc-l.txt`: 151/171/377/329/335/156) |
+| R-05 | plan implementation-record item 1 relabelled "Module set, slice head (`wc -l`, pre-apply)"; the delivered numbers stay in "Slice shape" | `fix1-wc-l.txt` re-measures the delivered tree: facade 327; Registry 659; Assignment 639; Claims 612; Transitions 1,181; Commands 798; TaskReads 874; Eligibility 301 — identical to "Slice shape" |
+| R-06 | evidence section 1 plan row: 298 → 356 lines, the pre-apply figure named as such | `wc -l docs/plans/…` (`fix1-wc-l.txt`) |
+| R-07 | moved-comment coordinate 565 → `claims.ex:570-571` in evidence section 4 and plan item 7 | `grep -n 'Scope locking precedes' control/lib/symmetry_control/orchestration/claims.ex` → 570 |
+| R-08 | evidence section 2: `assignment.ex:521` → `:520` | `grep -n 'def goal_runtime_matches' control/lib/symmetry_control/orchestration/assignment.ex` → 520 |
+| R-09 | subject-identity table: the pointer names `fix1-hashes.txt` (the fix-stage checksums) and the restore proof (`mutants/fix1-restore-check.out`) | `sha256sum -c mutants/hashes-before-fix1.txt` → 14 `OK`, exit 0 |
+| R-10 | `wc -l` gate row cites `fix1-wc-l.txt` (with the revision in its header) instead of the stale slice-head `wc-l.txt` | `fix1-wc-l.txt`: every file ≤ 1,500 L, largest `Transitions` 1,181 |
+| R-11 | citation-gate row: `apply-citations.out` named as the exit-1 run at `6a89405e`; the exit-0 pass re-run at a verification head whose audited content is the shipped `CLOSED-TODO.md` (`a53d2da3`) | `python scripts/ci/check-citation-existence.py --base 66bc9dcb --head a53d2da3` → exit 0, `1 changed document(s) pass the path and symbol check (521 path citation(s))` (`fix1-citations.out`; scratch index, no ref moved) |
+| R-12 | `docs/archive/CLOSED-TODO.md`: the two `git show 66bc9dcb:…` pins re-pinned to the coordinates that revision holds — `1370` / `2477` / `2568` and `3684` — with the 0007a/0009 log coordinates attributed to their logs | `git show 66bc9dcb:<path>` line checks; the gate row above exits 0 with the re-pinned document |
+| R-13 | evidence section 2: the self-contradicting "added tokens" clause after "zero dropped, zero added" deleted | the census instrument's added set is empty (`census.py`) |
+| R-14 | evidence section 4: "seven removed/added pairs" reworded to "seven removed and seven added: six reworded pairs, one dropped paragraph and one paragraph moved in from the controller" | `comment_census.py` listing (13 base / 13 head paragraphs) |
+| R-15 | `assignment.ex:615`: `def assign_all(runs, opts)` → `defp` (restores the base visibility) | caller census: only the public `/1` clause (`:611-613`) and its own recursion (`:617`); `fix1-code.diff`; compile + targeted suite green |
+| R-16 | plan decision 4: explicit recorded waiver for `nonempty_text?/1` and `valid_boolean_capability?/2` in `Registry`, with the caller census at the fix-stage tree | `fix1-callers.out`: `nonempty_text?/1` — transitions 958/967/969/970, commands 731; `valid_boolean_capability?/2` — task_reads 872; Registry 0 for both |
+| R-17 | plan item 3: `Assignment.runtime_matches_task?/3` → `/2` | `grep -n 'def runtime_matches_task' assignment.ex` → 623; called with two args at `claims.ex:205` |
+| R-18 | plan decision 5: DAG edge corrected to `Assignment → Registry → Claims` | import graph at the fix-stage tree (`registry.ex:18` imports Claims; no Registry → TaskReads edge) |
+| R-19 | five split files: a 2-line why-only comment on the second `@now` names the shadowing hazard | `fix1-code.diff`; the probe coordinates that shifted are re-based in section 3 (`:115` → `:117`, `:413` → `:415`) |
+| R-20 (no action) | the registry interface case deliberately pins the moved `map_key?/2` | `control/test/symmetry_control/orchestration/registry_test.exs:99-106` pins it; mutant `m-r9` kills that case (section 7) |
+| R-22 (conductor) | the controller's transition endpoint still calls `claim_owner/1`; O11 authorizes it, and the contract's clause-3 sentence needs the conductor's narrowing note (contract file, outside the owned set) | `daemon_controller.ex:177` (transition region); no claim-path call |
+| R-23 (no action) | `Goals.Eligibility` aliases the `Orchestration.{Run,Runtime,Task}` schemas, which the binding text permits | `eligibility.ex:14-16`; xref compile-connected `No cycles found` |
+| R-24 (confirm) | clause 2's `answer.md` is delivered as this record per the repo's evidence convention | section 9's clause-2 row; no `answer.md` exists in any goal |
+| R-25 (no action) | `runtime_spec/2` has no arity-1 caller after the split's default-argument cleanup | `rg -n 'runtime_spec\(' …` at the fix-stage tree: definitions at `orchestration_assignment_test.exs:903` and `orchestration_claims_test.exs:985`; every call site passes two args |
+
+Fix-stage deltas measured at the same tree: targeted suite `Result: 191 passed` (`fix1-targeted1.log`);
+e2e file `4 passed` with the env flag, `0 tests, 4 skipped` without (`fix1-e2e-env.out`,
+`fix1-e2e.out`); format/compile/compile-connected-xref/`git diff --check` exit 0 (`fix1-format.out`,
+`fix1-compile.out`, `fix1-xref-cc.out`, `fix1-diff-check.out`); plain xref 2 cycles unchanged
+(`fix1-xref-plain.out`); credo `--strict` 552 issues, unchanged (`fix1-credo.out`); title multiset
+over the split files 0 diff and 66 interface titles (`fix1-title-multiset.diff`, `fix1-titles.out`);
+mutants 66/66 with 0 UNKILLED, restored (`mutants/fix1-restore-check.out`); probes not re-run
+(section 3 note); DLP and host-path proofs 0 hits (`fix1-dlp.out`, `fix1-dlp-paths.out`).
+The full control suite was not re-run by this stage (conductor-owned; its environment limit is
+recorded in section 8).

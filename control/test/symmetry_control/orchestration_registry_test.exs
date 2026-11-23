@@ -119,6 +119,8 @@ defmodule SymmetryControl.OrchestrationRegistryTest do
   alias SymmetryControl.Workspaces
   alias SymmetryControl.Workspaces.{ProjectResource, WorkItem}
 
+  # The cases below came from the other base file's region and pin its clock;
+  # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
 
   test "legacy runtime registration replays without adapter metadata" do

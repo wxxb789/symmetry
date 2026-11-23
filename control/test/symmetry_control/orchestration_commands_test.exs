@@ -379,6 +379,8 @@ defmodule SymmetryControl.OrchestrationCommandsTest do
   alias SymmetryControl.Orchestration.{Command, Runtime, Task}
   alias SymmetryControl.Workspaces.{Project, ProjectResource}
 
+  # The cases below came from the other base file's region and pin its clock;
+  # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
 
   test "legacy command entry points cannot mutate a Goal task or its reservation" do

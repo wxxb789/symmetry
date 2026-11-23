@@ -110,6 +110,27 @@ defmodule SymmetryControl.Orchestration.ClaimsTest do
     assert Repo.get!(Task, task.id).state == "assigned"
   end
 
+  test "claim_run rolls back the claim and emits nothing when provider-access persistence fails" do
+    %{machine: machine} = enroll_machine()
+    runtime = register_runtime(machine, @now)
+    assert {:ok, task, :created} = Orchestration.submit_task(task_attrs(), "claims-6", now: @now)
+    assert {:ok, run} = Orchestration.assign_one(now: @now)
+
+    Repo.update_all(
+      from(run_row in Run, where: run_row.id == ^run.id),
+      set: [provider_access_snapshot: %{"v" => 1, "kind" => "none"}]
+    )
+
+    attach_claimed_events()
+
+    assert {:error, :ownership_lost} =
+             Claims.claim_run(run.id, claim_request(run, runtime), now: @now)
+
+    refute_receive :claimed_event, 20
+    assert Repo.get!(Run, run.id).state == "assigned"
+    assert Repo.get!(Task, task.id).state == "assigned"
+  end
+
   defp claim_request(run, runtime) do
     %{
       runtime_id: runtime.id,

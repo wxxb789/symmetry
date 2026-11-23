@@ -612,7 +612,7 @@ defmodule SymmetryControl.Orchestration.Assignment do
     assign_all([], opts)
   end
 
-  def assign_all(runs, opts) do
+  defp assign_all(runs, opts) do
     case assign_one(opts) do
       {:ok, run} -> assign_all([run | runs], opts)
       {:error, :no_assignment} -> {:ok, Enum.reverse(runs)}

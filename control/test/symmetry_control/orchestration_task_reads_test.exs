@@ -847,6 +847,8 @@ defmodule SymmetryControl.OrchestrationTaskReadsTest do
   alias SymmetryControl.RequestHash
   alias SymmetryControl.Orchestration
 
+  # The cases below came from the other base file's region and pin its clock;
+  # the shadowing is intentional, so do not move a case across this line.
   @now ~U[2026-09-09 09:00:00.000000Z]
 
   test "legacy submit_task preserves its request hash and creates no Goal settlement" do

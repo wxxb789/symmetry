@@ -554,7 +554,7 @@ defmodule SymmetryControl.Orchestration.Claims do
 
   @doc false
   @spec claim_run(Ecto.UUID.t(), map(), keyword()) ::
-          {:ok, {Run.t(), Task.t(), map()}} | {:error, atom()}
+          {:ok, {Run.t(), Task.t(), map() | nil}} | {:error, atom()}
   def claim_run(run_id, request, opts \\ [])
 
   def claim_run(run_id, request, opts) when is_map(request) and is_list(opts) do
