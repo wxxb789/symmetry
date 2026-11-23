@@ -116,6 +116,10 @@ metadata` in `docs/TODO.md`) was appended to the `## Dead-code candidates (rf-w1
 sweep)` section below and moved on 2026-11-22 from branch
 `refactor/rf-w4-15c-claude-candidate-relocation`.
 
+The reconciled stale-claude-README item appended to the new `## Harness capture fixtures: stale
+claude testdata READMEs (rf-w5-10, 2026-11-23)` section at the end of this file was moved on
+2026-11-23 from branch `refactor/rf-w5-10-harness-capture-fixtures`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4709,3 +4713,27 @@ discovery (`sendmsg: broken pipe`; the refusing check was not identified, record
 decisions and derived-path wiring are now covered hermetically (record section 13); and the
 rf-acc-native-hosted-run paragraph, landed with #270 while this slice was in flight, records the
 decision as open while this entry and the goal record carry the closure.
+
+## Harness capture fixtures: stale claude testdata READMEs (rf-w5-10, 2026-11-23)
+
+- [ ] Reconcile the two `testdata/claude/**` READMEs with the relocated identifiers: both files
+      were frozen for rf-w4-15c (`harness/testdata/**` is W5-10's surface) and neither is in the
+      citation gate's audited corpus, so the move left them stale —
+      `daemon/internal/harness/testdata/claude/2.1.281/README.md:48` names
+      `claudeCandidateStructuredOutputSchema` (now `candidateStructuredOutputSchema` in
+      `claude/adapter.go`) and `daemon/internal/harness/testdata/claude/2.1.323/README.md:36`
+      names `ClaudeTestedExecutableHash` (now `testedExecutableHash` in `claude/probe.go`). Owner
+      area: W5-10 fixture pruning.
+
+      **Closed (2026-11-23, branch `refactor/rf-w5-10-harness-capture-fixtures`, base
+      `2c8c419e`, plan
+      `docs/plans/2026-11-23-rf-w5-10-harness-capture-fixtures-plan.md`):** prose-only edits
+      correct both stale identifiers — `candidateStructuredOutputSchema` in
+      `daemon/internal/harness/claude/adapter.go` and `testedExecutableHash` in
+      `daemon/internal/harness/claude/probe.go` — and nothing else in either README changes.
+      Every capture byte, `version.txt` and `fixture-manifest.json` in the two directories stays
+      byte-identical: `git diff --name-only` over
+      `daemon/internal/harness/testdata/claude/2.1.281` and
+      `daemon/internal/harness/testdata/claude/2.1.323` lists exactly those two READMEs, and the
+      claude package suite stays green. The same slice retires the unread claude 2.1.259
+      directory, whose bytes remain in git history.
