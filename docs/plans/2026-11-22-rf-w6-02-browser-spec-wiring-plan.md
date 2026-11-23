@@ -91,7 +91,8 @@ in its `EXIT` trap, so the browser steps provision a second stack under their ow
 4. `Tear down the Compose acceptance stack` — `if: always()`, the smoke script's cleanup body:
    `ps`, `logs --no-color`, `down --volumes --remove-orphans`, each `|| true`.
 5. `Upload the Compose acceptance reports` — `if: always()`: both JSON reports, the Playwright
-   HTML report and the default `/tmp/symmetry-playwright-results` output directory.
+   HTML report and the default `symmetry-playwright-results` output directory under the runner's
+   scratch temp path.
 
 Both browser steps stay under the extraction pin's 80-line inline ceiling (27 and 48 body
 lines), keep the script's `set -Eeuo pipefail`, and use `docker compose exec -T` (no TTY on a
@@ -125,10 +126,11 @@ Steps:
 3. `Run the browser node suites` (`working-directory: browser`):
    `node --test scripts/connection-spec-env.test.mjs
    scripts/control-instance-isolation.test.mjs scripts/goal-context-fixtures.test.mjs`.
-   On Linux the isolation suite's three harness cases carry their own recorded
-   `skip: "the harnesses and their recording stub are Windows-only"` and its fourth case still
-   runs; the other two suites run fully (the env suite drives the real Playwright CLI, which is
-   installed). The wiring step names all three for the inventory gate.
+   On Linux the isolation suite's six harness cases carry their own recorded
+   `skip: "the harnesses and their recording stub are Windows-only"` and its one standalone case
+   still runs (the file holds seven cases: the standalone one plus three generated per harness
+   for the two harnesses); the other two suites run fully (the env suite drives the real
+   Playwright CLI, which is installed). The wiring step names all three for the inventory gate.
 4. `Run the connection fixture acceptance` — the driver's whole sequence in one self-contained
    step: mint a per-run operator token + fixture identity, write the empty steering document,
    stage the fixture log in `$RUNNER_TEMP`, export the driver's `SYMMETRY_FIXTURE_*`,
@@ -139,11 +141,15 @@ Steps:
    `connection fixture transport installed` marker, its logged identity and `/healthz`, then run
    `portal-connections.spec.mjs` (both projects) and assert its JSON report
    (`--expect-skipped 0`, both `--expect-project`, `--expect-file`, the pinned title). `trap …
-   EXIT` stops the fixture process on every exit path (the driver's `finally`).
+   EXIT` stops the fixture process on every exit path (the driver's `finally`). The step then
+   repeats the driver's canary scan: neither provider canary may appear in the fixture log (the
+   step merges the fixture's stderr into it) and the provider-call log must be non-empty.
 5. `Run the planning acceptance on the Control release` — extract the release archive, create and
    migrate `POSTGRES_DB=symmetry_0007c_test` (the driver's default name; dev `mix` for the create
    step and the fixture), mint `SYMMETRY_OPERATOR_TOKEN`/`SECRET_KEY_BASE`, set `DATABASE_URL` for
-   the release, `PHX_HOST=127.0.0.1 PHX_SERVER=true PORT=4030`, `SYMMETRY_CONTRACTS_DIR`,
+   the release and export `PHX_HOST=127.0.0.1` before the eval (the release evaluates the prod
+   runtime config for every command, `eval` included), with `PHX_SERVER=true PORT=4030` on the
+   start line, plus `SYMMETRY_CONTRACTS_DIR`,
    `SYMMETRY_GOALS_ROLLOUT_ENABLED=true` (the render gate's primary-release posture),
    `SYMMETRY_PLANNING_HARNESS=1` and `SYMMETRY_FIXTURE_MIX=mix` (no `mise` on the runner), start
    `bin/symmetry_control start` after `eval 'SymmetryControl.Release.migrate()'`, wait for
@@ -152,7 +158,7 @@ Steps:
 6. `Upload the browser fixture evidence` — `if: always()`: the two JSON reports, both logs, the
    fixture transport log and the Playwright report/output directories.
 
-Both phase steps stay under the inline ceiling (48 and 28 body lines). The node-suite step is
+Both phase steps stay under the inline ceiling (60 and 30 body lines). The node-suite step is
 the job's first phase on purpose: it proves the harness contracts (env classification, per-instance
 build paths, snapshot markers) before the browser phases spend the release/build time.
 
@@ -203,7 +209,9 @@ render-gate specs are untouched.
   the run did not produce reddens (`missing …`); (c) a README matrix row added back for a wired
   suite reddens the inventory gate (`both named by … and listed`). (a)/(b) run locally against
   synthetic reports built from the new shape — the real CI reports are the conductor's oracle;
-  (c) runs locally on the edited README.
+  (c) runs locally on the edited README; (d) the connection phase's trailing canary guard runs
+  locally against synthetic logs — a provider canary in the control log, an empty provider-call
+  log and a missing provider-call log each redden it, and the clean pair is green.
 - CI is the slow oracle (green `compose` browser steps, green `browser-fixture-linux`, unchanged
   render gate, the inventory step green): conductor-verified on the PR.
 - Host limitations, recorded with the exact commands: no Docker daemon and no PostgreSQL on this

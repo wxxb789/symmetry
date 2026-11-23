@@ -26,7 +26,7 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 
 | file | status | lines | note |
 | --- | --- | ---: | --- |
-| `.github/workflows/ci.yml` | edited | 1,846 → 2,121 | +275/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
+| `.github/workflows/ci.yml` | edited | 1,846 → 2,135 | +289/−0: the `compose` job's five appended steps and the new job (§3); two unused step ids (`compose_browser`, `compose_restart`) removed by the apply stage (simplify F1); the fix stage added the planning step's `PHX_HOST` export (+2 lines) and the connection step's trailing canary guard (+12 lines, review F1/F2); the render gate `:479-556` and its 7-name `--expect-file` list are byte-identical |
 | `browser/README.md` | edited | 615 → 613 | +11/−13: the manual matrix intro and rows (§3.4) |
 | `browser/tests/portal-connections.spec.mjs` | edited | 1,489 → 1,443 | +74/−120: the four E6 conversions plus `bindResourceThroughApi` → shared `attachResource` (§7; the latter in the apply stage, simplify F2) |
 | `browser/tests/portal-compose-daemon.spec.mjs` | edited | 577 → 571 | +15/−21: four helper copies converted (§7) |
@@ -36,7 +36,7 @@ after the runs; `git status --porcelain` carries no tracked change from it).
 | the 7 render-gate specs | **unedited** | — | no rename, no title change |
 | `browser/scripts/run-*.ps1` | **unedited** | 98 / 270 / 250 | each driver stays the local reproduction path; no owned-file clause forced an edit; the isolation suite still passes 7/7 |
 | `browser/playwright.config.mjs`, `browser/package.json` | **unedited** | — | no new reporter, no new script |
-| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 230 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines) |
+| `docs/plans/2026-11-22-rf-w6-02-browser-spec-wiring-plan.md` | new | 238 | the plan (228 after the implement stage; the apply stage's F6/F7 record edits add two lines; the fix stage's `PHX_HOST` description, canary guard, isolation-suite count and mutation clause add eight) |
 | `docs/evidence/rf-w6-02-browser-spec-wiring-2026-11-22.md` | new | — | this record |
 | `docs/TODO.md` / `docs/archive/CLOSED-TODO.md` | **unedited** | — | no entry closes; the remaining helper copies are recorded here instead (§8) |
 
@@ -63,24 +63,26 @@ always()`); `Upload the Compose acceptance reports` (`if: always()`). P1 is impl
 is provisioned by this family (the smoke step's stack dies in its own `EXIT` trap), never reused
 across steps.
 
-### 3.2 `browser-fixture-linux` (`:1969-2121`)
+### 3.2 `browser-fixture-linux` (`:1969-2135`)
 
 `needs: [changes, contracts]`, `if: needs.changes.outputs.run-heavy == 'true'`, ubuntu-latest,
 the `postgres:18.6-alpine` service, `portal-assets` + `control-release-linux` downloads, the
 dev-build compile, then three phases: the node suites; the connection fixture instance (per-run
 token/identity, empty steering document, `symmetry_0007e_test_4021`, readiness on the identity
-file + the transport marker + `/healthz`); the planning release (`DATABASE_URL`,
-`SYMMETRY_PLANNING_HARNESS=1`, `SYMMETRY_FIXTURE_MIX=mix`, the release archive's assets,
-`Release.migrate()`, `start`, healthz). Each phase traps its own teardown; the executed-set
-assertion pins both projects, zero skips, the file and one title per spec; an `if: always()`
-upload keeps the reports, logs and fixture call log.
+file + the transport marker + `/healthz`, then the trailing canary scan over the fixture log and
+the provider-call log); the planning release (`DATABASE_URL`, `PHX_HOST=127.0.0.1` exported
+before the eval so the prod runtime config provider resolves, `SYMMETRY_PLANNING_HARNESS=1`,
+`SYMMETRY_FIXTURE_MIX=mix`, the release archive's assets, `Release.migrate()`, `start`, healthz).
+Each phase traps its own teardown; the executed-set assertion pins both projects, zero skips, the
+file and one title per spec; an `if: always()` upload keeps the reports, logs and fixture call
+log.
 
 ### 3.3 Job-model constraints
 
 The new job passes the workflow-model pins: lowercase-hyphenated header, `changes` in `needs`,
 `if: needs.changes.outputs.run-heavy == 'true'` exactly; `legacy-route-audit` stays the only
 unconditional job (`test-ci-changed-path-classifier.py`, 31 tests, §5). Every new inline body is
-≤ 80 lines (27/48/6/2/48/28) and adds no advisory step, so
+≤ 80 lines (27/48/6/2/60/30) and adds no advisory step, so
 `test-ci-structure-extraction.py` stays green (23 tests).
 
 ### 3.4 The README matrix
@@ -108,13 +110,14 @@ phase's observable assertion exists in the wired CI step; deltas are named.
 | connection | `mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs` (PHX_SERVER/PORT) | same command from `control/` | yes |
 | connection | readiness: identity file (identity+port), log marker `connection fixture transport installed` + logged identity, `/healthz` 200; server-exit early exit | same four checks + `kill -0` liveness per poll | yes |
 | connection | spec run both projects + summary assertion (22 passed, no skip) | same invocation + `assert-playwright-json.py` (skips fail; file and title pinned) | yes (stricter) |
-| connection | canary scan of control log/err + provider-call log | not in the CI step; the spec's own response/DOM/header/cookie/console canary scans still run, and the driver keeps the log scan locally | **no** (recorded; the wired equivalent is the spec-side scan) |
+| connection | canary scan of control log/err + provider-call log | the step's trailing guard (12 lines) greps the fixture log for both provider canaries and requires a non-empty `connection-fixture-calls.jsonl`; the spec's own response/DOM/header/cookie/console canary scans still run | yes (delta: the step merges the fixture's stderr into the one log, so the driver's separate `.err` file has no counterpart) |
 | connection | `taskkill` the started tree + listener PID; port-free wait | `trap ... EXIT` kills the started process | yes (PID/lock mechanics are local-concurrency guards, not assertions; a taken port fails closed at bind + readiness) |
 | planning | `ecto.drop/create/migrate` checked | `mix ecto.create` + `mix ecto.migrate` | as above |
 | planning | per-run token; `SYMMETRY_PLANNING_HARNESS=1`; pinned toolchain | `openssl rand` token; same harness flag; setup-beam is the CI toolchain | yes |
 | planning | `mix phx.server` dev launcher with a restart loop (host BEAM-kill workaround) + `/healthz` + `/portal/login` form + staged-asset/service checks | the release (`bin/symmetry_control start`) after `Release.migrate()`, `/healthz` wait, `SYMMETRY_FIXTURE_MIX=mix`; the spec exercises the same routes | yes, carrier delta: the release is the contract's named carrier; the launcher loop and early-fail probes are host affordances, not assertions (the release log is uploaded on `always()`) |
 | planning | spec both projects + summary assertion (≥1 passed, no skip) | same invocation + `assert-playwright-json.py` | yes (stricter) |
 | planning | `taskkill` + port-free wait + mutex | `trap ... EXIT` | yes |
+| connection + planning | instance build isolation: `MIX_BUILD_PATH=control/_build/instances/<family>-<port>`, with an inherited value overridden and reported | not carried: the job compiles and runs `mix` from `control/` into the one shared `control/_build/dev`, and the release serves from its own extracted archive | **no** (recorded; carrier: a single job hosts one instance at a time, so no second dev build can collide — and the isolation suite's six harness cases stay Windows-only, so the Linux node step cannot assert it either) |
 
 Spec-side preconditions mapped to the new jobs: `portal-connections` needs the five
 `SYMMETRY_FIXTURE_*`/overrides plus the identity file — minted/written by the connection phase;
@@ -134,23 +137,35 @@ Spec-side preconditions mapped to the new jobs: `portal-connections` needs the f
 | assertion-program pin | `python3 scripts/ci/test-assert-playwright-json.py` | 0 | `Ran 17 tests … OK` |
 | workflow syntax | `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` | 0 | 0 findings |
 | YAML model | `python3 -c 'yaml.safe_load(...)'` | 0 | 15 jobs; the new job's `needs`/`if`/`runs-on` as pinned |
-| new inline bodies | `bash -n` over the 40 `shell: bash` `run: \|` bodies of `ci.yml` and the PowerShell parser over its 12 `shell: pwsh` bodies | 0 / 0 | 52 blocks, 0 syntax failures (parsed by their own shell); new bodies 27/48/6/2/48/28 lines ≤ 80 |
+| new inline bodies | `bash -n` over the 40 `shell: bash` `run: \|` bodies of `ci.yml` and the PowerShell parser over its 12 `shell: pwsh` bodies | 0 / 0 | 52 blocks, 0 syntax failures (parsed by their own shell); new bodies 27/48/6/2/60/30 lines ≤ 80 |
 | browser lint | `node node_modules/eslint/bin/eslint.js . --max-warnings 0` from `browser/` | 0 | 0 findings (converted specs included) |
 | collection parity | `playwright test --list` on the four converted specs, base copies vs HEAD | 0 / 0 | 62 normalized listing lines each, **identical** titles and order |
 | importer link check | `playwright test --list` (all 13 specs) | 0 | `Total: 168 tests in 13 files` |
 | node suites | `node --test scripts/connection-spec-env.test.mjs scripts/goal-context-fixtures.test.mjs` from `browser/` | 0 | 5 pass / 0 fail (the env suite drives the real CLI against the converted spec: 22 skipped ×2, the partial-identity collection failure, `Total: 22 tests in 1 file`) |
 | isolation suite | `node --test scripts/control-instance-isolation.test.mjs` | 0 | 7 pass / 0 fail (Windows; on Linux its six harness cases carry their own recorded skip) |
 | assertion shape (synthetic) | the four new `assert-playwright-json.py` invocations against well-formed synthetic reports | 0 | each verifies its file/title/projects |
-| step control-flow dry run | the four new step bodies (27/48/48/28 lines) extracted from `ci.yml` and run under `bash` with command-level stubs for `docker`/`curl`/`mix`/`tar`/`pnpm`/`jq` and the real assertion program | 0 / 0 / 0 / 0 | daemon: up → healthz → service check → spec → assertion; restart: record → fingerprint → restart → healthz → fingerprint equality → spec → assertion; connection: create/migrate → fixture start → identity+marker+healthz readiness → spec → assertion; planning: create/migrate → release extract/eval/start → healthz → spec → assertion (the psql argument log shows the exact fingerprint SQL and the interpolated project id) |
+| step control-flow dry run | the four new step bodies (27/48/6/2/60/30 lines) extracted from `ci.yml` and run under `bash` with command-level stubs for `docker`/`curl`/`mix`/`tar`/`pnpm`/`jq` and the real assertion program (implement stage; the two bodies the fix stage changed are re-run at the final bytes in the next row) | 0 / 0 / 0 / 0 | daemon: up → healthz → service check → spec → assertion; restart: record → fingerprint → restart → healthz → fingerprint equality → spec → assertion; connection: create/migrate → fixture start → identity+marker+healthz readiness → spec → assertion → canary guard; planning: create/migrate → release extract/eval/start → healthz → spec → assertion (the psql argument log shows the exact fingerprint SQL and the interpolated project id) |
+| fix-stage dry run of the two changed bodies | the connection and planning bodies extracted from `ci.yml` at the final tree and run under `bash` in a sandbox (stub `mix` that publishes the identity file, the transport marker, the logged identity and the recorded call; stub `tar` that lays down a release stub which fetches `PHX_HOST` as `config/runtime.exs:150` does; stub `curl`; stub `pnpm` writing the report shape; the real `scripts/ci/assert-playwright-json.py`) | 0 / 0 | connection: exit 0 with `render gate executed set verified: 0 skipped; 'a connection is created, inspected, tested and removed through the real API' passed in every project`, guard silent; planning: exit 0 with the same verified line for the planning title, `release eval` then `release start` in the stub log |
+| release provider probe (F1 mechanism, measured on this host) | `Config.Reader.read!("config/runtime.exs", env: :prod, target: :host)` with the CI planning env's `DATABASE_URL`/`SECRET_KEY_BASE`; then a scratch `mix release` project whose prod `runtime.exs` fetches `PHX_HOST`, run as `bin/<app> eval` | 1 (no `PHX_HOST`) / 0 (with it) | no-`PHX_HOST` run: `** (System.EnvError) could not fetch environment variable "PHX_HOST" because it is not set`, reported at `releases/<vsn>/runtime.exs` for the release `eval`; with `PHX_HOST=127.0.0.1` both runs succeed (`endpoint host=127.0.0.1`, `PROBE_EVAL_RAN`) |
 | diff hygiene | `git diff --check` | 0 | no whitespace errors |
 | DLP | case-insensitive profile-directory-fragment grep over the diff; backslash-u count over the raw diff | 1 / 0 | no host-path match, 0 backslash-u sequences |
 
-Apply stage re-run (simplify F1 + F2, the final tree): the same foreground gate set re-run with
+Apply stage re-run (simplify F1 + F2, then-final tree): the same foreground gate set re-run with
 unchanged counts — inventory `suites=16 wired=14 manual=2 unclassified=0`, classifier 31 tests,
 extraction 23, assertion-program 17, actionlint 0 findings, the 52 `run: |` bodies clean under
 their own parser (40 `bash -n`, 12 pwsh), `git diff --check` clean, DLP clean — plus `node --check`
 and eslint on the converted spec, its `playwright test --list` parity against the base bytes, the
 two node suites, and the converted 201 guard's stub-driven mutation (§7).
+
+Fix stage re-run (review F1–F4, final tree): the same foreground gate set re-run — inventory
+`suites=16 wired=14 manual=2 unclassified=0`, classifier 31 tests, extraction 23,
+assertion-program 17, actionlint 0 findings, the 52 `run: |` bodies clean under their own parser
+(40 `bash -n`, 12 pwsh), `git diff --check` clean, DLP clean — plus `node --check` on the touched
+`.mjs`, the `yaml.safe_load` model read (15 jobs, the new job's `needs`/`if`/`runs-on` as
+pinned), the fix-stage dry run of the two changed bodies (§5), and mutation rows d–g (§6). The
+`PHX_HOST` export and the connection canary guard are the only behaviour changes; the plan's
+isolation-suite count, its `PHX_HOST` description and this record's rows are the document
+changes.
 
 Not run on this host (recorded as missing, never passed):
 
@@ -171,6 +186,10 @@ Not run on this host (recorded as missing, never passed):
 | b | the asserted file absent from the run's report (a wired spec pointed at a file it did not run) | synthetic one-file report + the full assertion | exit 1: `missing portal-compose-restart.spec.mjs` and the missing case's `no result` |
 | c | a wired family labelled manual in the README while its step exists | README row added, gate run, row reverted | exit 1: `portal-connections.spec.mjs is both named by .github/workflows/ci.yml and listed in the browser/README.md manual matrix` |
 | control | the unmutated shapes | the same synthetic reports and the final README | exit 0 (a/b green on the two-file report; the inventory PASS after the revert) |
+| d | a provider canary written into the connection phase's fixture log (both canary values tried) | the step's trailing guard as it stands in `ci.yml`, run under `bash` against synthetic logs | exit 1 after the executed-set assertion had already verified: `canary scan FAILED: <log> contains gho_fixture_connection_token_canary` (and the Azure canary likewise) |
+| e | the provider-call log empty, then missing | the same guard lines, same synthetic logs | exit 1: `canary scan FAILED: provider-call log <path> is missing or empty: no recorded provider call to scan` |
+| f | the planning step's `export PHX_HOST=127.0.0.1` line deleted, with a release stub that fetches `PHX_HOST` as the prod runtime config does | the planning body extracted from `ci.yml` (final bytes) minus that one line, run in the fix-stage sandbox | exit 1: `** (System.EnvError) could not fetch environment variable "PHX_HOST" because it is not set` at the eval, before the release starts |
+| g | the unmutated shapes | the two bodies at the final bytes, clean logs, non-empty provider-call log, export present | exit 0 each, guard silent, and the real assertion program reports the verified executed set |
 
 The real reports of (a)/(b) are CI-side; the synthetic reports reproduce the report shape the
 Playwright JSON reporter writes for these specs (file, per-project case state), which is what the
@@ -207,8 +226,12 @@ republished at the final tree.
 - The CI steps' first real execution is the PR's CI run (the conductor's slow oracle). The
   instrument shapes, the workflow model, the assertion invocations and the collections were
   verified locally; the stack/release execution could not be.
-- The connection-fixture CI phase keeps the spec-side canary scans but not the driver's control
-  log + provider-call-log canary scan (§4, recorded “no”).
+- Connection-phase scan delta: the driver scans the control log, its `.err` file and the
+  provider-call log as three files; the CI step merges the fixture's stderr into its one log, so
+  the guard's single grep covers the log and its error stream (§4).
+- The planning step's `PHX_HOST` export is what the release's prod runtime config provider fetches
+  for every command, `eval` included (`config/runtime.exs:150`); an edit that moved it back onto
+  the `start` line alone reintroduces the abort (mutation row f, §6).
 - Remaining helper copies with no shared counterpart stay in the three wired specs: `columnOf`,
   `moveByKeyboard` (work-planning, compose-daemon, compose-restart), `itemDetail`, `openWork`,
   `fixtureDescription` (compose-daemon), `workItemDetail` (compose-restart). They are
@@ -221,7 +244,7 @@ republished at the final tree.
 
 ## 9. dLOC (D2, report-only)
 
-`git diff --numstat` over the changed files at the final tree: `ci.yml` +275/−0 (report-only per
+`git diff --numstat` over the changed files at the final tree: `ci.yml` +289/−0 (report-only per
 D2; the plan's ~+200 estimate), `browser/README.md` +11/−13, `portal-connections.spec.mjs`
 +74/−120, `portal-compose-daemon.spec.mjs` +15/−21, `portal-compose-restart.spec.mjs` +1/−2 —
-total **+376/−156 = +220** tracked lines, plus the plan (230) and this record.
+total **+390/−156 = +234** tracked lines, plus the plan (238) and this record (250).

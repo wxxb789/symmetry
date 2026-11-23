@@ -2072,6 +2072,18 @@ jobs:
             --expect-project mobile-chromium \
             --expect-file portal-connections.spec.mjs \
             'a connection is created, inspected, tested and removed through the real API'
+          # The fixture's provider tokens are canaries (scripts/ci/portal-connection-fixture.exs):
+          # a token in the control log or an unrecorded provider call is a leak, not evidence.
+          for canary in gho_fixture_connection_token_canary fixture-ado-access-token-canary; do
+            if grep --fixed-strings --quiet "$canary" "$fixture_log"; then
+              echo "canary scan FAILED: $fixture_log contains $canary" >&2
+              exit 1
+            fi
+          done
+          if [[ ! -s "$SYMMETRY_FIXTURE_TRANSPORT_LOG" ]]; then
+            echo "canary scan FAILED: provider-call log $SYMMETRY_FIXTURE_TRANSPORT_LOG is missing or empty: no recorded provider call to scan" >&2
+            exit 1
+          fi
       - name: Run the planning acceptance on the Control release
         timeout-minutes: 30
         shell: bash
@@ -2092,8 +2104,10 @@ jobs:
           mkdir -p control/_build/prod/rel
           tar --extract --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory control/_build/prod/rel
           control_bin=control/_build/prod/rel/symmetry_control/bin/symmetry_control
+          # The release evaluates the prod runtime config before any command, eval included.
+          export PHX_HOST=127.0.0.1
           "$control_bin" eval 'SymmetryControl.Release.migrate()'
-          PHX_HOST=127.0.0.1 PHX_SERVER=true PORT=4030 "$control_bin" start > "$RUNNER_TEMP/planning-release.log" 2>&1 &
+          PHX_SERVER=true PORT=4030 "$control_bin" start > "$RUNNER_TEMP/planning-release.log" 2>&1 &
           release=$!
           trap 'kill "$release" 2>/dev/null || true; wait "$release" 2>/dev/null || true' EXIT
           curl --fail --retry 60 --retry-delay 1 --retry-connrefused "$SYMMETRY_PORTAL_URL/healthz"
