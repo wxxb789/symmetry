@@ -126,7 +126,8 @@ callees became methods
 `validateLinuxCloneCleanup`, `validatePendingJournalEntriesAndDeliveries`),
 `validAcknowledgement` (the whole-journal argument became `runID` + `fence`), `RunJournal`
 (embedded block) and `RunJournal.HasProcessDetails` (delegates to
-`RunContainmentState.HasProcessDetails`, whose body hash equals the base method's) — plus the six
+`RunContainmentState.hasProcessDetails`, whose body hash equals the base method's; the sub-ledger
+helper is unexported at the review-fix revision, review F1) — plus the six
 the apply stage changed: `BindLinuxCloneReuse` (site 9 folded, §4), `LinuxCloneCleanupBeginEligible`
 (three containment operands dropped that `HasPendingContainment` already covers),
 `saveJournalLocked` and `writeJSONWithLimit` (duplicate unreachable nil-writer guards dropped),
@@ -250,13 +251,16 @@ no non-owned file is touched.
 
 ## 7. Exported surface, formatting, builds
 
-`go doc -all ./internal/state` base vs head (`scratch/godoc-final.diff`, 129 lines) contains
-only the intended additions: `type RunCloneState`, `type RunContainmentState`,
-`func (journal RunContainmentState) HasProcessDetails() bool`, `type RunGoalDeliveryState`,
-`type RunOutboxState`, and `RunJournal`'s struct block with the four embedded fields in place of
-the moved fields (every remaining field line and comment identical). No exported declaration is
-removed or renamed. The apply revision re-verified this: `go doc -all ./internal/state` there
-(`scratch/apply-doc.txt`) is byte-identical to `scratch/head-doc-final.txt`.
+`go doc -all ./internal/state` base vs head (re-measured at the review-fix revision; scratch
+`godoc-final.diff`, 150 lines, 68 added / 47 removed, zero added `func` lines) contains only the
+intended additions: `type RunCloneState`, `type RunContainmentState`,
+`type RunGoalDeliveryState`, `type RunOutboxState`, and `RunJournal`'s struct block with the four
+embedded fields in place of the moved fields (every remaining field line and comment identical).
+No exported declaration is removed or renamed. The earlier revision also exported
+`func (journal RunContainmentState) HasProcessDetails() bool`; the review-fix revision (review F1)
+renamed that sub-ledger helper to unexported `hasProcessDetails` — no file outside
+`daemon/internal/state` names `RunContainmentState`, and the exported
+`RunJournal.HasProcessDetails` keeps delegating — so the diff now has zero added `func` lines.
 
 ```
 gofmt -l internal/state                 # empty
@@ -393,7 +397,7 @@ moving-ref form refuses on a citation this slice does not own.
   The two such sequences the split test files carry are JSON duplicate-member fixtures that
   escape a leading ASCII letter of a key (`store_test.go`, `run_outbox_test.go`); both are
   verbatim relocations of lines that already exist at HEAD in `state_test.go`, so the change set
-  adds no new occurrence.
+  adds no net new occurrence (wording corrected at the review-fix revision, review F2).
 * Two observations outside this slice's owned set, recorded for a follow-up rather than edited:
   `scripts/ci/export-linux-v2-redacted-evidence.py:536` still names `state.go` as the owner of
   `isTerminalTransitionState`, which this slice moved to `journal_validation.go`; and
@@ -410,9 +414,9 @@ moving-ref form refuses on a citation this slice does not own.
   revision-bound historical records, with the full mapping recorded (§10).
 * Goldens are encoder-level round-trips over representative values, not validation fixtures:
   they pin the persisted byte contract of every journal family, not every validation branch.
-* `RunContainmentState.HasProcessDetails` is exported without a doc comment (the base comment
-  stays on the delegating `RunJournal.HasProcessDetails`); the owner comment policy prefers no
-  comments over restated ones.
+* `RunContainmentState.hasProcessDetails` (unexported at the review-fix revision, review F1)
+  carries no doc comment; the base comment stays on the delegating `RunJournal.HasProcessDetails`,
+  and the owner comment policy prefers no comments over restated ones.
 * Residual risk: the four sub-ledger blocks are embedded, so a future field added to a block is
   silently persisted at that block's position; the golden key test is the detector — it fails
   when a moved field's key appears outside its golden position.

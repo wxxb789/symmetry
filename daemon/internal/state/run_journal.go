@@ -95,7 +95,7 @@ func (journal RunJournal) Key() RunKey {
 // HasProcessDetails reports any retained process-ownership marker. A partial
 // marker is not evidence that its process has stopped.
 func (journal RunJournal) HasProcessDetails() bool {
-	return journal.RunContainmentState.HasProcessDetails()
+	return journal.RunContainmentState.hasProcessDetails()
 }
 
 // HasPendingContainment reports a durable containment authority, handoff, scan

@@ -44,7 +44,7 @@ type RunContainmentState struct {
 	ContainmentUnproven bool `json:"containment_unproven,omitempty"`
 }
 
-func (journal RunContainmentState) HasProcessDetails() bool {
+func (journal RunContainmentState) hasProcessDetails() bool {
 	return journal.PID != 0 || journal.ProcessIdentity != "" || !journal.StartedAt.IsZero()
 }
 
@@ -571,7 +571,7 @@ func (journal RunContainmentState) validateContainmentAuthority() error {
 
 func (journal RunContainmentState) validateContainmentHandoff(granted bool) error {
 	if journal.ContainmentHandoff != nil {
-		if journal.ContainmentAuthority != nil || journal.HasProcessDetails() || !granted {
+		if journal.ContainmentAuthority != nil || journal.hasProcessDetails() || !granted {
 			return errors.New("run journal containment handoff is invalid")
 		}
 		if err := journal.ContainmentHandoff.Validate(); err != nil {
@@ -598,15 +598,15 @@ func (journal RunContainmentState) validateContainmentCgroup(granted bool) error
 			return errors.New("run journal v2 cgroup reservation is invalid")
 		}
 		if reservation.AbortProof != nil && (journal.ContainmentUnproven || journal.ContainmentAuthority != nil ||
-			journal.ContainmentHandoff != nil || journal.HasProcessDetails()) {
+			journal.ContainmentHandoff != nil || journal.hasProcessDetails()) {
 			return errors.New("run journal aborted cgroup reservation has active owner state")
 		}
 		if reservation.PreGateStopReceipt != nil && (journal.ContainmentUnproven || journal.ContainmentAuthority != nil ||
-			journal.ContainmentHandoff != nil || journal.HasProcessDetails()) {
+			journal.ContainmentHandoff != nil || journal.hasProcessDetails()) {
 			return errors.New("run journal pre-gate cgroup receipt has active owner state")
 		}
 		if journal.ContainmentAuthority == nil && journal.ContainmentHandoff == nil {
-			if journal.HasProcessDetails() {
+			if journal.hasProcessDetails() {
 				return errors.New("uncommitted v2 cgroup reservation has process authority")
 			}
 		}
@@ -655,7 +655,7 @@ func (journal RunContainmentState) validateContainmentCgroupReleaseProof() error
 		if releaseProof.Validate() != nil || releaseProof.Version != authority.SupervisorHandoffVersionV2 ||
 			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
 			journal.ContainmentScans != nil || journal.ContainmentCgroupPreGateReleaseProof != nil ||
-			journal.HasProcessDetails() || journal.PID != 0 ||
+			journal.hasProcessDetails() || journal.PID != 0 ||
 			journal.ProcessIdentity != "" || !journal.StartedAt.IsZero() || journal.ContainmentUnproven {
 			return errors.New("run journal v2 cgroup release proof is invalid")
 		}
@@ -667,7 +667,7 @@ func (journal RunContainmentState) validateContainmentCgroupPreGateReleaseProof(
 	if releaseProof := journal.ContainmentCgroupPreGateReleaseProof; releaseProof != nil {
 		if releaseProof.Validate() != nil || journal.ContainmentCgroupReleaseProof != nil ||
 			journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil || journal.ContainmentCgroup != nil ||
-			journal.ContainmentScans != nil || journal.HasProcessDetails() || journal.PID != 0 ||
+			journal.ContainmentScans != nil || journal.hasProcessDetails() || journal.PID != 0 ||
 			journal.ProcessIdentity != "" || !journal.StartedAt.IsZero() || journal.ContainmentUnproven {
 			return errors.New("run journal pre-gate cgroup release proof is invalid")
 		}

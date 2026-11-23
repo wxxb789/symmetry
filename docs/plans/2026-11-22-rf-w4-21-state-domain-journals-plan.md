@@ -50,7 +50,11 @@ reads compile unchanged.
   `validateContainmentScans`, `validateContainmentCgroupReleaseProof`,
   `validateContainmentCgroupPreGateReleaseProof`,
   `requireLinuxScansCleanForAuthority`, `requireLinuxScansSealedForHandoff`,
-  `requireLinuxScansSealedForAuthority`.
+  `requireLinuxScansSealedForAuthority` — plus the base `HasProcessDetails` body as the
+  unexported `hasProcessDetails` (review-fix revision): no file outside `daemon/internal/state`
+  ever names `RunContainmentState`, so the sub-ledger method is unexported and its six
+  sub-ledger-internal call sites call it directly; the exported `RunJournal.HasProcessDetails`
+  stays declared and delegates, so the exported method surface is identical to base.
 * `RunCloneState`: `validateLinuxCloneIntentAbsent`,
   `validateLinuxCloneCleanupPending`, `validateLinuxCloneCleanupProof`,
   `linuxCloneStageCanAdvance(localState string)` — the four shipped receivers.
@@ -74,8 +78,13 @@ Exported predicates (`HasProcessDetails`, `HasPendingContainment`,
 `LinuxCloneCleanupBeginEligible`, `LinuxCloneCleanupIntentForJournal`) stay
 declared on `RunJournal`: the gates clause reads "`go doc` diff now records the
 intended exported-type additions only", which is the stricter of the two
-clauses; keeping exported methods in place makes the doc diff exactly the four
-new types plus `RunJournal`'s embedded field block. They still read the moved
+clauses. Re-measured at the review-fix revision (`go doc -all ./internal/state`, base
+`54026392` vs head; scratch `godoc-final.diff`): the diff is 150 lines, 68
+added / 47 removed, with zero added `func` lines — the added declarations are
+exactly `RunCloneState`, `RunContainmentState`, `RunGoalDeliveryState`,
+`RunOutboxState` and `RunJournal`'s struct block whose four embedded fields
+replace the moved field lines, and nothing is removed from the exported
+surface. They still read the moved
 fields through promotion; callers are unchanged. Free functions called from
 non-owned files or non-owned tests (`appendEvent` from `control.go`,
 `hasPendingTerminalTransition` from `control.go`, `linuxCloneArtifactReceiptRequired`
@@ -207,6 +216,8 @@ the slice head.
 ## 8. Out of scope
 
 Validator decomposition, error wrapping, unexporting (merged prerequisites);
+the review-fix revision's unexport of the `RunContainmentState` helper above is not
+that item — it exists to keep §2's exported-surface claim true;
 `goal_session.go`, `goal_delivery.go`, `provider_action.go`, `control.go`,
 `goal_usage.go`, `cgroup_release_linux.go`, the readers and the platform files;
 any behavioural change; test-unit splits inside functions; the app-side CAS
@@ -224,3 +235,16 @@ citation checker, `test-omo-control-native-evidence.py`, `wc -l`, `git diff
 --check`; (5) `docs/evidence/rf-w4-21-state-domain-journals-2026-11-22.md` and
 the implement-stage report. The AST tools and mutant harness run from a scratch
 directory outside the repository and are not committed.
+
+## 10. Known residuals (review-fix revision)
+
+* Review F2/P3 — accepted residual: the two test lines relocated verbatim as
+  `daemon/internal/state/store_test.go:146` (duplicate-member JSON fixture) and
+  `daemon/internal/state/run_outbox_test.go:24` (command-ack payload fixture)
+  carry the two-character JSON unicode-escape introducer (backslash followed by
+  the letter `u`) that the program's write rule names. The relocation is
+  net-zero (2 added / 2 removed; the base `state_test.go` lines are deleted),
+  so no new exposure is introduced, and no conforming alternative exists inside
+  the "test bodies stay byte-identical" clause — those escapes are the subject
+  of the duplicate-member tests. Removing the sequences needs a dedicated
+  follow-up that rewrites those fixture literals (a test-body change).
