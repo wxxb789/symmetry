@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
@@ -53,13 +54,15 @@ func TestSupervisoryInputWriteFailureSettlesOnceWithoutChangingLifecycle(t *test
 
 func TestPausedCleanProcessExitFailsAndPreservesArtifactsWhenRetentionWriteFails(t *testing.T) {
 	app, key, _ := supervisoryDaemon(t)
+	store := apptest.NewFaultStoreFrom(app.store.(*state.Store))
+	app.store = store
 	artifact := retainTestArtifact(t, app, key)
 	if !app.handleCommand(context.Background(), supervisoryCommand(key, "pause-1", "pause")) {
 		t.Fatal("pause intent not prepared")
 	}
 	supervisoryReceipt(t, app, key, "pause-1", "pause", "applied")
 	retentionAttempts := 0
-	app.options.retainWorkspace = func(state.RunKey) (state.RunJournal, error) {
+	store.OnRetainWorkspace = func(state.RunKey) (state.RunJournal, error) {
 		retentionAttempts++
 		return state.RunJournal{}, os.ErrPermission
 	}

@@ -671,10 +671,6 @@ func (daemon *daemon) persistContainmentStopReceipt(key state.RunKey, pid int, i
 func (daemon *daemon) persistProcessAuthority(key state.RunKey, pid int, identity string, value authority.Supervisor) error {
 	write := func() error {
 		candidate := value.Clone()
-		if daemon.options.recordProcessAuthority != nil {
-			_, err := daemon.options.recordProcessAuthority(key, pid, identity, candidate, daemon.now())
-			return err
-		}
 		_, err := daemon.store.SetProcessDetailsWithAuthority(key, pid, identity, daemon.now(), candidate)
 		return err
 	}
@@ -757,9 +753,6 @@ func (daemon *daemon) queueRecoveryTerminalTransition(ctx context.Context, key s
 	persisted := false
 	defer func() { finishTerminal(persisted) }()
 	queue := func() (state.RunJournal, error) {
-		if daemon.options.queueTerminalTransition != nil {
-			return daemon.options.queueTerminalTransition(key, transition, pendingAt)
-		}
 		return daemon.store.QueueTerminalTransitionAt(key, transition, pendingAt)
 	}
 	journal, queueErr := queue()

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
@@ -341,13 +342,18 @@ func TestGenericProcessMarkerClearFailureDoesNotBlockTerminalDelivery(t *testing
 	if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
+	fault := apptest.NewFaultStoreFrom(store)
 	clearStarted := make(chan struct{})
 	var clearOnce sync.Once
 	slots := make(chan struct{}, 1)
 	slots <- struct{}{}
+	fault.OnClearProcessDetails = func(state.RunKey, int, string) (state.RunJournal, error) {
+		clearOnce.Do(func() { close(clearStarted) })
+		return state.RunJournal{}, errors.New("durable clear failed")
+	}
 	d := &daemon{
 		config:  config.Config{CleanupTimeoutMS: 10000},
-		store:   store,
+		store:   fault,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: {
@@ -358,10 +364,6 @@ func TestGenericProcessMarkerClearFailureDoesNotBlockTerminalDelivery(t *testing
 		slots: slots,
 		options: options{
 			newID: ids(),
-			clearProcessDetails: func(state.RunKey, int, string) (state.RunJournal, error) {
-				clearOnce.Do(func() { close(clearStarted) })
-				return state.RunJournal{}, errors.New("durable clear failed")
-			},
 		},
 	}
 	d.waitForRunWithContext(context.Background(), key)
@@ -392,20 +394,21 @@ func TestGenericProcessMarkerClearReadbackReleasesSameActiveOwner(t *testing.T) 
 	if _, err := store.SetProcessDetails(key, 42, "test:42", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
+	fault := apptest.NewFaultStoreFrom(store)
 	active := &runningRun{process: fakeProcess{result: execution.Result{}}, cleanupBlocked: true}
+	fault.OnClearProcessDetails = func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
+		if _, err := store.ClearProcessDetails(key, pid, identity); err != nil {
+			return state.RunJournal{}, err
+		}
+		return state.RunJournal{}, errors.New("rename response was lost")
+	}
 	d := &daemon{
-		store:   store,
+		store:   fault,
 		control: &fakeControl{},
 		log:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		running: map[state.RunKey]*runningRun{key: active},
 		options: options{
 			newID: ids(),
-			clearProcessDetails: func(key state.RunKey, pid int, identity string) (state.RunJournal, error) {
-				if _, err := store.ClearProcessDetails(key, pid, identity); err != nil {
-					return state.RunJournal{}, err
-				}
-				return state.RunJournal{}, errors.New("rename response was lost")
-			},
 		},
 	}
 	d.waitForRunWithContext(context.Background(), key)

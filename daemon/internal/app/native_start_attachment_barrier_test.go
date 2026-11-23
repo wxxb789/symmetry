@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/app/apptest"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
@@ -17,9 +18,11 @@ func TestNativeStartAttachmentBarrierDefersCancellationUntilReceipt(t *testing.T
 	app, store, session, controlClient := nativeAdmissionDaemon(t, admission, validNativeTaskResult(t, admission), nil)
 	defer store.Close()
 
+	faultStore := apptest.NewFaultStoreFrom(store)
+	app.store = faultStore
 	readyEntered := make(chan struct{}, 1)
 	readyRelease := make(chan struct{})
-	app.options.markGoalSessionAttachDeliveryReady = func(key state.RunKey, localHandleID string) (state.RunJournal, error) {
+	faultStore.OnMarkGoalSessionAttachDeliveryReady = func(key state.RunKey, localHandleID string) (state.RunJournal, error) {
 		readyEntered <- struct{}{}
 		<-readyRelease
 		return store.MarkGoalSessionAttachDeliveryReady(key, localHandleID)
