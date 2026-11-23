@@ -147,9 +147,10 @@ reader fails when its directory is disturbed.
 4. `gofmt -l`; `go vet ./...`; `GOOS=windows go build ./...` and `GOOS=linux go build ./...`
    (test files compile for the host GOOS only); `git diff --check`.
 5. Citation corpus run (`scripts/ci/check-citation-existence.py`, P6) — the delete slice leaves the
-   audited corpus green (no retired string occurs in `docs/runbooks`, `docs/design/quality.md`,
-   `docs/archive/CLOSED-TODO.md`); historical citations of the retired paths live outside the
-   audited corpus and are listed in the PR body.
+   audited corpus green: none of the five retired version strings occurs in `docs/runbooks`,
+   `docs/design/quality.md`, `docs/archive/CLOSED-TODO.md` at the base revision (grep = 0), and the
+   appended CLOSED-TODO text cites only head-present paths (§7); historical citations of the retired
+   paths live outside the audited corpus and are listed in the PR body.
 6. WSL `go test -race -count=1 ./internal/harness/...` (Linux halves: `omo/linux.json`).
 7. Windows run only: `claude/adapter_cmdline_windows_test.go` and `omp/adapter_windows_test.go`
    compile and run under the host GOOS — recorded from the §5.1 output.
@@ -203,7 +204,7 @@ stage leaves the tree for verification). All gates foreground; Windows and WSL n
 | App cross-package consumer | `go test -count=1 -run TestNewHarnessRegistryBindsNativeAdaptersAndUnsupportedOpenCode ./internal/app/` | 0 | 1.1 s |
 | OpenCode freeze | `git diff --name-only -- daemon/internal/harness/testdata/opencode daemon/internal/harness/opencode` | — | empty |
 | Inventory artifact | the declared after-set vs the working tree | — | ARTIFACT-AGREES (83 files) |
-| DLP | `git diff` for `users/` and backslash-`u`; new files grepped directly | — | 0 / 0 |
+| DLP | the diff scanned for a user-profile path fragment and a backslash before `u`; new files grepped directly | — | 0 / 0 |
 
 Windows platform files exercised by the host run: `TestClaudeCandidateWindowsCommandLineFitsCreateProcessLimit`
 (`claude/adapter_cmdline_windows_test.go`) and `TestRetainedResumeAcceptsShortPathIdentity`
