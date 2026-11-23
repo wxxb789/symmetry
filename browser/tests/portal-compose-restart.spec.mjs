@@ -1,11 +1,10 @@
 import { expect, test } from "./fixtures.mjs";
-import { api, login } from "./readable-fixtures.mjs";
+import { api, login, workUrl } from "./readable-fixtures.mjs";
 
 const projectId = process.env.SYMMETRY_COMPOSE_PROJECT_ID;
 const projectKey = process.env.SYMMETRY_COMPOSE_PROJECT_KEY;
 const projectName = process.env.SYMMETRY_COMPOSE_PROJECT_NAME;
 
-const workUrl = (id) => `/portal/work/${id}`;
 const columnOf = (page, title) =>
   page
     .locator("[data-board-card]", { has: page.getByRole("link", { name: title }) })

@@ -47,7 +47,7 @@ import {
   monitorBrowserErrors,
   test
 } from "./fixtures.mjs";
-import { capture } from "./readable-fixtures.mjs";
+import { api, capture, createProject, deviceContextOptions, login, uniqueKey } from "./readable-fixtures.mjs";
 
 const fixtureVariables = [
   "SYMMETRY_OPERATOR_TOKEN",
@@ -68,7 +68,6 @@ if (isFixtureRun && missingVariables.length > 0) {
 test.skip(!isFixtureRun, "run browser/scripts/run-connection-fixture-tests.ps1 to publish the fixture identity");
 // The placeholders exist only for the skipped collection of a non-fixture run;
 // a run with the harness always carries all five values.
-const operatorToken = process.env.SYMMETRY_OPERATOR_TOKEN ?? "";
 const fixtureIdentity = process.env.SYMMETRY_FIXTURE_IDENTITY ?? "";
 const fixtureIdentityFile = process.env.SYMMETRY_FIXTURE_IDENTITY_FILE ?? "";
 const fixtureStateFile = process.env.SYMMETRY_FIXTURE_STATE_FILE ?? "";
@@ -92,7 +91,6 @@ test.describe.configure({ timeout: 120_000 });
 const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
 const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
 const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
-let projectSequence = 0;
 
 // The identity file is written by the fixture process started for this run, and
 // it names the port that process serves; the target must be that process before
@@ -106,36 +104,15 @@ async function assertFixtureTarget() {
   expect(String(identity.port), "fixture identity file must match the portal target port").toBe(portalUrl.port);
 }
 
-async function login(page) {
+const connectionsLogin = async (page) => {
   await assertFixtureTarget();
-  await page.goto("/portal/login?return_to=%2Fportal%2Fconnections");
-  await page.getByLabel("Operator token").fill(operatorToken);
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
-}
+  await login(page, "/portal/connections", { assert: [page.getByRole("heading", { level: 1, name: "Connections" })] });
+};
 
-async function api(page, path, { method = "POST", body } = {}) {
-  return page.evaluate(async ({ path, method, body }) => {
-    const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
-    const headers = method === "GET" ? { accept: "application/json" } : { "content-type": "application/json", "x-csrf-token": csrf };
-    const response = await fetch(path, {
-      method,
-      credentials: "same-origin",
-      headers,
-      ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
-    const text = await response.text();
-    return { status: response.status, contentType: response.headers.get("content-type"), text, body: text ? JSON.parse(text) : null };
-  }, { path, method, body });
-}
-
-async function createProject(page) {
-  // Project keys are ^[A-Z][A-Z0-9]{1,7}$; the sequence keeps runs distinct.
-  const key = `C${projectSequence += 1}${suffix}`.toUpperCase().slice(0, 8);
-  const response = await api(page, "/portal/api/projects", { body: { key, name: `Connection acceptance ${key}`, description: "Real Phoenix connection fixture" } });
-  expect(response.status).toBe(201);
-  return response.body.project.id;
-}
+const connectionProject = async (page) => {
+  const key = uniqueKey("C");
+  return (await createProject(page, { key, name: `Connection acceptance ${key}`, description: "Real Phoenix connection fixture" })).id;
+};
 
 // ── Fixture steering, projects, resources and work items ────────────────────
 
@@ -168,21 +145,21 @@ async function writeFixtureState(document) {
 const resetFixtureState = () => writeFixtureState({});
 
 async function createConnectionThroughApi(page, { provider = "github", name, account, capabilities }) {
-  const response = await api(page, "/portal/api/connections", { body: { provider, name, account_ref: account, capabilities } });
+  const response = await api(page, "POST", "/portal/api/connections", { provider, name, account_ref: account, capabilities });
   expect(response.status, JSON.stringify(response.body)).toBe(201);
   return response.body.connection.id;
 }
 
 async function bindResourceThroughApi(page, projectId, { kind, name, reference, connectionId }) {
-  const response = await api(page, `/portal/api/projects/${projectId}/resources`, { body: {
+  const response = await api(page, "POST", `/portal/api/projects/${projectId}/resources`, {
     kind, name, external_ref: reference, connection_id: connectionId
-  } });
+  });
   expect(response.status, JSON.stringify(response.body)).toBe(201);
   return response.body.resource;
 }
 
 async function readWorkspace(page, projectId) {
-  const response = await api(page, `/portal/api/workspace?project_id=${encodeURIComponent(projectId)}`, { method: "GET" });
+  const response = await api(page, "GET", `/portal/api/workspace?project_id=${encodeURIComponent(projectId)}`);
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   return response.body;
 }
@@ -194,7 +171,7 @@ function projectFromWorkspace(workspace, projectId) {
 }
 
 async function readBoundResource(page, connectionId, reference) {
-  const response = await api(page, "/portal/api/connections", { method: "GET" });
+  const response = await api(page, "GET", "/portal/api/connections");
   expect(response.status, JSON.stringify(response.body)).toBe(200);
   const connection = response.body.connections.find((candidate) => candidate.id === connectionId);
   expect(connection, `the connections read must serve connection ${connectionId}`).toBeTruthy();
@@ -226,21 +203,6 @@ async function bindResourceThroughConsole(page, { kind, name, reference, connect
 // page that owns the receipt; both are the 0007d notice surface, so the alert
 // carrying the server's code is asserted without pinning which one holds it.
 const refusalAlert = (page, code) => page.getByRole("alert").filter({ hasText: `(${code})` }).first();
-
-// browser.newContext does not inherit project use options, so the second
-// operator session copies the supported BrowserContextOptions fields from the
-// running project (exact viewport and device semantics) plus the target origin.
-const deviceContextOptions = (testInfo) => {
-  const use = testInfo.project.use ?? {};
-  return {
-    ...(use.viewport ? { viewport: use.viewport } : {}),
-    ...(use.isMobile === undefined ? {} : { isMobile: use.isMobile }),
-    ...(use.hasTouch === undefined ? {} : { hasTouch: use.hasTouch }),
-    ...(use.deviceScaleFactor === undefined ? {} : { deviceScaleFactor: use.deviceScaleFactor }),
-    ...(use.userAgent ? { userAgent: use.userAgent } : {}),
-    baseURL: portalOrigin
-  };
-};
 
 function recordApiBodies(page) {
   const responses = [];
@@ -377,7 +339,7 @@ async function createThroughConsole(page, { provider, name, account, capabilitie
 
 test("a connection is created, inspected, tested and removed through the real API", async ({ page }, testInfo) => {
   const recorded = recordApiBodies(page);
-  await login(page);
+  await connectionsLogin(page);
   const name = `GitHub fixture ${suffix}`;
 
   await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Work items", "CI"] });
@@ -419,7 +381,7 @@ test("a connection is created, inspected, tested and removed through the real AP
   // The detail unmounted with the removal; the page-level control that survives
   // it holds the keyboard instead of the document body.
   await expect(page.getByRole("button", { name: "New connection" })).toBeFocused();
-  const list = await api(page, "/portal/api/connections", { method: "GET" });
+  const list = await api(page, "GET", "/portal/api/connections");
   expect(list.status).toBe(200);
   expect(list.body.connections.filter((connection) => connection.name === name)).toEqual([]);
   expect(list.body.providers.map((provider) => provider.id).sort()).toEqual(["azure_devops", "github"]);
@@ -431,7 +393,7 @@ test("a connection is created, inspected, tested and removed through the real AP
 test("an expired provider session, a repeated submission and a refused submission stay actionable", async ({ page }, testInfo) => {
   allowBrowserError(page, /status of (401|422|502)/);
   const recorded = recordApiBodies(page);
-  await login(page);
+  await connectionsLogin(page);
   const name = `Expired fixture ${suffix}`;
 
   await createThroughConsole(page, { provider: "github", name, account: "expired-fixture", capabilities: ["CI"] });
@@ -447,15 +409,15 @@ test("an expired provider session, a repeated submission and a refused submissio
 
   // The same normalized submission is the same intent: the server replays the
   // applied connection instead of creating a second row.
-  const repeated = await api(page, "/portal/api/connections", { body: { provider: "github", name, account_ref: "expired-fixture", capabilities: ["ci"] } });
+  const repeated = await api(page, "POST", "/portal/api/connections", { provider: "github", name, account_ref: "expired-fixture", capabilities: ["ci"] });
   expect(repeated.status).toBe(200);
   expect(repeated.body.disposition).toBe("replayed");
-  const conflicting = await api(page, "/portal/api/connections", { body: { provider: "github", name, account_ref: "expired-fixture", capabilities: ["repositories"] } });
+  const conflicting = await api(page, "POST", "/portal/api/connections", { provider: "github", name, account_ref: "expired-fixture", capabilities: ["repositories"] });
   expect(conflicting.status).toBe(422);
   expect(conflicting.body.error.fields.provider.join(" ")).toContain("already has a connection with this name");
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(1);
-  const list = await api(page, "/portal/api/connections", { method: "GET" });
+  const list = await api(page, "GET", "/portal/api/connections");
   expect(list.body.connections.filter((connection) => connection.name === name)).toHaveLength(1);
 
   // The console refuses the conflicting submission with the server's own reason
@@ -483,17 +445,17 @@ test("an expired provider session, a repeated submission and a refused submissio
 test("stale updates and concurrent deletion reconcile to the server's current state", async ({ page }, testInfo) => {
   allowBrowserError(page, /status of (404|409)/);
   const recorded = recordApiBodies(page);
-  await login(page);
+  await connectionsLogin(page);
   const name = `Stale fixture ${suffix}`;
 
   await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Repositories"] });
-  const listed = await api(page, "/portal/api/connections", { method: "GET" });
+  const listed = await api(page, "GET", "/portal/api/connections");
   const created = listed.body.connections.find((connection) => connection.name === name);
   expect(created).toBeTruthy();
 
   // Another operator changes the connection while this page is open.
   const renamed = `${name} renamed`;
-  const external = await api(page, `/portal/api/connections/${created.id}`, { method: "PATCH", body: { version: created.version, name: renamed } });
+  const external = await api(page, "PATCH", `/portal/api/connections/${created.id}`, { version: created.version, name: renamed });
   expect(external.status).toBe(200);
 
   await page.getByRole("button", { name: new RegExp(name) }).click();
@@ -509,9 +471,9 @@ test("stale updates and concurrent deletion reconcile to the server's current st
 
   // A concurrent removal wins: the second delete is refused and the console
   // reconciles to the server's state instead of reporting success.
-  const current = await api(page, "/portal/api/connections", { method: "GET" });
+  const current = await api(page, "GET", "/portal/api/connections");
   const target = current.body.connections.find((connection) => connection.name === renamed);
-  const removedElsewhere = await api(page, `/portal/api/connections/${target.id}?version=${target.version}`, { method: "DELETE" });
+  const removedElsewhere = await api(page, "DELETE", `/portal/api/connections/${target.id}?version=${target.version}`);
   expect(removedElsewhere.status).toBe(200);
   await page.getByRole("button", { name: new RegExp(renamed) }).click();
   await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
@@ -526,22 +488,22 @@ test("stale updates and concurrent deletion reconcile to the server's current st
 
 test("a capability update visibly resets dependent resource health and sync state", async ({ page }, testInfo) => {
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
   const name = `Bound fixture ${suffix}`;
 
   await createThroughConsole(page, { provider: "github", name, account: "acme-fixture", capabilities: ["Repositories", "Changes", "CI"] });
-  const listed = await api(page, "/portal/api/connections", { method: "GET" });
+  const listed = await api(page, "GET", "/portal/api/connections");
   const connection = listed.body.connections.find((candidate) => candidate.name === name);
   // A provider resource must be owned by the connection's account: the GitHub
   // module refuses a reference whose owner is not the connection's account_ref.
-  const attached = await api(page, `/portal/api/projects/${projectId}/resources`, { body: {
+  const attached = await api(page, "POST", `/portal/api/projects/${projectId}/resources`, {
     kind: "repository", name: "symmetry", external_ref: "acme-fixture/symmetry", connection_id: connection.id
-  } });
+  });
   expect(attached.status).toBe(201);
   const resourceId = attached.body.resource.id;
 
-  const synced = await api(page, `/portal/api/resources/${resourceId}/sync`, {});
+  const synced = await api(page, "POST", `/portal/api/resources/${resourceId}/sync`);
   expect(synced.status).toBe(200);
   expect(synced.body.resource.status).toBe("healthy");
   expect(synced.body.resource.sync_status).toBe("synced");
@@ -563,7 +525,7 @@ test("a capability update visibly resets dependent resource health and sync stat
   await expect(settings).toBeHidden();
   await expect(page.getByRole("status").first()).toContainText("Bound resource health and sync state was reset");
 
-  const after = await api(page, "/portal/api/connections", { method: "GET" });
+  const after = await api(page, "GET", "/portal/api/connections");
   const reset = after.body.connections.find((candidate) => candidate.name === name);
   expect(reset.resources).toHaveLength(1);
   expect(reset.resources[0].status).toBe("unknown");
@@ -584,7 +546,7 @@ test("a capability update visibly resets dependent resource health and sync stat
 test("Azure DevOps connection management runs on the new route", async ({ page }, testInfo) => {
   allowBrowserError(page, /status of (401|502)/);
   const recorded = recordApiBodies(page);
-  await login(page);
+  await connectionsLogin(page);
   const name = `Azure fixture ${suffix}`;
 
   await createThroughConsole(page, { provider: "azure_devops", name, account: "acme-fixture", capabilities: ["Work items"] });
@@ -614,7 +576,7 @@ test("Azure DevOps connection management runs on the new route", async ({ page }
   // accessibility tree, so a role-based count can pass while the row persists).
   await expect(page.getByRole("dialog", { name: new RegExp(`Remove ${name}`) })).toBeHidden();
   await expect(page.getByRole("button", { name: new RegExp(name) })).toHaveCount(0);
-  const removed = await api(page, "/portal/api/connections", { method: "GET" });
+  const removed = await api(page, "GET", "/portal/api/connections");
   expect(removed.status).toBe(200);
   expect(removed.body.connections.filter((connection) => connection.name === name)).toEqual([]);
 
@@ -633,11 +595,11 @@ test("Azure DevOps connection management runs on the new route", async ({ page }
 test("a GitHub repository resource is bound, synced, updated and unbound through the console", async ({ page }, testInfo) => {
   allowBrowserError(page, /status of 409/);
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
   const connectionName = `Resource fixture ${suffix}`;
   await createThroughConsole(page, { provider: "github", name: connectionName, account: "acme-fixture", capabilities: ["Repositories"] });
-  const directory = await api(page, "/portal/api/connections", { method: "GET" });
+  const directory = await api(page, "GET", "/portal/api/connections");
   const connection = directory.body.connections.find((candidate) => candidate.name === connectionName);
   expect(connection, "the connections read must serve this test's connection").toBeTruthy();
   const reference = `acme-fixture/repository-${suffix}`;
@@ -689,7 +651,7 @@ test("a GitHub repository resource is bound, synced, updated and unbound through
   await resourceControl(page, "Update Alpha").click();
   const updateDialog = page.getByRole("dialog", { name: "Update resource" });
   await expect(updateDialog).toBeVisible();
-  const movedElsewhere = await api(page, `/portal/api/resources/${synced.id}`, { method: "PATCH", body: { version: synced.version, name: "Beta" } });
+  const movedElsewhere = await api(page, "PATCH", `/portal/api/resources/${synced.id}`, { version: synced.version, name: "Beta" });
   expect(movedElsewhere.status, JSON.stringify(movedElsewhere.body)).toBe(200);
   await updateDialog.getByLabel("Name").fill("Alpha renamed");
   await updateDialog.getByRole("button", { name: "Save", exact: true }).click();
@@ -710,7 +672,7 @@ test("a GitHub repository resource is bound, synced, updated and unbound through
   // and the unbind dialog submits the version it opened with.
   const reconciled = await readBoundResource(page, connection.id, reference);
   expect(reconciled.name).toBe("Beta");
-  const movedAgain = await api(page, `/portal/api/resources/${reconciled.id}`, { method: "PATCH", body: { version: reconciled.version, name: "Gamma" } });
+  const movedAgain = await api(page, "PATCH", `/portal/api/resources/${reconciled.id}`, { version: reconciled.version, name: "Gamma" });
   expect(movedAgain.status, JSON.stringify(movedAgain.body)).toBe(200);
   await resourceControl(page, "Unbind Beta").click();
   const unbindDialog = page.getByRole("dialog", { name: "Unbind Beta?" });
@@ -766,8 +728,8 @@ test("a GitHub repository resource is bound, synced, updated and unbound through
 test("a provider failure and an ambiguous outcome stay explicit and the next readback writes the provider's answer", async ({ page, isMobile }, testInfo) => {
   allowBrowserError(page, /status of 502/);
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
   const connectionName = `Sync fixture ${suffix}`;
   const connectionId = await createConnectionThroughApi(page, {
     name: connectionName,
@@ -891,11 +853,11 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   expect(deliveryRepository.sync_status).toBe("synced");
   const deliveryPullRequestUrl = `https://github.com/${repositoryReference}/pull/42`;
   const deliveryTitle = `Delivery evidence ${suffix}`;
-  const deliveryCreated = await api(page, `/portal/api/projects/${projectId}/work-items`, { body: {
+  const deliveryCreated = await api(page, "POST", `/portal/api/projects/${projectId}/work-items`, {
     title: deliveryTitle,
     repository_resource_id: deliveryRepository.id,
     pull_request_url: deliveryPullRequestUrl
-  } });
+  });
   expect(deliveryCreated.status, JSON.stringify(deliveryCreated.body)).toBe(201);
   const deliveryWorkItemId = deliveryCreated.body.work_item.id;
   // Until a sync reads the provider's answer, the item serves the operator's
@@ -915,7 +877,7 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   expect((await deliverySync).status()).toBe(200);
   const deliveryRepositorySynced = await readBoundResource(page, connectionId, repositoryReference);
   expect(deliveryRepositorySynced.sync_status).toBe("synced");
-  const deliveryRead = await api(page, `/portal/api/work-items/${deliveryWorkItemId}`, { method: "GET" });
+  const deliveryRead = await api(page, "GET", `/portal/api/work-items/${deliveryWorkItemId}`);
   expect(deliveryRead.status, JSON.stringify(deliveryRead.body)).toBe(200);
   const providerDelivery = deliveryRead.body.work_item.delivery;
   expect(providerDelivery.pull_request.source).toBe("provider");
@@ -986,11 +948,11 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   allowBrowserError(page, /status of 400/);
   const mismatchedPullRequestUrl = `https://github.com/acme-fixture/other-${suffix}/pull/42`;
   const mismatchedTitle = `Mismatched delivery ${suffix}`;
-  const mismatchedCreated = await api(page, `/portal/api/projects/${projectId}/work-items`, { body: {
+  const mismatchedCreated = await api(page, "POST", `/portal/api/projects/${projectId}/work-items`, {
     title: mismatchedTitle,
     repository_resource_id: deliveryRepository.id,
     pull_request_url: mismatchedPullRequestUrl
-  } });
+  });
   expect(mismatchedCreated.status, JSON.stringify(mismatchedCreated.body)).toBe(201);
   const mismatchedWorkItemId = mismatchedCreated.body.work_item.id;
   const mismatchedDelivery = mismatchedCreated.body.work_item.delivery;
@@ -1016,9 +978,9 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   // The refusal moved the check marker but kept the last good sync marker.
   expect(Date.parse(refusedRepository.last_synced_at)).toBeLessThan(Date.parse(refusedRepository.last_checked_at));
 
-  const mismatchedAfter = await api(page, `/portal/api/work-items/${mismatchedWorkItemId}`, { method: "GET" });
+  const mismatchedAfter = await api(page, "GET", `/portal/api/work-items/${mismatchedWorkItemId}`);
   expect(mismatchedAfter.body.work_item.delivery).toEqual(mismatchedDelivery);
-  const providerDeliveryAfter = await api(page, `/portal/api/work-items/${deliveryWorkItemId}`, { method: "GET" });
+  const providerDeliveryAfter = await api(page, "GET", `/portal/api/work-items/${deliveryWorkItemId}`);
   // The refusal writes nothing: the sibling item's provider-owned delivery is
   // intact, and the console sync's own receipt is the state above.
   expect(providerDeliveryAfter.body.work_item.delivery).toMatchObject({
@@ -1048,9 +1010,9 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
 test("project switching discards a late sync continuation and never writes into the new project", async ({ page, browser }, testInfo) => {
   allowBrowserError(page, /status of 502/);
   const recorded = recordApiBodies(page);
-  await login(page);
-  const first = await createProject(page);
-  const second = await createProject(page);
+  await connectionsLogin(page);
+  const first = await connectionProject(page);
+  const second = await connectionProject(page);
   const connectionName = `Switch fixture ${suffix}`;
   const connectionId = await createConnectionThroughApi(page, {
     name: connectionName,
@@ -1151,12 +1113,12 @@ test("project switching discards a late sync continuation and never writes into 
   // Cross-operator: an independent session reads the same served state and
   // settles its own project while the first page keeps the second selected.
   await resetFixtureState();
-  const context = await browser.newContext(deviceContextOptions(testInfo));
+  const context = await browser.newContext(deviceContextOptions(testInfo, { baseURL: portalOrigin }));
   const operator = await context.newPage();
   monitorBrowserErrors(operator);
   const operatorRecorded = recordApiBodies(operator);
   try {
-    await login(operator);
+    await connectionsLogin(operator);
     // The fresh session reads the whole project directory at login, so the
     // scope is selected in-app instead of loading a second document.
     await operator.getByLabel("Project", { exact: true }).selectOption(first);
@@ -1182,9 +1144,9 @@ test("project switching discards a late sync continuation and never writes into 
 test("external work items keep their identity, their provider-owned lock and their availability", async ({ page, isMobile }, testInfo) => {
   allowBrowserError(page, /status of 409/);
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
-  const otherProjectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
+  const otherProjectId = await connectionProject(page);
   const connectionName = `Assignment fixture ${suffix}`;
   const connectionId = await createConnectionThroughApi(page, {
     name: connectionName,
@@ -1201,7 +1163,7 @@ test("external work items keep their identity, their provider-owned lock and the
   await bindResourceThroughApi(page, otherProjectId, { kind: "repository", name: "Other repository", reference: otherReference, connectionId });
   await writeFixtureState({ github: { issues: { [issuesReference]: [101, 102] } } });
 
-  const synchronized = await api(page, `/portal/api/resources/${issues.id}/sync`, {});
+  const synchronized = await api(page, "POST", `/portal/api/resources/${issues.id}/sync`);
   expect(synchronized.status, JSON.stringify(synchronized.body)).toBe(200);
   const workspace = await readWorkspace(page, projectId);
   const imported = projectFromWorkspace(workspace, projectId).work_items.filter((item) => item.external?.resource_id === issues.id);
@@ -1213,7 +1175,7 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(subject.external.available).toBe(true);
   expect(subject.external.assignee).toBe("fixture-assignee");
 
-  const detailRead = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  const detailRead = await api(page, "GET", `/portal/api/work-items/${subject.id}`);
   expect(detailRead.status, JSON.stringify(detailRead.body)).toBe(200);
   expect(detailRead.body.work_item.external.id).toBe("101");
   expect(detailRead.body.work_item.external.url).toBe(subject.external.url);
@@ -1267,7 +1229,7 @@ test("external work items keep their identity, their provider-owned lock and the
   await dialog.getByLabel("CI resource").selectOption(pipeline.id);
   await dialog.getByRole("button", { name: "Save assignment", exact: true }).click();
   await expect(dialog).toBeHidden();
-  const assigned = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  const assigned = await api(page, "GET", `/portal/api/work-items/${subject.id}`);
   expect(assigned.body.work_item.repository_resource_id).toBe(repository.id);
   expect(assigned.body.work_item.ci_resource_id).toBe(pipeline.id);
   expect(assigned.body.work_item.assignee.type).toBe("agent");
@@ -1291,7 +1253,7 @@ test("external work items keep their identity, their provider-owned lock and the
 
   // Provider-owned fields stay locked on the API even though this surface
   // renders no control for them.
-  const refusedTitle = await api(page, `/portal/api/work-items/${subject.id}`, { method: "PATCH", body: { version: assigned.body.work_item.version, title: "Provider-owned change" } });
+  const refusedTitle = await api(page, "PATCH", `/portal/api/work-items/${subject.id}`, { version: assigned.body.work_item.version, title: "Provider-owned change" });
   expect(refusedTitle.status, JSON.stringify(refusedTitle.body)).toBe(409);
   expect(refusedTitle.body.error.code).toBe("provider_owned");
   expect(await detail.getByRole("textbox", { name: /title/i }).count()).toBe(0);
@@ -1310,12 +1272,12 @@ test("external work items keep their identity, their provider-owned lock and the
   // A readback that omits the item marks it unavailable: the detail renders it
   // unavailable, no run or retry control exists, and the readback refuses it.
   await writeFixtureState({ github: { issues: { [issuesReference]: [102] } } });
-  const shrunk = await api(page, `/portal/api/resources/${issues.id}/sync`, {});
+  const shrunk = await api(page, "POST", `/portal/api/resources/${issues.id}/sync`);
   expect(shrunk.status, JSON.stringify(shrunk.body)).toBe(200);
-  const unavailable = await api(page, `/portal/api/work-items/${subject.id}`, { method: "GET" });
+  const unavailable = await api(page, "GET", `/portal/api/work-items/${subject.id}`);
   expect(unavailable.body.work_item.external.available).toBe(false);
   expect(unavailable.body.work_item.can_start).toBe(false);
-  const stillAvailable = await api(page, `/portal/api/work-items/${closed.id}`, { method: "GET" });
+  const stillAvailable = await api(page, "GET", `/portal/api/work-items/${closed.id}`);
   expect(stillAvailable.body.work_item.external.available).toBe(true);
   // Back on the read-only detail (the clause check above left the classic
   // surface open), the served readback renders it unavailable.
@@ -1348,11 +1310,11 @@ test("external work items keep their identity, their provider-owned lock and the
 
 test("Azure DevOps repository, board and pipeline resources bind and sync against the fixture documents", async ({ page }, testInfo) => {
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
   const connectionName = `Azure resources ${suffix}`;
   await createThroughConsole(page, { provider: "azure_devops", name: connectionName, account: "acme-fixture", capabilities: ["Repositories", "Work items", "CI"] });
-  const directory = await api(page, "/portal/api/connections", { method: "GET" });
+  const directory = await api(page, "GET", "/portal/api/connections");
   const connection = directory.body.connections.find((candidate) => candidate.name === connectionName);
   expect(connection, "the connections read must serve this test's connection").toBeTruthy();
   const references = {
@@ -1443,8 +1405,8 @@ test("a failed workspace re-read after a write surfaces the failure instead of t
   // reports it as a console error like any failed subresource.
   allowBrowserError(page, /net::ERR_INTERNET_DISCONNECTED/);
   const recorded = recordApiBodies(page);
-  await login(page);
-  const projectId = await createProject(page);
+  await connectionsLogin(page);
+  const projectId = await connectionProject(page);
   const connectionId = await createConnectionThroughApi(page, {
     name: `Re-read failure ${suffix}`,
     account: "acme-fixture",

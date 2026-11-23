@@ -13,26 +13,29 @@
 // The retired classic pieces are named in the migration comments at the point
 // they were replaced, and in browser/README.md.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
-import { api, attachResource, createWorkItem, login, workspace } from "./readable-fixtures.mjs";
+import {
+  api,
+  attachResource,
+  createWorkItem,
+  login,
+  projectUrl,
+  servedColumnTitles,
+  uniqueKey,
+  workUrl,
+  workspace
+} from "./readable-fixtures.mjs";
 
 const composeEnabled = process.env.SYMMETRY_COMPOSE_DAEMON === "1";
 
-function uniqueProject(prefix = "DC") {
-  const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
-    .slice(-6)
-    .toUpperCase();
-  return { key: `${prefix}${suffix}`.slice(0, 8), name: `Compose daemon ${suffix}` };
-}
+const uniqueProject = (prefix = "DC") => {
+  const key = uniqueKey(prefix);
+  return { key, name: `Compose daemon ${key}` };
+};
 
 function fixtureDescription(mode, description) {
   return `[symmetry-fake-agent:${mode}]\n${description}`;
 }
 
-const projectUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
-};
-const workUrl = (id) => `/portal/work/${id}`;
 // The pages render more than one role=status region (notice lines and sr-only
 // announcers), so every notice assertion is scoped by its text.
 const statusNotice = (scope, text) => scope.locator('p[role="status"]', { hasText: text });
@@ -48,15 +51,6 @@ const renderedColumnTitles = (page, state) =>
       ),
     state
   );
-async function servedColumnTitles(page, projectId, state) {
-  const project = (await workspace(page, projectId)).body.projects.find(
-    (candidate) => candidate.id === projectId
-  );
-  return project.work_items
-    .filter((item) => item.status === state)
-    .sort((left, right) => left.position - right.position)
-    .map((item) => item.title);
-}
 async function moveByKeyboard(page, title, key) {
   const card = boardCard(page, title);
   await card.focus();
