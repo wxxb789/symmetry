@@ -259,7 +259,7 @@ Not run on this host (recorded as missing, never passed):
   the CLI's JSON leaf titles match the 18-title assertion exactly.
 - the Compose stack in WSL: `wsl.exe -d Ubuntu-24.04 -u accept docker version` resolves the
   distro's `docker` to the Windows desktop CLI (its contexts target the Windows named pipe) and
-  fails to connect; the distro has no `/var/run/docker.sock`, no `dockerd` and an inactive
+  fails to connect; the distro serves no Docker daemon socket, has no `dockerd` and an inactive
   `docker` service, so the daemon spec cannot run there either.
 - the render gate and the new jobs' end-to-end runs: conductor-verified on the PR.
 
