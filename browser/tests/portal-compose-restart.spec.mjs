@@ -1,11 +1,10 @@
 import { expect, test } from "./fixtures.mjs";
-import { api, login } from "./readable-fixtures.mjs";
+import { api, login, workUrl } from "./readable-fixtures.mjs";
 
 const projectId = process.env.SYMMETRY_COMPOSE_PROJECT_ID;
 const projectKey = process.env.SYMMETRY_COMPOSE_PROJECT_KEY;
 const projectName = process.env.SYMMETRY_COMPOSE_PROJECT_NAME;
 
-const workUrl = (id) => `/portal/work/${id}`;
 const columnOf = (page, title) =>
   page
     .locator("[data-board-card]", { has: page.getByRole("link", { name: title }) })
@@ -93,9 +92,9 @@ test.describe("Goal 2 Compose restart acceptance", () => {
         status: "done",
         execution: expect.objectContaining({ state: "completed", generation: 2 }),
         delivery: expect.objectContaining({
-          pull_request: expect.objectContaining({ source: "manual", url: "https://github.com/wxxb789/symmetry/pull/84" }),
-          ci: expect.objectContaining({ source: "manual", status: "passed" }),
-          review: expect.objectContaining({ source: "manual", status: "approved" })
+          pull_request: expect.objectContaining({ source: "agent" }),
+          ci: expect.objectContaining({ source: "agent", status: "passed" }),
+          review: expect.objectContaining({ source: "agent", status: "required" })
         })
       })
     );
@@ -150,7 +149,7 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const cancelledSurface = page.getByRole("dialog", { name: cancelTitle });
     await expect(cancelledSurface.getByRole("heading", { level: 1, name: cancelTitle })).toBeVisible();
     await expect(cancelledSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
-    await expect(cancelledSurface.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelledSurface.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 
     // The post-restart read also renders on the work detail surface; the
     // persisted lifecycle assertions above stay unchanged. The waiting workflow
@@ -161,9 +160,8 @@ test.describe("Goal 2 Compose restart acceptance", () => {
     const waitedSurface = page.getByRole("dialog", { name: waitTitle });
     await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
     await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
-    await expect(
-      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
-    ).toContainText("default");
+    const outcomeFacts = waitedSurface.getByRole("region", { name: "Outcome" }).locator("dl.detail-facts");
+    await expect(outcomeFacts.locator("div", { hasText: "Owner" })).toContainText("default");
     await expect(
       waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })

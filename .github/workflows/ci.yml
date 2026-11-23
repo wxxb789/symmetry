@@ -1844,3 +1844,331 @@ jobs:
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-pi-diagnostic.json
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-opencode-diagnostic.json
             ${{ runner.temp }}/rootless-compose-evidence-${{ github.run_id }}-${{ github.run_attempt }}/rootless-compose-unprovisioned-diagnostic.json
+
+      # The smoke step's stack is torn down by its own EXIT trap, so the Compose
+      # browser family provisions, uses and tears down a stack of its own.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.17.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
+      - name: Run the Compose daemon acceptance on a stack this job provisions
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          set -Eeuo pipefail
+          project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          origin_override="$RUNNER_TEMP/compose.browser-origin.yaml"
+          cat > "$origin_override" <<'EOF'
+          services:
+            control:
+              environment:
+                PHX_HOST: 127.0.0.1
+            control-migrate:
+              environment:
+                PHX_HOST: 127.0.0.1
+          EOF
+          compose=(docker compose --project-name "$project" --file compose.yaml --file "$origin_override")
+          "${compose[@]}" up --build --detach
+          curl --fail --silent --show-error --retry 90 --retry-delay 1 --retry-all-errors http://127.0.0.1:4000/healthz
+          for attempt in {1..30}; do
+            if "${compose[@]}" ps --status running --services | grep --fixed-strings --line-regexp daemon >/dev/null; then
+              break
+            fi
+            if (( attempt == 30 )); then
+              "${compose[@]}" ps >&2
+              "${compose[@]}" logs --no-color daemon control postgres >&2 || true
+              echo 'the daemon service did not stay running' >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          export SYMMETRY_COMPOSE_DAEMON=1
+          export SYMMETRY_PORTAL_URL=http://127.0.0.1:4000
+          export SYMMETRY_OPERATOR_TOKEN=development-operator-token
+          export SYMMETRY_PLAYWRIGHT_JSON_REPORT="$RUNNER_TEMP/compose-daemon-report.json"
+          pnpm --filter symmetry-browser-acceptance test tests/portal-compose-daemon.spec.mjs --project=desktop-chromium
+          python3 scripts/ci/assert-playwright-json.py "$SYMMETRY_PLAYWRIGHT_JSON_REPORT" \
+            --expect-skipped 0 \
+            --expect-project desktop-chromium \
+            --expect-file portal-compose-daemon.spec.mjs \
+            'the production Compose stack completes F1-F7 and persists each outcome'
+      - name: Verify the control restart preserves the Compose workspace
+        shell: bash
+        timeout-minutes: 15
+        run: |
+          set -Eeuo pipefail
+          project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose=(docker compose --project-name "$project" --file compose.yaml --file "$RUNNER_TEMP/compose.browser-origin.yaml")
+          record=$("${compose[@]}" exec -T postgres psql -U symmetry -d symmetry_dev -At -F '|' \
+            -c "SELECT p.id, p.key, p.name FROM projects p WHERE p.key LIKE 'DC%' ORDER BY p.inserted_at DESC LIMIT 1;")
+          IFS='|' read -r project_id project_key project_name <<< "$record"
+          if [[ -z "$project_id" || -z "$project_key" || -z "$project_name" ]]; then
+            echo 'the Compose acceptance workspace was not found' >&2
+            exit 1
+          fi
+          fingerprint_sql=$(cat <<SQL
+          SELECT md5(jsonb_build_object(
+            'project', to_jsonb(p) - 'inserted_at' - 'updated_at',
+            'resources', COALESCE((SELECT jsonb_agg(to_jsonb(r) - 'inserted_at' - 'updated_at' ORDER BY r.id) FROM project_resources r WHERE r.project_id = p.id), '[]'::jsonb),
+            'work_items', COALESCE((SELECT jsonb_agg(to_jsonb(w) - 'inserted_at' - 'updated_at' ORDER BY w.id) FROM work_items w WHERE w.project_id = p.id), '[]'::jsonb),
+            'tasks', COALESCE((SELECT jsonb_agg(to_jsonb(t) - 'inserted_at' - 'updated_at' ORDER BY t.id) FROM tasks t WHERE t.id IN (SELECT orchestration_task_id FROM work_items WHERE project_id = p.id)), '[]'::jsonb),
+            'runs', COALESCE((SELECT jsonb_agg(to_jsonb(rn) - 'inserted_at' - 'updated_at' ORDER BY rn.id) FROM runs rn WHERE rn.task_id IN (SELECT orchestration_task_id FROM work_items WHERE project_id = p.id)), '[]'::jsonb),
+            'events', COALESCE((SELECT jsonb_agg(to_jsonb(e) - 'inserted_at' ORDER BY e.id) FROM run_events e WHERE e.run_id IN (SELECT rn.id FROM runs rn WHERE rn.task_id IN (SELECT orchestration_task_id FROM work_items WHERE project_id = p.id))), '[]'::jsonb),
+            'transitions', COALESCE((SELECT jsonb_agg(to_jsonb(tn) - 'inserted_at' ORDER BY tn.id) FROM run_transitions tn WHERE tn.run_id IN (SELECT rn.id FROM runs rn WHERE rn.task_id IN (SELECT orchestration_task_id FROM work_items WHERE project_id = p.id))), '[]'::jsonb),
+            'commands', COALESCE((SELECT jsonb_agg(to_jsonb(c) - 'inserted_at' - 'updated_at' ORDER BY c.id) FROM commands c WHERE c.task_id IN (SELECT orchestration_task_id FROM work_items WHERE project_id = p.id)), '[]'::jsonb)
+          )::text)
+          FROM projects p
+          WHERE p.id = '$project_id';
+          SQL
+          )
+          fingerprint() {
+            "${compose[@]}" exec -T postgres psql -U symmetry -d symmetry_dev -At -c "$fingerprint_sql"
+          }
+          before=$(fingerprint)
+          "${compose[@]}" restart control
+          curl --fail --silent --show-error --retry 30 --retry-delay 1 --retry-all-errors http://127.0.0.1:4000/healthz
+          after=$(fingerprint)
+          if [[ "$before" != "$after" ]]; then
+            echo "database fingerprint changed across the control restart" >&2
+            echo "before=$before" >&2
+            echo "after=$after" >&2
+            exit 1
+          fi
+          export SYMMETRY_COMPOSE_PROJECT_ID="$project_id"
+          export SYMMETRY_COMPOSE_PROJECT_KEY="$project_key"
+          export SYMMETRY_COMPOSE_PROJECT_NAME="$project_name"
+          export SYMMETRY_PLAYWRIGHT_JSON_REPORT="$RUNNER_TEMP/compose-restart-report.json"
+          pnpm --filter symmetry-browser-acceptance test tests/portal-compose-restart.spec.mjs --project=desktop-chromium
+          python3 scripts/ci/assert-playwright-json.py "$SYMMETRY_PLAYWRIGHT_JSON_REPORT" \
+            --expect-skipped 0 \
+            --expect-project desktop-chromium \
+            --expect-file portal-compose-restart.spec.mjs \
+            'the control restart preserves the complete F1-F7 workspace'
+      - name: Tear down the Compose acceptance stack
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          project="symmetry-compose-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          compose=(docker compose --project-name "$project" --file compose.yaml)
+          "${compose[@]}" ps || true
+          "${compose[@]}" logs --no-color || true
+          "${compose[@]}" down --volumes --remove-orphans || true
+      - name: Upload the Compose acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: compose-browser-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/compose-daemon-report.json
+            ${{ runner.temp }}/compose-restart-report.json
+            browser/playwright-report
+            /tmp/symmetry-playwright-results
+
+  # The connection-fixture and planning families need their own Control
+  # instances (a provider-fixture transport, a planning fixture build and a
+  # per-run operator token) that no existing job provides; this job owns them
+  # and the three browser node suites.
+  browser-fixture-linux:
+    needs: [changes, contracts]
+    if: needs.changes.outputs.run-heavy == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: portal-assets
+          path: control/priv/static/portal
+      - uses: actions/download-artifact@v8
+        with:
+          name: control-release-linux
+          path: ${{ runner.temp }}
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: 1.20.4
+          otp-version: 29.0.6
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 12.17.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter symmetry-browser-acceptance exec playwright install --with-deps chromium
+      - name: Build the Control instance the fixture families serve from
+        working-directory: control
+        run: |
+          mix deps.get
+          mix compile
+      - name: Run the browser node suites
+        working-directory: browser
+        run: node --test scripts/connection-spec-env.test.mjs scripts/control-instance-isolation.test.mjs scripts/goal-context-fixtures.test.mjs
+      - name: Run the connection fixture acceptance
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export POSTGRES_DB="symmetry_0007e_test_4021"
+          export SYMMETRY_OPERATOR_TOKEN="$(openssl rand -hex 32)"
+          export SYMMETRY_FIXTURE_IDENTITY="$(openssl rand -hex 16)"
+          export SYMMETRY_FIXTURE_IDENTITY_FILE="$RUNNER_TEMP/connection-fixture-identity.json"
+          export SYMMETRY_FIXTURE_STATE_FILE="$RUNNER_TEMP/connection-fixture-state.json"
+          export SYMMETRY_FIXTURE_TRANSPORT_LOG="$RUNNER_TEMP/connection-fixture-calls.jsonl"
+          export SYMMETRY_FIXTURE_UNAUTHORIZED_ACCOUNTS=expired-fixture
+          export SYMMETRY_INTEGRATION_SYNC_INTERVAL_MS=3600000
+          export SYMMETRY_PORTAL_URL=http://127.0.0.1:4021
+          export SYMMETRY_PLAYWRIGHT_JSON_REPORT="$RUNNER_TEMP/connection-fixture-report.json"
+          echo '{}' > "$SYMMETRY_FIXTURE_STATE_FILE"
+          fixture_log="$RUNNER_TEMP/connection-fixture.log"
+          (cd control && mix ecto.create --quiet && mix ecto.migrate --quiet)
+          (cd control && PHX_SERVER=true PORT=4021 mix run --no-halt --no-start ../scripts/ci/portal-connection-fixture.exs) \
+            > "$fixture_log" 2>&1 &
+          fixture=$!
+          trap 'kill "$fixture" 2>/dev/null || true; wait "$fixture" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in {1..90}; do
+            if [[ -s "$SYMMETRY_FIXTURE_IDENTITY_FILE" ]] \
+              && jq --exit-status --arg identity "$SYMMETRY_FIXTURE_IDENTITY" --arg port 4021 \
+                '.identity == $identity and (.port | tostring) == $port' "$SYMMETRY_FIXTURE_IDENTITY_FILE" >/dev/null 2>&1 \
+              && grep --fixed-strings --quiet 'connection fixture transport installed' "$fixture_log" \
+              && grep --fixed-strings --quiet "$SYMMETRY_FIXTURE_IDENTITY" "$fixture_log" \
+              && curl --fail --silent --show-error http://127.0.0.1:4021/healthz >/dev/null; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$fixture" 2>/dev/null; then
+              echo 'the fixture control plane exited before it became ready' >&2
+              tail -n 50 "$fixture_log" >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          if [[ "$ready" != true ]]; then
+            echo 'the fixture control plane did not become ready' >&2
+            tail -n 50 "$fixture_log" >&2 || true
+            exit 1
+          fi
+          pnpm --filter symmetry-browser-acceptance test tests/portal-connections.spec.mjs
+          python3 scripts/ci/assert-playwright-json.py "$SYMMETRY_PLAYWRIGHT_JSON_REPORT" \
+            --expect-skipped 0 \
+            --expect-project desktop-chromium \
+            --expect-project mobile-chromium \
+            --expect-file portal-connections.spec.mjs \
+            'a connection is created, inspected, tested and removed through the real API' \
+            'an expired provider session, a repeated submission and a refused submission stay actionable' \
+            'stale updates and concurrent deletion reconcile to the server'\''s current state' \
+            'a capability update visibly resets dependent resource health and sync state' \
+            'Azure DevOps connection management runs on the new route' \
+            'a GitHub repository resource is bound, synced, updated and unbound through the console' \
+            'a provider failure and an ambiguous outcome stay explicit and the next readback writes the provider'\''s answer' \
+            'project switching discards a late sync continuation and never writes into the new project' \
+            'external work items keep their identity, their provider-owned lock and their availability' \
+            'Azure DevOps repository, board and pipeline resources bind and sync against the fixture documents' \
+            'a failed workspace re-read after a write surfaces the failure instead of the stale rows'
+          # The fixture's provider tokens are canaries (scripts/ci/portal-connection-fixture.exs):
+          # a token in the control log or the provider-call log is a leak, not evidence.
+          if [[ ! -s "$SYMMETRY_FIXTURE_TRANSPORT_LOG" ]]; then
+            echo "canary scan FAILED: provider-call log $SYMMETRY_FIXTURE_TRANSPORT_LOG is missing or empty: no recorded provider call to scan" >&2
+            exit 1
+          fi
+          for scan_file in "$fixture_log" "$SYMMETRY_FIXTURE_TRANSPORT_LOG"; do
+            for canary in gho_fixture_connection_token_canary fixture-ado-access-token-canary; do
+              if grep --fixed-strings --quiet "$canary" "$scan_file"; then
+                echo "canary scan FAILED: $scan_file contains $canary" >&2
+                exit 1
+              fi
+            done
+          done
+      - name: Run the planning acceptance on the Control release
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export POSTGRES_DB="symmetry_0007c_test"
+          export DATABASE_URL="postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB}"
+          export SYMMETRY_OPERATOR_TOKEN="$(openssl rand -hex 32)"
+          export SYMMETRY_ENROLLMENT_TOKEN="$(openssl rand -hex 32)"
+          export SECRET_KEY_BASE="$(openssl rand -hex 64)"
+          export SYMMETRY_CONTRACTS_DIR="$GITHUB_WORKSPACE/contracts"
+          export SYMMETRY_GOALS_ROLLOUT_ENABLED=true
+          export SYMMETRY_PLANNING_HARNESS=1
+          export SYMMETRY_FIXTURE_MIX=mix
+          export SYMMETRY_PORTAL_URL=http://127.0.0.1:4030
+          export SYMMETRY_PLAYWRIGHT_JSON_REPORT="$RUNNER_TEMP/planning-report.json"
+          (cd control && mix ecto.create --quiet && mix ecto.migrate --quiet)
+          mkdir -p control/_build/prod/rel
+          tar --extract --gzip --file "$RUNNER_TEMP/control-release-linux.tar.gz" --directory control/_build/prod/rel
+          control_bin=control/_build/prod/rel/symmetry_control/bin/symmetry_control
+          # The release evaluates the prod runtime config before any command, eval included.
+          export PHX_HOST=127.0.0.1
+          "$control_bin" eval 'SymmetryControl.Release.migrate()'
+          PHX_SERVER=true PORT=4030 "$control_bin" start > "$RUNNER_TEMP/planning-release.log" 2>&1 &
+          release=$!
+          trap 'kill "$release" 2>/dev/null || true; wait "$release" 2>/dev/null || true' EXIT
+          curl --fail --silent --show-error --retry 60 --retry-delay 1 --retry-all-errors "$SYMMETRY_PORTAL_URL/healthz"
+          pnpm --filter symmetry-browser-acceptance test tests/portal-work-planning.spec.mjs
+          python3 scripts/ci/assert-playwright-json.py "$SYMMETRY_PLAYWRIGHT_JSON_REPORT" \
+            --expect-skipped 0 \
+            --expect-project desktop-chromium \
+            --expect-project mobile-chromium \
+            --expect-file portal-work-planning.spec.mjs \
+            'creates, edits, archives and restores a project on real data' \
+            'refuses a duplicate project key with the server'\''s field error and keeps the draft' \
+            'submits a project and a work item once on a double submit' \
+            're-syncs to the newest project after a stale update in two contexts' \
+            'creates a work item with the project'\''s resources, edits it and moves status through the board' \
+            'refuses a whitespace title with the server'\''s field error and keeps the draft' \
+            'replays the failed intent verbatim on an explicit retry' \
+            'keeps an open draft across a background refresh and applies it against the loaded revision' \
+            're-syncs to the newest work item after a stale update in two contexts' \
+            'applies a late board move only to its own project' \
+            'moves and reorders the focused board card with the keyboard' \
+            'moves work into a ready column that has no cards on the board' \
+            'keeps the ready destination while the board is filtered to backlog' \
+            'replays a lost create response without duplicating the work item' \
+            'keeps an open editor draft across the responsive breakpoint' \
+            'a Goal-managed item offers no writable path and the server refuses legacy writes' \
+            'an external-tracker-owned item keeps its provider-owned fields and column unwritable' \
+            'an archived project'\''s board offers no create, edit or move path'
+      - name: Upload the browser fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-fixture-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/connection-fixture-report.json
+            ${{ runner.temp }}/planning-report.json
+            ${{ runner.temp }}/connection-fixture.log
+            ${{ runner.temp }}/connection-fixture-calls.jsonl
+            ${{ runner.temp }}/planning-release.log
+            browser/playwright-report
+            /tmp/symmetry-playwright-results

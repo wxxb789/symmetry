@@ -13,26 +13,29 @@
 // The retired classic pieces are named in the migration comments at the point
 // they were replaced, and in browser/README.md.
 import { allowBrowserError, expect, test } from "./fixtures.mjs";
-import { api, attachResource, createWorkItem, login, workspace } from "./readable-fixtures.mjs";
+import {
+  api,
+  attachResource,
+  createWorkItem,
+  login,
+  projectUrl,
+  servedColumnTitles,
+  uniqueKey,
+  workUrl,
+  workspace
+} from "./readable-fixtures.mjs";
 
 const composeEnabled = process.env.SYMMETRY_COMPOSE_DAEMON === "1";
 
-function uniqueProject(prefix = "DC") {
-  const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
-    .slice(-6)
-    .toUpperCase();
-  return { key: `${prefix}${suffix}`.slice(0, 8), name: `Compose daemon ${suffix}` };
-}
+const uniqueProject = (prefix = "DC") => {
+  const key = uniqueKey(prefix);
+  return { key, name: `Compose daemon ${key}` };
+};
 
 function fixtureDescription(mode, description) {
   return `[symmetry-fake-agent:${mode}]\n${description}`;
 }
 
-const projectUrl = (id, params = {}) => {
-  const query = new URLSearchParams(params).toString();
-  return `/portal/projects/${id}${query ? `?${query}` : ""}`;
-};
-const workUrl = (id) => `/portal/work/${id}`;
 // The pages render more than one role=status region (notice lines and sr-only
 // announcers), so every notice assertion is scoped by its text.
 const statusNotice = (scope, text) => scope.locator('p[role="status"]', { hasText: text });
@@ -48,15 +51,6 @@ const renderedColumnTitles = (page, state) =>
       ),
     state
   );
-async function servedColumnTitles(page, projectId, state) {
-  const project = (await workspace(page, projectId)).body.projects.find(
-    (candidate) => candidate.id === projectId
-  );
-  return project.work_items
-    .filter((item) => item.status === state)
-    .sort((left, right) => left.position - right.position)
-    .map((item) => item.title);
-}
 async function moveByKeyboard(page, title, key) {
   const card = boardCard(page, title);
   await card.focus();
@@ -295,7 +289,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     // exists) and only the response is dropped, so the browser has no
     // confirmation. The receipt states the unknown outcome — never applied —
     // and the reader's draft survives. If the served waiting signal still
-    // offers the request when the route is released, pressing the same control
+    // offers the request, pressing the same control
     // replays the same browser-minted identity; the run may also have completed
     // already, in which case the faithful snapshot owns the state. Either way
     // the timeline carries exactly one durable input command.
@@ -324,12 +318,12 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
       (entry) => entry.source === "command" && entry.data.kind === "provide_input"
     );
     expect(durableInput, "the lost response still left a durable input command").toHaveLength(1);
-    await page.unroute("**/portal/api/work-items/*/input");
     if ((await waitDetail.getByRole("button", { name: "Send" }).count()) === 1) {
       await expect(waitDetail.getByLabel("Response")).toHaveValue("continue");
       await waitDetail.getByRole("button", { name: "Send" }).click();
       await expect.poll(() => replayStatus).toBe(200);
     }
+    await page.unroute("**/portal/api/work-items/*/input");
     await expect(waitDetail.locator(".control-bar .chip")).toHaveText("Completed", { timeout: 30_000 });
     const waited = await itemDetail(page, wait.id);
     expect(waited.work_item.execution).toEqual(
@@ -375,7 +369,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Running", { timeout: 30_000 });
     await cancelDetail.getByRole("button", { name: "Cancel run" }).click();
     await expect(cancelDetail.locator(".control-bar .chip")).toHaveText("Cancelled", { timeout: 30_000 });
-    await expect(cancelDetail.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelDetail.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
     const cancelled = await itemDetail(page, cancelItem.id);
     expect(cancelled.work_item.execution).toEqual(expect.objectContaining({ state: "cancelled", generation: 1 }));
     expect(cancelled.raw.timeline).toEqual(
@@ -412,13 +406,14 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     await retryEditor.getByRole("button", { name: "Save" }).click();
     await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
     await expect(retryDetail.getByText("Corrected intent is used by generation two.", { exact: false })).toBeVisible();
-    await retryDetail.getByRole("button", { name: "Retry" }).click();
-    await expect(retryDetail.getByText("Completed the requested engineering work", { exact: false })).toBeVisible({
+    await retryDetail.getByRole("button", { name: "Retry", exact: true }).click();
+    const acceptedEvidence = retryDetail.getByRole("region", { name: "Latest accepted evidence" });
+    await expect(acceptedEvidence.getByText("Completed the requested engineering work", { exact: false })).toBeVisible({
       timeout: 30_000
     });
-    await expect(retryDetail.getByText("Verified the requested change", { exact: false })).toBeVisible();
-    await expect(retryDetail.getByText("README.md", { exact: false })).toBeVisible();
-    await expect(retryDetail.getByText("fake-agent verification", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("Verified the requested change", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("README.md", { exact: false })).toBeVisible();
+    await expect(acceptedEvidence.getByText("fake-agent verification", { exact: false })).toBeVisible();
 
     const retried = await itemDetail(page, retryItem.id);
     expect(retried.work_item.execution.task_id).toBe(failed.work_item.execution.task_id);
@@ -435,27 +430,30 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
 
     await retryDetail.getByRole("button", { name: "Edit work item" }).click();
     const deliveryEditor = page.getByRole("dialog", { name: "Edit work item" });
-    await deliveryEditor.getByLabel("Pull request URL").fill("https://github.com/wxxb789/symmetry/pull/84");
-    await deliveryEditor.getByLabel("CI", { exact: true }).selectOption("passed");
-    await deliveryEditor.getByLabel("Review").selectOption("approved");
-    await deliveryEditor.getByRole("button", { name: "Save" }).click();
-    await expect(statusNotice(retryDetail, "Work item updated.")).toBeVisible();
-    const retryReviewRow = retryDetail.locator("dl.delivery-list").locator("div", { hasText: "Review" }).first();
-    await expect(retryReviewRow).toContainText("approved");
-    await expect(retryReviewRow).toContainText("source: manual");
+    await expect(deliveryEditor.locator("#work-item-pull-request")).toHaveText(
+      "https://example.invalid/pull/42 · agent value, not editable here"
+    );
+    await expect(deliveryEditor.locator("#work-item-ci-status")).toHaveText("passed · agent value, not editable here");
+    await expect(deliveryEditor.locator("#work-item-review-status")).toHaveText(
+      "required · agent value, not editable here"
+    );
+    await deliveryEditor.getByRole("button", { name: "Cancel" }).click();
+    await expect(deliveryEditor).toHaveCount(0);
 
     await page.goto(projectUrl(projectId, { view: "board" }));
     for (const state of ["review", "done"]) {
       await moveByKeyboard(page, retryTitle, "ArrowRight");
       await expect.poll(() => columnOf(page, retryTitle)).toBe(state);
     }
-    const approved = await itemDetail(page, retryItem.id);
-    expect(approved.work_item.delivery.pull_request).toEqual(
-      expect.objectContaining({ source: "manual", url: "https://github.com/wxxb789/symmetry/pull/84" })
+    const completedRetry = await itemDetail(page, retryItem.id);
+    expect(completedRetry.work_item.delivery.pull_request).toEqual(
+      expect.objectContaining({ source: "agent" })
     );
-    expect(approved.work_item.delivery.ci).toEqual(expect.objectContaining({ source: "manual", status: "passed" }));
-    expect(approved.work_item.delivery.review).toEqual(
-      expect.objectContaining({ source: "manual", status: "approved" })
+    expect(completedRetry.work_item.delivery.ci).toEqual(
+      expect.objectContaining({ source: "agent", status: "passed" })
+    );
+    expect(completedRetry.work_item.delivery.review).toEqual(
+      expect.objectContaining({ source: "agent", status: "required" })
     );
 
     // The classic topbar settings dialog and its status select move to the
@@ -484,7 +482,7 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     // "Retry available" is the served retry control on its detail.
     const cancelSurface = await openWork(page, cancelItem.id, cancelTitle);
     await expect(cancelSurface.locator(".control-bar .chip")).toHaveText("Cancelled");
-    await expect(cancelSurface.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(cancelSurface.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
 
     const persisted = await workspace(page, projectId);
     const persistedProject = persisted.body.projects.find((candidate) => candidate.id === projectId);
@@ -524,9 +522,8 @@ test.describe("Goal 2 Compose daemon acceptance", () => {
     const waitedSurface = page.getByRole("dialog", { name: waitTitle });
     await expect(waitedSurface.getByRole("heading", { level: 1, name: waitTitle })).toBeVisible();
     await expect(waitedSurface.locator(".control-bar .chip")).toHaveText("Completed");
-    await expect(
-      waitedSurface.locator("dl.detail-facts").locator("div", { hasText: "Owner" })
-    ).toContainText("default");
+    const outcomeFacts = waitedSurface.getByRole("region", { name: "Outcome" }).locator("dl.detail-facts");
+    await expect(outcomeFacts.locator("div", { hasText: "Owner" })).toContainText("default");
     await expect(
       waitedSurface
         .locator("section.detail-section", { has: page.getByRole("heading", { name: "Execution history" }) })
