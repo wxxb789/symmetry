@@ -17,6 +17,14 @@ BLOCKED) resolves §6 — the connections guard change is authorized (option A),
 `router.latestLocation`, and the audit it demands is §6b. Attempt 2 continues from attempt 1's tree;
 §7 carries the settled numbers.
 
+Revision 3 (fix stage, 2026-11-23): the r1 review's STD-A01 is fixed in the same guard — a URL that
+names this route with a trailing slash keeps the slash in the router's parsed pathname, so the
+comparison trims it the way the router's own matching does (`trimPathRight`); the review's literal
+`endsWith` suggestion alone does not survive that form (measured; evidence §12). One case in
+`connections.test.tsx` pins the reachable branch — the create's selection move; the suite counts
+move 57 → 58 and 629 → 630, and §3 row h is the branch's mutant row. The added case sits above the
+pinned mount-timing case, which moves from `connections.test.tsx:735`/`:746` to `:744`/`:761`.
+
 ## 1. Dispatch gates (checked at dispatch, base `6d55c575`)
 
 | gate | state at dispatch |
@@ -102,6 +110,8 @@ BLOCKED) resolves §6 — the connections guard change is authorized (option A),
 | b | one lazy import pointed at the wrong module (chat route → the attention module) | the `router.test.tsx` cases exercising `/chat` redden | **measured red**: 1 of 42 at attempt 2 — `chat route > subscribes /chat and carries the shell's project scope in its navigation`, router error surface `Invariant failed: Could not find an active match from "/attention"` (attempt 1 measured the same shape as 3 of 42; evidence §6) |
 | c | only if a test needed an added `await`: the case red without it, green with it | — | unused: `router.test.tsx` is byte-identical to HEAD, no `await` added |
 | d | the connections guard back to mount-only under lazy routes (`stillOnConnections = () => mounted.current`) | the pinned `connections.test.tsx:735` case reddens | **measured red**: `1 failed, 56 skipped (57)`, exit 1, `Expected: "/portal/projects" / Received: "/portal/connections"` (evidence §6) |
+| e-g | the apply stage's three: build-id keying loosened, each non-Chrome load-failure wording broken, the listener's payload filter deleted | the case pinning each rule reddens | **measured red** (three runs; evidence §6 rows e-g) |
+| h | the fix stage's branch: the guard's trailing-slash trim removed (back to `router.latestLocation.pathname === "/connections"`, i.e. the pre-fix bytes) | the trailing-slash case in `connections.test.tsx` reddens | **measured red on the pre-fix bytes**: exit 1, `AssertionError: expected '' to contain '20000000-0000-4000-8000-000000000001'`; the same case exits 0 on the fixed bytes (evidence §12) |
 
 ## 4. Gates (all foreground, in this order; never the build concurrently with the suite)
 
@@ -153,10 +163,17 @@ of §6b.
 
 ### 6a. The guard change as implemented
 
-One predicate, `const stillOnConnections = () => mounted.current && router.latestLocation.pathname
-=== "/connections";` (`:356-363`), replaces the three mount-only checks — `noticeFor` (`:415`),
-`clearSelectionFor` (`:418`), the `saved` continuation (`:447`). `mounted.current` stays as the
-second conjunct so the unmounted case keeps its semantics.
+One predicate, `const stillOnConnections = () => mounted.current &&
+trimPathRight(router.latestLocation.pathname).endsWith("/connections");` (`:356-365`), replaces the
+three mount-only checks — `noticeFor` (`:417`), `clearSelectionFor` (`:420`), the `saved`
+continuation (`:449`). `mounted.current` stays as the second conjunct so the unmounted case keeps
+its semantics; the trailing-slash trim is the fix-stage change (revision 3, evidence §12).
+
+A URL that names this route with a trailing slash keeps the slash in the router's parsed pathname
+when the URL carries no search — `latestLocation.pathname` reads `/connections/` and the exact
+comparison answered false (temporary probe, evidence §12) — while a trailing-slash URL that *does*
+carry a search parses slash-free, so only the no-search flows (the create's selection move;
+nothing that needs an open detail) are reachable in that shape.
 
 Accessor, re-derived with a temporary probe on this tree (deleted before the gates; raw output in
 evidence §9a): on `/portal/connections`, `router.latestLocation.pathname` and
@@ -181,7 +198,7 @@ continuation guard.
 
 | site | what the guard gates | disposition |
 | --- | --- | --- |
-| `features/connections/connections.tsx:356-363`, `:415`, `:418`, `:447` | two navigations (pull-back, clear selection) and one notice | **fixed** (§6a) |
+| `features/connections/connections.tsx:356-365`, `:417`, `:420`, `:449` | two navigations (pull-back, clear selection) and one notice | **fixed** (§6a) |
 | `features/connections/resources.tsx:566-574` (`live()`, gated at `:603` and `:611-635`) | `setNotice` writes plus the reconcile invalidation; no navigation | **not fixed**: the project fence (`projectRef.current === projectId`) already discards continuations for a project the operator left; the mount conjunct only distinguishes "operator left the whole page", where a late write can at most render a notice on a page that is still visible while the destination chunk loads. No navigation, no URL change, no gate pins that window; outside the ruling's owned set (residual, evidence §11) |
 | `features/work/assignment.tsx:116-121`, `:137` (`saved`) | `setEditingFor`/`setNotice` writes; no navigation | **not fixed**: same reasoning — the subject fence (`subjectRef.current === workItemId`) already discards continuations for another item (residual, evidence §11) |
 
@@ -191,12 +208,15 @@ continuation guard.
   (257.27 → 217.95 kB gzip); the six route chunks and three small shared chunks are outside it
   (evidence §4). The route→module→chunk literals check out for all six lazy routes, and
   `/attention` / `/runtimes` stay in the entry by the measured decision (evidence §8).
-- `router.test.tsx` byte-identical, 42/42 green; `connections.test.tsx` byte-identical, 57/57 green
-  (the pinned case from §6 among them); typecheck exit 0; lint 220 problems / 0 errors under the
-  `--max-warnings 229` cap; build deterministic; full suite green — 27 files / 629 tests at the
-  apply-stage refresh, the pre-apply bytes' 27 files / 625 green in 7 of 8 invocations (one
-  unidentified, non-reproducing host flake: evidence §11).
+- `router.test.tsx` byte-identical, 42/42 green; `connections.test.tsx` 58/58 green (the fix stage's
+  one added case; the pinned case from §6 and every other case byte-identical); typecheck exit 0;
+  lint 220 problems / 0 errors under the `--max-warnings 229` cap; build deterministic; full suite
+  green — 27 files / 630 tests at the fix-stage refresh, 27 files / 629 at the apply-stage refresh,
+  the pre-apply bytes' 27 files / 625 green in 7 of 8 invocations (one unidentified,
+  non-reproducing host flake: evidence §11).
 - Mutants (a) chunk-level, (b) wrong lazy target and (d) the mount-only connections guard each
   measured red and reverted byte-identically; (c) unused because `router.test.tsx` needed no added
   `await`. The 2026-11-23 apply stage's three further mutants (build-id keying, the Firefox
   wording, the listener's payload filter — evidence §6 rows e-g) each measured red and reverted.
+  The fix stage's row (h) is the trailing-slash pair: red on the pre-fix guard bytes, green on the
+  fixed bytes (evidence §12).

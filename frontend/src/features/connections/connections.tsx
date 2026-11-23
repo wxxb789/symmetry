@@ -1,6 +1,6 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useRouteContext, useRouter, useRouterState, useSearch } from "@tanstack/react-router";
+import { trimPathRight, useNavigate, useRouteContext, useRouter, useRouterState, useSearch } from "@tanstack/react-router";
 import { AlertCircle, Cable, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { connectionsOptions, workspaceOptions } from "../../app/application";
@@ -360,7 +360,9 @@ export function ConnectionsPage() {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-  const stillOnConnections = () => mounted.current && router.latestLocation.pathname === "/connections";
+  // The router matches `/connections/` to this route but keeps the trailing slash in the parsed
+  // pathname, so trim it the way the router's own matching does before comparing.
+  const stillOnConnections = () => mounted.current && trimPathRight(router.latestLocation.pathname).endsWith("/connections");
   // The live selection, readable by continuations that outlive this render: a
   // response that arrives after the operator chose another subject must not
   // navigate them back or act on the newer subject.
