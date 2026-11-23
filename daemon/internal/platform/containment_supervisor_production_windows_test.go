@@ -26,11 +26,7 @@ func TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse(t
 	}
 
 	productionBinary := buildProductionDaemonBinary(t)
-	// The in-process test capability installs the local noop route; this
-	// witness drives the production binary's real helper dispatch.
-	previousLauncher := launchContainmentSupervisor
-	launchContainmentSupervisor = launchContainmentSupervisorProcess
-	t.Cleanup(func() { launchContainmentSupervisor = previousLauncher })
+	restoreContainmentSupervisorLauncher(t, launchContainmentSupervisorProcess)
 	previousExecutable := os.Args[0]
 	os.Args[0] = productionBinary
 	t.Cleanup(func() { os.Args[0] = previousExecutable })

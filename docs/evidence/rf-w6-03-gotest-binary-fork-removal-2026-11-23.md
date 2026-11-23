@@ -19,24 +19,30 @@ Ubuntu-24.04 over the same worktree through its mount point (`<worktree>/daemon`
 | `daemon/internal/platform/supervisor_linux_client.go` | `3fc7626317c705f8219d11f8bb9f12addccac551f1b508f37a89d54b4bfd4bb7` |
 | `daemon/internal/platform/containment_supervisor_testing_windows.go` (new) | `163ac56c660cb5d10f5e9a5302dca2f2beacba651cabc4f8271d1bb9b7b3f339` |
 | `daemon/internal/platform/containment_supervisor_testing_other.go` (new) | `e2563ff774f4ade7155d292df3f2f1c708d4cb0c37fbbb2ad9225072559eaea2` |
-| `daemon/internal/execution/process_launcher_linux.go` | `61395b4eab4ec15e80d10113eb97a5c379855d0bbe8b34704af45813a8264d06` |
+| `daemon/internal/execution/process_launcher_linux.go` | `215a5c515ea5ce284d22a007978a26204426c91360c3fdf3ad36ce212d4c40bd` |
 | `daemon/internal/execution/process_launcher_windows.go` | `09416475476bb8c11e3fcb846481f61ffa057c4acdd49a9d49546f92ac8f7761` |
 | `daemon/internal/execution/inprocess_containment_testing.go` (new) | `198c75f4af5a13d5881f8a5163b0af1d946a4d6b683aa79e31cecb434d380e29` |
 | `daemon/internal/execution/inprocess_containment_testing_unsupported.go` (new) | `2dcf24f2aaf85342115a456f388fbdae5be06eb362462f238779b2ce313f8ec7` |
 | `daemon/internal/platform/no_test_binary_branch_test.go` (new) | `d1a5084c2eee35d427a421bd910fad9b98d46b2384938fe6019aa8619876c14a` |
-| `daemon/internal/execution/runner_windows_test.go` | `0161fccc0d7800dc78cfa1776f6fb82d510676d47f8c8af16819f35c619233a3` |
-| `daemon/internal/execution/linux_owner_v2_test.go` | `596d7237297a93a6c59b4dbce3dfb6ea4a1e8b9248bae224372f71a4c338ae29` |
+| `daemon/internal/execution/runner_windows_test.go` | `34222448c313fb60d053ded407d3383c4b08beea54b03df1b7350d6d7ac5c35f` |
+| `daemon/internal/execution/runner_test.go` | `e9245e50c84aeb8eba87ecc4bdf3b07a92e746469dfdcd457fc6ed32c3f8089e` |
+| `daemon/internal/execution/linux_owner_v2_test.go` | `5cfcbb6a25c9ccf9b96ebe10db772c6c6694641018206ea4f3658e950eee9612` |
 | `daemon/internal/platform/containment_supervisor_windows_test.go` | `4a0e65a37df6f6e9c6158b7bb951a89cf2b97e3e1cecb026d2de776afa633d4b` |
 | `daemon/internal/platform/containment_supervisor_linux_test.go` | `9b5bcd657d184b55e1a44c69aeb4dae8e37ad3808a59c0644577383531aa531f` |
 | `daemon/internal/platform/process_windows_test.go` | `3918e8e817e63e8e71d29e0cf0b691bd9285973ece344daa803f3defa165bd5f` |
 | `daemon/internal/platform/native_launch_windows_test.go` | `d5bd9e44acf81a800b9d4068b4fadbb0348a4282fb3bab87fa8479e8afeb9bb7` |
-| `daemon/internal/platform/containment_supervisor_production_windows_test.go` | `5ee21802d2f751de915119718ce277f6a140a26d7a2c557dedb318347b64cbfb` |
+| `daemon/internal/platform/containment_supervisor_production_windows_test.go` | `1f65a4f017884a011300458df1ae5a4ab31cc74a7166dbb7a46846d06da877a4` |
 | `daemon/internal/execution/inprocess_containment_windows_test.go` (new) | `981fe15ac98ab7b1312d2a6caf45eabfca025f4f780b26be71787315020deda5` |
 | `daemon/internal/app/inprocess_containment_test.go` (new) | `f89720befa058d873158ac1f7182a33145569584351a9efe397cc8f448d3c274` |
 | `daemon/internal/harness/omp/inprocess_containment_test.go` (new) | `5accfb3aeba8ab405beff950d10f579feaac17c2697e535a4a31d3fa33be85c6` |
 | `daemon/internal/harness/omo/inprocess_containment_test.go` (new) | `050375be1782ff56d26b94f18dab347150208b8aeec7a7e24eef3cc017acecc8` |
-| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `20ddaf29398cb7a466dc77596ffa7e44790174c3143f709028b8c41728b3b328` |
+| `docs/plans/2026-11-23-rf-w6-03-gotest-binary-fork-removal-plan.md` | `a83f0a17af648b022ac0f82d8f2cbed416cbcb1d1075b34b3ec302fc8ee5eaf4` |
 | this record | the file you are reading (no self-referential hash) |
+
+The rows carrying apply-stage simplifications were re-hashed at the applied tree
+(`process_launcher_linux.go`, `runner_windows_test.go`, `linux_owner_v2_test.go`,
+`containment_supervisor_production_windows_test.go`, this plan); `runner_test.go` enters the
+inventory with the shared complete-handoff fixture.
 
 ## 2. Deleted fork sites and the replacement capability
 
@@ -132,8 +138,9 @@ caller depended on the removed default: the only production consumers were the t
 
 Caller census at HEAD before deletion: `isGoTestBinary` had exactly two callers
 (`supervisor_windows_client.go:657` noop take, `:1075` probe); `DurableSupervisorHandoffAvailable`
-exactly three (`process_launcher_linux.go:37`, `process_launcher_windows.go:51`,
-`containment_supervisor_linux_test.go:92`). All shipped callers were removed with their condition;
+had four call sites - two shipped (`process_launcher_linux.go:37`, `process_launcher_windows.go:51`)
+and two tests (`containment_supervisor_linux_test.go:92`, `process_windows_test.go:878`) - plus its
+two definitions. All shipped callers were removed with their condition;
 no other shipped site read `flag.CommandLine.Lookup`, `os.Args[0]` or `os.Executable()` to pick a
 containment route (the remaining `flag.` uses in the platform package are `flag.NewFlagSet` in the
 helper/anchor parsers, unrelated to routing).
@@ -176,7 +183,7 @@ measurement, as it is part of the change):
   capture process group anchor: process <pid> is in process group <pgrp>, want <pid>` (the local
   route ran the process, so the expected supervisor-branch error was absent).
 
-At HEAD (final tree) all three pins report `ok`:
+At HEAD (final tree; re-run green at the applied tree) all three pins report `ok`:
 
 ```
 go test -count=1 -run '^TestDefaultWindowsLauncherUsesRecorderHandoffCapability$' ./internal/execution/   # ok, exit 0
@@ -196,8 +203,15 @@ wsl -d Ubuntu-24.04 -u accept -- ... go test -count=1 -run 'TestDefaultLinuxLaun
 | whitespace | `git diff --check` | 0 | clean |
 | Windows suite | `go test -count=1 -timeout 1800s -v ./internal/platform/... ./internal/execution/... ./internal/app/... ./internal/harness/...` | 0 | 13 packages `ok`; 1365 `--- PASS`, 0 `--- FAIL`, 35 `--- SKIP` |
 | WSL suite | `go test -count=1 -race -timeout 2400s -v ./internal/platform/... ./internal/execution/... ./internal/app/... ./internal/harness/...` under `wsl -d Ubuntu-24.04 -u accept` over the same worktree | 0 | 13 packages `ok`; 1627 `--- PASS`, 0 `--- FAIL`, 49 `--- SKIP` (46 distinct names) |
-| Windows witness | `SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS=1 go test -count=1 -timeout 180s -v ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$'` | 0 | `--- PASS: TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse (8.37s)`, `ok ... internal/platform 9.878s` — real helper dispatch through the step-4 launcher restore |
+| Windows witness | `SYMMETRY_PRODUCTION_CONTAINMENT_WITNESS=1 go test -count=1 -timeout 180s -v ./internal/platform -run '^TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse$'` | 0 | `--- PASS: TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse (4.62s)`, `ok ... internal/platform 6.732s` — real helper dispatch through the step-4 launcher restore, now installed by `restoreContainmentSupervisorLauncher` (apply-stage re-run) |
 | Linux e2e witness | anchored CI expression `go test -count=1 -timeout 300s -v -run '^TestProductionLinuxContainment(WitnessSpine|NegativeWitness|ReplayWitness)$' ./e2e/` in WSL | 0 | package compiles; all three witnesses skip without the runner-provisioned control plane (`SYMMETRY_E2E=1` + live `http://127.0.0.1:4000`): `--- SKIP: TestProductionLinuxContainment{NegativeWitness,ReplayWitness,WitnessSpine}`. The contract's prefix command and the real run stay on the CI `daemon` job (`.github/workflows/ci.yml` step with `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_*` and `go-test-json-gate.py --assert '*' ...`) — recorded CI-only |
+
+Apply-stage re-run (2026-11-23, applied tree): every gate row above re-ran with the same exit code.
+The Windows suite reproduced 13 packages `ok`, 1365 `--- PASS` / 0 `--- FAIL` / 35 `--- SKIP` with
+the same names; the WSL suite reproduced 13 `ok`, 1627 / 0 / 49 (46 distinct names); the two
+Windows pins, the two Linux pins (§6) and the six cheap gates were green; the Linux e2e row
+re-ran as recorded (compile plus three env-gated skips). Mutant M5 below is the apply-stage
+addition for the new restore assertion; rows M1-M4 were not re-run.
 
 Windows SKIP names (all pre-existing env gates; the diff adds no `t.Skip`):
 `TestProductionContainmentSupervisorReplaysReceiptAfterLostRecoverResponse`,
@@ -299,12 +313,17 @@ pins are cross-platform and run in both suites.
 | M2 | re-added a test-binary short-circuit to both launcher gates: `&& !strings.Contains(os.Args[0], ".test")` plus the `strings` import in `process_launcher_linux.go` / `process_launcher_windows.go` | Windows: `go test -count=1 -run '^TestDefaultWindowsLauncherUsesRecorderHandoffCapability$' ./internal/execution/` → exit 1, `complete handoff recorder did not reach the durable route` (local route ran); Linux (WSL): `go test -count=1 -run '^TestDefaultLinuxLauncherUsesRecorderHandoffCapability$' ./internal/execution/` → exit 1, `did not enter the durable supervisor branch`; restored → both `ok` (exit 0) |
 | M3 | removed the execution-side route install (`restoreRoute := installInProcessSupervisorRouteForTesting()` dropped from `UseInProcessContainmentSupervisorForTesting`) | Windows: `go test -count=1 -run '<the two decision-liveness tests>' ./internal/app/` → exit 1 (`start ... connect durable containment supervisor: containment supervisor connection timeout`); Linux (WSL): the relocated `TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary` → exit 1, `receive Linux supervisor pidfd: Linux supervisor fd payload is incomplete`; restored → app tests `ok` (exit 0), relocated test `ok` (exit 0) |
 | M4 | made the converted stop-lease install expose durable authority (`mutantDurableAuthorityLease` embedding `noopContainmentSupervisorLease` plus `containmentAuthority()`) | `go test -count=1 -run '^TestNonDurableStopLeaseCloseRetainsFailedStopProof$' ./internal/platform/` → exit 1, `in-process supervisor platform.mutantDurableAuthorityLease exposes durable authority; the non-durable stop lease route is not exercised`; restored → exit 0 `ok` |
+| M5 (apply stage) | made the execution route restore a no-op (`installInProcessSupervisorRouteForTesting` returned `func() {}` instead of restoring `launchLinuxSupervisor`) | `go test -count=1 -run '^TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary$' ./internal/execution/` (WSL) → exit 1, `capability restore did not restore the shipped durable dispatch`; restored → exit 0 `ok`, `process_launcher_linux.go` back to its §1 sha256 |
 
 ## 9. dLOC (D2: report-only)
 
 `git diff --numstat` over the strictly owned shipped files
 (`containment_supervisor_windows.go`, `supervisor_windows_client.go`, `supervisor_linux_client.go`,
-`process_launcher_linux.go`, `process_launcher_windows.go`): +71/−80, net −9 (the deleted fork family — `isGoTestBinary`, both probes, the noop take — is 31 of the deleted lines); the four new shipped capability files add 64 lines (35/9/15/5). Base plan estimated −40 dLOC;
+`process_launcher_linux.go`, `process_launcher_windows.go`): +68/−80, net −12 (re-measured at the
+applied tree; the pre-apply tree was +71/−80, net −9 — the apply-stage simplification removed the
+three dead statements the diff had moved in `process_launcher_linux.go` from the added side). The
+deleted fork family — `isGoTestBinary`, both probes, the noop take — is 31 of the deleted lines; the
+four new shipped capability files add 64 lines (35/9/15/5). Base plan estimated −40 dLOC;
 the gate is the grep + the pins + the mutations).
 
 ## 10. Residual risks and limits

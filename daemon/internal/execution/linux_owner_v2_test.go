@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -359,10 +360,7 @@ func TestDefaultLinuxLauncherUsesRecorderHandoffCapability(t *testing.T) {
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 
-	invocation := Invocation{Program: command.Path}
-	invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
-	invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
-	invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	invocation := completeHandoffInvocation(Invocation{Program: command.Path})
 
 	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
 	if started != nil {
@@ -389,10 +387,7 @@ func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
 	defer devNull.Close()
 	command.Stdin, command.Stdout, command.Stderr = devNull, devNull, devNull
 
-	invocation := Invocation{Program: command.Path}
-	invocation.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
-	invocation.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
-	invocation.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	invocation := completeHandoffInvocation(Invocation{Program: command.Path})
 
 	started, err := defaultProcessLauncher(context.Background(), command, invocation, nil, nil, nil)
 	if err != nil {
@@ -404,6 +399,10 @@ func TestLinuxSupervisorDurableHandoffIsDisabledForGoTestBinary(t *testing.T) {
 	}
 	if err := started.close(); err != nil {
 		t.Fatalf("close in-process containment: %v", err)
+	}
+	restore()
+	if reflect.ValueOf(launchLinuxSupervisor).Pointer() != reflect.ValueOf(launchLinuxSupervisorProcess).Pointer() {
+		t.Fatal("capability restore did not restore the shipped durable dispatch")
 	}
 }
 

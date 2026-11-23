@@ -36,9 +36,10 @@ requests handoff.
 | implicit dependents: `execution/runner_test.go`, `probe_test.go`, `runner_windows_test.go`, `identity_windows_test.go`; `app/decision_liveness_test.go`, `output_settlement_test.go`; `harness/omp/native_acceptance_test.go`, `harness/omo/native_test.go` | census confirmed by the base-red experiment: with only the Windows gate dropped, `TestRequiredInvalidDecisionStopsRealBlockedChildBeforeAndAfterAttachment` (both subtests) and `TestLegacyQuestionOnlyDecisionKeepsRealChildLiveUntilInput` fail with `connect durable containment supervisor: containment supervisor connection timeout` | each test binary installs the capability once (`TestMain` per package, §2) |
 
 The caller census re-measured at HEAD: `isGoTestBinary` had exactly two callers
-(`supervisor_windows_client.go:657,:1075`), `DurableSupervisorHandoffAvailable` exactly three
-(`process_launcher_linux.go:37`, `process_launcher_windows.go:51`,
-`containment_supervisor_linux_test.go:92`); a non-test grep over `daemon/internal` for
+(`supervisor_windows_client.go:657,:1075`); `DurableSupervisorHandoffAvailable` had four call
+sites (two shipped: `process_launcher_linux.go:37`, `process_launcher_windows.go:51`; two tests:
+`containment_supervisor_linux_test.go:92`, `process_windows_test.go:878`), plus its two
+definitions; a non-test grep over `daemon/internal` for
 `flag.CommandLine.Lookup` / `test.v` / `isGoTestBinary` returned exactly the two probe sites.
 
 ## 2. Public/API shape

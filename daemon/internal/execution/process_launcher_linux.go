@@ -32,9 +32,6 @@ func defaultProcessLauncher(
 	if invocation.linuxV2Requested() {
 		return launchLinuxV2Process(ctx, command, invocation, stdinRead, stdoutWrite, stderrWrite)
 	}
-	_ = stdinRead
-	_ = stdoutWrite
-	_ = stderrWrite
 	writes := invocationWrites(invocation)
 	capabilities := writes.Capabilities()
 	if capabilities.SupervisorHandoffRequested() {

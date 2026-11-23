@@ -272,10 +272,7 @@ func TestDefaultWindowsLauncherUsesRecorderHandoffCapability(t *testing.T) {
 	}
 	t.Cleanup(func() { attachSuspendedProcessWithHandoff = previous })
 
-	complete := helperInvocation("args")
-	complete.PrepareSupervisorHandoff = func(authority.SupervisorHandoff) error { return nil }
-	complete.BindSupervisorHandoff = func(authority.SupervisorHandoff, int, string) error { return nil }
-	complete.CommitSupervisorHandoff = func(authority.SupervisorHandoff, time.Time) error { return nil }
+	complete := completeHandoffInvocation(helperInvocation("args"))
 	process, err := NewRunner().Start(context.Background(), complete, &recordingSink{})
 	if process != nil {
 		t.Cleanup(func() { cleanupRunnerTestProcess(t, process) })
