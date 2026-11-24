@@ -126,23 +126,27 @@ Two further scratch runs bound the barrier:
 ## 5. Assertion census (base `6369546b` vs HEAD)
 
 `expect(` count 324 → 325; assertion-bearing lines 327 → 328; tests 11 → 11; `capture(page …)`
-32 → 32; spec lines 1,443 → 1,473 (`git diff --stat`: 59 insertions, 29 deletions); `page.route(` /
-`unroute(` pairs 1 → 2 (the held read). Base-only lines (the two replaced by the documented
-allowance): `expect(entry.request?.failure(), …).toBeTruthy()` and
+32 → 32; spec lines 1,443 → 1,464 (`git diff --numstat 5599a0b7`: 52 insertions, 31 deletions);
+`page.route(` / `unroute(` pairs 1 → 2 (the held read). Base-only lines (the two replaced by the
+documented allowance): `expect(entry.request?.failure(), …).toBeTruthy()` and
 `expect(["GET","HEAD"], … aborted read …).toContain(…)`. Head-only lines: the read-requirement
 assertion and the two-string allowance assertion (Change 1), plus `await expect(removal).toBeVisible();`
-(Change 2). No other assertion changed. The apply stage (2026-11-24) replaced the 9-line class-2
-comment with a 6-line one (finding F1): the `expect(`/tests/`capture`/route counts above are
-unchanged, the `1,476`-line count and the sha256 `4a393552…` are historical, and every HEAD line
-number after the comment block (`:486-491`) is 3 lower than in the pre-trim record. Structural
-references in this file use the trimmed numbers; line numbers quoted from pre-trim run logs keep
-the logged value with the trimmed one noted where the two differ.
+(Change 2). No other assertion changed. Two later stages changed only comments. The apply stage
+(2026-11-24) replaced the 9-line class-2 comment with a 6-line one (finding F1); the fix r1 stage
+(2026-11-24) then shortened the four over-cap blocks this branch had added — the pair of protocol
+sentences, the `navigate` helper, the allowance rule and the class-2 ordering — to two lines each,
+removing nine lines, and deleted the two scratch pin copies from the branch (review R-01–R-03),
+so the range adds no second spec file. Neither edit touched an assertion. The
+`expect(`/tests/`capture`/route counts above are unchanged, and the
+`1,476`-line count with the sha256s `4a393552…` (implement bytes) and `029e6af0…` (apply-trim
+bytes) are historical. Structural references in this file use the final numbers; line numbers
+quoted from earlier run logs keep the logged value with the final one noted where the two differ.
 
 ## 6. Gates (real commands, counts, exit codes)
 
 Local host: Windows 11, PostgreSQL 18.6; the baseline ran on the shared instance at
 127.0.0.1:5432 with the run-owned database names, and the acceptance repeats run on a dedicated
-cluster at 127.0.0.1:55444 (`sync_commit` off, data directory on Q:) with two fixture instances
+cluster at 127.0.0.1:55444 (`sync_commit` off, data directory on a scratch volume) with two fixture instances
 (`PHX_SERVER=true PORT=4021` and `PORT=4022`, Windows priority High, their `SYMMETRY_*` from the
 driver) so the two suites load each other instead of the host's foreign jobs alone. The fixture is
 started as
@@ -161,9 +165,15 @@ the pinned lockfile.
 | assertion census | §5 | — | no assertion removed outside the documented allowance |
 | loaded repeats (repeat budget, conductor ruling 2026-11-24) | `repeat.sh` over `node node_modules/@playwright/test/cli.js test … --repeat-each=60`, one suite at a time, `timeout 4500` | 1 / 1 / 0 / 0 / 0 | 300 executions: class-1 desktop 52/60 and mobile 58/60 (10 environment stalls, none the recorder assertion), class-2 mobile 60/60, class-1 reruns 60/60 on both projects; §7 repeat budget |
 | loaded repeats, post-trim bytes `029e6af0…` (apply-stage F1 re-record) | the same `repeat.sh` suites over the current bytes, one suite at a time, `timeout 4500` | 0 / 0 / 0 | 180 executions: class-1 desktop 60/60, class-1 mobile 60/60, class-2 mobile 60/60, every JSON report `expected 60, unexpected 0`, recorder assertion 0 times; §7 post-trim re-run |
-| whitespace/CRLF on the three owned files | `grep -cP '[ \t]+$'` / `grep -c $'\r'` | 0 | 0 trailing-whitespace lines, 0 CRLF lines each |
+| loaded repeats, fix r1 bytes `8014879b…` (fix-stage comment trim) | the same `repeat.sh` suites over the hand-over bytes, one suite at a time, `timeout 4500` | 0 / 0 / 0 | 180 executions: class-1 desktop 60/60, class-1 mobile 60/60, class-2 mobile 60/60, every JSON report `expected 60, unexpected 0`, recorder assertion 0 times; §7 fix r1 re-run |
+| pins on the fix r1 bytes | `-g "external work items"` (class 1, both projects) and `-g "stale updates" --project=mobile-chromium` (class 2), regenerated pins | 0 / 0 | class-1 pin 2 passed (44.8 s), class-2 pin 1 passed (6.7 s); §7 fix r1 re-run |
+| browser suite coverage (review R-01) | `python3 scripts/ci/assert-browser-suite-coverage.py` | 1 → 0 | before the pin deletion: `unclassified=2` (`pin-class1-final.spec.mjs`, `pin-class2-final.spec.mjs`); after: `suites=16 wired=14 manual=2 unclassified=0` |
+| changed-file clone gate (review R-02) | `python3 scripts/ci/jscpd-changed.py --base 9d113eb6… --head <rev>` with the pinned jscpd 4.3.0 | 1 → 0 | before (`5add3541`): 5 new clones refused, the two pin copies against `portal-connections.spec.mjs`; after (a dangling candidate commit of the frozen tree): 3 changed files, 1,717 scanned sources, none new |
+| added-comment census (fix r1) | the added `//` runs of `git diff -U0 9d113eb6…` over the spec | 0 | 0 added comment runs above the 2-line cap; the four listed blocks are two lines each |
+| records carry no host path | the account name, drive-letter, and `/mnt` and `/home` prefixes scanned over the plan and evidence records | 0 (no hits) | plan and evidence clean |
+| whitespace/CRLF on the hand-over files (spec, plan, evidence) | `grep -cP '[ \t]+$'` / `grep -c $'\r'` | 0 | 0 trailing-whitespace lines, 0 CRLF lines each |
 | `git diff --check` | repo root | 0 | — |
-| spec bytes handed over | `sha256sum browser/tests/portal-connections.spec.mjs` | — | `029e6af050afc95905ddc76fe6911dfeb7671ede01d2ced7f7011eb59cb634d9` (apply-stage trim, finding F1), 59 insertions / 29 deletions; the pre-trim `4a393552756be09b0882f09bbeeaacba711bd64272892eb1ebe9147865c1fc7d` (the ruling's `4a393552…`) is historical |
+| spec bytes handed over | `sha256sum browser/tests/portal-connections.spec.mjs` | — | `8014879b15bca310c771a07516064ed181798f671cda5a2c40a3a744ea899250` (fix r1 comment trim), 52 insertions / 31 deletions against `5599a0b7`; predecessor hashes are recorded in §5 |
 | CI `browser-fixture-linux` 3× | `gh run rerun` on the PR | — | conductor-owned; needs the pushed PR head (this stage does not push) |
 
 ## 7. Loaded repeats (CI configuration: workers 1, retries 0)
@@ -190,10 +200,10 @@ bootstrap stalls ("Checking your session…", `Refresh` absent within the shared
 guard), and measurement pinned the fixture's route handler, not the spec: the same minutes gave
 `/portal/login` 3.6 s … 25.1 s while static assets served in 15-24 ms, and `pg_database_size` on
 the shared cluster took 11.5 s / 32.7 s against `select 1` at 0.2 ms — the shared PostgreSQL
-(`C:/…/scratch/w609-apply-pg/data`) is I/O-bound under the foreign build and Defender.
+(its data directory under `<scratch>`) is I/O-bound under the foreign build and Defender.
 **Attempt 3** therefore isolates the database and re-raises the fixtures' priority:
 
-- a dedicated PostgreSQL 18.6 cluster on Q: (`initdb` + `postgres -D Q:/pg-flake-conn/data -p
+- a dedicated PostgreSQL 18.6 cluster under `<scratch>` (`initdb` + `postgres -D <scratch>/pg-flake-conn/data -p
   55444 -c listen_addresses=127.0.0.1 -c synchronous_commit=off -c full_page_writes=off`) — the
   same major version and the driver's own 55444 port; `pg_database_size` 130 ms, `select 1`
   1.3 ms;
@@ -245,20 +255,20 @@ retained as the pre-trim record.
 Rig rebuilt at 17:09-17:12 from this revision's own bytes, because the previous stage's
 fixture processes carried unrecoverable per-run credentials (the operator token is only ever
 an environment variable of the fixture process) and its Playwright browser path was gone
-(`%LOCALAPPDATA%\ms-playwright` absent; the browsers live at `Q:/.tools/ms-playwright`):
+(`%LOCALAPPDATA%\ms-playwright` absent; the browsers live at `<tools-root>/ms-playwright`):
 
 - fixtures on 4021/4022 with their own fresh databases (`symmetry_0007e_test_4021|4022`) on the
   dedicated PostgreSQL 18.6 cluster at 127.0.0.1:55444, per-run operator token and identity,
-  `SYMMETRY_*` from `C:/Users/lhan/.local/state/gdd/scratch/rf-flake-conn/env-<port>.sh`
-  (the session environment carries a stale `SYMMETRY_CONTRACTS_DIR=Q:\repos\wt-0007f\symmetry\contracts`
+  `SYMMETRY_*` from `<scratch>/rf-flake-conn/env-<port>.sh`
+  (the session environment carries a stale `SYMMETRY_CONTRACTS_DIR` naming another worktree's `contracts`
   and `POSTGRES_PORT=55442`, both overridden), instance build paths
   `control/_build/instances/connections-<port>`, SPA staged from the revision's CI
   `portal-assets` artifact (unchanged from the previous stage);
-- Playwright 1.65.1 with `PLAYWRIGHT_BROWSERS_PATH=Q:/.tools/ms-playwright`, the repo config
+- Playwright 1.65.1 with `PLAYWRIGHT_BROWSERS_PATH=<tools-root>/ms-playwright`, the repo config
   unchanged (`workers: 1`, `retries: 0`, `timeout: 60_000`, `test.describe.configure({timeout: 120_000})`),
   invoked as `node node_modules/@playwright/test/cli.js test tests/portal-connections.spec.mjs`
   (the invocation `browser/scripts/connection-spec-env.test.mjs` itself uses);
-- runner `C:/Users/lhan/.local/state/gdd/scratch/rf-flake-conn/repeat.sh`, one label per suite,
+- runner `<scratch>/rf-flake-conn/repeat.sh`, one label per suite,
   JSON report per suite, speculation-free `-g` filters matching one test each.
 
 | suite | command (Playwright config `workers: 1`, `retries: 0`) | executions | passed | failed | wall |
@@ -317,7 +327,7 @@ latency, not a captured system trace.
 a database recreated from scratch immediately before it (drop/create/migrate + fixture restart,
 the rig's `reset-port.sh`), so accumulation is excluded as the driver, and it still failed twice
 (executions 6 and 7 of 60, both plain `Test timeout of 120000ms exceeded` - one in
-`page.evaluate` at the spec's `:1305` (pre-trim; `:1302` after the apply trim), one during
+`page.evaluate` at the spec's `:1305` (implement bytes; `:1293` at the final bytes), one during
 teardown - not an assertion). An independent
 probe started with the run (one `/healthz` curl, one `/portal/login` curl and one raw
 `psql select 1` every ~3 s, 339 samples, no browser involved) measured the same episodes live:
@@ -362,11 +372,14 @@ assertion about a response body, a refusal notice or a reconciled row.
 
 ### Repeat budget re-run — post-trim bytes `029e6af0…` (apply stage, 2026-11-24)
 
+Superseded for the hand-over bytes by the fix r1 re-run below (the fix stage's comment trim
+changed the bytes again); retained as the apply-stage record.
+
 Finding F1's trim changed the spec bytes the budget's numbers bind, so the three suites were
 re-run over the current bytes (sha256 `029e6af050afc95905ddc76fe6911dfeb7671ede01d2ced7f7011eb59cb634d9`,
 59 insertions / 29 deletions against `5599a0b7`) with the pre-trim budget's rig, runner and
 configuration: the same `repeat.sh`, one suite at a time in the foreground, `timeout 4500`,
-Playwright config `workers: 1`, `retries: 0`, `PLAYWRIGHT_BROWSERS_PATH=Q:/.tools/ms-playwright`,
+Playwright config `workers: 1`, `retries: 0`, `PLAYWRIGHT_BROWSERS_PATH=<tools-root>/ms-playwright`,
 each suite on a database dropped and recreated immediately before it (`cycle-port.sh`, fixture
 restarted at High priority; the 55444 postmaster measured `High`), one `probe.sh` (a `/healthz`
 curl, a `/portal/login` curl, a raw `select 1` every ~3 s) beside each run.
@@ -397,7 +410,7 @@ episodes were present in the runs' own probe windows, as in the pre-trim reruns:
 
 180 clean executions inside windows that still carry the stall class is the same shape the
 pre-trim reruns record, and it is the pass/fail count the conductor's repeat budget asks for,
-measured over the bytes that hand over.
+measured over the apply-stage bytes.
 
 Two condition notes, recorded for the judge:
 
@@ -413,6 +426,51 @@ Two condition notes, recorded for the judge:
   whether it reached the fixture - is unverified; both suites passed 60/60 with them alive or
   recently alive.
 
+### Repeat budget re-run — fix r1 bytes `8014879b…` (fix stage, 2026-11-24)
+
+The fix r1 comment trim (−9 lines) changed the bytes the budget binds again, so the three suites
+were re-run over the hand-over bytes (sha256
+`8014879b15bca310c771a07516064ed181798f671cda5a2c40a3a744ea899250`, 52 insertions / 31 deletions
+against `5599a0b7`) with the apply-stage re-run's rig, runner and configuration: the same
+`repeat.sh`, one suite at a time in the foreground, `timeout 4500`, Playwright config
+`workers: 1`, `retries: 0`, `PLAYWRIGHT_BROWSERS_PATH=<tools-root>/ms-playwright`, each suite on a
+database dropped and recreated immediately before it (`cycle-port.sh`, fixture restarted at High
+priority), one `probe.sh` (a `/healthz` curl, a `/portal/login` curl, a raw `select 1` every ~3 s)
+beside each run.
+
+Both pins were regenerated from those bytes and re-run green before the budget: the class-1 pin
+(`-g "external work items"`, the 800 ms delayed read, 300 s pin budget) 2 passed in 44.8 s
+(desktop 23.7 s, mobile 18.3 s), and the class-2 pin (`-g "stale updates"
+--project=mobile-chromium`, CDP `Emulation.setCPUThrottlingRate { rate: 12 }`) 1 passed in 6.7 s;
+both exit 0. The pins' bytes are the spec's plus the documented injections (sha256 `b1816a37…`
+and `e38a8c4c…`), deleted before hand-back as §4 records.
+
+| suite | command | executions | passed | failed | wall |
+| --- | --- | ---: | ---: | ---: | ---: |
+| class 1, desktop | `-g "external work items" --project=desktop-chromium --repeat-each=60` (4021, fresh database) | 60 | 60 | 0 | 23.1 m (1387 s) |
+| class 1, mobile | `-g "external work items" --project=mobile-chromium --repeat-each=60` (4021, fresh database) | 60 | 60 | 0 | 18.8 m (1128 s) |
+| class 2, mobile | `-g "stale updates" --project=mobile-chromium --repeat-each=60` (4022, fresh database) | 60 | 60 | 0 | 17.2 m (1032 s) |
+
+Total: 180 executions, 180 passed, 0 failed, 0 skipped; each JSON report reads `expected 60,
+unexpected 0, skipped 0`, the recorder assertion (`must be readable unless its request was
+aborted`) appears 0 times in the three logs, and no execution failed an assertion. The stall
+episodes were present in the runs' own probe windows, as in the earlier budgets:
+
+- class-1 desktop probe (299 samples): `/healthz` max 2.36 s with 2 samples above 2 s,
+  `/portal/login` max 1.91 s, `select 1` max 2 143 ms with 2 above 1 500 ms;
+- class-1 mobile probe (269 samples): `/healthz` max 1.83 s, `/portal/login` max 3.14 s with 1
+  sample above 2 s, `select 1` max 993 ms, none above 1 500 ms;
+- class-2 mobile probe (191 samples): `/healthz` max 8.48 s with 5 samples above 2 s,
+  `/portal/login` max 6.90 s with 3, `select 1` max 2 205 ms with 5 above 1 500 ms.
+
+180 clean executions inside windows that still carry the stall class, over the bytes that hand
+over, is the pass/fail count the conductor's repeat budget asks for.
+
+One condition note, recorded for the judge: the fix stage's first session started the class-1
+desktop suite and the stage ended while that command was a background job, after `ok` 27 of 60
+(`class1-desktop-final.log` in the scratch directory); its JSON report never closed, so it is not
+part of the count. The three counts above come from the foreground re-run.
+
 ## 8. Residual risks and limits
 
 - The `navigate` barrier settles reads already started; a response event that fires between its
@@ -420,7 +478,8 @@ Two condition notes, recorded for the judge:
   navigation allowance, and it is the only tolerated class beyond an aborted request.
 - The barrier is load-bearing but unguarded by static checks: a bare `page.goto` added to this
   spec later would redden only the forced delayed-read pin, not a deterministic test (§4's
-  mutation row), so the flake could return silently in CI. The candidate guards (a scoped
+  mutation row), so the flake could return silently in CI — the mutant reddens only outside CI,
+  an oracle gap. The candidate guards (a scoped
   `no-restricted-syntax` block in `browser/eslint.config.mjs`, or a source-text case in
   `browser/scripts/connection-spec-env.test.mjs`) are outside this slice's owned files and are
   recorded here instead (apply-stage finding F2).
@@ -430,7 +489,7 @@ Two condition notes, recorded for the judge:
   container on 5432; the fixture, the SPA build and the spec bytes are the revision's.
 - The CI acceptance (3 consecutive green `browser-fixture-linux` attempts) is conductor-owned.
 - The repeat budget's class-1 filter is the "external work items" case only. The contract also
-  names `a provider failure and an ambiguous outcome stay explicit ...` (base `:720`, HEAD `:757`)
+  names `a provider failure and an ambiguous outcome stay explicit ...` (base `:720`, final `:748`)
   as a class-1 case: its bytes are identical in base, reordered and final revisions, its two
   `navigate()` sites are the shared helper under test here, and the previous stage's whole-spec
   repeats ran it inside a 121-execution clean stretch; it is not re-exercised by this budget.

@@ -91,9 +91,8 @@ test.describe.configure({ timeout: 120_000 });
 const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
 const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
 const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
-// Playwright 1.65.1's own words for the two ways a recorded body read is lost to
-// the scan while the request itself never fails: the document navigated away, or
-// the session was torn down. No other unreadable body is tolerated.
+// Playwright 1.65.1's own words for the two tolerated lost reads: the document
+// navigated away, or the session was torn down. No other unreadable body passes.
 const navigatedAway = "Response body is not available for a response that was navigated away from. Read response.body() before triggering any navigation.";
 const sessionClosed = "Target page, context or browser has been closed";
 
@@ -252,10 +251,8 @@ function recordApiBodies(page) {
   return { responses, requests, consoleMessages, pageErrors, cookieJarSamples };
 }
 
-// A body the recorder still has to read cannot survive the document navigation
-// that replaces it: Playwright 1.65.1 refuses that read (see `navigatedAway`)
-// while the request carries no failure, so every document navigation settles
-// the reads already started — the ones that land while this waits included.
+// The recorder's pending reads do not survive the navigation that replaces them:
+// settle every read already started before navigating.
 const navigate = async (page, recorded, url) => {
   let pending;
   do {
@@ -290,10 +287,8 @@ async function assertNoCredentials(page, recorded) {
     expect(entry.headers.length, `response ${entry.path} must have headers for the credential scan`).toBeGreaterThan(0);
     expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
     if (entry.unreadable !== undefined) {
-      // The protocol cannot serve the body of a response whose read the page
-      // aborted, or whose document the scan lost to a navigation or a torn-down
-      // session. Every case is a read, the navigation/session ones only in the
-      // exact words above, and the recorded error stays in the message.
+      // An unreadable body is tolerated only for a GET/HEAD; with no request
+      // failure its recorded error must end in one of the two sentences above.
       const method = entry.request?.method();
       expect(["GET", "HEAD"], `an unreadable response must belong to a read: ${method} ${entry.path}: ${entry.unreadable}`).toContain(method);
       if (entry.request?.failure()) continue;
@@ -483,12 +478,8 @@ test("stale updates and concurrent deletion reconcile to the server's current st
   await settings.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("button", { name: new RegExp(renamed) })).toBeVisible();
 
-  // A concurrent removal wins: the second delete is refused and the console
-  // reconciles to the server's state instead of reporting success. The dialog is
-  // open before the other operator's delete, and the connections read that
-  // delete's invalidation triggers (about 220 ms after the row is written, the
-  // failing traces' re-read pair) would unmount the dialog first: it is held
-  // until the refusal is asserted, then released as the reconcile observed below.
+  // A concurrent removal wins: the dialog opens before the other operator's delete,
+  // whose invalidation read is held until the refusal is asserted, then released.
   const current = await api(page, "GET", "/portal/api/connections");
   const target = current.body.connections.find((connection) => connection.name === renamed);
   await page.getByRole("button", { name: new RegExp(renamed) }).click();
