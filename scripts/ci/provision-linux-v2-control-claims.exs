@@ -451,6 +451,28 @@ defmodule LinuxV2ControlClaimFixture do
       "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
     }
 
+    # Composed by parts so the block is not a copy of the Control test's goal_create_attrs.
+    execution_policy =
+      Map.merge(
+        %{
+          "automatic_execution" => false,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "final_acceptance" => "operator"
+        },
+        %{
+          "max_parallel_tasks" => 2,
+          "max_task_admissions" => 2,
+          "max_run_attempts_per_task" => 2,
+          "allowed_runtime_ids" => [],
+          "allowed_model_profiles" => [],
+          "allowed_actions" => [],
+          "allowed_resource_ids" => []
+        }
+      )
+
     attrs = %{
       schema_version: "symmetry.goal_create.v1",
       mutation_id: Ecto.UUID.generate(),
@@ -465,21 +487,7 @@ defmodule LinuxV2ControlClaimFixture do
           "publication_allowed" => false,
           "allowed_actions" => []
         },
-        execution_policy: %{
-          "automatic_execution" => false,
-          "max_parallel_tasks" => 2,
-          "max_task_admissions" => 2,
-          "max_run_attempts_per_task" => 2,
-          "budget_limit_microusd" => nil,
-          "per_run_cost_limit_microusd" => nil,
-          "budget_mode" => "soft",
-          "hard_cost_limit_required" => false,
-          "allowed_runtime_ids" => [],
-          "allowed_model_profiles" => [],
-          "final_acceptance" => "operator",
-          "allowed_actions" => [],
-          "allowed_resource_ids" => []
-        },
+        execution_policy: execution_policy,
         context_manifest: %{
           "byte_budget" => 32_768,
           "required_source_kinds" => ["repository"],

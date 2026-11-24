@@ -347,3 +347,19 @@ lists equal in the exporter suite; F07 names the mutant's CI job and stop; F08 d
 provider-access cases from `CASES`; F09 stays the documented `synthetic_goal_cleanup` carve-out.
 Evidence: the record's §10 with the mutant rows (§10.9) and the local probe transcripts (§10.10);
 the all-12 run on the delivered bytes remains the conductor's dispatch.
+
+### 7c. Round-1 review fixes (2026-11-25, PR #281 Sol + DS + Sec reconciled)
+
+The conductor's binding ruling items 1-5, implemented and recorded in evidence §11: (1) the
+rootless-Compose caller of `write-linux-v2-owner-request.py` migrates to the OpenCode-preserving
+`stage_replay_unprovisioned_refusal` case (both Compose fixture files join the owned set for that
+migration only; writer and request bytes unchanged, local positive/negative probe); (2) the
+goal-create `execution_policy` literal is composed by `Map.merge` so the `contracts` clone gate
+stops seeing the Control test's block (thresholds untouched, jscpd-changed exit 0 on the PR event
+shapes); (3) `linux_v2_pi_tree_digest` binds entry type, mode, ownership, path, link target and
+content, the pin is recomputed for the staged normalized tree (`f5fc36f7…`), and the check lives
+at the staging site where that tree is canonicalized (fetch keeps archive/executable/version pins);
+(4) the record's stop-line citations and the §4d mutant wording are corrected; (5) the plan file is
+ratified as owned. Item 6 is the literal all-12 scratch run on the round-1 bytes (evidence §11.6),
+the last code-affecting action; the delivered code bytes carry an all-equal sha256 table against
+that run head.

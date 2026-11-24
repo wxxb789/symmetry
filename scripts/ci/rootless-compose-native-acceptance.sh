@@ -418,10 +418,11 @@ config = {
 pathlib.Path(config_path).write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
 chmod 0600 "$native_root/unprovisioned-config.json"
+# The OpenCode vehicle keeps its own refusal case; the generic stage_replay entry is the pi vehicle.
 python3 "$repo/scripts/ci/write-linux-v2-owner-request.py" \
-  stage_replay "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
+  stage_replay_unprovisioned_refusal "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
   /opt/symmetry-owner-test/barriers/unprovisioned/request "$control_api_url" \
-  "$control_machine_token" "$owner_request_source" native_release
+  "$control_machine_token" "$owner_request_source"
 sudo install -o root -g 65532 -m 0640 "$native_root/unprovisioned-config.json" \
   "$owner_fixture/unprovisioned/config.json"
 sudo install -o root -g 65532 -m 0440 "$owner_request_source" \

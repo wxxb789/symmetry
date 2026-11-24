@@ -186,7 +186,7 @@ mutant rows below revisit.
 | 8 | `45479093531` | same three sets (run 7's bytes + the stall diagnostics) | `5bb2e546` | all three exit 1, and the new truncate-instead-of-drop tail names the wall: `build explicit App-owned Linux v2 witness invocation: revalidate Linux owner before native invocation: verify A-owned Git metadata tree /opt/symmetry-owner-test/production/source/.git: Git metadata entry …/.git/logs/refs/heads/symmetry is accessible to B: effective permissions for UID 52001 GID 52001 are 05, require 0 and forbid 07`. The RunJournal projection shows `has_clone_intent` and `has_seed_receipt` set, so the clone reserve admits the goal-backed claim and the seed runs; the A-owned refs it creates inherit the fixture's `umask 022`, which the same binary's revalidation refuses. |
 | 9 | `45481221551` | same three sets (run 8's bytes + `UMask=0077` for the bundle witnesses) | `aa58f43b` | all three exit 1; zero `clone intent does not match` and zero Git-metadata lines — the wall is cleared and each set now reaches its own boundary, stopping on the later checks of §4: `stage_replay_create_started` reaches the hold and its journal boundary validates, then fails the recovery exit contract; `migration` never reaches its marker (the App's own release step aborts it, stderr in §4); `stale_journal_run_key` fails a pre-fresh-request precondition (the pinned native process is already exited). |
 | 10 | `45484692731` | `stage_replay_leaf_bound`, `stage_replay_launcher_bound`, `ack_loss_launcher_bound`, `stale_leaf`, `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject` | `0003f62d` | all seven exit 1, and every row confirms a predicted class: the three `unresolved`-expected sets stop on the recovery exit contract (`:178` twice, the ack runner's `:217` once, all `unresolved production recovery exit = <nil>, want deliberate nonzero process exit`); `stale_leaf` reaches its boundary — a **durable stop receipt on the pi vehicle with dummy credentials** (the failed turn stops the containment, the marker and `linuxV2ValidateStageJournalBoundary` both pass) — and its recovery leg then refuses with `stage replay unresolved outcome lacks retained journal/owner uncertainty` and writes no response (`:630`); the three variants stop at the recovery refusal of §4c (`:269`). |
-| 11 | `45485437534` | the four stale-journal sets (run 9's bytes + §2.17's parked-gate fix) | `ab48f317` | all four exit 1, and the fix is visible: no leg stops at the old liveness message any more. The new first failing checks are `stale_journal_run_key` → `:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`, and the three `TestProductionLinuxV2StaleOwnerRequestDenials` variants → `:269` `read stage-replay recovery response: decode redacted production owner-witness response`. Every set's App stderr is the same refusal — `recover existing owner witness RunJournal without launch` — over a journal that still shows `has_clone_intent`/`has_seed_receipt`/`recovery_required` (§4c). |
+| 11 | `45485437534` | the four stale-journal sets (run 9's bytes + §2.17's parked-gate fix) | `ab48f317` | all four exit 1, and the fix is visible: no leg stops at the old liveness message any more. The new first failing checks are `stale_journal_run_key` → `:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`, and the three `TestProductionLinuxV2StaleOwnerRequestDenials` variants → `:269` `read stage-replay recovery response: decode redacted production owner-witness response`. Every set's App stderr is the same refusal — `recover existing owner witness RunJournal without launch` — over a journal that still shows `has_clone_intent`/`has_seed_receipt`/`recovery_required` (§4c). |
 | 12 | `45488371274` | `stale_journal_run_key` (F3 mutant: a mismatched marker gate identity injected before the guard) | `6763a2df` | exit 1 at 0.00 s with the guard refusing — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; run 11's unmutated bytes got past the same guard to the pidfd pin (§5 row 6). No manifest. |
 | 13 | `45489336388` | all twelve retargeted sets, literal, on the implement stage's final goal-tree bytes (the apply and fix stages changed nine of the ten subject files afterwards — §9, §10) | `f2682b71` | twelve exit-1 sets, every row reproducing runs 9/10/11 (§4e); ten manifests carrying the pinned pi `native_binary` block (`sha256:6a2ac1c5…`, `1.5.2`, subject commit `f2682b71`; artifact `linux-v2-native-evidence-45489336388-1`), the same two export refusals (`shared`, `synthetic_goal_cleanup`), and witness documents with `harness: "pi"` / `installed_owner_verified: true`. Job 16m42s. |
 
@@ -258,7 +258,7 @@ Run 11 (post-fix) rows — all four sets, first failing checks only, with the sa
 
 | Set | Exit | Boundary reached | First failing check |
 | --- | --- | --- | --- |
-| `stale_journal_run_key` | 1 | the setup hold + SIGKILL, the post-kill anchor/helper liveness check, the marker/journal identity binding | `:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials` (the same pidfds passed the wrapper's liveness check moments earlier) |
+| `stale_journal_run_key` | 1 | the setup hold + SIGKILL, the post-kill anchor/helper liveness check, the marker/journal identity binding | `:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials` (the same pidfds passed the wrapper's liveness check moments earlier) |
 | `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject` | 1 | the setup hold + SIGKILL and the post-kill liveness check | `:269` `read stage-replay recovery response: decode redacted production owner-witness response` — the recovery leg refused and wrote no response, so the denial legs never ran |
 
 Run 10 (pre-fix siblings) rows, same per-set evidence shape (witness document with `harness: "pi"` and
@@ -308,7 +308,7 @@ recovery leg of a `handoff_committed` setup refuses with `recover existing owner
 without launch` (`linux_owner_witness_linux.go:531-534`) and writes **no** response — the refusal
 replaces the recovery error, so the failing sub-step is unobservable for the same reason as the
 release above — and `stale_journal_run_key` fails its fresh-request precondition one guard earlier
-(`:531` `stage owner does not have exact A credentials`) although the wrapper's own post-SIGKILL
+(`:532` `stage owner does not have exact A credentials`) although the wrapper's own post-SIGKILL
 liveness check on the *same* anchor/helper pidfds had passed moments before. Neither symptom is
 reachable from an owned file; both are pre-existing (these legs never ran this far before the
 retarget). The pin guard reads `/proc/<pid>` credentials and requires **A's** effective UID/GID
@@ -342,7 +342,7 @@ names is the pre-admission run's own stop, so both stops are on record.
 
 | # | Mutant | Before (run / observed) | After (probe / observed) |
 | --- | --- | --- | --- |
-| 1 | `stage_replay_create_started` reverted to the legacy `launch_one_shot_work_item!` route (`<scratch>/provision-mutant.exs`, sha256 `67e4b514996fe8ca4a58e083fd4a8a042193b24ad00ef1cef1d470505706d91e`) | the bytes run `45481221551` executed: the case is a goal case (`probe-fixture-final.json` sha256 `d0edafd065f86716223b4bc0e1d77e4c935809f26381ad556e2213d8298c7ddb`: `goal_cases` 39 / `work_items` 9), the writer accepts its admission (`probe-request-final.json` sha256 `13c4dc620c50c79b767fdf211c11a96fe36251822c91d3469264c9230430b861`: `work.input.schema_version == "symmetry.admission.v1"`, non-null `goal_id`, `subject` = the fixture Subject, `provider_scope: null`, no `provider_access`), and the set reaches the `create_started` hold | mutant bytes (`probe-fixture-mutant.json` sha256 `7d3bbed9bcae12daebbddbc9e502ed00570cd702b96b07f9cd70b90510d697d4`: `goal_cases` 38 / `work_items` 10 — exactly one case moved), `probe-run-mutant.json` sha256 `b9439d22bff1dd7fd789e3f26e47814bbc528882e7db86d0203ed4f8ed835464` (the legacy work item and task exist) and **no `probe-request-mutant.json`**: the writer's pi-durability guard refuses the legacy ClaimResponse at `write-linux-v2-owner-request.py:193-196` with `durability ClaimResponse Work input is not a goal admission` (the stop the delivered bytes reach), so no request document exists. The App-level stop the ruling names (`Linux clone intent does not match the current admitted Subject`) is the *pre-admission* run `45461719002`'s wall (20 lines, §3 rows 4/6); on the current bytes the same mutant stops one step earlier, at the writer. CI job: `linux-native-v2-acceptance` (non-root `runner`; the guest go-test runs as the fixture A account). |
+| 1 | `stage_replay_create_started` reverted to the legacy `launch_one_shot_work_item!` route (`<scratch>/provision-mutant.exs`, sha256 `67e4b514996fe8ca4a58e083fd4a8a042193b24ad00ef1cef1d470505706d91e`) | the bytes run `45481221551` executed: the case is a goal case (`probe-fixture-final.json` sha256 `d0edafd065f86716223b4bc0e1d77e4c935809f26381ad556e2213d8298c7ddb`: `goal_cases` 39 / `work_items` 9), the writer accepts its admission (`probe-request-final.json` sha256 `13c4dc620c50c79b767fdf211c11a96fe36251822c91d3469264c9230430b861`: `work.input.schema_version == "symmetry.admission.v1"`, non-null `goal_id`, `subject` = the fixture Subject, `provider_scope: null`, no `provider_access`), and the set reaches the `create_started` hold | mutant bytes (`probe-fixture-mutant.json` sha256 `7d3bbed9bcae12daebbddbc9e502ed00570cd702b96b07f9cd70b90510d697d4`: `goal_cases` 38 / `work_items` 10 — exactly one case moved), `probe-run-mutant.json` sha256 `b9439d22bff1dd7fd789e3f26e47814bbc528882e7db86d0203ed4f8ed835464` (the legacy work item and task exist) and **no `probe-request-mutant.json`**. **On the delivered bytes the mutant stops at the writer**, not at the clone wall: the writer's pi-durability guard refuses the legacy ClaimResponse at `write-linux-v2-owner-request.py:193-196` with `durability ClaimResponse Work input is not a goal admission`, so no request document exists and the App never sees the claim. The clone-intent stop the ruling names (`Linux clone intent does not match the current admitted Subject`) is recorded from the *pre-admission* run `45461719002` (20 lines, §3 rows 4/6), whose bytes predate the writer guard. CI job: `linux-native-v2-acceptance` (non-root `runner`; the guest go-test runs as the fixture A account). |
 | 2 | the goal-admission route without a native-shaped claim runtime (`register-linux-v2-claim-machine.py` adapter block removed) | final bytes: the sixth claim runtime registers with `harness_kind pi` / `1.5.2` / adapter operations and Control assigns the goal task (`probe-registration-final.json` sha256 `e2df9c51da6a4d04d6ba5bcdfa36f48989f0d796c9aa82827b688f2c9a51e609`) | probe-observed 2026-11-24 11:53 (session transcript; no artifact): Control refuses the goal assignment for the adapter-less runtime with `400` instead of assigning a run, so the fixture cannot claim it; `assignment.ex:332,:519-530` is the guard. |
 
 ### 4e. Per-set verdicts (finalizing ruling of 2026-11-25)
@@ -361,11 +361,11 @@ three follow-up goals named in `docs/TODO.md`.
 | `stage_replay_launcher_bound` | expected stop proven (`launcher_bound` hold) → F1-exit | `45489336388` | same `:178` line (1.84 s) |
 | `ack_loss_launcher_bound` | expected stop proven (ack-loss `launcher_bound` boundary) → F1-exit | `45489336388` | `production_linux_v2_native_witness_test.go:217: unresolved production recovery exit = <nil>, want deliberate nonzero process exit` (1.84 s) |
 | `migration` | F2-release (the App's own release aborts before its `native_release` marker) | `45489336388` | `-linux-v2-native-owner-witness: start native owner witness transport: resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown)` (31.02 s) |
-| `stale_journal_run_key` | expected stop proven (setup hold, SIGKILL, marker/journal identity binding) → F4-semantics | `45489336388` | `production_linux_v2_native_witness_test.go:531: A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` (0.00 s); run 11 hit the credential variant of the same class |
+| `stale_journal_run_key` | expected stop proven (setup hold, SIGKILL, marker/journal identity binding) → F4-semantics | `45489336388` | `production_linux_v2_native_witness_test.go:532: A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` (0.00 s); run 11 hit the credential variant of the same class |
 | `stale_journal_run_key_legacy` | F4-semantics (the recovery refuses; the fresh-request denial legs never run) | `45489336388` | `production_linux_v2_native_witness_test.go:269: read stage-replay recovery response: decode redacted production owner-witness response`; App stderr `recover existing owner witness RunJournal without launch` |
 | `stale_journal_fence` | F4-semantics | `45489336388` | same `:269` line |
 | `stale_journal_subject` | F4-semantics | `45489336388` | same `:269` line |
-| `stale_leaf` | expected stop proven at the pi turn: the `stop_receipt_durable` hold passes with a durable stop receipt on the pi vehicle (the failed dummy-credential turn stops the containment fail-closed) → F2-release in its recovery | `45489336388` | `production_linux_v2_native_witness_test.go:627: read stale-leaf recovery response: decode redacted production owner-witness response`; App stderr `stage replay unresolved outcome lacks retained journal/owner uncertainty` |
+| `stale_leaf` | expected stop proven at the pi turn: the `stop_receipt_durable` hold passes with a durable stop receipt on the pi vehicle (the failed dummy-credential turn stops the containment fail-closed) → F2-release in its recovery | `45489336388` | `production_linux_v2_native_witness_test.go:628: read stale-leaf recovery response: decode redacted production owner-witness response`; App stderr `stage replay unresolved outcome lacks retained journal/owner uncertainty` |
 | `synthetic_goal_cleanup` | out of scope (containment-witness); pre-existing stop | `45489336388` | `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the real Linux v2 launcher/anchor/helper: start "/bin/sh": Linux v2 native release requires an App admission check`; export refused (`pi durability witness is unavailable: synthetic-goal-cleanup.json`) |
 | `shared` | out of scope (containment-witness); the pre-existing owner-leg stop fires before any pi witness | `45489336388` | `clone_cleanup_linux_test.go:259: A cleanup caller exited without the requested parent-death signal` + `clone_integration_linux_test.go:240` + `launcher_integration_linux_test.go:439`; export refused (`ack-loss-replay-checkout_ready.json`) |
 
@@ -382,7 +382,7 @@ all-12 replay; each "before" column points at the same set's row in `45461719002
 | 3 | `@cases` entry `stage_replay_stale_leaf` reverted to `opencode-native`/`:opencode` (`provision-linux-v2-control-claims.exs:75`) | `45461719002`, `stale_leaf`: manifest with the pinned pi block | `45464759248`, `stale_leaf`: `per-harness daemon profile is absent`; no witness document, no manifest |
 | 4 | exporter's pi durability binding drops the `native_binary_sha256` comparison (`export-linux-v2-redacted-evidence.py:1486-1490`) | `python3 scripts/ci/test-linux-v2-evidence.py -k pi_durability` → `Ran 2 tests … OK` (apply-stage bytes) | same command → `FAILED (failures=2)`, `AssertionError: 0 == 0` in `test_manual_pi_durability_digest_or_binding_mismatch_refuses_publication` (mutation `witness digest`); file restored and re-run green. At the delivered bytes the selector matches 5 cases and stays green (§10.9) |
 | 5 | frozen bytes | `git diff 9d113eb6 -- <frozen paths>` empty; six base regions + three frozen OpenCode invocations verbatim | the same checks after every edit: still empty/verbatim (§6) |
-| 6 | F3: a mismatched marker gate identity injected before the unresolved-journal guard (`marker.Owners.Gate.Identity = "mutant-mismatched-gate-identity"`, scratch commit `6763a2df`) | run `45485437534`, `stale_journal_run_key`: the guard passes and the leg proceeds to the pidfd pin (`:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`) | run `45488371274`: the guard fails at 0.00 s — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; no manifest. The injected line was removed before run `45489336388` (the §1 equality table). Design source for the relaxed liveness: `gate.c:731-757` (`wait_for_release` polls the owner pidfd and exits `ESRCH`) and `helper_v2_recovery.go:223-225` (`prepared.Abort()` on owner loss); the gate identity itself stays bound by the marker/RunJournal comparison above the liveness pins. |
+| 6 | F3: a mismatched marker gate identity injected before the unresolved-journal guard (`marker.Owners.Gate.Identity = "mutant-mismatched-gate-identity"`, scratch commit `6763a2df`) | run `45485437534`, `stale_journal_run_key`: the guard passes and the leg proceeds to the pidfd pin (`:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`) | run `45488371274`: the guard fails at 0.00 s — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; no manifest. The injected line was removed before run `45489336388` (the §1 equality table). Design source for the relaxed liveness: `gate.c:731-757` (`wait_for_release` polls the owner pidfd and exits `ESRCH`) and `helper_v2_recovery.go:223-225` (`prepared.Abort()` on owner loss); the gate identity itself stays bound by the marker/RunJournal comparison above the liveness pins. |
 
 ## 6. Gates (local, delivered bytes)
 
@@ -1065,3 +1065,170 @@ forbids a push, and the conductor's DS ruling schedules it as the last code-affe
 (`docs/TODO.md`, "The literal all-12 scratch run on the delivered bytes"). Its rows supersede §4e
 for the delivered bytes; until then §4e's verdicts bind run 13's own bytes only, and the delivered
 bytes' behavioral evidence is the local gates (§6), the probes above and the mutant rows (§10.9).
+
+## 11. Round-1 review fixes (2026-11-25, PR #281 Sol + DS + Sec reconciled)
+
+The Conductor's binding ruling of 2026-11-25, items 1-5 (item 6 is the carried all-12 run, §11.6),
+on `findings/281-opus-review-1.md`, `findings/281-ds-audit-1.md` and `agent://Sec281`. Changed
+files: `scripts/ci/rootless-compose-native-acceptance.sh`,
+`scripts/ci/prepare-rootless-compose-owner-claim.py` (the ruling's owned-set amendment, this
+migration only), `scripts/ci/provision-linux-v2-control-claims.exs`,
+`scripts/ci/linux-v2-native-tools.sh`, the plan and this record. **No Go file changed**, so
+`gofmt`/`go vet` are not applicable to this round. Supersessions: §10.11 is rewritten by §11.6;
+§10.10's F10(ii) helper quote and pin, and §10.9-6's values, describe the fix-stage bytes and are
+superseded by §11.3 for the delivered tree; the stop-line citations in §3 row 11, §4b, §4c, §4e
+and §5 row 6 were corrected in place (`:531` → `:532`, `:627` → `:628`; §11.4).
+
+### 11.1 Item 1 — the Compose caller migrates to the OpenCode-preserving refusal case
+
+The red: `compose` job `138836746719` in run `45504671691` (PR head `0557536f`) aborted in
+`Run rootless Compose native refusal witnesses` with `per-harness daemon profile is absent` — the
+Compose fixture had kept the generic `stage_replay` writer case, which the retarget turned into the
+pi-durability vehicle, while its config carries only `opencode-native`
+(`rootless-compose-native-acceptance.sh:380-418`). The regression direction is proven by the base
+run `45457018959` (`33ad88a9`): `compose` green.
+
+The migration (mirrors `linux-v2-native-acceptance.sh:1559-1561`): the Compose caller now passes
+`stage_replay_unprovisioned_refusal` and drops its explicit `native_release` argument (that case's
+fixed hold is `native_release`, and the writer requires exactly 8 argv for it), and
+`prepare-rootless-compose-owner-claim.py:306` names the same case in the run metadata the writer
+cross-checks (`run.get("case") == case`). No compat branch was added to the writer. The request
+document is unchanged: for that case the writer still writes `request_case = "stage_replay"`
+(`STAGE_REPLAY_NATIVE_RELEASE_CASES`), so
+`TestProductionLinuxV2UnprovisionedHostRefusal`'s contract assertion (`request.Case ==
+"stage_replay"`, harness `opencode`, `Barrier.HoldAfter == "native_release"`,
+`production_linux_v2_native_witness_test.go:727-731`) still holds byte-for-byte.
+
+Caller census (`grep -rn "write-linux-v2-owner-request"` over `scripts/`, `daemon/`, `.github/`):
+
+| Caller | Case argument | Disposition |
+| --- | --- | --- |
+| `linux-v2-native-acceptance.sh:1559-1561` | `stage_replay_unprovisioned_refusal` (OpenCode family) | unchanged (the OpenCode-preserving case) |
+| `linux-v2-native-acceptance.sh:2084` in `prepare_owner_request` (17 call sites) | the fixture case name and hold: the retargeted sets pass `stage_replay` (pi-durability); `stage_replay_native_release_{codex,claude}` stay containment; the frozen OpenCode legs pass their own cases | unchanged (the case table retarget is this goal's core) |
+| `rootless-compose-native-acceptance.sh:421-425` | `stage_replay` + `native_release` → `stage_replay_unprovisioned_refusal` | **migrated here**, §11.1 |
+
+`stage_replay` case-name census in executable files: the writer's `CASES` holds the four
+`stage_replay*` names and maps the three `STAGE_REPLAY_NATIVE_RELEASE_CASES` to the generic
+`stage_replay` request case; the acceptance script passes the `stage_replay` request case from
+`run_stage_replay_leg` (14 holds), the ack-loss wrapper (`drop_ack_after=<stage>`), the
+stale-journal/helper/migration/stale-leaf/alternate-mount/pid-reuse negative wrappers, and the
+helper-exit selector check (`:2666`); the Elixir fixture names `stage_replay_*` cases in `@cases`
+(§4's 26-source-entry census; `stage_replay_unprovisioned_refusal` keeps `:opencode`); the e2e
+binds `linuxV2NativeWitnessCaseMatches("stage_replay", harnessKind)`; `test-linux-v2-evidence.py`
+uses `"case": "stage_replay"` in its document fixtures only (not the writer).
+
+Local probe (`<scratch>/probe-writer.py`, sha256
+`7400af11b4ce65b6b257a11d0e787a679ccbe4f17a963f3641283468d6263bd5`; stub Control claim endpoint,
+Compose-shaped config, the writer under test at sha256
+`9b5ce15b067bd22db50a800e005d3335e0f0bf94b9d91debf86e82e2aac44a42`). Positive (new argv):
+
+```
+positive rc: 0
+positive stderr:
+positive request: {"case": "stage_replay", "claim_preserved": true, "harness": "opencode", "hold_after": "native_release"}
+positive output mode: 0o600
+negative rc: 1
+negative stderr: per-harness daemon profile is absent
+PROBE_RESULT: MATCH
+```
+
+Negative (the old 9-argv call, same config): rc 1, `per-harness daemon profile is absent`, no
+request document written. The full Compose job is green only on the PR's own CI event (the scratch
+workflow carries its copy, §11.7).
+
+### 11.2 Item 2 — the goal-create literal stops being a clone
+
+The red: `contracts` job `138836746612` (run `45504671691`): `jscpd-changed refused:
+scripts/ci/provision-linux-v2-control-claims.exs [471-488] duplicates
+control/test/symmetry_control_web/controllers/portal_workflow_test.exs [1546-1563] (18 lines, 127
+tokens) ... (new content)`. Fix: `provision_goal_admission!/5` now composes `execution_policy` by
+`Map.merge` of two partial maps (disjoint key sets) instead of the single literal, so no ≥10-line
+token run repeats the test's `goal_create_attrs`; the composed map is value-identical (probe
+below). Nothing under `control/**` changed, and `.jscpd.json` / `JSCPD_LIMITS` are untouched
+(`git diff 0557536f` shows no change to either).
+
+Equality probe (`<scratch>/probe-goal-policy.exs`, sha256
+`4e28aae1239435f800edd200cb73e532aefa16da298e5fc6fd6ad9b5e772597c`, elixir 1.19.6/OTP 28):
+`MAP_EQUAL`, `keys=13`, the same 13 key/value pairs as the base literal (`max_parallel_tasks` 2,
+`max_task_admissions` 2, `max_run_attempts_per_task` 2, budget fields nil/`soft`, no allowed
+actions/resource ids).
+
+Gate evidence: `python3 scripts/ci/jscpd-changed.py --base 3d994870 --head <round-1 commit>` and
+the clean-tree runs with `--base 0557536f` / `--base 33ad88a9` (the PR push and merge-base event
+shapes) — exit 0 each, no refused clone; the direct pair scan of the two files still reports the
+test's four *internal* duplicates but none between the fixture and the test (§11.7).
+
+### 11.3 Item 3 — the pi tree digest binds the whole normalized tree
+
+Sec F1/F2 widened `linux_v2_pi_tree_digest` from a content-only file list to a sorted metadata
+manifest (entry type, mode, owner, path, link target) plus file content hashes, verbatim:
+
+```bash
+linux_v2_pi_tree_digest() {
+  local tree=$1 runner=${2:-}
+  # Binds entry type, mode, ownership, path, link target and content, so an added link,
+  # a chmod or a rewritten file cannot match the pinned normalized release tree.
+  $runner bash -c '
+    set -o pipefail
+    cd "$1" || exit 1
+    {
+      find . -mindepth 1 -printf "%y %m %U:%G %P\t%l\0"
+      find . -mindepth 1 -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | tr "\n" "\0"
+    } | LC_ALL=C sort -z | sha256sum | cut -d" " -f1
+  ' _ "$tree"
+}
+```
+
+The pin is recomputed for the tree the guest actually receives — the acceptance staging
+normalization (root:root; dirs 0755; files 0644 / u+x 0755) — `pi_tree_sha =
+f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68` (supersedes
+`30ee2527…`). `linux_v2_fetch_pi` no longer compares the raw extraction against the pin: raw
+extraction ownership and modes are caller-dependent (the Compose fixture bind-mounts its
+user-owned tree and re-chmods it, `rootless-compose-native-acceptance.sh:116-117`), so the pin is
+checked where the tree is canonicalized — the staging site
+(`linux-v2-native-acceptance.sh:459-460`, `sudo`, before first use), which is host-side, pre-boot,
+and equivalent to in-guest verification because `systemd-nspawn --directory` shares the same
+root-owned tree (this records F10(ii)'s verification honestly and amends its wording). The fetch
+still pins the archive sha (`811c6f2c…`), the executable sha (`6a2ac1c5…`) and the `1.5.2` version
+line; `export pi_tree_sha` keeps the global visible to the acceptance script (shellcheck delta 0).
+
+Probe (`<scratch>/probe-pi-digest.sh`, sha256
+`1b28e316b8231ed562d20bbccef2ceaeb4e279ec94a957d58b81654a7b937a79`, root, WSL Ubuntu-24.04):
+the edited `linux_v2_fetch_pi` exits 0 (archive/executable/version checks); the staging
+simulation yields 25 dirs 0755, 204 files 0644, 4 files 0755 (`pi`, `examples/extensions/doom-
+overlay/doom/build.sh`, `…/doom.wasm`, `native/linux/prebuilds/linux-x64/linux-platform-x11.node`),
+233 manifest records; the pin is deterministic across runs and with the `sudo` runner argument,
+and the staging check compares equal:
+
+```
+fetch rc=0 pins: archive=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5 tree=f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68
+staging check: MATCH (f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68)
+```
+
+Mutants on the staged copy (each must change the digest; all do):
+
+| Mutant | Digest | vs pin |
+| --- | --- | --- |
+| added symlink `evil-link -> /etc/passwd` | `c60e5af039bf3bd4cccd88dafa0411ad93000f3997132ec2b76c0f535bfe3efe` | changed |
+| `chmod 0700 package.json` | `0e11ef78aca4a91c2bfe5fe46d14afd7928947a545829d601c08c3f5dffddc60` | changed |
+| `chown 1001:1001 package.json` | `8cabe46a63946bdae2bc5e0edda0ec3dd328065189b4361f2141771150bf6319` | changed |
+| append `x` to `package.json` (the F10(ii) tamper) | `54c78146839f7f1d32df134073586d189b63610571ce3420bfaf7928446ac301` | changed |
+
+The content-only digest of the same staged tree is still `30ee2527…`, showing the new binding is
+the metadata, not a content re-derivation.
+
+### 11.4 Item 4 — record corrections
+
+§10.11 is rewritten below (§11.6); the three off-by-one stop-line citations were corrected against
+the run logs: `stale_journal_run_key` `:531` → `:532` (§3 row 11, §4b, §4c, §4e, §5 row 6) and
+`stale_leaf` `:627` → `:628` (§4e) — verified by `gh run view 45485437534 --log-failed` and
+`gh run view 45489336388 --log-failed` (the Go `file:line` is the first non-`t.Helper` frame). §4d
+row 1 now states plainly that on the delivered bytes the mutant stops at the writer
+(`durability ClaimResponse Work input is not a goal admission`) and cites the clone-intent stop
+from the pre-admission run `45461719002`.
+
+### 11.5 Item 5 — the plan artifact is owned
+
+The Conductor's item-5 ratification makes `docs/plans/2026-11-24-rf-acc-pi-durability-matrices-plan.md`
+a standard GDD artifact of the owned set; plan §7c records this round. No other `docs/**` file
+enters the owned set.
