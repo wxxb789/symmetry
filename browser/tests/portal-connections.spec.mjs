@@ -486,12 +486,9 @@ test("stale updates and concurrent deletion reconcile to the server's current st
   // A concurrent removal wins: the second delete is refused and the console
   // reconciles to the server's state instead of reporting success. The dialog is
   // open before the other operator's delete, and the connections read that
-  // delete's invalidation triggers is held until the refusal is on screen: that
-  // read arrives about 220 ms after the row is written (the failing traces'
-  // re-read pair) and unmounts the removed connection's detail — the open dialog
-  // with it — so a submission racing that read is refused by this page instead
-  // of by the server. Releasing the read is the reconcile the assertions below
-  // observe.
+  // delete's invalidation triggers (about 220 ms after the row is written, the
+  // failing traces' re-read pair) would unmount the dialog first: it is held
+  // until the refusal is asserted, then released as the reconcile observed below.
   const current = await api(page, "GET", "/portal/api/connections");
   const target = current.body.connections.find((connection) => connection.name === renamed);
   await page.getByRole("button", { name: new RegExp(renamed) }).click();
