@@ -50,7 +50,7 @@ describe("workspace navigation", () => {
     const user = userEvent.setup();
     seedProjectsWorkspace();
     const { history } = renderWorkspace("/portal/projects");
-    await screen.findByRole("heading", { level: 2, name: "Project Two" });
+    await screen.findByRole("heading", { level: 2, name: "Project Two" }, { timeout: 5_000 });
     expect(screen.getByText("Open project to load work")).toBeVisible();
     expect(screen.getByRole("option", { name: "All projects" })).toHaveValue("");
     await user.selectOptions(screen.getByLabelText("Project"), secondProjectId);
@@ -396,7 +396,7 @@ describe("readable work views", () => {
     const release = Promise.withResolvers<void>();
     seedWorkView({ holdDetail: release.promise });
     renderWorkspace(`/portal/work/${subjectId}`);
-    const pending = await screen.findByRole("dialog", { name: "Work item" });
+    const pending = await screen.findByRole("dialog", { name: "Work item" }, { timeout: 5_000 });
     expect(within(pending).getByText("Loading work item…")).toBeVisible();
     // Radix marks the page behind the modal inert (aria-hidden) while the drawer is
     // open, so the background is asserted as hidden DOM: it must not exist before

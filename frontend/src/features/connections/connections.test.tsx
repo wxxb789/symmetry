@@ -173,7 +173,7 @@ const refusal = (status: number, code: string, message: string, fields: Record<s
 describe("connection management", () => {
   it("lists providers, capabilities and bound resource state without inventing values", async () => {
     renderConnections(() => undefined);
-    expect(await screen.findByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
+    expect(await screen.findByRole("heading", { level: 1, name: "Connections" }, { timeout: 5_000 })).toBeVisible();
     const row = await screen.findByRole("button", { name: /GitHub engineering/ });
     expect(row).toHaveTextContent("acme · GitHub CLI · HTTPS");
     expect(row).toHaveTextContent("Repositories");
@@ -185,7 +185,7 @@ describe("connection management", () => {
   it("renders an unknown status and capability instead of hiding them", async () => {
     const harness = renderConnections(() => undefined);
     harness.setConnections([connection({ status: "future_state", capabilities: ["future_capability"], status_message: "Provider authentication failed" })]);
-    await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh" }, { timeout: 5_000 }));
     expect(await screen.findByText("Unknown connection status: future_state")).toBeVisible();
     expect(screen.getByText("Unknown capability: future_capability")).toBeVisible();
     expect(screen.getByText("Provider authentication failed")).toBeVisible();

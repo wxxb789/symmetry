@@ -196,7 +196,6 @@ ADVISORY_STEPS = frozenset(
         ("control", "Measure Hex advisories (advisory)"),
         ("daemon", "Measure golangci-lint findings (GOOS=linux, advisory)"),
         ("daemon", "Measure govulncheck findings (advisory)"),
-        ("daemon", "Summarize Go test durations"),
         ("legacy-route-audit", "Measure ruff findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure shellcheck findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure actionlint findings for the workflows (advisory)"),
@@ -204,10 +203,13 @@ ADVISORY_STEPS = frozenset(
         ("contracts", "Measure production dependency advisories (advisory)"),
     }
 )
-ADVISORY_JOBS = frozenset({"coverage-daemon", "coverage-frontend"})
+ADVISORY_JOBS: frozenset[str] = frozenset()
 CREDO_GATE_STEP = "Enforce the committed Credo strict baseline"
 CREDO_GATE_INVOCATION = 'python3 ../scripts/ci/assert-credo-strict-baseline.py --log "$credo_log"'
 CREDO_STRICT_INVOCATION = 'mix credo --strict 2>&1 | tee "$credo_log"'
+DURATION_GATE_STEP = "Summarize Go test durations"
+DURATION_GATE_CONDITION = "always() && steps.daemon_race_tests.outcome != 'skipped'"
+DURATION_GATE_INVOCATION = 'python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"'
 
 
 def require(condition: bool, message: str) -> None:
@@ -619,6 +621,27 @@ def check_credo_gate_step(workflow_text: str) -> None:
     )
 
 
+def check_duration_gate_step(workflow_text: str) -> None:
+    normalized = find_step(job_blocks(workflow_text)["daemon"], DURATION_GATE_STEP)
+    scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+    require(
+        "continue-on-error" not in scalars,
+        "the duration gate step must not carry a step-level continue-on-error: its verdict has to fail the job",
+    )
+    require(
+        scalars.get("if") == DURATION_GATE_CONDITION,
+        f"the duration gate step must keep its reachability `{DURATION_GATE_CONDITION}`; found {scalars.get('if')!r}",
+    )
+    body = run_body_at(normalized, WORKFLOW_INDENT[1])
+    require(body is not None, "the duration gate step must keep a `run: |` body")
+    commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
+    require(
+        bool(commands) and commands[-1] == DURATION_GATE_INVOCATION,
+        f"the duration gate step's body must end in {DURATION_GATE_INVOCATION!r}; "
+        f"found {commands[-1] if commands else '<an empty body>'!r}",
+    )
+
+
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
     steps, jobs = workflow_advisories(workflow_text)
     steps |= action_advisories(action_text)
@@ -670,6 +693,9 @@ class FoldedGateCompletenessTests(unittest.TestCase):
 class CredoGateStepTests(unittest.TestCase):
     def test_the_credo_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
         check_credo_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_duration_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
+        check_duration_gate_step(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -883,6 +909,33 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_credo_gate_step(mutated)
+
+    def test_mutation_restoring_the_duration_gate_steps_advisory_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {DURATION_GATE_STEP}\n",
+            f"      - name: {DURATION_GATE_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
+
+    def test_mutation_narrowing_the_duration_gate_steps_reachability_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"        if: {DURATION_GATE_CONDITION}\n",
+            "        if: success()\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
+
+    def test_mutation_replacing_the_duration_gate_invocation_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {DURATION_GATE_INVOCATION}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):

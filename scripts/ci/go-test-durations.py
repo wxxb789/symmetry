@@ -14,24 +14,26 @@ job's race pass writes `$RUNNER_TEMP/daemon-go-race.json` through
   named test explains, is replayed, so the diagnostics a red run needs are
   readable in this step's log and not only inside the gate's buffered event
   echo;
-* a test whose elapsed time exceeds `MAX_TEST_SECONDS` fails the summary, and
-  the per-test p95 (nearest-rank over the tests that ran) fails it when it
-  exceeds `P95_LIMIT_FACTOR` times the committed baseline below.
+* a test whose elapsed time exceeds `MAX_TEST_SECONDS` fails the summary unless
+  the committed adoption roster below names it, in which case its own measured
+  ceiling applies; the per-test p95 (nearest-rank over the tests that ran) fails
+  the summary when it exceeds `P95_LIMIT_FACTOR` times the committed baseline.
 
 The distribution is the stream's terminal `pass`/`fail` events with a `Test`
 field, keyed by `(Package, Test)`; a repeated key keeps its largest observed
 elapsed. `skip` events are excluded - a skipped test performed no work, and the
 skip share differs by host - but they are counted and printed. A malformed
-line, a missing file, a stream without outcome events, or a package-level
-failure no named test explains (a build failure, a timeout panic: the package
-was cut off, so its durations are incomplete) is an error (exit 2), never a
-silent green; the tables still print whenever the stream carries per-test
-outcomes, labelled partial when the stream is refused - a red race pass cut off
-by its timeout is exactly when the slow tests need naming.
+line, a missing file, a stream without outcome events, a package-level failure
+no named test explains, or a test that started and never finished (a build
+failure or a timeout panic: the package was cut off, so its durations are
+incomplete) is an error (exit 2), never a silent green; the tables still print
+whenever the stream carries per-test outcomes, labelled partial when the stream
+is refused - a red race pass cut off by its timeout is exactly when the slow
+tests need naming.
 
-The thresholds are advisory until refactor slice W6-12 flips them to blocking
-(program plan section 10.5); the exit status is the verdict either way, and the
-step that runs this tool owns whether that verdict gates the job.
+The verdict gates the daemon job (refactor slice W6-12): the race step and this
+summary both fail the job, and the adoption roster is the measured baseline its
+ceilings rest on.
 """
 
 import argparse
@@ -48,6 +50,25 @@ P95_LIMIT_FACTOR = 1.2
 # Committed baseline: nearest-rank p95 (0.260s) of the daemon module's full
 # `go test -race -count=1 -json ./...` stream on the GitHub ubuntu runner (run 44892215975).
 P95_BASELINE_SECONDS = 0.26
+
+# Adoption data: ceil(measured per-run max x 1.2) over ten green main runs (2026-11-22/23); the run
+# ids and every per-run value are in docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md.
+ADOPTED_TEST_CEILINGS = {
+    ("github.com/wxxb789/symmetry/daemon/internal/app", "TestOutputBackpressureRecoversWithOneTruncationMarker"): 201.0,
+    ("github.com/wxxb789/symmetry/daemon/internal/app", "TestRawOutputBudgetDropsWithoutFailingSemanticEvents"): 150.0,
+    (
+        "github.com/wxxb789/symmetry/daemon/internal/state",
+        "TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation",
+    ): 42.0,
+    (
+        "github.com/wxxb789/symmetry/daemon/internal/state",
+        "TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded",
+    ): 40.0,
+    (
+        "github.com/wxxb789/symmetry/daemon/internal/state",
+        "TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch",
+    ): 41.0,
+}
 
 TOP_TEST_ROWS = 20
 TOP_PACKAGE_ROWS = 10
@@ -76,7 +97,14 @@ def load_events(path: str) -> tuple[list[dict], int]:
 
 def collect_outcomes(
     events: list[dict],
-) -> tuple[dict[tuple[str, str], float], dict[str, float], int, set[tuple[str, str]], list[str]]:
+) -> tuple[
+    dict[tuple[str, str], float],
+    dict[str, float],
+    int,
+    set[tuple[str, str]],
+    list[str],
+    set[tuple[str, str]],
+]:
     """A package total is read from its package-level terminal event, the only event
     carrying the whole elapsed time."""
     tests: dict[tuple[str, str], float] = {}
@@ -84,6 +112,8 @@ def collect_outcomes(
     skipped = 0
     failed: set[tuple[str, str]] = set()
     failed_packages: list[str] = []
+    started: set[tuple[str, str]] = set()
+    finished: set[tuple[str, str]] = set()
     for event in events:
         action = event.get("Action")
         package = event.get("Package")
@@ -91,9 +121,13 @@ def collect_outcomes(
             continue
         test = event.get("Test")
         if isinstance(test, str):
+            key = (package, test)
+            if action == "run":
+                started.add(key)
+                continue
             if action not in ("pass", "fail", "skip"):
                 continue
-            key = (package, test)
+            finished.add(key)
             if action == "skip":
                 skipped += 1
                 continue
@@ -106,7 +140,7 @@ def collect_outcomes(
             packages[package] = float(event.get("Elapsed") or 0.0)
             if action == "fail":
                 failed_packages.append(package)
-    return tests, packages, skipped, failed, failed_packages
+    return tests, packages, skipped, failed, failed_packages, started - finished
 
 
 def collect_output(events: list[dict]) -> tuple[dict[tuple[str, str], list[str]], dict[str, list[str]]]:
@@ -181,12 +215,13 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as error:
         print(f"could not read the Go test JSON events: {error}", file=sys.stderr)
         return 2
-    tests, packages, skipped, failed, failed_packages = collect_outcomes(events)
+    tests, packages, skipped, failed, failed_packages, unfinished = collect_outcomes(events)
     if not tests:
         counted = f"{invalid} unparsable line(s) and " if invalid else ""
         print(f"the Go test JSON stream carries {counted}no per-test pass/fail events", file=sys.stderr)
         return 2
     unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]
+    cut_off = sorted(package for package, _test in unfinished)
 
     # The tables print before the refusals below: a refused run loses the verdict, not the
     # attribution, and the headings carry the partial label instead.
@@ -195,6 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         reasons.append(f"{invalid} unparsable JSON line(s) were skipped")
     if unexplained:
         reasons.append("a package-level failure cut a package off")
+    if unfinished:
+        reasons.append("tests that started never finished")
     note = f" (partial: {'; '.join(reasons)})" if reasons else ""
     print_test_table(tests, note)
     print_package_table(packages, note)
@@ -211,6 +248,16 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if unfinished:
+        print(
+            "the Go test JSON stream ends with tests still running "
+            f"({len(unfinished)} in {', '.join(sorted(set(cut_off)))}); the packages were cut off "
+            "and their durations are incomplete",
+            file=sys.stderr,
+        )
+        for package, test in sorted(unfinished):
+            print(f"  {package} {test}", file=sys.stderr)
+        return 2
 
     elapsed_values = list(tests.values())
     p95 = nearest_rank(elapsed_values, 0.95)
@@ -219,20 +266,39 @@ def main(argv: list[str] | None = None) -> int:
         ((package, test, elapsed) for (package, test), elapsed in tests.items() if elapsed > MAX_TEST_SECONDS),
         key=lambda item: (-item[2], item[0], item[1]),
     )
+    adopted = [
+        (package, test, elapsed, ADOPTED_TEST_CEILINGS[(package, test)])
+        for package, test, elapsed in over_cap
+        if (package, test) in ADOPTED_TEST_CEILINGS
+    ]
 
     ratio = p95 / P95_BASELINE_SECONDS
     print(
         f"go_test_durations: tests={len(tests)} skipped={skipped} packages={len(packages)} "
         f"p95={p95:.3f}s baseline={P95_BASELINE_SECONDS:.3f}s ratio={ratio:.2f}x limit={limit:.3f}s "
-        f"over_{MAX_TEST_SECONDS:.0f}s={len(over_cap)} failed={len(failed)} package_fail={len(failed_packages)}"
+        f"over_{MAX_TEST_SECONDS:.0f}s={len(over_cap)} adopted={len(adopted)} failed={len(failed)} "
+        f"package_fail={len(failed_packages)}"
     )
 
     verdict = 0
     for package, test, elapsed in over_cap:
+        ceiling = ADOPTED_TEST_CEILINGS.get((package, test))
+        if ceiling is None:
+            print(
+                f"go_test_durations: FAIL: {package} {test} took {elapsed:.2f}s, over the {MAX_TEST_SECONDS:.0f}s cap",
+            )
+            verdict = 1
+        elif elapsed > ceiling:
+            print(
+                f"go_test_durations: FAIL: {package} {test} took {elapsed:.2f}s, "
+                f"over its committed ceiling {ceiling:.0f}s",
+            )
+            verdict = 1
+    for package, test, elapsed, ceiling in adopted:
         print(
-            f"go_test_durations: FAIL: {package} {test} took {elapsed:.2f}s, over the {MAX_TEST_SECONDS:.0f}s cap",
+            f"go_test_durations: adopted: {package} {test} took {elapsed:.2f}s "
+            f"within its committed ceiling {ceiling:.0f}s",
         )
-        verdict = 1
     if p95 > limit:
         print(
             f"go_test_durations: FAIL: the per-test p95 {p95:.3f}s exceeds the "
@@ -241,7 +307,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         verdict = 1
     if verdict == 0:
-        print("go_test_durations: PASS: no test over the cap and the p95 is within the committed baseline band")
+        print(
+            "go_test_durations: PASS: no unadopted test over the cap, every adopted test within its "
+            "committed ceiling, and the p95 within the committed baseline band"
+        )
     return verdict
 
 

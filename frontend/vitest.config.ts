@@ -36,6 +36,13 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text-summary", "lcov"],
       reportsDirectory: toolCacheDir ? path.join(toolCacheDir, "coverage") : "coverage",
+      // Floors: the minimum of four green main-run reports minus one point (rf-w6-12); `statements`
+      // stays unset because the committed lcov reporter does not carry it.
+      thresholds: {
+        lines: 93.55,
+        functions: 90.12,
+        branches: 83.12,
+      },
     },
   },
 });
