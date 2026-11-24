@@ -198,7 +198,7 @@ func (session *genericSession) Control(ctx context.Context, request ControlReque
 		return ControlReceipt{}, err
 	}
 	if request.Kind != ControlCancel {
-		capability := controlCapability(request.Kind)
+		capability := ControlCapability(request.Kind)
 		return ControlReceipt{}, &CapabilityError{
 			Kind:       KindGeneric,
 			Capability: capability,
@@ -249,7 +249,7 @@ func (session *genericSession) done() <-chan struct{} {
 	return session.resultDone
 }
 
-func controlCapability(kind ControlKind) Capability {
+func ControlCapability(kind ControlKind) Capability {
 	switch kind {
 	case ControlPause:
 		return CapabilityPause

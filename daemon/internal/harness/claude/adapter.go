@@ -535,7 +535,7 @@ func (session *candidateSession) Control(ctx context.Context, request harness.Co
 			CommandID:  request.CommandID,
 			Kind:       request.Kind,
 			Outcome:    harness.ControlUnsupported,
-			Capability: controlCapability(request.Kind),
+			Capability: harness.ControlCapability(request.Kind),
 			Message:    "Claude Code native adapter control is unverified for this operation",
 			AppliedAt:  time.Now().UTC(),
 		}, nil
@@ -577,21 +577,6 @@ func (session *candidateSession) Control(ctx context.Context, request harness.Co
 		return harness.ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: harness.ControlFailed, Capability: harness.CapabilityCancel, Message: err.Error(), AppliedAt: time.Now().UTC()}, err
 	}
 	return harness.ControlReceipt{CommandID: request.CommandID, Kind: request.Kind, Outcome: harness.ControlApplied, Capability: harness.CapabilityCancel, Message: "Claude process termination completed", AppliedAt: time.Now().UTC()}, nil
-}
-
-func controlCapability(kind harness.ControlKind) harness.Capability {
-	switch kind {
-	case harness.ControlPause:
-		return harness.CapabilityPause
-	case harness.ControlResume:
-		return harness.CapabilityResume
-	case harness.ControlGuidance:
-		return harness.CapabilityGuidance
-	case harness.ControlApprovalResponse:
-		return harness.CapabilityApprovalResponse
-	default:
-		return harness.Capability(kind)
-	}
 }
 
 func (session *candidateSession) WaitTurn(ctx context.Context) error {
