@@ -230,7 +230,9 @@ func validateEffectiveLinuxSystemdProperties(properties map[string]string, polic
 		return errors.New("effective unit ordering omits local-fs.target")
 	}
 	if policy.owner {
-		for _, key := range []string{"Before", "After", "BindsTo", "Requires", "Requisite", "Wants", "PartOf", "Conflicts"} {
+		// systemd records the inverse of the daemon's own required After edge on the owner as
+		// Before (unit_add_dependency_impl), which the design expects; every other key stays refused.
+		for _, key := range []string{"After", "BindsTo", "Requires", "Requisite", "Wants", "PartOf", "Conflicts"} {
 			if systemdListHasItem([]string{properties[key]}, "symmetry-daemon.service") {
 				return fmt.Errorf("effective owner unit depends on or orders against symmetry-daemon.service through %s", key)
 			}
