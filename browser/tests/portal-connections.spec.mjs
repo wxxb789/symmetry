@@ -91,6 +91,11 @@ test.describe.configure({ timeout: 120_000 });
 const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
 const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
 const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
+// Playwright 1.65.1's own words for the two ways a recorded body read is lost to
+// the scan while the request itself never fails: the document navigated away, or
+// the session was torn down. No other unreadable body is tolerated.
+const navigatedAway = "Response body is not available for a response that was navigated away from. Read response.body() before triggering any navigation.";
+const sessionClosed = "Target page, context or browser has been closed";
 
 // The identity file is written by the fixture process started for this run, and
 // it names the port that process serves; the target must be that process before
@@ -247,6 +252,19 @@ function recordApiBodies(page) {
   return { responses, requests, consoleMessages, pageErrors, cookieJarSamples };
 }
 
+// A body the recorder still has to read cannot survive the document navigation
+// that replaces it: Playwright 1.65.1 refuses that read (see `navigatedAway`)
+// while the request carries no failure, so every document navigation settles
+// the reads already started — the ones that land while this waits included.
+const navigate = async (page, recorded, url) => {
+  let pending;
+  do {
+    pending = recorded.responses.length;
+    await Promise.all(recorded.responses.slice(0, pending));
+  } while (recorded.responses.length > pending);
+  await page.goto(url);
+};
+
 async function assertNoCredentials(page, recorded) {
   const browserState = await page.evaluate(() => ({
     html: document.documentElement.outerHTML,
@@ -273,12 +291,14 @@ async function assertNoCredentials(page, recorded) {
     expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
     if (entry.unreadable !== undefined) {
       // The protocol cannot serve the body of a response whose read the page
-      // aborted or navigated away from. That is only allowed for a request that
-      // failed (nothing was delivered to the page) and, like every other
-      // aborted same-origin request below, it must be a read; its headers were
-      // scanned above, and every completed response is still scanned below.
-      expect(entry.request?.failure(), `response ${entry.path} must be readable unless its request was aborted`).toBeTruthy();
-      expect(["GET", "HEAD"], `an unreadable response must belong to an aborted read: ${entry.request?.method()} ${entry.path}`).toContain(entry.request?.method());
+      // aborted, or whose document the scan lost to a navigation or a torn-down
+      // session. Every case is a read, the navigation/session ones only in the
+      // exact words above, and the recorded error stays in the message.
+      const method = entry.request?.method();
+      expect(["GET", "HEAD"], `an unreadable response must belong to a read: ${method} ${entry.path}: ${entry.unreadable}`).toContain(method);
+      if (entry.request?.failure()) continue;
+      const lost = entry.unreadable.endsWith(navigatedAway) || entry.unreadable.endsWith(sessionClosed);
+      expect(lost, `response ${entry.path} must be readable unless its request was aborted: ${entry.unreadable}`).toBe(true);
       continue;
     }
     expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
@@ -445,15 +465,17 @@ test("stale updates and concurrent deletion reconcile to the server's current st
   const created = listed.body.connections.find((connection) => connection.name === name);
   expect(created).toBeTruthy();
 
-  // Another operator changes the connection while this page is open.
-  const renamed = `${name} renamed`;
-  const external = await api(page, "PATCH", `/portal/api/connections/${created.id}`, { version: created.version, name: renamed });
-  expect(external.status).toBe(200);
-
   await page.getByRole("button", { name: new RegExp(name) }).click();
   await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Edit capabilities", exact: true }).click();
   const settings = page.getByRole("dialog", { name: "Connection settings" });
   await settings.getByLabel("Work items", { exact: true }).check();
+
+  // Another operator changes the connection after this editor froze the version
+  // it opened with, so the submission below is refused by the server's fence.
+  const renamed = `${name} renamed`;
+  const external = await api(page, "PATCH", `/portal/api/connections/${created.id}`, { version: created.version, name: renamed });
+  expect(external.status).toBe(200);
+
   await settings.getByRole("button", { name: "Save", exact: true }).click();
   await expect(settings.getByRole("alert")).toContainText("(stale)");
   await expect(settings.getByLabel("Name")).toBeDisabled();
@@ -462,16 +484,34 @@ test("stale updates and concurrent deletion reconcile to the server's current st
   await expect(page.getByRole("button", { name: new RegExp(renamed) })).toBeVisible();
 
   // A concurrent removal wins: the second delete is refused and the console
-  // reconciles to the server's state instead of reporting success.
+  // reconciles to the server's state instead of reporting success. The dialog is
+  // open before the other operator's delete, and the connections read that
+  // delete's invalidation triggers is held until the refusal is on screen: that
+  // read arrives about 220 ms after the row is written (the failing traces'
+  // re-read pair) and unmounts the removed connection's detail — the open dialog
+  // with it — so a submission racing that read is refused by this page instead
+  // of by the server. Releasing the read is the reconcile the assertions below
+  // observe.
   const current = await api(page, "GET", "/portal/api/connections");
   const target = current.body.connections.find((connection) => connection.name === renamed);
-  const removedElsewhere = await api(page, "DELETE", `/portal/api/connections/${target.id}?version=${target.version}`);
-  expect(removedElsewhere.status).toBe(200);
   await page.getByRole("button", { name: new RegExp(renamed) }).click();
   await page.getByRole("complementary", { name: "Connection detail" }).getByRole("button", { name: "Remove", exact: true }).click();
-  await page.getByRole("dialog", { name: new RegExp(`Remove ${renamed}`) }).getByRole("button", { name: "Remove connection", exact: true }).click();
+  const removal = page.getByRole("dialog", { name: new RegExp(`Remove ${renamed}`) }).getByRole("button", { name: "Remove connection", exact: true });
+  await expect(removal).toBeVisible();
+  const heldReads = [];
+  let holding = true;
+  await page.route(/\/portal\/api\/connections(\?|$)/, async (route) => {
+    if (!holding) return route.continue();
+    heldReads.push(route);
+  });
+  const removedElsewhere = await api(page, "DELETE", `/portal/api/connections/${target.id}?version=${target.version}`);
+  expect(removedElsewhere.status).toBe(200);
+  await removal.click();
   await expect(page.getByRole("status").first()).toContainText("(not_found)");
   await expect(page.getByRole("status").first()).toContainText("The server's current state is shown instead.");
+  holding = false;
+  for (const route of heldReads) await route.continue().catch(() => undefined);
+  await page.unroute(/\/portal\/api\/connections(\?|$)/);
   await expect(page.getByRole("button", { name: new RegExp(renamed) })).toHaveCount(0);
   await capture(page, testInfo, "concurrent-delete", "concurrent removal refused and reconciled");
 
@@ -893,11 +933,7 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   expect(providerDelivery.ci.generation).toBeNull();
   expect(typeof providerDelivery.ci.recorded_at).toBe("string");
 
-  // Wait for the connections surface to finish its reads before the document
-  // navigation: a response body that is still in flight when the page navigates
-  // away cannot be read by the credential scan.
-  await page.waitForLoadState("networkidle");
-  await page.goto(`/portal/work/${deliveryWorkItemId}`);
+  await navigate(page, recorded, `/portal/work/${deliveryWorkItemId}`);
   const deliveryDetail = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: deliveryTitle });
   await expect(deliveryDetail.getByRole("heading", { level: 1, name: deliveryTitle })).toBeVisible();
   const deliveryRows = deliveryDetail.locator(".delivery-list > div");
@@ -932,10 +968,8 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   // request URL belongs to another repository. The console renders the
   // server's receipt, the resource takes the server's failure state, and
   // neither work item's delivery is rewritten.
-  // Back to the connections surface: the previous document's reads settle first
-  // so no response body is stranded by the navigation.
-  await page.waitForLoadState("networkidle");
-  await page.goto(`/portal/connections?projectId=${projectId}`);
+  // Back to the connections surface.
+  await navigate(page, recorded, `/portal/connections?projectId=${projectId}`);
   await expect(page.getByRole("heading", { name: "Project resources" })).toBeVisible();
   allowBrowserError(page, /status of 400/);
   const mismatchedPullRequestUrl = `https://github.com/acme-fixture/other-${suffix}/pull/42`;
@@ -1173,8 +1207,7 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(detailRead.body.work_item.external.url).toBe(subject.external.url);
   expect(detailRead.body.work_item.external.available).toBe(true);
 
-  await page.waitForLoadState("networkidle");
-  await page.goto(`/portal/work/${subject.id}`);
+  await navigate(page, recorded, `/portal/work/${subject.id}`);
   const detail = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: subject.title });
   await expect(detail.getByRole("heading", { level: 1, name: subject.title })).toBeVisible();
   await expect(detail.getByRole("link", { name: "Open external record" })).toHaveAttribute("href", subject.external.url);
@@ -1253,7 +1286,7 @@ test("external work items keep their identity, their provider-owned lock and the
   // The execution entry point for an available item is asserted on the work
   // detail the project surface opens: the served `can_start` renders
   // `Start run`, and the readback that omits the item must remove it (below).
-  await page.goto(`/portal/projects/${projectId}`);
+  await navigate(page, recorded, `/portal/projects/${projectId}`);
   await page.getByRole("link", { name: subject.title }).click();
   const availableDetail = isMobile
     ? page.locator("#main-content")
@@ -1273,7 +1306,7 @@ test("external work items keep their identity, their provider-owned lock and the
   expect(stillAvailable.body.work_item.external.available).toBe(true);
   // Back on the read-only detail (the clause check above left the classic
   // surface open), the served readback renders it unavailable.
-  await page.goto(`/portal/work/${subject.id}`);
+  await navigate(page, recorded, `/portal/work/${subject.id}`);
   const reloaded = isMobile ? page.locator("#main-content") : page.getByRole("dialog", { name: subject.title });
   await expect(reloaded.getByText(/unavailable/i).first()).toBeVisible();
   await expect(reloaded.getByRole("button", { name: /^(start run|run|retry)$/i })).toHaveCount(0);
@@ -1287,7 +1320,7 @@ test("external work items keep their identity, their provider-owned lock and the
 
   // The project surface now opens the omitted item with no execution entry
   // point: the served availability removes `Start run` for the same item.
-  await page.goto(`/portal/projects/${projectId}`);
+  await navigate(page, recorded, `/portal/projects/${projectId}`);
   await page.getByRole("link", { name: subject.title }).click();
   const omittedDetail = isMobile
     ? page.locator("#main-content")
