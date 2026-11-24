@@ -145,18 +145,18 @@ measurement harness, and recorded with its measured wall time in the evidence re
 ## Results (commands, counts, hashes — full rows in the evidence record)
 
 Subject: worktree `9d113eb6` + `daemon/internal/app/omo_attach_ack_test.go` sha256
-`d3f5001647c6e7727a4da487c90ce0cc776759117a2de0db87cfd53cd60e72c9` (`git diff --numstat` 234/21;
-`git diff --check` clean). Scratch clones `Q:/scratch-rf-flake-omo-attach/{before,after}`. Rows for
-the intermediate revisions between the extension and the comment trim (which re-bound every gate
-below) are in the evidence record §4.2.
+`24931a59649d80e92c5e58bb4566072b0e949ad2d9a1a34cb9381f9143006a19` (`git diff --numstat` 236/21;
+`git diff --check` clean). Scratch clones `Q:/scratch-rf-flake-omo-attach/{before,after}`. Each row
+below is the apply-stage re-run on the binding bytes unless it names the pre-fix arm; the
+implement-stage rows for the intermediate revisions are in the evidence record §4.2.
 
 | row | command | exit | result |
 | --- | --- | ---: | --- |
 | pre-fix loaded repeat | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline' ./internal/app/` (`before`, P1-only arm) | 1 | 22 red / 200 in 622.797 s: 21 starved-A + 1 in-flight readback, each with its P1 timeline |
-| post-fix loaded repeat | same command (worktree, binding bytes) beside `timeout 25m go test -count=30 -timeout 1400s ./internal/state/ ./internal/execution ./internal/harness/... ./internal/notification` then the two heavy `internal/app` tests ×3 | 0 | 0 red / 200 in 680.700 s; the carrier window covered the whole measurement |
-| post-fix companion | same command plus `-v`, no carrier | 0 | 0 red / 200; 400 trajectory lines: 186 intended (margin min 0.064 s / max 1.963 s / mean 1.699 s), 14 starved-A, 200 pins |
-| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-flake-omo-attach/symmetry/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 27.096s`, no race report |
-| focused family | `go test -count=1 -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 51.776s` |
+| post-fix loaded repeat | same command (worktree, binding bytes) beside 7 bounded rounds of `go test -count=4 -run '^TestOutputBackpressureRecoversWithOneTruncationMarker$' ./internal/app/` | 0 | 0 red / 200 in 482.614 s; the carrier rounds covered the whole measurement |
+| post-fix companion | same command plus `-v`, no carrier | 0 | 0 red / 200; 400 trajectory lines: 196 intended (margin min 0.923 s / max 1.968 s / mean 1.915 s), 4 starved-A, 200 pins |
+| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-flake-omo-attach/symmetry/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 22.846s`, no race report |
+| focused family | `go test -count=1 -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 24.778s` |
 | vet / format | `go vet ./...`; `gofmt -l internal/app/omo_attach_ack_test.go` | 0 | clean, empty |
 | pins and mutants | §5 of the evidence record | P2-before 1, P2-after 0, in-flight pin 0, M1 1 (×2; M1′ 1, deterministic), M2 1 (×2), M3 1 | product files restored to sha256 `89a9857d…` (`goal_delivery.go`), `76bcca94…` (`goal_admission_tx.go`), `b95b4f69…` (`harness_test.go`) |
 | citation existence (emulation) | `python3 scripts/ci/check-citation-existence.py --repo . --base 9d113eb6 --head HEAD` | 0 | 573 path citations pass |

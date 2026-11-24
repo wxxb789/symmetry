@@ -383,8 +383,8 @@ func (fixture *omoAttachAckFixture) run(ctx context.Context) state.RunJournal {
 	return journal
 }
 
-// Starved trajectories serve no PUT, so the exact-ready delivery is captured from the
-// store immediately before the readback GET the illegal trajectory would never issue.
+// The exact-ready delivery is captured from the store as the product enters the readback
+// call; starved trajectories serve no PUT, so the store is the only source.
 func (fixture *omoAttachAckFixture) capturePendingAttach() {
 	journal, err := fixture.app.store.LoadJournal(state.RunKey{RunID: omoAttachAckRunID, Generation: 1})
 	if err != nil || len(journal.PendingGoalDeliveries) != 1 {
@@ -464,7 +464,9 @@ func (fixture *omoAttachAckFixture) assertBudgetArmTrajectory(journal state.RunJ
 	methods := append([]string(nil), fixture.methods...)
 	fixture.mu.Unlock()
 	calls := fixture.session.callsSnapshot()
-	if testing.Verbose() {
+	// The refusal branch logs the trajectory itself; the guard keeps one line per run.
+	refused := len(methods) == 0 && countNativeStartCall(calls, "open") == 0
+	if testing.Verbose() && !refused {
 		fixture.t.Logf("attachment trajectory: requests=%v native_calls=%v timeline=%s", methods, calls, fixture.timeline.format())
 	}
 	switch {
@@ -484,7 +486,7 @@ func (fixture *omoAttachAckFixture) assertBudgetArmTrajectory(journal state.RunJ
 		fixture.assertStoppedWithoutTurn()
 		fixture.assertExactPending(journal)
 		fixture.assertTerminalFailure(journal, "context deadline exceeded")
-	case len(methods) == 0 && countNativeStartCall(calls, "open") == 0:
+	case refused:
 		fixture.assertRefusedBeforeNativeLaunch(journal)
 	default:
 		fixture.t.Fatalf("attachment trajectory left the closed 2 s set: requests=%v native_calls=%v terminal_state=%s timeline=%s", methods, calls, journal.TerminalState, fixture.timeline.format())
