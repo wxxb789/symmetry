@@ -26,7 +26,7 @@ rename race; `docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md` §8 f
 | `docs/plans/2026-11-24-rf-flake-stdout-drain-64kib-plan.md` | this plan |
 | `docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md` | the evidence record |
 | `docs/TODO.md` | one decision note: the resolved residual and the unapplied durable alternative |
-| `docs/archive/CLOSED-TODO.md` | the (F-b) tracked item this goal found, moved out of `docs/TODO.md` with its closure paragraph (the repo's done-items convention) |
+| `docs/archive/CLOSED-TODO.md` | the (F-b) item the goal's gate runs found, recorded directly in the archive under its own section with its closure paragraph (never a `docs/TODO.md` item) |
 
 No production file changes. The mutants below run in a scratch clone, each restored byte-identical
 and verified by blob hash against the clone's committed base.
@@ -104,12 +104,14 @@ exact-length assertions and `requireStrictSequence` are unchanged.
 
 ### D6. Boundary pin shape
 
-One non-parallel table test over the pure stripper plus the gate: payload alone; payload plus each of
-the three documented lines (one and two newlines); payload plus two documented lines; payload plus a
-foreign `error:`-prefixed line; payload plus a documented line then a foreign line; payload plus a
-documented line without a terminator; shortened payload plus a documented line; and the gate rows
-(helper environment without `GOCOVERDIR`, with it empty, and with it set). "Still fails" is expressed
-as "the post-strip length is not 196731", which is what the exact-length assertion checks.
+Two parallel table tests: 13 stripper rows over the pure stripper plus 3 gate rows. The stripper rows
+cover payload alone; payload plus each of the three documented lines (one or two newlines, and the
+carriage-return-terminated form); payload plus two documented lines; payload plus a foreign
+`error:`-prefixed line; payload plus a documented line then a foreign line; payload plus a documented
+line without a terminator; a mid-line-prefixed documented block; and a shortened payload plus a
+documented line. The gate rows cover the helper environment without `GOCOVERDIR`, with it empty, and
+with it set. "Still fails" is expressed as "the post-strip length is not 196731", which is what the
+exact-length assertion checks.
 
 ### D7. `docs/TODO.md` gets one decision note, not a tracked item
 
@@ -201,11 +203,19 @@ path, not a widened window. Consumers: `probe_test.go:76`, `runner_unix_test.go:
   load-driven (0/20 idle, 3/20 loaded), census 192/4 with no assertion weakened, and the duration
   ratchet summarizer PASS on a local single-iteration stream (p95 0.210 s vs the 0.260 s baseline,
   141 tests, none over the cap, none adopted).
+- Fix stage (2026-11-24, review findings STD-A01–STD-A05): the prefix-table comment names the three
+  causes instead of one (STD-A01); the archive entry has its own section and the "moved out of
+  `docs/TODO.md`" provenance is corrected to a direct record in this plan's and the evidence
+  record's tables (STD-A02); D6 reads two parallel table tests (STD-A03); the boundary pin gains the
+  mid-line-prefixed and carriage-return rows — 13 stripper rows + 3 gate rows — and the
+  `docs/TODO.md` phrase reads a trailing block of documented lines matching those exact prefixes
+  (STD-A04); the archived item's opening clause no longer reads as unfixed (STD-A05). The contract
+  gates were re-run on the final tree: evidence record §11.
 - Residual: the covmeta race itself is untouched by design, and CI's `daemon`/`daemon-windows` rows
   remain the operator's oracle for the PR head (this stage does not push).
 - Contract-file decision: the goal file in the GDD state root is left in place unchanged (Status
   `queued`), because it is the conductor's control-plane artifact for the following verify stage and
   the dispatch gate refuses `implement` runs against an archived contract. The repo-side close-out —
-  plan, evidence record, `docs/TODO.md` note and the `docs/archive/CLOSED-TODO.md` move — is done
+  plan, evidence record, `docs/TODO.md` note and the `docs/archive/CLOSED-TODO.md` entry — is done
   here, and no repo-grammar or stability document is left stale by this change (`ci.yml`, the
   coverage job and the design docs are untouched).

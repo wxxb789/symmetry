@@ -79,6 +79,7 @@ func TestCoverageRuntimeDiagnosticStripBoundary(t *testing.T) {
 		{"payload alone is untouched", payload, 0, true},
 		{"payload plus a documented line with one newline", payload + documented[0] + "\n", 1, true},
 		{"payload plus a documented line with two newlines", payload + documented[0] + "\n\n", 1, true},
+		{"payload plus a carriage-return-terminated documented line strips", payload + documented[0] + "\r\n", 1, true},
 		{"payload plus a documented counter line", payload + documented[1] + "\n", 1, true},
 		{"payload plus the documented warning line", payload + documented[2] + "\n", 1, true},
 		{"payload plus two documented lines", payload + documented[0] + "\n" + documented[2] + "\n\n", 2, true},
@@ -86,6 +87,7 @@ func TestCoverageRuntimeDiagnosticStripBoundary(t *testing.T) {
 		{"payload plus a documented line then a foreign line still fails", payload + documented[0] + "\n" + "error: surprising helper failure\n", 0, false},
 		{"payload plus a documented line without a terminator still fails", payload + documented[0], 0, false},
 		{"payload plus a newline then a documented line still fails", payload + "\n" + documented[0] + "\n", 1, false},
+		{"payload plus a mid-line-prefixed documented block still fails", payload + "x" + documented[0] + "\n", 1, false},
 		{"a shortened payload plus a documented line still fails", payload[:len(payload)-1] + documented[0] + "\n", 1, false},
 	}
 
@@ -619,8 +621,8 @@ func minimalEnvironment() []string {
 	return values
 }
 
-// Coverage runtime exit hooks append one of these lines to an instrumented helper child's
-// stream when it loses the shared covmeta rename race; nothing else may be stripped.
+// Coverage runtime exit-hook write failures (covmeta/covcounters) and the GOCOVERDIR-unset
+// warning; nothing else may be stripped.
 var coverageRuntimeDiagnosticPrefixes = [...]string{
 	"error: coverage meta-data emit failed: ",
 	"error: coverage counter data emit failed: ",

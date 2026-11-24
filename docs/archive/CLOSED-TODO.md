@@ -33,6 +33,10 @@ on 2026-11-23 from branch `refactor/rf-w6-10-elixir-lint-coverage-flips`.
 The closed STD-A09 partial-run detection appended to the `## Deferred review findings (PR #205)`
 section below was moved on 2026-11-24 from branch `refactor/rf-w6-12-wall-clock-ratchets`.
 
+The descendant-window item appended under `## Descendant window under host load
+(rf-flake-stdout-drain-64kib)` below was recorded directly in this file on 2026-11-24 from branch
+`refactor/rf-flake-stdout-drain-64kib` (it was never a `docs/TODO.md` item).
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -4841,12 +4845,15 @@ decision as open while this entry and the goal record carry the closure.
       `scripts/ci/test-go-test-durations.py` pins the refusal on the exact stream shape
       (one failed test, one unfinished test, a package-level failure).
 
-- [ ] The descendant window under host load (found by this goal's gate runs; not owned or fixed by
-      it). `daemon/internal/execution/runner_test.go`'s helper mode `root-exits-child-holding-stdout`
-      spawns a grandchild, sleeps a fixed 100 ms and exits; the runner tears the containment tree down
-      on root exit, so the grandchild's first stdout write is delivered only inside that window. Under
-      this host's load the grandchild's own spawn+exit wall time is 109–756 ms (median 131 ms plain,
-      134 ms instrumented), and `TestRunBoundedCommandStopsDescendantHoldingOutputPipe`
+## Descendant window under host load (rf-flake-stdout-drain-64kib)
+
+- [ ] The descendant window under host load (found by the goal's gate runs; brought into scope and
+      fixed by the 2026-11-24 ruling). `daemon/internal/execution/runner_test.go`'s helper mode
+      `root-exits-child-holding-stdout` spawns a grandchild, sleeps a fixed 100 ms and exits; the
+      runner tears the containment tree down on root exit, so the grandchild's first stdout write is
+      delivered only inside that window. Under this host's load the grandchild's own spawn+exit wall
+      time is 109–756 ms (median 131 ms plain, 134 ms instrumented), and
+      `TestRunBoundedCommandStopsDescendantHoldingOutputPipe`
       (`probe_test.go:83`, empty output) and
       `TestRootExitDoesNotLeaveADescendantHoldingStdoutOnWindows` (`runner_windows_test.go:218`, the
       30 s hang guard) red 7–8 of 20 focused iterations **without** `-coverprofile` and on the

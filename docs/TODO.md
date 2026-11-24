@@ -1805,9 +1805,9 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       of exactly the three documented coverage-runtime exit-hook lines
       (`error: coverage meta-data emit failed: `, `error: coverage counter data emit failed: `,
       `warning: GOCOVERDIR not set, no coverage data emitted`) from the helper's stderr — only while
-      the helper environment forwards `GOCOVERDIR`, only as whole newline-terminated lines, each one
-      logged — and the exact 196731-byte payload assertions plus `requireStrictSequence` are
-      unchanged. This supersedes the rf-w4-12c §8 "the profile above comes from a pass that skips
+      the helper environment forwards `GOCOVERDIR`, only as a trailing block of documented lines
+      matching those exact prefixes, each one logged — and the exact 196731-byte payload assertions
+      plus `requireStrictSequence` are unchanged. This supersedes the rf-w4-12c §8 "the profile above comes from a pass that skips
       that one test" workaround (`docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md`) and
       the matching residual in `docs/plans/2026-11-21-rf-w2-17-coverage-plane-plan.md`. Measurements,
       the verbatim capture and the mutant rows:
