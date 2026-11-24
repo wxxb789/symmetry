@@ -15,10 +15,14 @@ test" workaround.
 
 Scratch roots (never committed, all under one host scratch directory): `<scratch>` = a copy of
 `daemon/` with a capture-only patch (`base/`, pre-F1); `<clone>` = the F1-stage `git clone --shared`
-whose clone-local HEAD was `15a27066`; `<clone-fb>` = this stage's `git clone --shared` of the
-worktree, clone-local HEAD `4a45cda9` ("scratch: F1 strip + F-b handshake") whose four test-file blobs
-equal the shipped tree's (`7955bf8b…` `runner_test.go`, `346bedd4…` `probe_test.go`, `3e4d4a44…`
-`runner_unix_test.go`, `e265a770…` `runner_windows_test.go`; runner.go at `bd677058…`). Every command
+whose clone-local HEAD was `15a27066`; `<clone-fb>` = the implement stage's `git clone --shared` of
+the worktree, clone-local HEAD `4a45cda9` ("scratch: F1 strip + F-b handshake") whose four test-file
+blobs equalled the pre-apply shipped tree's (`7955bf8b…` `runner_test.go`, `346bedd4…`
+`probe_test.go`, `3e4d4a44…` `runner_unix_test.go`, `e265a770…` `runner_windows_test.go`; runner.go
+at `bd677058…`); `<clone-apply>` = the apply stage's `git clone --shared`, clone-local HEAD
+`e60375d4` ("scratch: apply-stage tree (S1 + S2)") whose blobs equal the current shipped tree
+(`3a3177b3…` `runner_test.go`, `346bedd4…` `probe_test.go`, `3e4d4a44…` `runner_unix_test.go`,
+`e265a770…` `runner_windows_test.go`; runner.go at `bd677058…`). Every command
 ran foreground (bash tool `pty:true`, `timeout:0` — the harness reported pty unavailable and ran
 without a terminal; the commands were still bounded with `timeout` and no job was left running) and
 the two heavy configurations never ran concurrently with each other or with another suite. Windows
@@ -28,7 +32,7 @@ x64, `go1.27.4 windows/amd64`; WSL Ubuntu-24.04, `go1.27.0 linux/amd64`.
 
 | file | numstat (add/del) | change |
 | --- | --- | --- |
-| `daemon/internal/execution/runner_test.go` | 195 / 4 | the strip (three documented lines, whole trailing block, helper-`GOCOVERDIR`-gated, every stripped line logged), the two pin tests, and the F-b readiness handshake (root waits for the grandchild's marker; `descendantHoldingStdoutInvocation`/`startHelperInvocation` plumbing) |
+| `daemon/internal/execution/runner_test.go` | 192 / 4 | the strip (three documented lines, whole trailing block, helper-`GOCOVERDIR`-gated, every stripped line logged), the two pin tests, and the F-b readiness handshake (root waits for the grandchild's marker; `descendantHoldingStdoutInvocation`/`startHelperInvocation` plumbing); the apply stage starts the streams test through `startHelperInvocation` (§10) |
 | `daemon/internal/execution/probe_test.go` | 1 / 1 | the bounded probe row supplies the F-b marker path |
 | `daemon/internal/execution/runner_unix_test.go` | 1 / 1 | the Unix root-exit row supplies the F-b marker path |
 | `daemon/internal/execution/runner_windows_test.go` | 1 / 1 | the Windows root-exit row supplies the F-b marker path |
@@ -38,9 +42,10 @@ x64, `go1.27.4 windows/amd64`; WSL Ubuntu-24.04, `go1.27.0 linux/amd64`.
 | `docs/archive/CLOSED-TODO.md` | 29 / 0 | the (F-b) tracked item this goal found, moved out of `docs/TODO.md` with its closure paragraph (the repo's done-items convention) |
 
 No production file change. The only product-tree edits were the mutants in §6, applied in
-`<clone>`/`<clone-fb>` and reverted by `git checkout` with blob hashes compared. Shipped hashes at
-the gate runs: `runner_test.go` blob `7955bf8bafdb0ce79d5130f4a541394d6deec160`, sha256
-`58f4b91f02d1434f132badd3e2002b499a2652e0f4c709100154b0fc6b5727c8`; `probe_test.go` sha256
+`<clone>`/`<clone-fb>`/`<clone-apply>` and reverted by `git checkout` with blob hashes compared.
+Shipped hashes at the gate runs (post-apply tree, §10): `runner_test.go` blob
+`3a3177b3daff09467138f783a2abcf4c2b94fc23`, sha256
+`7194f81a34eb96cb8effd94b6416fc4a864101e93f6b0cd3a18bd5335c274971`; `probe_test.go` sha256
 `e9bf53dda61343bc009c56122f8778b4d805f12ef97b12f6d78a11da2b74f2bf`; `runner_unix_test.go` sha256
 `e965c169c02659c69eb243ddd67e5fa1ff1a9e09536f043102439c6ab8b657c9`; `runner_windows_test.go` sha256
 `d457cef9e45d14deb83adae3b5a0a029077c39d7bdc3c26dc5602ad298f8f8dd`.
@@ -125,9 +130,18 @@ and 2 × `runner_windows_test.go:218: helper child PID was not observed before t
 expired` — the pre-fix signature (the prior stage recorded 7–8/20 for the same configuration; the
 rate is load-driven). Reverted (`git checkout --`), blob `7955bf8b…` restored, clone status clean.
 
+Apply-stage re-run (`<clone-apply>`, the post-apply tree, same mutation and command): **exit 0,
+42.478 s, 0 red of 20 on an idle host** — the grandchild's spawn+exec then lands inside the 100 ms
+window, so the mutant needs the load the comment names. With a bounded six-way CPU load
+(`timeout 300s yes > /dev/null` ×6) the row reddens again: **exit 1, 92.502 s, 3 red iterations of
+20** in the same pre-fix signature (2 × `probe_test.go:83` empty output, 1 ×
+`runner_windows_test.go:218` 30 s hang guard); the spawn latency measured under that load is
+116–278 ms for 10 spawns (`runner_test.go`'s own `-test.run='^$'` binary), i.e. at or above the
+100 ms window. Reverted (`git checkout --`), blob `3a3177b3…` restored, clone status clean.
+
 ## 4. The strip, the pins, and the natural races
 
-The acceptance run (§7 row 1, the final tree, `-json` so passing tests' `t.Logf` lines are recorded):
+The acceptance run (§7 row 1, the post-apply tree, `-json` so passing tests' `t.Logf` lines are recorded):
 
 | quantity | value |
 | --- | ---: |
@@ -135,13 +149,13 @@ The acceptance run (§7 row 1, the final tree, `-json` so passing tests' `t.Logf
 | `fail` events, package-wide | 0 |
 | `skip` events | 0 |
 | `stripped coverage runtime diagnostic` log events, all | 29 |
-| — on the shipped streams row (`runner_test.go:60`, the real diagnostic) | 9 |
-| — on the boundary pin's gate row (`runner_test.go:127`, the synthesized line) | 20 |
+| — on the shipped streams row (`runner_test.go:57`, the real diagnostic) | 9 |
+| — on the boundary pin's gate row (`runner_test.go:124`, the synthesized line) | 20 |
 
 So the goal's flake is fixed and *exercised*, not merely silenced: the race that produced §2's eight
 reds occurred nine times in this run, the strip removed exactly the documented block each time, and
 the exact-length assertions passed. Verbatim (one of the nine, paths elided):
-`runner_test.go:60: stripped coverage runtime diagnostic (507 bytes): error: coverage meta-data emit
+`runner_test.go:57: stripped coverage runtime diagnostic (503 bytes): error: coverage meta-data emit
 failed: writing <merge-dir>\covmeta.5bde9a34b0182dd9672696b24ef5f92c: rename from
 <merge-dir>\tmp.covmeta.5bde9a34b0182dd9672696b24ef5f92c<nanotime> failed: rename <tmp> <covmeta>:
 Access is denied.` Before → after on the subject row: **8/20 red → 0/20 red** over the gate runs
@@ -149,35 +163,40 @@ Access is denied.` Before → after on the subject row: **8/20 red → 0/20 red*
 
 ## 5. Forced pins (contract Gates)
 
-The F1 rows were run at the F1 tree by the prior stage (kept below); the after-F1 rows were re-run at
-the final tree in `<clone-fb>` with a forced child (one extra stderr write appended to the `streams`
-mode — never in the shipped tree, which carries no forced mode).
+The F1 rows were run at the F1 tree by the prior stage (kept below); the after-F1 rows were re-run by
+the apply stage at the post-apply tree in `<clone-apply>` with a forced child (one extra stderr write
+appended to the `streams` mode — never in the shipped tree, which carries no forced mode).
 
 | row | command (cwd) | exit | observed |
 | --- | --- | ---: | --- |
 | boundary pin + gate pin, shipped tree | `go test -count=1 -timeout 120s -run '^TestCoverageRuntimeDiagnosticStrip' -v ./internal/execution/` (`daemon/`) | 0 | 11 boundary subtests and 3 gate subtests pass |
 | forced documented line, **before F1** | `<scratch>/base-forced` (pre-F1 + the line appended to the `streams` mode): `GOMAXPROCS=8 timeout 10m go test -count=1 -timeout 300s -coverprofile=… -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` | 1 | `P1 stderr length = 196854, want 196731; first non-e byte index = 196732; over-length bytes = "error: coverage meta-data emit failed: rename <merge-dir>\\tmp.covmeta.5bde9a34b0182dd9672696b24ef5f92c: Access is denied.\n\n"; GOCOVERDIR nonempty = true` |
-| forced documented line, after F1, coverage mode (final tree) | `<clone-fb>` + the line: `GOMAXPROCS=8 timeout 10m go test -count=1 -timeout 300s -v -coverprofile=… -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` | 0 | PASS; `runner_test.go:60: stripped coverage runtime diagnostic (121 bytes): error: coverage meta-data emit failed: rename <merge-dir>\tmp.covmeta.5bde9a34b0182dd9672696b24ef5f92c: Access is denied.` |
-| forced documented line, **`GOCOVERDIR` not forwarded**, plain mode (final tree) | the same forced child without `-coverprofile` (shell `GOCOVERDIR` empty, `minimalEnvironment` forwards nothing) | 1 | `runner_test.go:61: stderr length = 196854, want 196731` — the strip is closed without a forwarded `GOCOVERDIR` (the conductor's gate) |
-| forced **foreign** line, after F1, coverage mode (final tree) | `<clone-fb>` + `error: unexpected forced diagnostic\n\n` appended | 1 | `runner_test.go:61: stderr length = 196768, want 196731` — a foreign line stays red |
+| forced documented line, after F1, coverage mode (post-apply tree) | `<clone-apply>` + the line: `GOMAXPROCS=8 timeout 10m go test -count=1 -timeout 300s -v -coverprofile=… -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` | 0 | PASS; `runner_test.go:57: stripped coverage runtime diagnostic (121 bytes): error: coverage meta-data emit failed: rename <merge-dir>/tmp.covmeta.5bde9a34b0182dd9672696b24ef5f92c: Access is denied.` |
+| forced documented line, **`GOCOVERDIR` not forwarded**, plain mode (post-apply tree) | the same forced child without `-coverprofile` (shell `GOCOVERDIR` empty, `minimalEnvironment` forwards nothing) | 1 | `runner_test.go:58: stderr length = 196854, want 196731` — the strip is closed without a forwarded `GOCOVERDIR` (the conductor's gate) |
+| forced **foreign** line, after F1, coverage mode (post-apply tree) | `<clone-apply>` + `error: unexpected forced diagnostic\n\n` appended | 1 | `runner_test.go:58: stderr length = 196768, want 196731` — a foreign line stays red |
 
 ## 6. Mutants (all in a clone, reverted by `git checkout`)
 
 `<clone>`'s HEAD was the F1-stage clone-local commit `15a27066`; `<clone-fb>`'s is `4a45cda9` (§
-header). Every row below was applied, run, reverted with `git checkout --`, and re-hashed to the
-listed blob before the next row.
+header) — the implement stage's rows ran there. The apply stage re-ran M1, M2, M2b, M3 and M5 in
+`<clone-apply>` (HEAD `e60375d4`, § header) so that every row is bound to the shipped bytes; the
+observed cells below are those re-runs. Every row was applied, run, reverted with `git checkout --`,
+and re-hashed to the listed blob before the next row.
 
 | id | mutation | command | exit | observed |
 | --- | --- | --- | ---: | --- |
-| M1 | `runner.go` `readOutput` holds each chunk and never enqueues the final one (no drain of the tail) | `go test -count=1 -timeout 300s -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` (`<clone-fb>`) | 1 | `stdout length = 196608, want 196731` — the lost tail chunk still reddens the exact-length assertion; the strip does not hide drain loss. Reverted: runner.go `bd677058…` |
-| M2 | the strip replaced by "cut at the first non-`e` byte" (the contract's over-strip example) | `go test -count=1 -timeout 200s -run '^TestCoverageRuntimeDiagnosticStrip' ./internal/execution/` (`<clone-fb>`) | 1 | 9 boundary rows red + the gate row red: e.g. `stripped stream is the payload = false, want true; length = 196732, want 196731`, `stripped lines = 1, want 0: ["rror: surprising helper failure"]`, the log line `(55 bytes): rror: coverage meta-data emit failed: Access is denied.`, and the shortened-payload row `stripped stream is the payload = true, want false` |
-| M2b | the prefix table widened to any `error: ` line (the conductor's dispatch row) | the same | 1 | 4 boundary rows red: both foreign-line rows (`stripped lines = 1/2, want 0`), the warning-line row and the two-documented-lines row (`stripped lines = 0, want 1/2`) |
-| M3 | `TestHelperProcess` `streams` writes `count-1` stderr bytes | `-run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$'` | 1 | `stderr length = 196730, want 196731` |
-| M5 (F-b mutant) | the handshake replaced by the fixed `time.Sleep(100 * time.Millisecond)` | §3.3 | 1 | 6 red / 20 in the pre-fix signature (§3.3) |
+| M1 | `runner.go` `readOutput` holds each chunk and never enqueues the final one (no drain of the tail) | `go test -count=1 -timeout 300s -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` (`<clone-apply>`) | 1 | `runner_test.go:55: stdout length = 196608, want 196731` — the lost tail chunk still reddens the exact-length assertion; the strip does not hide drain loss. Reverted: runner.go `bd677058…` |
+| M2 | the strip replaced by "cut at the first non-`e` byte" (the contract's over-strip example; re-run as `strings.IndexFunc(output, r != 'e')`) | `go test -count=1 -timeout 200s -run '^TestCoverageRuntimeDiagnosticStrip' ./internal/execution/` (`<clone-apply>`) | 1 | 9 boundary rows red + the gate row red: the documented-line rows, both foreign-line rows, the no-terminator row, the leading-newline row and the shortened-payload row, e.g. the shortened-payload row `stripped stream is the payload = true, want false`, and the gate row `runner_test.go:124: stripped coverage runtime diagnostic (56 bytes): rror: coverage meta-data emit failed: Access is denied.` + `runner_test.go:125: drained = false, want true` |
+| M2b | the prefix table widened to any `error: ` line (the conductor's dispatch row; re-run as `"error: "` prepended to the table) | the same | 1 | 2 boundary rows red: both foreign-line rows (`payload_plus_a_foreign_error_line_still_fails`, `payload_plus_a_documented_line_then_a_foreign_line_still_fails`) |
+| M3 | `TestHelperProcess` `streams` writes `count-1` stderr bytes | `-run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$'` (`<clone-apply>`) | 1 | `runner_test.go:58: stderr length = 196730, want 196731` |
+| M5 (F-b mutant) | the handshake replaced by the fixed `time.Sleep(100 * time.Millisecond)` | §3.3 | 1 | 6 red / 20 in the pre-fix signature at the implement tree (§3.3); apply-stage re-run on the post-apply tree: 0 red / 20 idle, 3 red / 20 under a six-way CPU load (§3.3) |
 | M4 (diagnostic only, prior stage, **not** a proposed change) | the mode's fixed 100 ms window widened to 3 s | the focused descendant pair `-count=20` (plain, `<clone>`) | 0 | 20/20 green (168.636 s): the missing-descendant-output signature was the fixed window, not F1, coverage instrumentation or the drain |
 
-Every mutation is restored: `<clone-fb>` `git status --porcelain` empty after the last revert (HEAD
-`4a45cda9`, its four test-file blobs = the shipped tree's, runner.go blob `bd677058…`).
+Every mutation is restored: `<clone-fb>` `git status --porcelain` empty after the last implement-stage
+revert (HEAD `4a45cda9`, its four test-file blobs = the pre-apply shipped tree's, runner.go blob
+`bd677058…`), and `<clone-apply>` clean after the apply stage's last revert (HEAD `e60375d4`, its
+four test-file blobs = the current shipped tree's (`3a3177b3…`, `346bedd4…`, `3e4d4a44…`,
+`e265a770…`), runner.go blob `bd677058…`).
 
 ## 7. Gates
 
@@ -185,40 +204,37 @@ Every row foreground, bounded with `timeout`; no row ran concurrently with anoth
 
 | gate | command (cwd) | exit | counts / output |
 | --- | --- | ---: | --- |
-| red before / green after, the flake's own configuration | §2 (before), then `GOMAXPROCS=8 timeout 30m go test -json -count=20 -timeout 1200s -coverprofile=… ./internal/execution/` (`daemon/`, final tree) | 1 / 0 | before 8 red of 20 (all the subject row) with the verbatim capture; **after 0 fail events of 20 iterations** (320 s wall, `coverage: 60.1% of statements`), subject row 20 run / 20 pass, 29 strips logged (9 real, §4). The intermediate F1-tree runs red 8/20 and 3/20, every red (F-b) (§3.1) |
-| plain loaded repeat (the CI shape) | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 300s -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` (`daemon/`) | 0 | 34.473 s, 200 executions, 0 failures (before: 23.057 s, 0 failures) |
-| plain package suite (local stand-in for `daemon`/`daemon-windows`) | `GOMAXPROCS=8 timeout 30m go test -count=1 -timeout 900s ./internal/execution/` (`daemon/`) | 0 | 26.480 s — the pre-F-b local reds (`probe_test.go:83` empty output) are gone |
-| boundary pin + gate pin, shipped tree | §5 row 1 | 0 | 11 + 3 subtests |
-| forced pins, final tree | §5 rows 3–5 | 0 / 1 / 1 | as §5 |
-| WSL `-race` (Linux oracle) | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/<WORKTREE>/daemon && GOMAXPROCS=8 go test -race -count=1 -timeout 600s ./internal/execution/'` | 0 | `ok … 29.413s`; 0 `DATA RACE` lines; `go1.27.0 linux/amd64` (the WSL distro's toolchain; the repo pins 1.27.4) |
-| mutants | §6, six rows | 1 (M1, M2, M2b, M3, M5), 0 (M4) | as §6, all reverted with blob hashes verified |
-| assertion census | `git diff -U0 -- daemon/internal/execution/*.go` + `git diff --check` (`9d113eb6` → worktree) | 0 | `runner_test.go` 195 added / 4 deleted, the 4 deletions named: the streams test's old `startHelper` call, the old `if got := len(sink.output(Stderr)); got != 196731 {` wrapper (replaced in place by the drained call), the old `startHelper` body line, and the mode's old `time.Sleep(100 * time.Millisecond)`; `probe_test.go`/`runner_unix_test.go`/`runner_windows_test.go` each 1/1 (their old call line). No assertion deleted or weakened: both payload assertions still require exactly 196731 with their original messages (`runner_test.go:58`, `:61`) and `requireStrictSequence` (`:63`) has 0 diff lines; `git diff --check` exits 0 |
+| red before / green after, the flake's own configuration | §2 (before), then `GOMAXPROCS=8 timeout 30m go test -json -count=20 -timeout 1200s -coverprofile=… ./internal/execution/` (`daemon/`; post-apply tree, §10) | 1 / 0 | before 8 red of 20 (all the subject row) with the verbatim capture; **after 0 fail events of 20 iterations** (377.013 s wall, `coverage: 60.0% of statements`), subject row 20 run / 20 pass, 29 strips logged (9 real at `runner_test.go:57`, 20 pin-gate at `runner_test.go:124`, §4). The implement-stage run at the pre-apply tree read 320 s / 60.1%; the profile carries no `_test.go` entries (`grep -c _test.go` on the profile = 0), so the 0.1% spread is product-code path coverage under load, not a test-file delta. The intermediate F1-tree runs red 8/20 and 3/20, every red (F-b) (§3.1) |
+| plain loaded repeat (the CI shape) | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 300s -run '^TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB$' ./internal/execution/` (`daemon/`) | 0 | 57.816 s on the post-apply tree, 200 executions, 0 failures (implement tree: 34.473 s; before: 23.057 s, 0 failures) |
+| plain package suite (local stand-in for `daemon`/`daemon-windows`) | `GOMAXPROCS=8 timeout 30m go test -count=1 -timeout 900s ./internal/execution/` (`daemon/`) | 0 | 12.637 s on the post-apply tree (implement tree: 26.480 s) — the pre-F-b local reds (`probe_test.go:83` empty output) are gone |
+| boundary pin + gate pin, shipped tree | §5 row 1 | 0 | 11 + 3 subtests (re-run at the post-apply tree) |
+| forced pins, post-apply tree | §5 rows 3–5 | 0 / 1 / 1 | as §5 |
+| WSL `-race` (Linux oracle) | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/<WORKTREE>/daemon && GOMAXPROCS=8 go test -race -count=1 -timeout 600s ./internal/execution/'` | 0 | `ok … 23.878s` on the post-apply tree (implement tree: 29.413 s); no race report (the detector fails the run on any race); `go1.27.0 linux/amd64` (the WSL distro's toolchain; the repo pins 1.27.4) |
+| mutants | §6, six rows, re-run at the post-apply tree (M5 under a six-way load) | 1 (M1, M2, M2b, M3, M5 loaded), 0 (M4, M5 idle) | as §6, all reverted with blob hashes verified |
+| assertion census | `git diff -U0 -- daemon/internal/execution/*.go` + `git diff --check` (`9d113eb6` → worktree) | 0 | `runner_test.go` 192 added / 4 deleted (the apply stage's 4→1 replacement at the streams start, §10), the 4 deletions named: the streams test's old `startHelper` call, the old `if got := len(sink.output(Stderr)); got != 196731 {` wrapper (replaced in place by the drained call), the old `startHelper` body line, and the mode's old `time.Sleep(100 * time.Millisecond)`; `probe_test.go`/`runner_unix_test.go`/`runner_windows_test.go` each 1/1 (their old call line). No assertion deleted or weakened: both payload assertions still require exactly 196731 with their original messages (`runner_test.go:55`, `:58`) and `requireStrictSequence` (`:60`) has 0 diff lines; `git diff --check` exits 0 |
 | gofmt / go vet | `gofmt -l .` / `go vet ./...` (`daemon/`) | 0 / 0 | no output |
-| shipped hashes at the gate runs | `git hash-object` + `sha256sum` on the four test files | 0 | §1; unchanged after the docs were written — the gates ran on the final Go tree |
+| duration ratchet (`scripts/ci/go-test-durations.py`, the w6-12 measurement harness) | `GOMAXPROCS=8 timeout 10m go test -json -count=1 -timeout 900s ./internal/execution/` → `python3 scripts/ci/go-test-durations.py <scratch>/exec-iter1.json` (`daemon/`, post-apply tree) | 0 | `tests=141 skipped=0 p95=0.210s baseline=0.260s ratio=0.81x limit=0.312s over_30s=0 adopted=0 failed=0` → PASS; slowest test 5.09 s (`TestContextCancellationTerminatesTheProcessTree`), the streams row not in the top 20. The committed baseline and ceilings are keyed to the GitHub ubuntu race run and no `internal/execution` test is on the adopted roster, so this row is a local floor check; the ratchet's verdict for the PR head is the CI row below |
+| shipped hashes at the gate runs | `git hash-object` + `sha256sum` on the four test files | 0 | §1, post-apply values; the Go tree did not change while the docs were written — every §7 gate ran on that tree |
 | CI `daemon` / `daemon-windows` on the PR head | not run here: this stage does not push | — | the operator's CI is the oracle for the acceptance row |
 
 ## 8. Scope
 
 ```
 $ git status --porcelain -uall --no-renames
- M daemon/internal/execution/probe_test.go
  M daemon/internal/execution/runner_test.go
- M daemon/internal/execution/runner_unix_test.go
- M daemon/internal/execution/runner_windows_test.go
- M docs/TODO.md
- M docs/archive/CLOSED-TODO.md
-?? docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md
-?? docs/plans/2026-11-24-rf-flake-stdout-drain-64kib-plan.md
+ M docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md
+ M docs/plans/2026-11-24-rf-flake-stdout-drain-64kib-plan.md
 ```
 
-The test files are exactly the contract's owned set plus the conductor's F-b extension
-(`probe_test.go`, `runner_unix_test.go`, `runner_windows_test.go` — call-site-only changes for the
-marker path); the docs are the plan, this record, and the TODO/CLOSED-TODO closure the ruling asked
-for. `runner.go`, `ci.yml`, `minimalEnvironment`, the payload assertions and every other path are
+The implement stage's tree (the four test files — the contract's owned set plus the conductor's F-b
+extension, call-site-only in `probe_test.go`/`runner_unix_test.go`/`runner_windows_test.go` — plus
+the plan, this record, and the TODO/CLOSED-TODO closure) is committed as `2101921`; this block is the
+apply stage's delta over it (§10): the S1 edit in `runner_test.go`, and the plan/record refreshes.
+`runner.go`, `ci.yml`, `minimalEnvironment`, the payload assertions and every other path are
 byte-identical to `9d113eb6` (runner.go blob `bd677058…`): the mutants lived only in
-`<clone>`/`<clone-fb>` and were restored to the blobs above. No commit was made (the contract leaves
-the tree to verification). All cover profiles, logs and clones live outside the repository, in the
-host scratch directory (paths elided as `<scratch>`).
+`<clone>`/`<clone-fb>`/`<clone-apply>` and were restored to the blobs above. The apply stage made no
+commit (the contract leaves the tree to verification). All cover profiles, logs and clones live
+outside the repository, in the host scratch directory (paths elided as `<scratch>`).
 
 ## 9. Findings and residual risks
 
@@ -243,3 +259,26 @@ host scratch directory (paths elided as `<scratch>`).
 5. `TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB`'s own coverage-mode failures are gone and the
    package's coverage-mode pass is green on this host; CI's `daemon`/`daemon-windows` rows (which do
    not instrument) remain the operator's oracle for the PR head.
+
+## 10. Apply stage (2026-11-24, simplify findings S1 + S2)
+
+The simplify stage (`…-simplify/answer.md`) reported two findings; the conductor's brief — accept
+everything inside the goal contract's owned set that does not weaken tests, types, validation or
+permissions — admits both, and both are applied.
+
+| finding | file | change | effect on this record |
+| --- | --- | --- | --- |
+| S1 | `daemon/internal/execution/runner_test.go:48` | the streams test's inline `NewRunner().Start` + `if err != nil` + `t.Fatalf` + `}` (4 lines) becomes `process := startHelperInvocation(t, sink, invocation)` — the helper this same increment extracted for the three F-b call sites, same call and the same `Start() error = %v` message | `runner_test.go` 195/4 → 192/4; blob/sha256 refreshed (§1); citations after the edit shift by −3 (`:60`→`:57` strip log, `:127`→`:124` pin gate row, `:58`→`:55` stdout assertion, `:61`→`:58` stderr assertion, `:63`→`:60` `requireStrictSequence`) |
+| S2 | `docs/plans/2026-11-24-rf-flake-stdout-drain-64kib-plan.md:93` | D4's residual pointer said `evidence §11`; the record has §1–§9 and the residual is §9 item 3 → `evidence §9` (plan D5 also records the S1 start shape) | none (doc-only) |
+
+Re-run gates at the post-apply tree, each foreground and serialized (§7): coverage-mode `-count=20`
+exit 0 with 0 fail events and the subject row 20/20 (9 natural strips logged at `runner_test.go:57`);
+plain `-count=200` subject repeat 0 failures; plain package suite green; WSL `-race` green; boundary +
+gate pins green (11 + 3 subtests); forced pins 0/1/1 in `<clone-apply>`; M1, M2, M2b, M3 and M5
+re-run in `<clone-apply>` (M5 is load-driven: 0 red/20 idle, 3 red/20 under a six-way CPU load,
+§3.3); assertion census 192/4 with no assertion deleted or weakened; `gofmt -l .`, `go vet ./...` and
+`git diff --check` exit 0; the duration ratchet summarizer passes on a local single-iteration stream
+(141 tests, p95 0.210 s vs the 0.260 s committed baseline, none over the 30 s cap, none on the
+adopted roster, §7). Neither finding deleted or weakened a test, an evidence row or a
+documented boundary, and nothing outside the contract's owned set plus the conductor's F-b extension
+was touched.

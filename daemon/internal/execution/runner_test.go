@@ -45,10 +45,7 @@ func TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB(t *testing.T) {
 
 	sink := &recordingSink{}
 	invocation := helperInvocation("streams", "196731")
-	process, err := NewRunner().Start(context.Background(), invocation, sink)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
+	process := startHelperInvocation(t, sink, invocation)
 	result := waitForResult(t, process)
 
 	if result.ExitCode != 0 {

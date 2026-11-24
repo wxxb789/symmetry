@@ -90,16 +90,17 @@ perturb their instrumented children.
 
 The contract owns it only if P1 shows the bounded rows also see the line. The 20-run capture shows
 0/20 for those rows (and for every other helper-output row) and 8/20 for the streams row, so the
-change stays in `runner_test.go`. Residual recorded (evidence §11 and `docs/TODO.md`): the diagnostic
+change stays in `runner_test.go`. Residual recorded (evidence §9 and `docs/TODO.md`): the diagnostic
 can in principle land on any instrumented helper child, so a future loss on another row would redden
 that row; the durable alternative below is the fix if that ever happens.
 
-### D5. The streams test builds its invocation inline
+### D5. The streams test builds its invocation inline, then starts it through the helper
 
 The strip needs the invocation that produced the child, so the test uses
-`invocation := helperInvocation("streams", "196731")` plus `NewRunner().Start(...)` — the pattern
-`TestWriteInputAppendsAfterInitialInput` already uses — instead of `startHelper`. The start path,
-payload size, both exact-length assertions and `requireStrictSequence` are unchanged.
+`invocation := helperInvocation("streams", "196731")` and starts it with
+`startHelperInvocation(t, sink, invocation)` — the same `NewRunner().Start` plus `Start() error = %v`
+failure the F-b call sites use, so the call is behavior-identical. The start path, payload size, both
+exact-length assertions and `requireStrictSequence` are unchanged.
 
 ### D6. Boundary pin shape
 
@@ -190,6 +191,16 @@ path, not a widened window. Consumers: `probe_test.go:76`, `runner_unix_test.go:
   --check` exit 0. The sleep-restored mutant reddens 6/20 in the pre-fix signature; M1/M2/M2b/M3
   redden in the contract's rows; `<clone-fb>` is clean after the reverts. Full record:
   `docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md` §3–§7.
+- Apply stage (2026-11-24, simplify findings S1 + S2): the streams test now starts through
+  `startHelperInvocation` (S1 — `runner_test.go` 195/4 → 192/4 added/deleted, blob `3a3177b3…`,
+  sha256 `7194f81a…`) and D4's pointer reads `evidence §9` (S2). Citations after the edit shift by −3
+  (strip log `:60` → `:57`, pin gate row `:127` → `:124`, stdout assertion `:58` → `:55`, stderr
+  assertion `:61` → `:58`, `requireStrictSequence` `:63` → `:60`); the gates were re-run on the
+  post-apply tree (evidence §7, §10): coverage-mode `-count=20` exit 0 with 9 natural strips, plain
+  `-count=200` green, WSL `-race` green, pins green, M1–M3/M2b re-run in the apply clone and M5
+  load-driven (0/20 idle, 3/20 loaded), census 192/4 with no assertion weakened, and the duration
+  ratchet summarizer PASS on a local single-iteration stream (p95 0.210 s vs the 0.260 s baseline,
+  141 tests, none over the cap, none adopted).
 - Residual: the covmeta race itself is untouched by design, and CI's `daemon`/`daemon-windows` rows
   remain the operator's oracle for the PR head (this stage does not push).
 - Contract-file decision: the goal file in the GDD state root is left in place unchanged (Status
