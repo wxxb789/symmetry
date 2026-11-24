@@ -2005,7 +2005,7 @@ const (
 	linuxV2OwnerWitnessStderrTailBytes = 4 << 10
 	linuxV2OwnerWitnessStderrTailLines = 40
 	linuxV2OwnerWitnessStderrLogBytes  = 300
-	linuxV2OwnerWitnessStderrLogLines  = 9
+	linuxV2OwnerWitnessStderrLogLines  = 5
 	linuxV2OwnerWitnessStderrRedacted  = "<redacted>"
 )
 
@@ -2036,33 +2036,31 @@ func linuxV2KnownCredentialValues(request linuxV2OwnerWitnessRequest) []linuxV2C
 	return values
 }
 
-// linuxV2OwnerWitnessStderrTail reads the bounded tail of the captured App stderr, replaces every
-// known credential value, and refuses text that still carries one (writeLinuxV2NativeWitness's rule).
+// linuxV2OwnerWitnessStderrTail redacts the whole captured App stderr, refuses text whose marker
+// view still carries a known credential value, and returns the last bounded window.
 func linuxV2OwnerWitnessStderrTail(path string, request linuxV2OwnerWitnessRequest) ([]string, error) {
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read captured owner-witness stderr: %w", err)
 	}
-	if len(contents) > linuxV2OwnerWitnessStderrTailBytes {
-		contents = contents[len(contents)-linuxV2OwnerWitnessStderrTailBytes:]
+	values := linuxV2KnownCredentialValues(request)
+	redacted := string(contents)
+	for _, value := range values {
+		redacted = strings.ReplaceAll(redacted, value.value, linuxV2OwnerWitnessStderrRedacted)
 	}
-	lines := strings.Split(string(contents), "\n")
+	stripped := strings.ReplaceAll(redacted, linuxV2OwnerWitnessStderrRedacted, "")
+	for _, value := range values {
+		if strings.Contains(stripped, value.value) {
+			return nil, fmt.Errorf("captured owner-witness stderr still carries the %s value", value.name)
+		}
+	}
+	lines := strings.Split(redacted, "\n")
 	if len(lines) > linuxV2OwnerWitnessStderrTailLines {
 		lines = lines[len(lines)-linuxV2OwnerWitnessStderrTailLines:]
 	}
-	values := linuxV2KnownCredentialValues(request)
-	for index, line := range lines {
-		for _, value := range values {
-			line = strings.ReplaceAll(line, value.value, linuxV2OwnerWitnessStderrRedacted)
-		}
-		lines[index] = line
-	}
-	for _, line := range lines {
-		for _, value := range values {
-			if strings.Contains(line, value.value) {
-				return nil, fmt.Errorf("captured owner-witness stderr still carries the %s value", value.name)
-			}
-		}
+	window := strings.Join(lines, "\n")
+	if len(window) > linuxV2OwnerWitnessStderrTailBytes {
+		lines = strings.Split(window[len(window)-linuxV2OwnerWitnessStderrTailBytes:], "\n")
 	}
 	return lines, nil
 }
@@ -2105,7 +2103,7 @@ func TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds(t *testing.T) {
 	lines[40] = "claim " + leaseToken + " " + providerToken
 	lines[41] = strings.Repeat("x", 512)
 	lines[42] = diagnostic
-	lines[43] = "environment " + apiKey
+	lines[43] = "environment " + apiKey + " " + operatorToken
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
 		t.Fatalf("write captured owner-witness stderr fixture: %v", err)
 	}
@@ -2125,6 +2123,9 @@ func TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds(t *testing.T) {
 	if strings.Contains(joined, "witness noise line 04") || !strings.Contains(joined, diagnostic) {
 		t.Fatalf("tail did not keep the newest bounded window with its diagnostic: %q", joined)
 	}
+	if strings.Contains(joined, "beyond the retained tail") {
+		t.Fatalf("tail kept the carrier line before the bounded window: %q", joined)
+	}
 	logged := linuxV2OwnerWitnessStderrBoundedLines(tail)
 	if len(logged) != linuxV2OwnerWitnessStderrLogLines {
 		t.Fatalf("logged lines = %d, want %d", len(logged), linuxV2OwnerWitnessStderrLogLines)
@@ -2143,7 +2144,7 @@ func TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds(t *testing.T) {
 	}
 }
 
-func TestLinuxV2OwnerWitnessStderrCaptureRefusesMarkerCarriedValue(t *testing.T) {
+func TestLinuxV2OwnerWitnessStderrCaptureRedactsValuesInsideTheMarker(t *testing.T) {
 	t.Setenv("SYMMETRY_CREDENTIAL", "redacted")
 	request := linuxV2OwnerWitnessRequest{}
 	path := filepath.Join(t.TempDir(), linuxV2OwnerWitnessStderrName)
@@ -2155,10 +2156,44 @@ func TestLinuxV2OwnerWitnessStderrCaptureRefusesMarkerCarriedValue(t *testing.T)
 		t.Fatalf("clean tail = %q error = %v, want the line and no refusal", tail, err)
 	}
 	if err := os.WriteFile(path, []byte("the refused witness printed redacted\n"), 0o600); err != nil {
-		t.Fatalf("write refused captured owner-witness stderr fixture: %v", err)
+		t.Fatalf("write marker-carried captured owner-witness stderr fixture: %v", err)
+	}
+	tail, err = linuxV2OwnerWitnessStderrTail(path, request)
+	if err != nil || len(tail) != 2 || tail[0] != "the refused witness printed <redacted>" {
+		t.Fatalf("tail = %q error = %v, want the marker for the marker-carried value", tail, err)
+	}
+}
+
+func TestLinuxV2OwnerWitnessStderrCaptureRefusesFragmentedValue(t *testing.T) {
+	t.Setenv("SYMMETRY_CREDENTIAL", "abcd")
+	t.Setenv("SYMMETRY_API_KEY", "XY")
+	request := linuxV2OwnerWitnessRequest{}
+	path := filepath.Join(t.TempDir(), linuxV2OwnerWitnessStderrName)
+	if err := os.WriteFile(path, []byte("prefix abXYcd suffix\n"), 0o600); err != nil {
+		t.Fatalf("write fragmented captured owner-witness stderr fixture: %v", err)
 	}
 	if tail, err := linuxV2OwnerWitnessStderrTail(path, request); err == nil || tail != nil {
-		t.Fatalf("tail = %q error = %v, want a refusal when the marker carries the credential value", tail, err)
+		t.Fatalf("tail = %q error = %v, want a refusal when redaction splits a credential value", tail, err)
+	}
+}
+
+func TestLinuxV2OwnerWitnessStderrCaptureRedactsAcrossTheByteWindow(t *testing.T) {
+	const apiKey = "api-key-90fe"
+	t.Setenv("SYMMETRY_OPENAI_API_KEY", apiKey)
+	before := strings.Repeat("noise line\n", 400)
+	path := filepath.Join(t.TempDir(), linuxV2OwnerWitnessStderrName)
+	if err := os.WriteFile(path, []byte(before+apiKey+"\n"+strings.Repeat("x", linuxV2OwnerWitnessStderrTailBytes-6)), 0o600); err != nil {
+		t.Fatalf("write byte-boundary captured owner-witness stderr fixture: %v", err)
+	}
+	lines, err := linuxV2OwnerWitnessStderrTail(path, linuxV2OwnerWitnessRequest{})
+	if err != nil {
+		t.Fatalf("byte window refused clean redacted content: %v", err)
+	}
+	joined := strings.Join(lines, "\n")
+	for _, fragment := range []string{apiKey, apiKey[len(apiKey)-4:]} {
+		if strings.Contains(joined, fragment) {
+			t.Fatalf("byte window leaked credential fragment %q: %q", fragment, joined)
+		}
 	}
 }
 

@@ -704,11 +704,17 @@ def fail(message: str) -> None:
     raise SystemExit(f"redacted evidence export failed: {message}")
 
 
-def require_no_excluded_witness_file(roots: tuple[pathlib.Path, ...]) -> None:
+def require_no_excluded_witness_file(
+    roots: tuple[pathlib.Path, ...], sources: tuple[pathlib.Path, ...] = ()
+) -> None:
     for root in roots:
         for name in EXCLUDED_WITNESS_NAMES:
             candidate = root / name
             if candidate.is_symlink() or candidate.exists():
+                fail(f"{name} is a harness-private App stderr capture and is never exported")
+    for source in sources:
+        for name in EXCLUDED_WITNESS_NAMES:
+            if name in source.parts:
                 fail(f"{name} is a harness-private App stderr capture and is never exported")
 
 
@@ -1517,7 +1523,6 @@ def main() -> int:
             fail("manual mode requires witness/Control receipt roots and one exact case set")
         witness_root = pathlib.Path(arguments.witness_root)
         receipt_root = pathlib.Path(arguments.receipt_root)
-        require_no_excluded_witness_file((witness_root, receipt_root))
         expected.extend((witness_root / source, target) for source, target in MANUAL_WITNESSES)
         expected.extend(
             (
@@ -1537,21 +1542,22 @@ def main() -> int:
         expected = [
             (source, target) for source, target in expected if target in MANUAL_CASE_SET_FILES[arguments.case_set]
         ]
+        require_no_excluded_witness_file((witness_root, receipt_root), tuple(source for source, _ in expected))
     elif arguments.mode == "compose":
         if not arguments.witness_root:
             fail("Compose mode requires the private witness staging directory")
         witness_root = pathlib.Path(arguments.witness_root)
-        require_no_excluded_witness_file((witness_root,))
         expected.extend((witness_root / name, name) for name in COMPOSE_WITNESSES)
         expected.extend((witness_root / name, name) for name in COMPOSE_DIAGNOSTICS)
+        require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))
     else:
         if not arguments.witness_root:
             fail("legacy mode requires the private witness root")
         if arguments.receipt_root or arguments.case_set:
             fail("legacy mode accepts only --witness-root and optional credential scan input")
         witness_root = pathlib.Path(arguments.witness_root)
-        require_no_excluded_witness_file((witness_root,))
         expected.extend((witness_root / name / "witness-evidence.json", f"{name}.json") for name in LEGACY_WITNESSES)
+        require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))
 
     copied = []
     missing = []

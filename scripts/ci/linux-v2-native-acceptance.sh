@@ -947,9 +947,13 @@ machine_run_as() {
   shift 2
   machine_run_count=$((machine_run_count + 1))
   local unit="${machine}-step-${machine_run_count}"
+  local home
+  home=$(machine_run /usr/bin/getent passwd "$user" | cut -d: -f6) ||
+    fail "read the guest passwd home directory for $user"
+  [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
-    --setenv="HOME=/home/$user" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    --setenv="HOME=$home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
     -- "$@"
 }
 

@@ -1,33 +1,37 @@
-# rf-acc-native-containment-witness — evidence record (2026-11-24, implement + apply stages)
+# rf-acc-native-containment-witness — evidence record (2026-11-24, implement + apply + fix stages)
 
 Contract: `goal-rf-acc-native-containment-witness.md` (GDD state root, external to the repository).
 Base `477e4c62` (#277, the rf-acc-native-burndown merge). Branch
 `refactor/rf-acc-native-containment-witness`. Scratch branch
 `scratch/rf-acc-native-containment-witness` (deleted at stage close, §9). Every hash below is a
-working-tree byte hash; the §1 rows cite the final (post-apply) bytes.
+working-tree byte hash; the §1 rows cite the final (post-fix) bytes.
 
-Two clauses are proven green by the final run: the containment rows now name their post-seed App
-refusal (bounded, redacted, in the job log) and end at a recorded `DECISION_NEEDED` product cause;
-`synthetic_goal_cleanup` is past its admission refusal and stops at a later named check.
+Two clauses are proven green by the binding run `45465331434` on its bytes: the containment rows
+name their post-seed App refusal (bounded, redacted, in the job log) and end at a recorded
+`DECISION_NEEDED` product cause; `synthetic_goal_cleanup` is past its admission refusal and stops
+at a later named check. The fix stage (§13) changes four code/script files after that run; the
+hosted re-proof of the acceptance clause on the final bytes stays conductor-owned.
 
 ## 1. Binding — final bytes, runs, and scratch-only bytes
 
 | File (working tree) | sha256 |
 | --- | --- |
 | `daemon/e2e/production_linux_v2_owner_cli_test.go` | `80b9f557b396118dbb7f3b0b369e2054ec5010aeeceec43083c3fd243e02e23c` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `f297fd5d6b1bef002bc79d5d31bf99651024cc12eb3e972a2881d35fd65bb1d7` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `29366dd82495027dcbaa23bdb1b8270a5ee67d4255a6bee94b3e4b57710a546c` |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `08f4dbd91951e500ad7d549556ff4fe41e94c717f1a375f244b8c606c443788f` |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `2452803f04223353d35088f041f28490dff0aec5156c38d462fedc3f191cfc2c` |
-| `scripts/ci/test-linux-v2-evidence.py` | `0ee65be478bf837b3e21cb9e4586789c7d594439b7bdba488cf2912eadff3622` |
-| `docs/plans/2026-11-24-rf-acc-native-containment-witness-plan.md` | `2f15f6a1e74391eaa0540ab858b2695364f7dca3de089b07d4d521c9016e3e64` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `01550959d9f1797d56018914155709002ba8a5a77d5a69868561a25c22d09b7d` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `e3c2c1554d046d234dcd29a9ac1c79f0d526f1e27f4f61ce82eb97451bba9466` |
+| `scripts/ci/test-linux-v2-evidence.py` | `00342bc23cbbb08c7569b95049ddb68e7d61a640ba0c481eda0db59847a1f234` |
+| `docs/plans/2026-11-24-rf-acc-native-containment-witness-plan.md` | `77c18856e3e872b335cdeef1892d78b03e8f3a3893c6b6b516fac52ea9a53037` |
 
 Run `45465331434` ran on scratch head `65bfeaf2`, whose six code/script rows were byte-identical
 to the pre-apply copies of the rows above (`cmp` clean for each) plus the two scratch-only files
-of §10. The apply stage's four simplifications (§12) are behavior-neutral, and the rows above are
-the final bytes; the hosted re-proof of the acceptance clause on these bytes is conductor-owned,
-because the apply stage cannot push. `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this
-record are documentation-only and postdate the run.
+of §10. The apply stage's four simplifications (§12) were behavior-neutral; the fix stage then
+changed four code/script rows (§13: the containment capture helper, the acceptance script, the
+exporter and its suite), so the rows above are the final bytes and no hosted run covers them
+verbatim. The hosted re-proof of the acceptance clause is conductor-owned, because neither apply
+nor fix stage can push. `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are
+documentation-only and postdate the run.
 
 | Run | Head | Sets | Result |
 | --- | --- | --- | --- |
@@ -43,26 +47,44 @@ record are documentation-only and postdate the run.
 - Sink: `linuxV2OwnerWitnessStderrPath` (`owner-witness.stderr` beside the response file) replaces
   `os.DevNull` as the command's stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52`), opened
   `O_CREATE|O_TRUNC|O_WRONLY` 0600, one per command start, in the A-private `artifactDir`.
-- Helpers (`production_linux_v2_native_witness_test.go:2001-2083`):
+- Helpers (`production_linux_v2_native_witness_test.go:2001-2081`):
   `linuxV2KnownCredentialValues` (every `os.Environ` name matching
   `linuxV2IsCredentialEnvironmentName` — which covers the writer's `SYMMETRY_OPERATOR_TOKEN` /
   `SYMMETRY_ENROLLMENT_TOKEN` cases — the request's lease token, and the provider token),
-  `linuxV2OwnerWitnessStderrTail` (last ≤4 KiB / ≤40 lines, every known value replaced with
-  `<redacted>`, then refuses — error, no text — if one survives),
-  `linuxV2OwnerWitnessStderrBoundedLines` (≤9 lines, each ≤300 content bytes).
+  `linuxV2OwnerWitnessStderrTail` (`:2041-2066`: replaces every known value in the whole capture
+  with `<redacted>`, then refuses — error, no text — if a value survives in the marker-stripped
+  view, and only then returns the last ≤40 lines / ≤4 KiB window; §13 lists the round-1 change),
+  `linuxV2OwnerWitnessStderrBoundedLines` (≤5 lines, each ≤300 content bytes).
 - Report: `linuxV2ReportOwnerWitnessFailure` (`owner_cli_test.go:1573-1592`) waits ≤5 s for the
   pidfd, logs `owner-witness command exit status: <n>`, then the tail as separate `t.Logf` lines
-  before each `t.Fatalf`. Call sites: the barrier wait and all eight `waitLinuxV2OwnerWitnessStage`
-  waits (`:1744`, `:2377`, `:3387`, `:3566`, `:3797`, `:3963`, `:4122`, `:4444`).
+  before each `t.Fatalf`. Line budget: 1 status line, then last ≤5 tail lines (`:2008`); the
+  fixture printer keeps the last 10 lines of a test and four of them surround the report
+  (`=== RUN`, the `t.Fatalf` body, the fixture's `:1838` StateDir cleanup line, `--- FAIL`), so
+  the maximum report stream fills the window exactly and keeps the status line and every tail
+  line. Call sites: eight `waitLinuxV2OwnerWitnessStage` waits report
+  (`:1744`, `:2377`, `:3387`, `:3566`, `:3797`, `:3963`, `:4122`, `:4444`, the barrier wait at
+  `:4444` included). Census and exemptions (round 1, §13): nine
+  `waitLinuxV2OwnerWitnessStage` call sites exist — the ninth,
+  `production_linux_v2_helper_exit_witness_test.go:188` (reached by the `shared` set at
+  `linux-v2-native-acceptance.sh:2936`), is outside this goal's owned set and stays unnamed; the
+  recovery/replay exit waits on a live command (`owner_cli_test.go:1841-1843`, `:3465-3466`,
+  `:3700-3701`, `:4515-4516`) stay unnamed too, and their rows stop at their own named stage
+  waits first.
 - Local probes, before any dispatch:
   - `print_witness_output_lines` extracted verbatim from the script and fed a real non-verbose
     `go test -json` failing test (throwaway module): the `exit status` and 279-byte diagnostic lines
     printed; a 420-byte content line and a line carrying `development-operator-token` were dropped;
     last-10/400-byte semantics unchanged.
-  - Unit tests `TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds` (44 lines → last 40, four
-    credential values replaced, diagnostic kept, one over-long line truncated, ≤9 logged lines) and
-    `TestLinuxV2OwnerWitnessStderrCaptureRefusesMarkerCarriedValue` (clean tail passes; a value the
-    marker itself carries refuses with no text). Both PASS on a linux/amd64 test binary (§8).
+  - Unit tests (`:2083`, `:2147`, `:2167`, `:2180`):
+    `TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds` (44 lines → last 40, four credential
+    values replaced in the window, the out-of-window carrier line dropped, diagnostic kept, one
+    over-long line truncated, ≤5 logged lines),
+    `TestLinuxV2OwnerWitnessStderrCaptureRedactsValuesInsideTheMarker` (a value that is a
+    substring of the marker does not veto the tail),
+    `TestLinuxV2OwnerWitnessStderrCaptureRefusesFragmentedValue` (a value redaction split is
+    refused), and `TestLinuxV2OwnerWitnessStderrCaptureRedactsAcrossTheByteWindow` (a credential
+    straddling the 4 KiB cut is redacted before the window). All four PASS on a linux/amd64 test
+    binary (§8).
 - Before/after rows: `45388258526` rows 1-2 end at an unnamed 30.7 s barrier wait with no App stderr
   in the log (burndown record §3.13); runs `45452357027`, `45455325059`, `45458181149` and the
   binding run `45465331434` print the bounded, redacted App diagnostic plus the real exit status for
@@ -92,28 +114,36 @@ launcher guard and no `daemon/internal/**` byte changed.
 ## 4. Carry-over P3 fixes in `scripts/ci/linux-v2-native-acceptance.sh`
 
 - P3-1: the `shared` set's unprovisioned-gate failure branch now pipes `grep … | head -n 5` through
-  `print_filtered_output_lines` (`:1556`), like the `run_go_test` twin.
+  `print_filtered_output_lines` (`:1563`), like the `run_go_test` twin.
 - P3-2: both Change-1 `systemctl show` blocks and the `journalctl --output=cat -n 80 --grep=…` dump
-  (`:1615-1631`) capture to `$fixture_root/daemon-service-failure.log` and print through
+  (`:1623-1637`) capture to `$fixture_root/daemon-service-failure.log` and print through
   `print_filtered_output_lines`; the narrow `--grep` and `-n 80` bound are unchanged. The branch had
   0 firings in run `45458181149` (0 `systemctl show --property=Result` lines).
-- P3-3: the two probe pipelines (`:1699-1708`) became capture-then-filter, so `machine_run_as` runs
-  in the parent shell. Probe (throwaway stub): pipeline shape → `count after pipelines=0` and the
-  unit `probe-step-1` reused twice; capture shape → `count after captures=2`, units `step-1`,
-  `step-2`. Filter probe on the extracted function: a 420-byte line and a secret-bearing line were
-  dropped, the last 40 of 48 lines printed, exit 0.
+- P3-3: the two probe pipelines (`:1706-1708`, `:1713-1715`) became capture-then-filter, so
+  `machine_run_as` runs in the parent shell. Probe (throwaway stub): pipeline shape → `count after
+  pipelines=0` and the unit `probe-step-1` reused twice; capture shape → `count after captures=2`,
+  units `step-1`, `step-2`. Filter probe on the extracted function: a 420-byte line and a
+  secret-bearing line were dropped, the last 40 of 48 lines printed, exit 0. Round-1 note: the
+  `machine_run_as` edits (`:950-953`) shift these ranges by four lines; the refs above are the
+  final tree's.
 
 ## 5. Exporter exclusion (conductor ruling Q3)
 
 `export-linux-v2-redacted-evidence.py` gains `EXCLUDED_WITNESS_NAMES = ("owner-witness.stderr",)`
 and `require_no_excluded_witness_file` (all three modes, before any read): an input root that
-carries the capture refuses publication. `test-linux-v2-evidence.py` gains
+carries the capture refuses publication, and — added in round 1 (§13) — any computed export source
+path that carries the name as a component refuses too, so a future allowlist entry that named a
+subpath such as `stage-replay/owner-witness.stderr` cannot leak. The guard calls moved after each
+mode's allowlist walk with the computed sources passed in (`:1545`, `:1552`, `:1560`).
+`test-linux-v2-evidence.py` gains
 `test_manual_containment_refuses_the_owner_witness_stderr_capture` (the apply stage removed the
-successful-export test's added `assertNotIn`, §12). Mutant row: with the guard stashed, the new
-test fails (`AssertionError: 0 == 0` — the export succeeded); with the guard, the full suite is
-`Ran 43 tests … OK` (§8).
+successful-export test's added `assertNotIn`, §12). Round-1 tests: a computed subpath source
+refuses, and compose/legacy witness roots carrying the capture refuse (`:1619`, `:1626`, `:1636`).
+Mutant row: with the guard stashed, the new test fails (`AssertionError: 0 == 0` — the export
+succeeded); with the guard, the full suite is `Ran 48 tests … OK` (§8; 43 at the apply stage,
+§12).
 
-## 6. The final literal all-14 run (`45465331434`, head `65bfeaf2`, job 23m23s)
+## 6. The final literal all-14 run (`45465331434`, head `65bfeaf2`, job 23m23s; pre-fix bytes, §13)
 
 Run `45458181149` (job 23m04s) first ran these bytes minus one trimmed doc comment and produced
 byte-identical failure blocks; §2's comment trim forced the re-bind, and run 4 is the binding run.
@@ -173,10 +203,12 @@ passwd HOME of the fixed-B account. The fixture created B with a passwd HOME out
 product defect. Fix in the owned
 fixture: `B_HOME="$OWNER_TEST_ROOT/fixed-b-home"` (distinct from the clone tests'
 `CLONE_TEST_B_HOME=$OWNER_TEST_ROOT/b-home`), plus a passwd readback fence
-(`:612-613`). Every B-path fence and A-view ACL was already `$B_HOME`-relative, so no other byte
-moved. Before/after rows: `45452357027` row 1 → `45455325059` and `45458181149` (rows 1-2 proceed to
-the refusal below). Probe of the new fence: synthetic passwd rows → positive passes, a row carrying
-the old outside-root HOME and a missing user both fire.
+(`:612-613`). Every B-path fence and A-view ACL was already `$B_HOME`-relative, with one
+round-1 exception (§13, STD-07): `machine_run_as` passed a hardcoded per-account `--setenv=HOME=`
+value that was false for B after this move; it now derives HOME from the guest passwd entry
+(`:950-953`). No other byte moved in the apply stage. Before/after rows: `45452357027` row 1 → `45455325059` and
+`45458181149` (rows 1-2 proceed to the refusal below). Probe of the new fence: synthetic passwd
+rows → positive passes, a row carrying the old outside-root HOME and a missing user both fire.
 
 ### 7.2 `DECISION_NEEDED`: the witness's clone reservation requires an admitted Subject that the witness request validation forbids
 
@@ -235,12 +267,13 @@ allowed outcome for those rows; the rows do not reach the credential-dependent s
 | `gofmt -l .` (`daemon/`) | 0 | 0 lines |
 | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...` (`daemon/`) | 0 | clean |
 | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` (`daemon/`) | 0 | clean |
-| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o <tmp> ./e2e` then the binary `-test.run 'TestLinuxV2OwnerWitnessStderrCapture'` (WSL Ubuntu-24.04, linux/amd64) | 0 | both new tests PASS |
-| `python3 scripts/ci/test-linux-v2-evidence.py` (WSL Ubuntu-24.04, python 3.12.3) | 0 | `Ran 43 tests … OK` |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o <tmp> ./e2e` then the binary `-test.run 'TestLinuxV2OwnerWitnessStderrCapture'` (WSL Ubuntu-24.04, linux/amd64) | 0 | all four capture tests PASS (two at the apply stage; §13 adds two) |
+| `python3 scripts/ci/test-linux-v2-evidence.py` (WSL Ubuntu-24.04, python 3.12.3) | 0 | `Ran 48 tests … OK` (43 at the apply stage; §13 adds five) |
 | `python3 scripts/ci/test-linux-v2-go-events.py` (same) | 0 | clean |
 | `python3 -m py_compile scripts/ci/export-linux-v2-redacted-evidence.py` (same) | 0 | clean |
 | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | clean |
-| `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh` (0.11.0) | 1 | 11 findings; finding set byte-identical to the base script apart from line numbers (delta 0); SC histogram `SC1078 ×2, SC2024, SC2043, SC2154 ×8, SC2174, SC2276 ×3, SC2288, SC2289 ×2` identical at base |
+| `shellcheck --severity=warning -f gcc scripts/ci/linux-v2-native-acceptance.sh` (Windows 0.11.0) | 1 | 16 findings on the shipped bytes and 16 on the base script; the line:col-stripped finding multiset is identical at base (delta 0); SC histogram `SC1078 ×1, SC2024, SC2043, SC2154 ×8, SC2174, SC2276 ×2, SC2288, SC2289` (this row is the round-1 correction of the apply-stage count; §12/§13) |
+| the same command under WSL 0.9.0 | 0 | 16 findings, same histogram, delta 0 versus the base script; this distro build prints findings but exits 0 even for parse errors (a redirection parse probe also exits 0) |
 | `actionlint .github/workflows/scratch-native-containment-witness.yml` (throwaway, 1.7.12) | 0 | clean; the real workflow is untouched, so no row for it |
 
 Changed-document gates, run in the scratch worktree over a temporary, never-pushed local commit of
@@ -260,8 +293,8 @@ The Go unit tests, `gofmt`, `go vet` and the fixture-contract scripts run in the
 witnesses themselves need the installed A/B fixture and were exercised only by the hosted scratch
 runs, as the contract allows. Git-diff hygiene: `git diff --check` clean; the profile-name and
 host-path scans used by the burndown apply (no Windows/WSL host prefixes in added lines).
-The apply stage re-ran the rows above on the final bytes; exit codes, counts and the document
-gates are in §12.
+The fix stage re-ran every row above on the final bytes (§13 carries its mutant rows); §12 keeps
+the apply-stage counts and §13 the final document gates.
 
 ## 9. Scope and scratch hygiene
 
@@ -269,6 +302,8 @@ Owned files touched: the three `daemon/e2e` files (§2, §3), the acceptance scr
 exporter and its fixture suite (§5), the plan, this record, `docs/TODO.md` and
 `docs/archive/CLOSED-TODO.md`. Not touched: `daemon/internal/**` (no byte), `control/**`, the real
 workflow (no byte), the frozen OpenCode pin/render tokens, any environment/secrets/vars/trigger.
+The fix stage re-touched the capture helper's file, the acceptance script, the exporter and its
+suite, the plan and this record; no new file was added and no other file moved (§13).
 
 Scratch loop: the branch was pushed twice (runs 1-3, then run 4 after the comment trim) and deleted
 twice with `git push origin --delete scratch/rf-acc-native-containment-witness` →
@@ -286,7 +321,9 @@ refusal) plus the fixture class the captured refusal named (the fixed-B HOME) pl
 bytes after the two-line comment-policy trim changed one Go file). `45455325059`'s first attempt
 died in the unrelated `contracts` flake and was rerun in-run, so no dispatch was spent on it. One
 remains in reserve for a flake re-dispatch; the Change-1/Change-2 mutant rows cite the before run
-`45388258526` as the contract allows.
+`45388258526` as the contract allows. The fix stage spent no dispatch: its four changed
+code/script files postdate the binding run, and the hosted re-proof on the final bytes (or a
+formal acceptance of the amendment) remains conductor-owned.
 
 ## 10. Appendix — scratch pins and mutants used as evidence (verbatim, full sha256)
 
@@ -307,6 +344,14 @@ secret-bearing lines.
 
 ## 11. Residual risks and known limits
 
+- The fix stage changed four code/script files after the binding run `45465331434`: the report's
+  line budget, the capture helper's redaction order and refusal view, `machine_run_as`'s HOME
+  source, and the exporter guard's computed-source check. Each carries a local probe and a mutant
+  row (§13); none is re-exercised by a hosted run, so the acceptance clause's bytes-for-bytes
+  binding moves to the conductor's re-proof.
+- `machine_run_as`'s passwd-derived HOME is exercised by the extraction probe only (positive and
+  negative rows, §13); the guest transport itself needs the installed A/B fixture, so its mutant
+  is an oracle gap: removing the derivation reddens no CI job, only that probe.
 - The containment judging clause stays unmet beyond the recorded stop: no run reaches the
   credential-dependent step, because the witness cannot reserve its clone until §7.2 is decided.
   Every credential-dependent step of every row remains unproven (the scratch doubles reach no
@@ -322,15 +367,15 @@ secret-bearing lines.
 - The fixed-B HOME move changes every set's B account HOME; run `45458181149` shows no regression
   (passing legs, smokes, retirement counts and failure names match the pre-change baseline), but
   only the sets' *witness* paths were re-exercised — no other repository fixture uses this account.
-- The local shellcheck baseline differs in count from the burndown record's (11 findings on this
-  host's shellcheck 0.11.0 versus its 16); the delta versus the base script is the binding number
-  and is 0.
+- The apply-stage §8 shellcheck count (11) was wrong; both installed binaries report 16 findings
+  on the shipped bytes with the histogram §8 now carries, and the delta versus the base script is
+  the binding number and is 0 (§12, §13).
 - `docs/TODO.md`'s `linux-native-v2-acceptance` dispatch entry and the burndown's other follow-ups
   are untouched: this goal narrows the containment follow-up to §7.2 and closes the capture/cleanup
   half.
 - The hosted all-14 run was produced on the pre-apply copies of the §1 rows; §12 records the four
-  behavior-neutral apply deltas and leaves the hosted re-proof (or a formal acceptance of the
-  amendment) to the conductor.
+  behavior-neutral apply deltas and §13 the four fix-stage deltas; both leave the hosted re-proof
+  (or a formal acceptance of the amendment) to the conductor.
 
 ## 12. Apply stage (2026-11-24) — accepted simplifications and the binding amendment
 
@@ -345,9 +390,9 @@ paragraphs below name the evidence and each probe re-runs with one command.
   eight `linuxV2ReportOwnerWitnessFailure` call sites shifted to `:1744`, `:2377`, `:3387`,
   `:3566`, `:3797`, `:3963`, `:4122`, `:4444` (§2 and plan §2 carry the shifted refs).
 - **F2 (Delete)** — the `assertNotIn("owner-witness.stderr", …)` line the implement stage added
-  to `test_manual_containment_export_records_pinned_native_binary`
-  (`test-linux-v2-evidence.py:1600`) could not fail: the output directory receives only the
-  allowlisted names plus `manifest.json`, and a root without the capture never yields it. Mutant
+  to `test_manual_containment_export_records_pinned_native_binary` could not fail: the output
+  directory receives only the allowlisted names plus `manifest.json`, and a root without the
+  capture never yields it. Mutant
   P2 (guard call lines removed from a disposable copy) reddens only the dedicated refusal test
   and leaves the export test `ok`, i.e. the deleted line detected nothing about the guard. Q3's
   coverage stays with `test_manual_containment_refuses_the_owner_witness_stderr_capture` (§5).
@@ -357,33 +402,36 @@ paragraphs below name the evidence and each probe re-runs with one command.
   were provable no-ops: the predicate is case-insensitive and both names end in `_TOKEN` (probe
   P1: 0 mismatches over 10 keys; exhaustively, a matching name always already skips and a
   non-matching name is neither literal). The pre-existing writer's copy
-  (`native_witness_test.go:3372`) is outside this goal's owned region ("only the shared
+  (`native_witness_test.go:3407`) is outside this goal's owned region ("only the shared
   redaction/capture helper") and stays untouched; only the increment's own copy is gone, so the
   helper no longer carries the duplicated literals.
 - **F4 (Refactor)** — the comment above `print_witness_failure_context`
-  (`linux-v2-native-acceptance.sh:1665-1666`) was rewritten to drop the falsified premise that
+  (`linux-v2-native-acceptance.sh:1669-1670`) was rewritten to drop the falsified premise that
   the command's stderr is discarded by its own harness (§2, §6, §7.1 show the captured, redacted
   tail in the job log). Same line count; the fixture-state clause stays true.
 
-Binding amendment: the §1 rows are the final bytes. Run `45465331434` was produced on scratch
-head `65bfeaf2`, byte-identical to the pre-apply copies of those rows; the four deltas above are
-behavior-neutral by P1/P2 and by inspection (F4 touches comment text only). Re-proving the
-acceptance clause on the final bytes needs a scratch push and one fresh literal all-14 run; this
-stage cannot push, so the re-proof — or a formal acceptance of this amendment — is
-conductor-owned (one dispatch of the contract's budget remains).
+Binding amendment: run `45465331434` was produced on scratch head `65bfeaf2`, byte-identical to
+the pre-apply copies of the §1 rows; the four deltas above were behavior-neutral by P1/P2 and by
+inspection (F4 touches comment text only). Round 1 then changed four code/script rows again
+(§13), so the final byte binding and the hosted re-proof — or a formal acceptance of the
+amendment — are conductor-owned (one dispatch of the contract's budget remains).
 
 Census for the "every" clauses this stage touches:
 
 - "redacts every credential value the harness already knows": `linuxV2IsCredentialEnvironmentName`
   call sites, 6 total — definition `native_witness_test.go:1991`; helper `:2025` (converted by
-  F3); writer `:3372` (exempt: pre-existing, outside the owned region); `owner_cli_test.go:117`,
+  F3); writer `:3407` (exempt: pre-existing, outside the owned region); `owner_cli_test.go:117`,
   `:133` and `production_linux_v2_rootless_compose_witness_test.go:1115` (pre-existing env
   filtering, untouched — the rootless witness already uses the plain-predicate form F3 adopts).
-- Change 1's "all eight call sites": `linuxV2ReportOwnerWitnessFailure(t, fixture, command)`
-  appears 8 times, one per wait site, unchanged.
+- Change 1's call-site census (corrected in round 1, §13): `linuxV2ReportOwnerWitnessFailure(t,
+  fixture, command)` appears 8 times, one per `production_linux_v2_owner_cli_test.go` wait site;
+  the ninth `waitLinuxV2OwnerWitnessStage` call site
+  (`production_linux_v2_helper_exit_witness_test.go:188`) and the recovery/replay exit waits
+  (`:1841-1843`, `:3465-3466`, `:3700-3701`, `:4515-4516`) stay unnamed as explicit exemptions
+  (§2 carries the full census).
 - Q3's "all three modes": `require_no_excluded_witness_file` definition
-  (`export-linux-v2-redacted-evidence.py:707`) plus call sites `:1520`, `:1544`, `:1553` — all
-  three present, untouched.
+  (`export-linux-v2-redacted-evidence.py:707`) plus call sites `:1545`, `:1552`, `:1560` — all
+  three present; round 1 passes each mode's computed sources into the same guard (§5, §13).
 
 Apply-stage evidence appendix (probes; each re-runnable in one command):
 
@@ -446,7 +494,167 @@ the document gates were re-run after this section landed, over the final record 
 | `python3 scripts/ci/check-record-cleanliness.py --base 1f2c8a13 --head <stash-create commit>` | 0 | `1 changed record(s) pass the root-only check`; with `--base 477e4c62`: `3 changed record(s) pass` |
 | `python3 scripts/ci/check-citation-existence.py --base 1f2c8a13 --head <stash-create commit>` | 0 | no audited document added or modified; with `--base 477e4c62`: `1 changed document(s) pass the path and symbol check (600 path citation(s))`, the three pre-existing ignore notes unchanged |
 
-The §8/§11 shellcheck count (11 findings) is not reproducible with either installed binary today
-(both report 16); the binding number, the delta versus the base script, is 0. `actionlint` has no
-row: the real workflow is untouched. The four changed code files' sha256 were re-checked after the
-last edit to this record (which touches only this file) and still equal the §1 rows.
+The apply-stage §8 count (11 findings) was not reproducible with either installed binary (both
+report 16 on the shipped bytes); §8 now carries the measured row, and the binding number, the
+delta versus the base script, stays 0 on both binaries. `actionlint` has no row: the real
+workflow is untouched. The apply-stage note that the §1 code hashes were re-checked after this
+record's last edit held for the apply tree; round 1 recomputed them (§13).
+
+## 13. Fix stage (2026-11-24) — review round 1, findings STD-01–STD-10
+
+Source: this goal's review-stage report (`MUST_FIX (10)`, all P3, two mechanisms described as
+unreachable with the repository's job env). Every finding is FIXed or explicitly exempted below;
+no settled design or contract clause was weakened. The four changed code/script files and the
+plan carry the §1 hashes.
+
+| id | disposition | what changed, and the observed before/after proof |
+| --- | --- | --- |
+| STD-01 | docs; ninth site exempt (outside the owned set) | The census is now 9 `waitLinuxV2OwnerWitnessStage` sites: 8 report (`owner_cli_test.go:1744,2377,3387,3566,3797,3963,4122,4444`), the ninth (`production_linux_v2_helper_exit_witness_test.go:188`, reached by the `shared` set at `linux-v2-native-acceptance.sh:2936`) and the recovery/replay exit waits (`:1841-1843`, `:3465-3466`, `:3700-3701`, `:4515-4516`) are explicit exemptions — the first because the file is outside the goal's owned set. Rewritten: §2, §12's census bullet, plan §2. Census probe: `grep -n 'if err := waitLinuxV2OwnerWitnessStage'` over the two `e2e` files returns 9 call sites (8 in `production_linux_v2_owner_cli_test.go`, 1 in the helper-exit file) and `grep -c 'linuxV2ReportOwnerWitnessFailure(t, fixture, command)'` returns 8. |
+| STD-02 | code + test + docs | `linuxV2OwnerWitnessStderrLogLines` 9 → 5 (`native_witness_test.go:2008`). Before: `WitnessOutputWindowTest.test_report_budget_keeps_its_status_line_and_every_tail_line` fails (the 9-line budget evicts `owner-witness command exit status: 1` and tail lines 0-1 from the printer's 10-line window — mutant M3 reproduces it). After: 10 of 10 lines print, the status line and every tail line included. §2/plan §1 carry the window arithmetic. |
+| STD-03 | code + test (one pinned expectation replaced) | The refusal check now runs on the marker-stripped view (`:2051`): a value that is a substring of `<redacted>` no longer vetoes the tail, and a value a redaction split is refused. `TestLinuxV2OwnerWitnessStderrCaptureRedactsValuesInsideTheMarker` (marker output, no refusal) and `…RefusesFragmentedValue` replace the old `…RefusesMarkerCarriedValue` expectation, which pinned the veto this finding names as the regression. Before: both fail (refusal where the marker is the carrier; no refusal where redaction split the value). |
+| STD-04 | code + test | The whole capture is redacted before the ≤40-line/≤4 KiB window (`:2041-2066`), so a credential value straddling the old raw-byte cut can no longer reach the tail as a fragment. `…RedactsAcrossTheByteWindow` fails on the old order (leaked `90fe`; mutant M2 reproduces it) and passes now. |
+| STD-05 | test + docs | The `operatorToken` carrier moved inside the retained window (`:2106`), the out-of-window line's drop is asserted separately (`:2126-2128`), and §2 no longer miscounts the replaced values (all four are in the window). |
+| STD-06 | docs (plan §1) | The false invariant "commands never overlap within one fixture" is replaced with the actual semantics: the unresolved-journal witness starts its fresh command (`native_witness_test.go:495`) while the setup command's owner processes stay live (`:449-453`), so that start truncates a capture the setup tree may still hold open; no report reads the capture in that window, so the interleave stays latent. |
+| STD-07 | code + probe (oracle gap) | `machine_run_as` derives `HOME` from the guest passwd entry (`linux-v2-native-acceptance.sh:950-953`) and refuses a missing/relative home. Probe (verbatim in the appendix) against the branch-head bytes first shows the defect: B ran with an A-shaped per-account home and an unknown account succeeded with a synthesized home; the final bytes give B its passwd home and refuse the unknown / relative / transport-failure rows (exit 3). The guest transport needs the installed A/B fixture, so no CI job reddens without the derivation: recorded oracle gap (§11). |
+| STD-08 | code + tests | `require_no_excluded_witness_file` also refuses any computed export source path carrying the excluded name as a component (`export-linux-v2-redacted-evidence.py:715-718`), and all three modes pass their computed sources in after the allowlist walk (`:1545`, `:1552`, `:1560`). New tests: subpath source refuses (fails pre-change: no such parameter), compose refusal, legacy refusal (both cover the previously untested call sites; mutants M4/M5a/M5b). Plan §5's claim now matches the guard. |
+| STD-09 | docs | §8's shellcheck row carries the measured 16 findings and histogram; §11/§12 note the correction. Measured: Windows 0.11.0 exit 1, WSL 0.9.0 exit 0 (that build prints findings without signaling), identical line:col-stripped multiset at base (delta 0) on both. |
+| STD-10 | docs | §4's ranges refreshed to the final tree (`:1563`, `:1623-1637`, `:1706-1708`/`:1713-1715`) and §2's double-counted "barrier wait and all eight waits" sentence rewritten (the barrier wait `:4444` is one of the eight). |
+
+Round-1 deltas (compared with the pre-fix copies of the §1 rows):
+
+- `daemon/e2e/production_linux_v2_native_witness_test.go`: helper redaction order and refusal
+  view, budget 5, test updates and two new tests (`:2041-2066`, `:2108`, `:2128-2130`, `:2147`,
+  `:2167`, `:2180`).
+- `scripts/ci/linux-v2-native-acceptance.sh`: `machine_run_as` passwd-derived `HOME`.
+- `scripts/ci/export-linux-v2-redacted-evidence.py` + `scripts/ci/test-linux-v2-evidence.py`:
+  source-component guard, moved call sites, three guard tests and the printer-window pair.
+- `docs/plans/2026-11-24-rf-acc-native-containment-witness-plan.md` and this record: §1/§2/§4/§5
+  and §13.
+
+Counts at the final tree: the e2e capture tests run 2 → 4; `test-linux-v2-evidence.py` 43 → 48
+`OK`; `test-linux-v2-go-events.py` 6 `OK` unchanged.
+
+CI coverage of this round's guards (no new suite was added, so nothing needed wiring): the
+`daemon` job (`.github/workflows/ci.yml`, `ubuntu-latest`, non-root runner) runs
+`go test -race -count=1 -timeout 600s -json ./...` — the four capture tests included — and
+`python3 ../scripts/ci/test-linux-v2-evidence.py`, so M1-M5 redden there; the `machine_run_as`
+mutant reddens no CI job and stays the oracle gap (§11).
+
+Round-1 probes and mutants (verbatim mutation or overlay, then the full sha256 of the mutant
+artifact; every artifact lives outside the repository and every restoration was checked against
+the §1 hash):
+
+M1 — drop the marker strip (mutant of the helper check line):
+
+```
+-	stripped := strings.ReplaceAll(redacted, linuxV2OwnerWitnessStderrRedacted, "")
++	stripped := redacted
+```
+
+Mutant `daemon/e2e/production_linux_v2_native_witness_test.go` sha256
+`fd1169e92b246fda070f267ef9fdeaee9adfc7f317e2fae79fa4dcc9c76583cf`. Result: 2 FAIL
+(`…RedactsValuesInsideTheMarker`, `…RefusesFragmentedValue`), other two PASS; restored hash
+matches §1.
+
+M2 — re-introduce the pre-redaction byte cut (mutant inserts after `redacted := string(contents)`):
+
+```go
+	if len(redacted) > linuxV2OwnerWitnessStderrTailBytes {
+		redacted = redacted[len(redacted)-linuxV2OwnerWitnessStderrTailBytes:]
+	}
+```
+
+Mutant file sha256 `cbb1d66f1c6b0c6fa23dbbd0276c189a95a23cd43f657fee78274085c9a77fa7`. Result: 1
+FAIL (`…RedactsAcrossTheByteWindow`); restored hash matches §1.
+
+M3 — budget back to 9:
+
+```
+-	linuxV2OwnerWitnessStderrLogLines  = 5
++	linuxV2OwnerWitnessStderrLogLines  = 9
+```
+
+Mutant file sha256 `b7a44f88568c5b5bfa17a8e75f8a7dddc2c2251a6099c2b0f63838f789be8e3f`. Result: 1
+FAIL (`WitnessOutputWindowTest.test_report_budget_keeps_its_status_line_and_every_tail_line`);
+restored hash matches §1.
+
+M4/M5 — exporter guard mutants, built in a disposable copy of `scripts/ci` outside the repository:
+restore the shipped exporter, then run
+
+```python
+import pathlib
+p = pathlib.Path("export-linux-v2-redacted-evidence.py")
+text = p.read_text(encoding="utf-8")
+line = '        require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))\n'
+assert text.count(line) == 2, text.count(line)
+compose = text.replace(line, '', 1)
+legacy = compose.replace(line, '', 1)
+p.with_name("export-m5-compose.py").write_text(compose, encoding="utf-8")
+p.with_name("export-m5-legacy.py").write_text(legacy, encoding="utf-8")
+```
+
+M4 (drop the computed-source loop from the exporter): mutant sha256
+`0be15eb2af032c243c666ac3e7dd994e42a0fd20f36650986975529c2809709e`. Result: 1 FAIL
+(`test_excluded_capture_in_a_computed_source_path_refuses`, `SystemExit not raised`); the
+compose/legacy tests stay green. M5-compose (compose guard call removed): mutant sha256
+`746d6e344a1b538c0201b7a89c07e23096974f4997421761b207f8d4c1cb9682`, 1 FAIL (the compose refusal
+test's `owner-witness.stderr` assertion). M5-legacy (both call sites removed): mutant sha256
+`17578407ccd95bc65e9efe1eb4a52d75a624dbc9f1c6f6431f38ba7fcc6c43d3`, 2 FAIL (compose + legacy).
+
+Machine-run-as extraction probe (STD-07 replacement proof; sha256
+`f1ec7bc3896d5d13b2b9b90a16b00f7aad3b32d0966e21165537efcc115b822f`), run against the shipped
+script with the guest transport stubbed:
+
+```bash
+#!/usr/bin/env bash
+# Local probe for the machine_run_as HOME derivation; stubs the guest transport.
+set -u
+machine=symmetry-test-machine
+machine_run_count=0
+fail() { printf 'PROBE-FAIL: %s\n' "$1" >&2; exit 3; }
+declare -A probe_passwd=(
+  [symmetry-a]="symmetry-a:x:52000:52000::<A_HOME>:/bin/bash"
+  [symmetry-b]="symmetry-b:x:52001:52001::<B_HOME>:/bin/bash"
+)
+machine_run() { printf '%s\n' "${probe_passwd[$3]:-}"; }
+sudo() { printf 'sudo %s\n' "$*"; }
+eval "$(sed -n '/^machine_run_as() {/,/^}/p' "$1")"
+echo "--- positive A run"
+machine_run_as symmetry-a symmetry-a /usr/bin/true
+echo "--- positive B run"
+machine_run_as symmetry-b symmetry-b /usr/bin/true
+echo "--- negative unknown user"
+if (machine_run_as symmetry-c symmetry-c /usr/bin/true); then echo 'unexpected success'; else echo "refused exit=$?"; fi
+echo "--- negative relative home"
+probe_passwd[symmetry-c]="symmetry-c:x:53000:53000::relative-home:/bin/bash"
+if (machine_run_as symmetry-c symmetry-c /usr/bin/true); then echo 'unexpected success'; else echo "refused exit=$?"; fi
+echo "--- negative transport failure"
+machine_run() { return 1; }
+if (machine_run_as symmetry-b symmetry-b /usr/bin/true); then echo 'unexpected success'; else echo "refused exit=$?"; fi
+```
+
+The block above is the run artifact with the two guest passwd homes replaced by `<A_HOME>` /
+`<B_HOME>` (the run artifact outside the repository keeps the literal homes and has the sha256
+given above). Observed: A run `--setenv=HOME=<A_HOME>` (unchanged), B run
+`--setenv=HOME=<B_HOME>` (the fix; the pre-fix form set the false A-shaped home for B), and all
+three negative cases refuse with exit 3. The shipped script's `set -Eeuo pipefail` makes a failing
+`getent` take the `|| fail` arm (`set -o pipefail` is not restored in the stub, so the
+transport-failure row is caught by the absolute-home check instead — same refusal).
+
+Final-tree gates this stage ran (exact commands, WSL Ubuntu-24.04 unless noted):
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `gofmt -l .` (`daemon/`) | 0 | 0 lines |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...` (`daemon/`) | 0 | clean |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` (`daemon/`) | 0 | clean |
+| `go test -c -o <tmp> ./e2e` + `-test.run TestLinuxV2OwnerWitnessStderrCapture -test.v` | 0 | 4/4 PASS |
+| `python3 scripts/ci/test-linux-v2-evidence.py` (python 3.12.3) | 0 | `Ran 48 tests … OK` |
+| `python3 scripts/ci/test-linux-v2-go-events.py` | 0 | `Ran 6 tests … OK` |
+| `python3 -m py_compile scripts/ci/export-linux-v2-redacted-evidence.py` | 0 | clean |
+| `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | clean |
+| `shellcheck --severity=warning -f gcc` on the script (Windows 0.11.0 / WSL 0.9.0) | 1 / 0 | 16 findings each, delta 0 versus base (0.9.0 does not signal findings on exit) |
+| `python3 scripts/ci/check-record-cleanliness.py --base 33ad88a9790186e656b76bd66c157b3bd51c9d2c --head <git stash create commit>` (run from the repository root) | 0 | `1 changed record(s) pass the root-only check` |
+| `python3 scripts/ci/check-citation-existence.py --base <same> --head <same>` | 0 | `1 changed document(s) pass the path and symbol check (600 path citation(s))`; the three pre-existing `CLOSED-TODO.md` ignore notes unchanged |
+| `git diff --check` | 0 | clean |
+| host-path scans: the sanitize tool's root set (`/home /Users /root /tmp /var /mnt /private`, drive letters) over the two changed Markdown files → 0 hits; the program rule's case-insensitive profile-directory scan over `git diff origin/main...HEAD` and over a `git stash create` commit of the final bytes → 0 and 0 matches | 0 | no host absolute path in the changed documents and no profile-name path in the branch diff |
