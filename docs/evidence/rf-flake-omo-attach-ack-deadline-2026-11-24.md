@@ -7,8 +7,11 @@ plan/evidence pair (the 5.2, 6.3 and §9 rows this slice closes) and the W6-12 p
 
 **Subject revision (binding):** the worktree at `9d113eb6` with
 `daemon/internal/app/omo_attach_ack_test.go` sha256
-`24931a59649d80e92c5e58bb4566072b0e949ad2d9a1a34cb9381f9143006a19` (`git diff --numstat` 236/21).
-Every gate, pin and mutant row below was executed on these bytes unless the row says otherwise; the
+`ff43ba46a66b00260f7a213458b1b3bbdf516b24ad89c2b0427452ed5b3186ae` (`git diff --numstat`
+against the PR base `5c297c25`: 222/21). The fix r2 stage (§10) removed 14 of the 15 added comment lines and kept one
+on the claim anchor, so the final bytes differ from the `24931a59…` revision (236/21) that most
+rows below name only in comments; §10 re-runs the loaded repeat, the companion, the late-served
+pin, the focused family, `go vet` and the hygiene gates on the final bytes. Earlier revisions: the
 apply stage re-ran every row after the comment rewording and the one-log-per-trajectory change
 moved the test bytes from the implement-stage revision
 `d3f5001647c6e7727a4da487c90ce0cc776759117a2de0db87cfd53cd60e72c9` (234/21).
@@ -32,17 +35,19 @@ moved the test bytes from the implement-stage revision
 
 | file | numstat (add/del) | change |
 | --- | --- | --- |
-| `daemon/internal/app/omo_attach_ack_test.go` | 236 / 21 | P1 timeline; F1 claim-anchored `DeadlineAt`; F2 closed fail-closed trajectory set; the shape-B pin mode; apply stage: comment rewrite, one trajectory log line per run |
-| `docs/plans/2026-11-24-rf-flake-omo-attach-ack-deadline-plan.md` | new 163 lines | the plan, decisions and the command/count table |
-| `docs/evidence/rf-flake-omo-attach-ack-deadline-2026-11-24.md` | new 207 lines | this record |
-| `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 0 / 18, 39 / 0 | the tracked entry moves to the archive with the closure statement |
+| `daemon/internal/app/omo_attach_ack_test.go` | 222 / 21 | P1 timeline; F1 claim-anchored `DeadlineAt`; F2 closed fail-closed trajectory set; the shape-B pin mode; fix r2: the 15 added rationale comment lines cut to the single claim-anchor line |
+| `docs/plans/2026-11-24-rf-flake-omo-attach-ack-deadline-plan.md` | new 194 lines | the plan, decisions and the command/count table |
+| `docs/evidence/rf-flake-omo-attach-ack-deadline-2026-11-24.md` | new 494 lines | this record |
+| `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 0 / 18, 40 / 0 | the tracked entry moves to the archive with the closure statement |
 
-No committed production change; the only product edits were temporary mutants restored
-byte-identical (§5). The added comments are all ≤2 lines (one four-line comment block was trimmed
-before the final gate runs, which is why the earlier intermediate runs below belong to a superseded
-revision). The one-log guard is A/B-verified on the starved-B delegation: a 2 s arm forced into the
-refusal case (scratch offset `-1 s`) logs the identical trajectory line twice on the pre-apply
-bytes and once on the binding bytes (`apply-s2-delegated-{old,new}.log`).
+Counts are `git diff --numstat 5c297c25` (the PR merge-base; `origin/main` has since advanced to
+`477e4c62` by a merge this branch does not carry). No committed production change; the only
+product edits were temporary mutants restored byte-identical (§5). The final test file adds one
+comment line (the claim-anchor coupling); the fixture-design rationale the earlier drafts carried
+inline lives in plan D1/D3/D4/D6 and §§3/8/10 (review r2 P3-6). The one-log guard is A/B-verified
+on the starved-B delegation: a 2 s arm forced into the refusal case (scratch offset `-1 s`) logs
+the identical trajectory line twice on the pre-apply bytes and once on the `24931a59…` bytes
+(`apply-s2-delegated-{old,new}.log`).
 
 ## 3. P1 timeline and the intended trajectory
 
@@ -88,7 +93,7 @@ contract's shape-A hypothesis named (the pipeline is starved *before* the GET is
 the GET does get in, the PUT is refused past the deadline). Both recorded shapes are wall-clock
 misses, not product defects.
 
-### 4.2 Post-fix repeats on the binding revision
+### 4.2 Post-fix repeats (apply-stage revision `24931a59…`; the fix-r2 re-runs on the final bytes are §10.3)
 
 | run | exit | wall | reds / 200 | note |
 | --- | ---: | ---: | ---: | --- |
@@ -103,7 +108,8 @@ Companion trajectory histogram (`-v`, binding revision):
 | starved-A `[]` with `open`+`close` | 4 | — |
 | shape-B pin (`admission_deadline_refused`) | 200 | — |
 
-The 4 starved arm iterations on a nominally idle host are the direct evidence that the 2 s budget
+The fix-r2 re-runs of both commands on the final bytes are §10.3 (0 red / 200 each; the same
+196/4/200 companion split). The 4 starved arm iterations on a nominally idle host are the direct evidence that the 2 s budget
 is not a property the host honours; the closed set is what makes those outcomes green without
 weakening any postcondition. Superseded intermediate runs (extension/relaxation and comment states,
 kept for the audit trail): a 585.260 s loaded run 0 red/200 with 5 of 11 minutes of carrier; a
@@ -136,7 +142,7 @@ and the committed M1-M3 rows carry the CI oracle for their families.
 | P2-after | same edit | same | n/a — pin (green by design) | exit 0, accepted starved-A: `requests=[] native_calls=[start details open details close wait]`, timeline `t0/claim` only | sha256 `b95b4f69…` |
 | shape-B pin | committed `admission_deadline_refused` mode (offset `-1 s`) | `-count=1 -v -run '…/admission_deadline_refused'` | n/a — pin; a removal reddens through M3 | exit 0, `requests=[] native_calls=[]`, refusal classification asserted; green in every 200-count repeat (200 pins per run) | committed |
 | in-flight pin | fixture transport sleeps 2.1 s before the PUT round trip | `-count=1 -v -run '…/admission_deadline$'` | oracle gap (scratch pin) | exit 0, accepted in-flight readback: `requests=[GET]`, `first_request=+0.058 s(until=+1.944 s)`, `after_put_return=+2.159 s`, PUT refused by the expired budget | binding bytes |
-| late-served pin (fix r1) | fixture holds the PUT's server-side handling to 50 ms past the anchored deadline (body buffered at handler entry; `<scratch>/fix-pin-lateserved.patch`, pin bytes sha256 `2ed35401…`) | `GOMAXPROCS=8 -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved'` beside one carrier at a time | oracle gap (scratch pin); M4/M5 mutate its expectations | exit 0, 200/200 green: 197 late-served with the PUT entry 50-55 ms past the anchored deadline (`until=-0.050..-0.055 s`; first request live by +1.709..+1.966 s) + 3 accepted starved-A (`requests=[]`, native open+close) | binding bytes (`24931a59…` re-verified) |
+| late-served pin (fix r1) | fixture holds the PUT's server-side handling to 50 ms past the anchored deadline (body buffered at handler entry; `<scratch>/fix-pin-lateserved.patch`, pin bytes sha256 `2ed354019cd225f4c5a3e75e23da717c28b93785a0b90a389cf08daa4c860d7d`) | `GOMAXPROCS=8 -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved'` beside one carrier at a time | oracle gap (scratch pin); M4/M5 mutate its expectations | exit 0, 200/200 green: 197 late-served with the PUT entry 50-55 ms past the anchored deadline (`until=-0.050..-0.055 s`; first request live by +1.709..+1.966 s) + 3 accepted starved-A (`requests=[]`, native open+close) | `24931a59…`; the final-bytes rebuild and re-run are §10.1-§10.2 |
 | M1 | arm's `afterPut` returns immediately | `-count=1 -v -run '…/admission_deadline$'` ×2 | `daemon`, `daemon-windows` (non-root) | exit 1 ×2, `requests=[GET PUT GET]`, `native_calls=[… start_turn wait_turn …]`, `terminal_state=completed`, the classifier naming the trajectory outside the closed set | binding bytes |
 | M2 | product `goal_delivery.go` uncertain readback on `controlContext(context.WithoutCancel(ctx))` (guard included) | same ×2 | `daemon`, `daemon-windows` (non-root) | exit 1 ×2, `requests=[GET PUT GET]`, `start_turn`, `terminal_state=completed` | sha256 `89a9857d…` |
 | M3 | product `goal_admission_tx.go` elapsed-deadline refusal removed | `-count=1 -v -run '…/admission_deadline_refused'` | `daemon`, `daemon-windows` (non-root) | exit 1, the pin's own refusal assertion: `deadline refusal did not precede native launch: requests=[] native_calls=[start details open details close wait]` | sha256 `76bcca94…` |
@@ -174,6 +180,10 @@ stays red.
 
 ## 7. Gates
 
+Apply-stage rows on `24931a59…`; the fix-r2 re-runs of the loaded repeat, the companion, the
+focused family and `go vet` on the final bytes are §10.3 (the other rows were not re-run: the byte
+delta is comments only).
+
 | gate | command (cwd) | exit | result |
 | --- | --- | ---: | --- |
 | loaded repeat | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline' ./internal/app/` + carrier (`daemon/`, worktree) | 0 | 0 red / 200, 482.614 s, carrier overlap full window |
@@ -184,7 +194,7 @@ stays red.
 | format | `gofmt -l internal/app/omo_attach_ack_test.go` | 0 | empty |
 | diff hygiene | `git diff --check` (worktree root) | 0 | clean |
 | census | §6 | — | no assertion removed; every accepted trajectory strict |
-| citation existence | emulation commit in the `after` clone: `python3 scripts/ci/check-citation-existence.py --repo . --base 9d113eb6 --head HEAD` | 0 | `1 changed document(s) pass the path and symbol check (573 path citation(s))`; three pre-existing ignore-covered notices on `docs/archive/CLOSED-TODO.md` |
+| citation existence | emulation repo of the final tree: `python3 scripts/ci/check-citation-existence.py --repo . --base 28b471f --head HEAD` | 0 | `1 changed document(s) pass the path and symbol check (580 path citation(s))`; three pre-existing ignore-covered notices on `docs/archive/CLOSED-TODO.md` (fix r2 re-measurement; §10.4) |
 | changed-file clone gate | `python3 scripts/ci/jscpd-changed.py --repo . --base 9d113eb6 --head HEAD` | 2 | **not run locally**: the pinned `jscpd` is not installed in this worktree (no `node_modules`); the CI `contracts` job owns the gate. The added blocks are ≤6 lines against the 14-line/275-token threshold, and the plan and this record share no verbatim block; recorded as a verification limit, not a pass |
 
 Not run here: CI `daemon` / `daemon-windows` on a PR head (the stage must not push; conductor-owned
@@ -219,6 +229,24 @@ green).
   production-bound arm (W4-13 §5.2) and was not converted.
 - The `afterPut` *entry* mark is recorded but not asserted: the PUT leg's resolution can be starved
   past the deadline (observed once), so liveness binds the served requests and the hold's return.
+- **Late-branch PUT-error allowance (review r2 P3-4):** the late branch admits `io.EOF` or
+  `context.DeadlineExceeded`; the deterministic pin and the M4 control both serve only
+  `context.DeadlineExceeded` (M4 reds under an EOF-only allowance), so the EOF alternative is
+  accepted but executed by no pin. Both are lost-acknowledgement classes, not a wildcard; recorded
+  rather than tightened because the unforced superseded late-served reds carried the hijack `EOF`
+  class.
+- **`caller_deadline` has no own pin (review r2 P3-5):** every recorded pin and repeat selects the
+  `admission_deadline` subtests (Go's unanchored `-run` never matches `caller_deadline`). Review r2's
+  scratch probe applied the same stall to `caller_deadline` and took the same branch green 3/3
+  (`put=+2.05s(until=-0.050s)`) with the same classification, so that arm's adoption of the closed
+  set is low-risk but unpinned; recorded as a residual.
+- **Starved-B wording (review r2 P3-7):** the contract's F2 bullet says starved-B asserts "no turn,
+  exact pending"; the shipped `assertRefusedBeforeNativeLaunch` instead requires zero
+  pending/delivered/retired deliveries, which is the correct reading — the product queues the
+  session-attach delivery only after `resolveGoalAdapter` (`goal_admission_tx.go:216`), so an
+  already-elapsed deadline refuses before any delivery exists and "exact pending" would have nothing
+  to compare against. Plan D3/D5 and the shipped assertion match the product; the contract sentence
+  is the stale one, recorded so the ruling is not misread as a weakening.
 
 ## 9. Fix stage (review r1 findings, 2026-11-25)
 
@@ -232,7 +260,8 @@ are recorded once, in the plan's D3a; this section carries the fix stage's evide
 ### 9.1 Late-served pin (STD-A01)
 
 Scratch edit on the shipping bytes (`<scratch>/fix-pin-lateserved.patch`, numstat vs the shipping
-file 43/1; pin file sha256 `2ed35401…`, patch sha256 `316ad1a7…`): a fixture hook stalls a PUT's
+file 43/1; pin file sha256 `2ed354019cd225f4c5a3e75e23da717c28b93785a0b90a389cf08daa4c860d7d`,
+patch sha256 `316ad1a7819d8d11ce8ff170ff89fcaa9eb39e1e5cd674823ef81f3b9f1cff55`): a fixture hook stalls a PUT's
 server-side handling before the `put` mark — the handler buffers the request body at entry and waits
 for a release at the anchored deadline + 50 ms — so the recorded PUT entry lands past the deadline
 while the readback GET stays live and the product serves both requests. The test waits on a channel
@@ -289,8 +318,9 @@ and the real terminal classification; the probe reds by design as the recorded r
   PR head: pending (conductor-owned)." (SPEC-A02).
 - Host paths in these records were replaced by the `<worktree>`/`<scratch>` placeholders (§1); no
   verbatim log text was rewritten and no pre-existing entry was touched.
-- No test byte changed: the binding file is `24931a59…` before and after the stage, so §4/§7's
-  measured numbers stand as recorded (re-verified, not re-measured).
+- No test byte changed at the r1 stage: the file was `24931a59…` before and after it, so §4/§7's
+  numbers stand as recorded for that revision (re-verified, not re-measured); fix r2 changes the
+  bytes (§10) and re-runs the loaded repeat, the companion, the pin, the focused family and `go vet`.
 
 ### 9.4 Fix-stage gates (document delta; no test byte changed)
 
@@ -298,14 +328,167 @@ and the real terminal classification; the probe reds by design as the recorded r
 | --- | --- | ---: | --- |
 | focused family | `go test -count=1 -timeout 600s -run 'TestOmOAttachAckRegression' ./internal/app/` (`daemon/`) | 0 | `ok … 23.582s`; the 8 test functions of the owned file, unchanged in count |
 | format / hygiene | `gofmt -l internal/app/omo_attach_ack_test.go`; `git diff --check` | 0 | empty / clean |
-| binding re-verify | `sha256sum daemon/internal/app/omo_attach_ack_test.go` (and the restored scratch copy) | 0 | `24931a59…` both; the pin copy was `2ed35401…` before the restore |
+| binding re-verify | `sha256sum daemon/internal/app/omo_attach_ack_test.go` (and the restored scratch copy) | 0 | `24931a59…` both; the pin copy was `2ed354019cd225f4c5a3e75e23da717c28b93785a0b90a389cf08daa4c860d7d` before the restore |
 | late-served pin | §9.1's runs (`<scratch>/after/daemon`) | 0 | 200/200 green: 197 late-served + 3 accepted starved-A; 40/40 under 3-process load; WSL `-race` green |
 | expectation controls | §5's M4/M5 rows and the readback-crossing probe | 1 / 1 / 1 | each red for its named expectation; the probe red by design |
 | citation existence | emulation repo of the final tree (`git archive HEAD` plus the fix-stage documents, committed; `python3 scripts/ci/check-citation-existence.py --repo . --base <base> --head <head>`) | 0 | `1 changed document(s) pass the path and symbol check (580 path citation(s))`; the three pre-existing ignore-covered notices unchanged |
 | record path scans | the added lines of `git diff origin/main -- docs`, the two new records read whole, and the committed branch diff, each checked for drive-letter, guest-mount, temp, home and profile-directory tokens (patterns described, not pasted, per the stage brief) | 0 | no hits; no host path and no account name in any of the records |
-| comment runs | added Go comment lines in `git diff origin/main...HEAD -- daemon/` (longest consecutive run) | 0 | 2, at the plan's cap |
+| comment runs | added Go comment lines in `git diff origin/main -- daemon/` (longest consecutive run) | — | 2 at the r1 stage; 1 after fix r2 (§10.3) |
 
-Not re-run at this stage: the loaded repeat and the companion (the test bytes are unchanged,
-`24931a59…` re-verified, so §4.2/§7's measured numbers stand), CI `daemon`/`daemon-windows` on a PR
-head (conductor-owned), and the changed-file clone gate (pinned `jscpd` unavailable locally; CI's
-`contracts` job owns it).
+Not re-run at this stage: CI `daemon`/`daemon-windows` on a PR head (conductor-owned) and the
+changed-file clone gate (pinned `jscpd` unavailable locally; CI's `contracts` job owns it); fix r2
+re-runs the loaded repeat, the companion, the pin, the focused family and `go vet` on the final
+bytes (§10.3), and the remaining `24931a59…` rows stand because the byte delta is comments only.
+
+## 10. Fix stage 2 (review r2: P2-1, P3-2..P3-7, 2026-11-25)
+
+Review r2 (`279-opus-review-1.md`) **shipped** the PR with one P2 and five P3 record findings: the
+late-served pin was not retained as a verifiable artifact and its recorded hashes were truncated
+(P2-1); the plan/§7 citation count and §2's numstat rows were stale (P3-2, P3-3); and three
+accepted-set / wording residuals were to be recorded (P3-4, P3-5, P3-7). The fix r2 stage drops
+the eight fixture-rationale comment blocks — 14 of the 15 added comment lines — and keeps the
+single line on the claim-anchor coupling (P3-6), then re-runs the key gates on the final
+comment-trimmed bytes and inlines the pin below. No non-comment line changed; no product, budget,
+timeout, retry, skip or wildcard; no assertion removed.
+
+### 10.1 The late-served pin artifact (P2-1)
+
+The pin is a scratch copy of the shipping test file plus one added subtest mode
+(`admission_deadline_lateserved`): the fixture holds a PUT's server-side handling (body buffered at
+handler entry) until 50 ms past the anchored deadline, waits (bounded at 5 s) for the handler to
+record the PUT, and then runs the ordinary closed-set assertion, whose complement predicate
+selects the late-served branch.
+
+- r1 artifact (build on `24931a59…`, superseded by the comment trim): pin file sha256
+  `2ed354019cd225f4c5a3e75e23da717c28b93785a0b90a389cf08daa4c860d7d`; patch sha256
+  `316ad1a7819d8d11ce8ff170ff89fcaa9eb39e1e5cd674823ef81f3b9f1cff55`.
+- r2 artifact (build on the final bytes `ff43ba46…`): pin file sha256
+  `84540b3257145f342b555205c41aeb3dcfa18c2fc7464ee27b9f50fc8a4ce923`; canonical patch (context 3)
+  sha256 `7a20ae37a8f7629d38c2353a532f260960ce92a3bfe9b5b3225ef9dfa234b4a0`. The block below renders
+  the same patch with context 0 so the record's whitespace gate stays clean: every changed line is
+  byte-identical and only the context lines are omitted (sha256
+  `bbbbdc730c9efc7ba1e8253bcc62fe34e3d35a325111938ee9fbe42331cff043`); it applies with `patch -p1`
+  and reproduces the pin file byte-for-byte (verified).
+
+Rebuild, re-apply and run through `go test -overlay` (placeholders per §1; the overlay JSON paths
+must be absolute for the go command):
+
+```
+mkdir -p <scratch>/r2/daemon/internal/app
+cp <worktree>/daemon/internal/app/omo_attach_ack_test.go <scratch>/r2/daemon/internal/app/
+cd <scratch>/r2 && patch -p1 < fix-pin-lateserved-r2-u0.patch
+sha256sum daemon/internal/app/omo_attach_ack_test.go   # 84540b32… (the pin file)
+diff -u --label a/daemon/internal/app/omo_attach_ack_test.go \
+  --label b/daemon/internal/app/omo_attach_ack_test.go \
+  <worktree>/daemon/internal/app/omo_attach_ack_test.go daemon/internal/app/omo_attach_ack_test.go \
+  | sha256sum    # 7a20ae37… (regenerates the canonical context-3 patch)
+printf '%s\n' '{"Replace":{"<worktree>/daemon/internal/app/omo_attach_ack_test.go":"<scratch>/r2/daemon/internal/app/omo_attach_ack_test.go"}}' > overlay.json
+cd <worktree>/daemon && GOMAXPROCS=8 timeout 30m go test -overlay <scratch>/r2/overlay.json \
+  -count=200 -timeout 1500s -v \
+  -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline_lateserved' \
+  ./internal/app/
+```
+
+```diff
+--- a/daemon/internal/app/omo_attach_ack_test.go
++++ b/daemon/internal/app/omo_attach_ack_test.go
+@@ -3,0 +4 @@
++	"bytes"
+@@ -196 +197,5 @@
+-	timeline            omoAttachAckTimeline
++	// Scratch pin (fix r1): stall the PUT's server-side handling across the anchored
++	// deadline; putReached closes once the stalled handler has recorded the PUT.
++	putStall   func(*http.Request)
++	putReached chan struct{}
++	timeline   omoAttachAckTimeline
+@@ -254,0 +260,3 @@
++	if request.Method == http.MethodPut && fixture.putStall != nil {
++		fixture.putStall(request)
++	}
+@@ -263,0 +272,4 @@
++		if fixture.putReached != nil {
++			close(fixture.putReached)
++			fixture.putReached = nil
++		}
+@@ -798 +810 @@
+-	for _, mode := range []string{"caller_cancel", "caller_deadline", "admission_deadline", "admission_deadline_refused", "request_deadline"} {
++	for _, mode := range []string{"caller_cancel", "caller_deadline", "admission_deadline", "admission_deadline_refused", "admission_deadline_lateserved", "request_deadline"} {
+@@ -803,0 +816 @@
++			var putServed chan struct{}
+@@ -818,0 +832,23 @@
++			case "admission_deadline_lateserved":
++				fixture.claimDeadlineOffset = 2 * time.Second
++				fixture.afterPut = func(requestContext context.Context) { <-requestContext.Done() }
++				release := make(chan struct{})
++				putServed = make(chan struct{})
++				fixture.putStall = func(request *http.Request) {
++					body, err := io.ReadAll(request.Body)
++					if err == nil {
++						request.Body = io.NopCloser(bytes.NewReader(body))
++					}
++					<-release
++				}
++				fixture.putReached = putServed
++				go func() {
++					for {
++						deadline := fixture.timeline.deadlineSnapshot()
++						if !deadline.IsZero() && time.Now().After(deadline.Add(50*time.Millisecond)) {
++							close(release)
++							return
++						}
++						time.Sleep(5 * time.Millisecond)
++					}
++				}()
+@@ -825,0 +862,6 @@
++			case "admission_deadline_lateserved":
++				select {
++				case <-putServed:
++				case <-time.After(5 * time.Second):
++				}
++				fixture.assertBudgetArmTrajectory(journal)
+```
+
+### 10.2 Pin runs on the final bytes
+
+| run | command (cwd `<worktree>/daemon`) | exit | result |
+| --- | --- | ---: | --- |
+| single | `go test -overlay <scratch>/r2/overlay.json -count=1 -timeout 300s -v -run '…/admission_deadline_lateserved' ./internal/app/` | 0 | late branch: `requests=[GET PUT]`, `first_request=+0.049s(until=+1.955s)`, `put=+2.054s(until=-0.050s)`, 2.27 s arm |
+| 200 repeats | `GOMAXPROCS=8 timeout 30m go test -overlay <scratch>/r2/overlay.json -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved' ./internal/app/` beside the D7 carrier pair (exit 0: 39.696 s backpressure + 5.488 s `internal/state`) | 0 | 448.542 s; 200 `RUN` / 200 `PASS` / 0 red: **198 late-served** (`requests=[GET PUT]`; PUT entry 0.050-0.055 s past the anchored deadline, mean 0.053 s; first request live by 1.670-1.966 s, mean 1.943 s) + **2 accepted starved-A** (`requests=[]`, native open+close, `t0`/`claim`-only timelines) |
+
+Histogram (200 iterations): 198 late-served / 2 starved-A / 0 other / 0 red. The PUT-error class
+the pin serves is `context.DeadlineExceeded`; the M4/M5 expectation controls (§5) still red under
+their altered branch expectations. The carrier pair finished early in this window (39.7 s + 5.5 s);
+the pin's hold forces the shape regardless of host load.
+
+### 10.3 Final-bytes gate re-runs
+
+| gate | command (cwd `<worktree>/daemon` unless noted) | exit | result |
+| --- | --- | ---: | --- |
+| loaded repeat | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline' ./internal/app/` beside 25 backpressure carrier rounds (322.748 s) then 2 `internal/state` runs (7.213 s), carrier exit 0 | 0 | 0 red / 200 in 468.956 s |
+| companion (`-v`, no carrier) | the same command plus `-v` | 0 | 0 red / 200 in 468.213 s; 400 trajectory lines: 196 intended (margin min 1.140 s / max 1.965 s / mean 1.935 s), 4 starved-A, 200 shape-B pins |
+| focused family | `go test -count=1 -timeout 600s -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 64.030s` (every test of the owned file) |
+| vet | `go vet ./internal/app/...` and `go vet ./...` (the module root is `<worktree>/daemon`, so the vet pattern is module-relative) | 0 / 0 | clean, empty output |
+| format / hygiene | `gofmt -l daemon/internal/app/omo_attach_ack_test.go`; `git diff --check` (worktree root) | 0 | empty / clean |
+| comment census | `git diff 5c297c25 -- daemon/internal/app/omo_attach_ack_test.go | grep -cE '^\+[[:space:]]*//'` | — | 1 (the claim-anchor line); the working-tree delta vs the tip is +1/−15, all comments |
+
+### 10.4 Record corrections (P3-2, P3-3)
+
+- The plan's citation row and §7's: 573 → **580** path citations, re-measured in the emulation repo
+  of the final tree (`28b471f`..`HEAD`).
+- §2's numstat rows restated against the PR merge-base (`git diff --numstat 5c297c25`, working
+  tree): test file 222/21, plan 194/0, record 494/0; `docs/TODO.md` 0/18 and
+  `docs/archive/CLOSED-TODO.md` 40/0 (the earlier 163/207/39 numbers were the apply-stage interim
+  state).
+- §5/§9.1/§9.4's truncated pin hashes replaced by the full 64-hex digests (§10.1).
+
+### 10.5 Residuals recorded (P3-4, P3-5, P3-7)
+
+The three residuals are recorded in §8: the late branch's unexecuted `io.EOF` alternative (P3-4),
+the `caller_deadline` arm's lack of its own pin (P3-5; review r2's scratch probe reproduced the
+same late branch there 3/3), and the starved-B contract wording (P3-7; the shipped zero-delivery
+assertion is the correct one).
+
+Not run at this stage: CI `daemon`/`daemon-windows` on a PR head (conductor-owned), the WSL `-race`
+oracle and the mutant rows re-run on the final bytes (the byte delta is comments only, so their
+`24931a59…`/pin-build results stand), and the changed-file clone gate (pinned `jscpd` unavailable
+locally; CI's `contracts` job owns it).

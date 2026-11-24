@@ -56,8 +56,6 @@ func (client *omoAttachAckControl) Claim(ctx context.Context, runID string, requ
 	return claim, err
 }
 
-// The product parses the admission from the claim's Work (app.go), so the 2 s budget is
-// anchored here: every stage before this point would otherwise race the arm's own clock.
 func (client *omoAttachAckControl) anchorClaimDeadline(offset time.Duration) {
 	deadline := time.Now().Add(offset)
 	admission := client.admission
@@ -113,8 +111,6 @@ func (transport omoAttachAckRoundTripper) RoundTrip(request *http.Request) (*htt
 	return transport(request)
 }
 
-// A loaded host starves the fixture pipeline past the arm's own budget; the recorded
-// stage margins are what the trajectory assertion and the evidence runs read.
 type omoAttachAckTimeline struct {
 	mu       sync.Mutex
 	deadline time.Time
@@ -195,8 +191,7 @@ type omoAttachAckFixture struct {
 	mutate       func(*control.GoalSessionReceipt)
 	afterPut     func(context.Context)
 	afterRead    func()
-	// Non-zero: Claim re-anchors admission.Limits.DeadlineAt to Now()+offset
-	// before delegating, where the product parses the claim's Work.
+	// Non-zero: Claim re-anchors Limits.DeadlineAt where the product reads it (app.go:1359).
 	claimDeadlineOffset time.Duration
 	timeline            omoAttachAckTimeline
 }
@@ -383,8 +378,6 @@ func (fixture *omoAttachAckFixture) run(ctx context.Context) state.RunJournal {
 	return journal
 }
 
-// The exact-ready delivery is captured from the store as the product enters the readback
-// call; starved trajectories serve no PUT, so the store is the only source.
 func (fixture *omoAttachAckFixture) capturePendingAttach() {
 	journal, err := fixture.app.store.LoadJournal(state.RunKey{RunID: omoAttachAckRunID, Generation: 1})
 	if err != nil || len(journal.PendingGoalDeliveries) != 1 {
@@ -456,15 +449,12 @@ func (fixture *omoAttachAckFixture) assertExactPending(journal state.RunJournal)
 	}
 }
 
-// The 2 s arms race a wall clock against host-dependent pipeline latency; exactly the
-// fail-closed trajectories the probe and pins recover are accepted, everything else red.
 func (fixture *omoAttachAckFixture) assertBudgetArmTrajectory(journal state.RunJournal) {
 	fixture.t.Helper()
 	fixture.mu.Lock()
 	methods := append([]string(nil), fixture.methods...)
 	fixture.mu.Unlock()
 	calls := fixture.session.callsSnapshot()
-	// The refusal branch logs the trajectory itself; the guard keeps one line per run.
 	refused := len(methods) == 0 && countNativeStartCall(calls, "open") == 0
 	if testing.Verbose() && !refused {
 		fixture.t.Logf("attachment trajectory: requests=%v native_calls=%v timeline=%s", methods, calls, fixture.timeline.format())
@@ -493,8 +483,6 @@ func (fixture *omoAttachAckFixture) assertBudgetArmTrajectory(journal state.RunJ
 	}
 }
 
-// The served pair consumed the expiry inside the PUT leg: the hold returns no earlier
-// than the anchored deadline, and the late branch inverts the liveness predicate.
 func (fixture *omoAttachAckFixture) assertServedBudgetPlacement(journal state.RunJournal) {
 	fixture.t.Helper()
 	deadline := fixture.timeline.deadlineSnapshot()
@@ -518,8 +506,6 @@ func (fixture *omoAttachAckFixture) assertServedBudgetPlacement(journal state.Ru
 	fixture.assertTerminalFailure(journal, "attach native Goal session")
 }
 
-// An already-elapsed admission deadline refuses before any native launch; nothing
-// durable may exist behind the refusal and the classification is the recorded one.
 func (fixture *omoAttachAckFixture) assertRefusedBeforeNativeLaunch(journal state.RunJournal) {
 	fixture.t.Helper()
 	fixture.mu.Lock()

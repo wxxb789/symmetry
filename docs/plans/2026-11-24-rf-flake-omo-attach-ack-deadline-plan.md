@@ -95,11 +95,12 @@ rationale live in this section):
   other. No wildcard acceptance, no budget raise, no retry, no skip, no removed assertion; the
   mutants below re-verify that defect detection is unchanged (M1/M2/M3 still red).
 
-The late-served family's deterministic pin is recorded in the evidence record §9 (fix r1): the
-fixture holds the PUT's server-side handling until 50 ms past the anchored deadline, and the branch
-executes green on the shipping bytes under load (197/200 runs took the late branch; the other 3
-were the accepted starved-A family), plus once under WSL `-race`. Reverting to (a) remains a
-two-branch deletion; it is the recorded rejected alternative, not an open question.
+The late-served family's deterministic pin is recorded in the evidence record §9 (fix r1) and
+retained re-appliable in §10 (fix r2): the fixture holds the PUT's server-side handling until 50 ms
+past the anchored deadline, and the branch executes green on the shipping bytes under load (fix r1:
+197/200 runs took the late branch, the other 3 were the accepted starved-A family; the fix-r2
+re-run on the final bytes: 198/200 plus 2 starved-A), plus once under WSL `-race`. Reverting to (a)
+remains a two-branch deletion; it is the recorded rejected alternative, not an open question.
 
 ## D4. Starved-A's exact-pending capture
 
@@ -166,14 +167,28 @@ in the evidence record §4.2.
 | focused family | `go test -count=1 -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 24.778s` |
 | vet / format | `go vet ./...`; `gofmt -l internal/app/omo_attach_ack_test.go` | 0 | clean, empty |
 | pins and mutants | §5 of the evidence record | P2-before 1, P2-after 0, in-flight pin 0, M1 1 (×2; M1′ 1, deterministic), M2 1 (×2), M3 1 | product files restored to sha256 `89a9857d…` (`goal_delivery.go`), `76bcca94…` (`goal_admission_tx.go`), `b95b4f69…` (`harness_test.go`) |
-| citation existence (emulation) | `python3 scripts/ci/check-citation-existence.py --repo . --base 9d113eb6 --head HEAD` | 0 | 573 path citations pass |
+| citation existence (emulation) | `python3 scripts/ci/check-citation-existence.py --repo . --base 9d113eb6 --head HEAD` | 0 | 580 path citations pass (review r2 reproduced this count on the delivered bytes and the fix-r2 emulation of the final tree agrees; the apply-stage interim value was 573) |
 | changed-file clone gate | `python3 scripts/ci/jscpd-changed.py …` | 2 | not run: pinned `jscpd` not installed locally (verification limit; CI owns it) |
 
-Fix-stage rows (review r1, 2026-11-25; the test bytes are unchanged — binding sha256 re-verified
-`24931a59…`; full rows in the evidence record §9):
+Fix-stage rows (review r1, 2026-11-25; that stage left the test bytes at `24931a59…`, re-verified;
+full rows in the evidence record §9):
 
 | row | command | exit | result |
 | --- | --- | ---: | --- |
 | late-served pin | `GOMAXPROCS=8 go test -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved' ./internal/app/` (`after` clone + `<scratch>/fix-pin-lateserved.patch`, pin bytes sha256 `2ed35401…`) beside bounded carrier rounds (one at a time) | 0 | 200/200 green: 197 late-served (PUT entry 50-55 ms past the anchored deadline) + 3 accepted starved-A |
 | pin `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <scratch>/after/daemon && go test -race -count=1 -timeout 1200s -run …/admission_deadline_lateserved ./internal/app/'` | 0 | `ok … 4.412s`, no race report |
 | pin-expectation mutants M4/M5, readback-crossing probe | the same pin command (M4: EOF-only allowance; M5: wrong terminal message; probe: the hold moved to the GET) | 1 / 1 / 1 | M4 names the observed `context deadline exceeded`, M5 the real terminal classification; the probe reds by design as the recorded `[GET]`/`putErr=nil` residual shape |
+
+Fix-stage rows 2 (review r2, 2026-11-25; the comment trim moved the test bytes to
+`ff43ba46a66b00260f7a213458b1b3bbdf516b24ad89c2b0427452ed5b3186ae`; the pin is retained
+re-appliable in the evidence record §10 with the overlay recipe and the full 64-hex hashes):
+
+| row | command | exit | result |
+| --- | --- | ---: | --- |
+| comment trim (P3-6) | working-tree diff vs the tip | — | 8 rationale blocks (14 of the 15 added comment lines) dropped; one line kept on the claim anchor; no non-comment line changed |
+| late-served pin (P2-1, final bytes) | `GOMAXPROCS=8 timeout 30m go test -overlay <scratch>/r2/overlay.json -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved' ./internal/app/` beside the D7 carrier pair | 0 | 200/200 green: 198 late-served (PUT entry 50-55 ms past the anchored deadline) + 2 accepted starved-A; pin file sha256 `84540b32…`, patch sha256 `7a20ae37…` (evidence §10.1) |
+| loaded repeat (final bytes) | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run '…/admission_deadline' ./internal/app/` beside 25 backpressure rounds + 2 `internal/state` runs | 0 | 0 red / 200 in 468.956 s |
+| companion (`-v`, no carrier) | the same command plus `-v` | 0 | 0 red / 200 in 468.213 s; 196 intended (margin 1.140-1.965 s) / 4 starved-A / 200 pins |
+| focused family | `go test -count=1 -timeout 600s -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 64.030s` |
+| vet / format / hygiene | `go vet ./internal/app/...`; `gofmt -l internal/app/omo_attach_ack_test.go`; `git diff --check` (`daemon/`, worktree root) | 0 | clean, empty, clean |
+| citation existence (final tree) | `python3 scripts/ci/check-citation-existence.py --repo . --base <emulation-base> --head HEAD` (emulation repo of the final tree) | 0 | `1 changed document(s) pass the path and symbol check (580 path citation(s))` |
