@@ -18,14 +18,19 @@ real workflow.
 
 | File | sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `05d81032f184bc09cf35e64c0691b073b298bad84da7c784fd8fbe4399d09689` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `ab44c6148972c742943f2bc03c51ae0a70d5e71e370f7779e2ca0fbb28264b72` |
 | `scripts/ci/linux-v2-native-rootfs-base.sh` | `d4f91792b7954acb9b592b4599790d99cc37dfadc13fc21c921c5f05691b7ccc` |
 | `scripts/ci/write-linux-v2-owner-request.py` | `17c36b13e25cf50813d4dd74155a69684a0094dedd9b7ba49cffb67ce1eb7b46` |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `76ad9dfb89d4bc95ad26440f7d59c5c0f36f5d456307cfa8a1d46d3697645fa7` |
 | `.github/workflows/linux-native-v2-acceptance.yml` | `c0d18435e86758e00cef0b176248eed696e70ec397c883b9b7b46c17740dc890` |
 | `daemon/internal/linuxpreflight/systemd_linux.go` | `37045972b7c6aba631045e5a9a348a9f51a0eae0351eef15b6908bdb4724ea92` |
-| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `08b5367dc7a8509c421d7a0981d042b615386f0c95bfad733e7888e06dbccbc3` |
+| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `465293fa3ac3b0c385fabd38f6b385da986f86a7305d7958e9b335a2c7d9f1fd` |
 | this record | no self-referential hash |
+
+Fix-stage refresh (2026-11-24, §10): the acceptance-script row above is the fix-stage bytes; the
+final all-14 run `45402706492` bound the pre-fix bytes (`05d81032…`, §3.15/§9), and only
+§10.1-§10.3's diagnostic-path regions differ. The preflight row above is the merged head's value
+(§9).
 
 The cap-ruling heads progress as `9fadfda2` (round 7: round-6 bytes plus the scoped
 `safe.directory` guard, §3.7.6), `26ba0065` (round 8: the ACK-loss fix and the first failure
@@ -35,8 +40,8 @@ the pi share directory mode, the A-view tool fences and the containment early-ph
 table's hashes), `daeaedda` (round 11: the explicit tool-tree modes A's own fences pin, §3.11),
 `99277aed` (round 12: the fixed-B XDG cache and Pi session directory, §3.12.1, run 12's hash),
 `d4fdb149` (round 13: the fifth leg's pin re-point, §3.14) and `8339f991` (round 13b: the
-parent-death fixture name width, §3.15 — the head of the final all-14 run `45402706492` and this
-table's hash).
+parent-death fixture name width, §3.15 — the head of the final all-14 run `45402706492`; §10
+replaced this table's script row with the fix-stage bytes).
 Verified with `git cat-file blob <head>:<path>` against the worktree at each push;
 each commit's tree is the push-time worktree (PR head plus this stage's files) with the two
 throwaway files below, deleted with the branch: `.github/workflows/scratch-native-burndown.yml`,
@@ -947,6 +952,11 @@ contract's dummy `gho_scratchdummy0000000000000000000000000000` — one dummy `s
 the daemon's own stderr prefixes only, and the added probes print unit state and the App's own
 refusal lines, none of which carry credentials.
 
+Fix-stage update (2026-11-24, §10.6): the review's STD-01…STD-03 changed the acceptance script, so
+§1's script row is refreshed and §10.6 re-runs the script gates at that tree (`bash -n` 0;
+`shellcheck` 16 findings, delta 0; `actionlint` 0). The rows above describe the implement stage's
+trees.
+
 ## 5. Reached failure classes behind the smoke
 
 ### 5.1 Class C — named from the journal; root outside the owned files
@@ -1375,6 +1385,17 @@ the two throwaway files stay untracked in the working tree and never reach the P
   goal. Every credential-dependent step remains unproven: the scratch doubles never reach a
   provider turn or a GitHub provider action.
 
+- Fix-stage residual (STD-06, one-shot F2 sweep; read at the fix tree): the retirement runs once
+  per case set inside `prepare` (`scripts/ci/provision-linux-v2-control-claims.exs:101` calling
+  `:425-436`), while the workflow keeps running later case sets after a failed one
+  (`.github/workflows/linux-native-v2-acceptance.yml:136-152`). If a set's teardown cannot prove
+  its guest stopped (`linux-v2-native-acceptance.sh:238`/`:246` set `guest_stopped=0`), the
+  surviving guest's daemon can heartbeat its own earlier runtime back to `online`
+  (`control/lib/symmetry_control/orchestration/registry.ex:263`), and that row carries the
+  previous set's `repository_resource_id`, so the class-E guard fires again. Not observed in any
+  run; the workflow's `SYMMETRY_HEARTBEAT_INTERVAL_MS: "3600000"` (same file, `:44`) keeps the
+  window near one hour. If it ever fires: re-sweep at `schedule` time.
+
 ## 9. Apply stage (2026-11-24, after the simplify review of `9d113eb6..4c305861`)
 
 Applied from the accepted simplify set (no commit: the stage's rules forbid one; the deletions and
@@ -1415,3 +1436,103 @@ green: `go test ./internal/linuxpreflight/ -count=1` exit 0 (the accept block an
 `owner/<key>` refuse rows included), `go vet` 0, `gofmt -l` empty (Go 1.27.4, `GOOS=linux`). The
 other six subject rows hash identically at the merged head; refreshing the Go row's value is left to
 the conductor, outside this apply set.
+
+## 10. Fix stage (2026-11-24, review findings STD-01…STD-06)
+
+Supersedes §9's withholding note and its "left to the conductor" sentence, and the withheld-finding
+parts of §3.13.1/§9 where they conflict; §8 keeps a new STD-06 bullet, and §1's script and Go rows
+are refreshed above. The stage's rules forbid commit and push, so nothing below is committed; the
+hashes are the fix-stage working tree's.
+
+### 10.1 STD-01 — the `shared` set's unprovisioned-gate failure branch was dead code
+
+`print_witness_output_lines` was defined at `:1600` (pre-fix numbering) but called at `:1499` (the
+`shared` set's unprovisioned-gate failure branch), so bash reached the call before the definition:
+under `set -Eeuo pipefail` the branch aborted with `command not found` (exit 127) before its
+`exit 1`, and never printed the bounded witness-output diagnostic the branch exists for. The
+function now sits beside `print_witness_document` (`:165-200`), before every caller; the call
+sites move with the layout (`:1536`, `:1889`, `:1895` at the fix tree) and their content is
+unchanged. Probes (all run at the fix tree):
+
+- definition-order probe over the whole file (41 functions): the pre-fix bytes (`06fbdb06`) show
+  exactly one reference-before-definition pair, `print_witness_output_lines` referenced at `:1499`,
+  defined at `:1600`; the fixed tree shows zero pairs.
+- runtime characterization of the pre-fix shape:
+  `bash -c 'set -euo pipefail; …; print_witness_output_lines; print_witness_output_lines() { :; }'`
+  printed `command not found` and exited 127.
+- the fixed function body extracted from the file prints `witness output: hello from the witness`
+  for a matching `output` event and prints nothing for a non-matching name, so the move did not
+  change the body's behaviour.
+
+Mutant row: move the definition back below the call → the branch reddens with `command not found`
+(exit 127) instead of its diagnostic plus `exit 1`; observed in the isolated repro and in the
+definition-order probe above. In CI the branch is reached only when the `shared` set's
+unprovisioned gate fails inside the `linux-native-v2-acceptance` job (root on the runner), so the
+row is an oracle gap: no passing run exercises it.
+
+### 10.2 STD-02 — the probe comment's premise
+
+The comment claimed the probe's one bounded run names the first refusal because the witness refuses
+before it writes fixture state. Falsified by §3.13.1 and by run `45402706492`'s log (two
+`existing owner witness clone intent differs from the exact Subject` lines, rows 1-2): the probe's
+App run stops at the existing-journal check (`daemon/internal/app/linux_owner_witness_linux.go:2625`)
+on the journal the witness's own run seeded, and the printed message is unconditional, so the first
+post-seed refusal stays unnamed. The comment now states that premise; no code change.
+
+### 10.3 STD-03 — the containment field's jq selector
+
+`native_open_reached: (.containment.native_open_reached // null)` mapped a recorded `false` to
+`null` (jq's `//` substitutes on `false`), erasing the "native open never reached" signal the
+containment rows exist to report; the Go field is a non-pointer bool
+(`daemon/internal/app/linux_owner_witness_linux.go:278`), so a written containment block always
+carries `true`/`false`. The selector is now `.containment.native_open_reached`. Probes on
+`{"containment":{"native_open_reached":false}}`: the old form printed `null`, the new form prints
+`false`; with the block absent both forms print `null`, so absence stays distinguishable.
+
+### 10.4 STD-04/05 — the plan and record citations
+
+- Plan change 2 (`docs/plans/2026-11-24-rf-acc-native-burndown-plan.md:57-60`): the reject sites
+  are now `daemon/internal/harness/codex/probe.go:246,256,266` and
+  `daemon/internal/harness/claude/probe.go:144,147,170`, and the gate is `kind.UnavailableProbe()`
+  at `daemon/internal/app/probe.go:49`; the stale `unavailableRuntimeKind` symbol is gone (main
+  #273 renamed it).
+- §1's `preflight_linux_test.go` row is refreshed to `465293fa…`, the merged head's value (§9).
+
+### 10.5 STD-06 — the one-shot F2 sweep
+
+Recorded in §8 as a residual, with its probes: one-shot call at
+`scripts/ci/provision-linux-v2-control-claims.exs:101` → `:425-436`; the workflow continues to
+later case sets (`.github/workflows/linux-native-v2-acceptance.yml:136-152`); teardown failure sets
+`guest_stopped=0` (`scripts/ci/linux-v2-native-acceptance.sh:238`/`:246`); a surviving daemon
+heartbeats its runtime back to `online`
+(`control/lib/symmetry_control/orchestration/registry.ex:263`); the workflow's
+`SYMMETRY_HEARTBEAT_INTERVAL_MS: "3600000"` (same file, `:44`) keeps the window near one hour. Not
+observed in any run.
+
+### 10.6 Gates at the fix tree, and the acceptance binding
+
+Re-run on the fix-stage working tree (diff range `9d113eb6..06fbdb06` plus this stage's working
+tree; commands as run):
+
+- `bash -n scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-rootfs-base.sh
+  scripts/ci/linux-v2-native-tools.sh` (WSL Ubuntu-24.04, bash 5.2.21): exit 0.
+- `shellcheck --severity=warning scripts/ci/linux-v2-native-acceptance.sh` (0.11.0): exit 1 with 16
+  findings (3 error, 13 warning); its output is byte-identical to the same command on the pre-fix
+  copy (`06fbdb06`) apart from the reported line numbers, and the code histogram matches the base
+  copies at `668e75de` and `9d113eb6` (16 findings each): delta 0.
+- `shellcheck --severity=warning scripts/ci/linux-v2-native-rootfs-base.sh
+  scripts/ci/linux-v2-native-tools.sh`: exit 0, 0 findings.
+- `actionlint .github/workflows/linux-native-v2-acceptance.yml` (1.7.12): exit 0. No workflow
+  change this stage.
+- Record hygiene: a profile-name scan over `git diff origin/main...HEAD` and an added-line scan for
+  Windows drive-letter and WSL mount-point host prefixes are both empty; quoted run-log lines keep
+  their guest/runner-internal paths verbatim.
+
+The acceptance clause "the final all-14 scratch run, on the PR-head script bytes" is **not re-bound**
+at the fix tree: run `45402706492` ran the pre-fix script (`05d81032…`, blob `19ed563b…`, §3.15),
+and §10.1-§10.3 are exactly the bytes that changed. The deltas cannot change any path that run
+exercised — the hoisted function is the same code, the branch that now prints had zero firings, the
+comment is documentation, and the jq selector changes only the printed witness document — but the
+binding is byte-exact by contract, so closing it needs one fresh literal all-14 scratch run on the
+fixed bytes, or an explicit conductor amendment. This stage cannot dispatch one (no commit, no
+push; the scratch branch is deleted); it is recorded as the stage report's open item.

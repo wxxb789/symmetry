@@ -54,9 +54,10 @@ the `runtime.name` label is derived from the config's own `harness_kind` instead
 the kind pin map `:984-991` already carries the guest's probed native version for codex (`0.168.0`)
 and claude (`2.1.323`), and the blanket `adapter_version` is only compared for a *verified*
 projection (`daemon/internal/app/probe.go:56-64`), which neither kind has on Linux
-(`codex/probe.go:243` and `claude/probe.go:220` both reject with `ErrNativeUnverified`, and
-`unavailableRuntimeKind` does not list codex). Containment guests still provision exactly their own
-kind's credential directory; `:1254-1267` is untouched.
+(`daemon/internal/harness/codex/probe.go:246,256,266` and
+`daemon/internal/harness/claude/probe.go:144,147,170` both reject with `ErrNativeUnverified`, and
+`kind.UnavailableProbe()` at `daemon/internal/app/probe.go:49` does not list codex). Containment
+guests still provision exactly their own kind's credential directory; `:1254-1267` is untouched.
 
 ## 4. Change 3 — one base rootfs per job, cloned per case set
 

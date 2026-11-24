@@ -158,8 +158,45 @@ print_witness_document() {
   local document=$1
   sudo test -s "$document" || return 0
   sudo jq -c '{case, harness, native_version, owner_witness_outcome, failure_category, recovery_state,
-    installed_owner_verified, native_binary, native_open_reached: (.containment.native_open_reached // null)}' \
+    installed_owner_verified, native_binary, native_open_reached: .containment.native_open_reached}' \
     "$document" >&2 || true
+}
+
+# Defined before its earliest caller: the shared set's unprovisioned gate failure prints through it.
+print_witness_output_lines() {
+  local event_file=$1
+  shift
+  python3 - "$event_file" "$evidence_secret_values_file" "$@" >&2 <<'PY' || true
+import json, pathlib, sys
+
+events, secrets_path, *names = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+try:
+    with open(events, encoding="utf-8", errors="strict") as stream:
+        for line in stream:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("Action") != "output":
+                continue
+            name = event.get("Test")
+            if not isinstance(name, str) or not any(name == target or name.startswith(target + "/") for target in names):
+                continue
+            text = event.get("Output") or ""
+            raw = text.encode("utf-8", errors="replace")
+            if len(raw) > 400 or any(secret in raw for secret in secrets):
+                continue
+            lines.append(text.rstrip())
+except OSError:
+    raise SystemExit(0)
+for text in lines[-10:]:
+    print("witness output: " + text)
+PY
 }
 
 export_native_evidence() {
@@ -1597,44 +1634,8 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
-print_witness_output_lines() {
-  local event_file=$1
-  shift
-  python3 - "$event_file" "$evidence_secret_values_file" "$@" >&2 <<'PY' || true
-import json, pathlib, sys
-
-events, secrets_path, *names = sys.argv[1:]
-try:
-    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
-except OSError:
-    secrets = []
-lines = []
-try:
-    with open(events, encoding="utf-8", errors="strict") as stream:
-        for line in stream:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("Action") != "output":
-                continue
-            name = event.get("Test")
-            if not isinstance(name, str) or not any(name == target or name.startswith(target + "/") for target in names):
-                continue
-            text = event.get("Output") or ""
-            raw = text.encode("utf-8", errors="replace")
-            if len(raw) > 400 or any(secret in raw for secret in secrets):
-                continue
-            lines.append(text.rstrip())
-except OSError:
-    raise SystemExit(0)
-for text in lines[-10:]:
-    print("witness output: " + text)
-PY
-}
-
-# The witness command refuses before it writes any fixture state, so one bounded run with the
-# exact staged request names that refusal; a run that gets past it stops at the barrier timeout.
+# The probe's App run stops at the existing-journal check on the witness run's seeded journal, so
+# the first post-seed refusal stays unnamed; a run that gets past it stops at the barrier timeout.
 probe_witness_app_refusal() {
   local guest_config=$1
   local guest_request=$2
