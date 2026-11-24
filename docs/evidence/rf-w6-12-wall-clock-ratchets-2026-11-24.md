@@ -28,13 +28,13 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | 22 / 9 | the three flips, the Go floor step, the jscpd step, the two new suite wire-ups |
 | `scripts/ci/go-test-durations.py` | 90 / 25 | adoption roster with measured ceilings, ceiling verdict, partial-run detection |
-| `scripts/ci/test-go-test-durations.py` | new 252 lines | the duration gate's suite (16 tests) |
+| `scripts/ci/test-go-test-durations.py` | new 283 lines | the duration gate's suite (17 tests) |
 | `scripts/ci/assert-go-coverage-floor.py` | new 125 lines | the fail-closed floor parser and verdict |
 | `scripts/ci/go-coverage-baseline.json` | new 15 lines | the four measured runs and the 54.664 floor |
 | `scripts/ci/go-coverage-capture-fixture.txt` | new 19 lines | a verbatim `go tool cover -func` capture |
-| `scripts/ci/test-assert-go-coverage-floor.py` | new 163 lines | the floor gate's suite (17 tests) |
+| `scripts/ci/test-assert-go-coverage-floor.py` | new 197 lines | the floor gate's suite (22 tests) |
 | `scripts/ci/test-ci-changed-path-classifier.py` | 72 / 26 | the blocking check, the Go-floor and vitest pins, four new mutations |
-| `scripts/ci/test-ci-structure-extraction.py` | 61 / 11 | allowlists, the duration-gate pin, three mutations |
+| `scripts/ci/test-ci-structure-extraction.py` | 108 / 11 | allowlists, the duration- and jscpd-gate pins, six mutations |
 | `frontend/vitest.config.ts` | 7 / 0 | the coverage thresholds |
 | `daemon/internal/notification/client_test.go` | 19 / 5 | the conversion (§6.1) |
 | `control/test/…/portal_goal_attention_test.exs` | 20 / 5 | the conversion (§6.2) |
@@ -45,8 +45,8 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | `frontend/src/features/goals/goal-attention.test.tsx` | 1 / 1 | one converted wait (§6.3) |
 | `frontend/src/features/work/assignment.test.tsx` | 1 / 1 | the `openAssignmentEditor` wait (§6.3) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 19 / 10, 24 / 0 | the closed partial-run entry and the adopted-rows debt |
-| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 280 lines | the plan |
-| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 340 lines | this record |
+| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 297 lines | the plan |
+| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 361 lines | this record |
 
 No production file change: the only production edits were temporary mutants, each restored and
 verified (§7).
@@ -89,7 +89,7 @@ Rows and mutants:
 
 | row | command (cwd) | exit | output |
 | --- | --- | ---: | --- |
-| suite | `python scripts/ci/test-go-test-durations.py` | 0 | `Ran 16 tests … OK` (includes the ten measured runs replayed green through the gate) |
+| suite | `python scripts/ci/test-go-test-durations.py` | 0 | `Ran 17 tests … OK` (includes the ten measured runs replayed green through the gate) |
 | real-data replay (in-suite) | the five over-cap rows per recorded run + 200 fast rows | 0 | `over_30s=N adopted=5 … PASS` for each of the ten runs |
 | planted 40 s test | synthetic stream with one unrostered 40 s row | 1 | `FAIL: … TestPlanted took 40.00s, over the 30s cap` |
 | mutant M3 (cap) | `MAX_TEST_SECONDS = 30.0` → `1.0` | 1 | the suite's cap row reddens (`took 40.00s, over the 1s cap`) |
@@ -123,7 +123,7 @@ does not match its hit/total pair.
 
 | row | command | exit | output |
 | --- | --- | ---: | --- |
-| suite | `python scripts/ci/test-assert-go-coverage-floor.py` | 0 | `Ran 17 tests … OK` |
+| suite | `python scripts/ci/test-assert-go-coverage-floor.py` | 0 | `Ran 22 tests … OK` |
 | real capture | `python scripts/ci/assert-go-coverage-floor.py --summary scripts/ci/go-coverage-capture-fixture.txt` | 0 | `measured 86.20% >= floor 54.66% (baseline 55.66%, the minimum of 4 recorded runs)` |
 | planted coverage drop (M6) | a summary one point below the floor (`54.65%`) | 1 | `the Go coverage total 54.66% is below the committed floor 54.66%`-shaped refusal naming both |
 | floor tamper | floor raised without the baseline | 2 | `the floor must be baseline_percent - 1.00` |
@@ -154,14 +154,17 @@ job after `./.github/actions/contracts-build`, with the job's checkout gaining `
 runs the job the step lives in (pinned by the classifier suite's `daemon-code-modified` and
 tool-fixture rows). The step runs the gate's own suite then the gate.
 
-The gate was also run over this branch's own emulated range (a `git clone --shared` of the worktree
-with the 22 changed/new paths committed on top of `f731e04e`, `--repo <clone> --base f731e04e
---head HEAD`): its first run **refused** the change for a 14-line / 275-token clone — the ten-run
-duration table verbatim in both the plan and this record (`docs/evidence/…md [70-83] duplicates
-docs/plans/…-plan.md [171-184]`) — which is the step's own planted red on real content; the table
-was deduplicated (the plan points at this record's §3) and the range re-run green: `jscpd-changed: 22
-changed file(s), 1708 scanned source(s), 1266 clone(s) in the corpus, 0 tolerated among the added
-lines, none new` (exit 0).
+The gate's own planted red on real content: the first run over this branch's change shape
+**refused** it for a 14-line / 275-token clone — the ten-run duration table verbatim in both the
+plan and this record (`docs/evidence/…md [70-83] duplicates docs/plans/…-plan.md [171-184]`); the
+table was deduplicated (the plan points at this record's §3), and that run ended green with
+`22 changed file(s), 1708 scanned source(s), 1266 clone(s)`. That emulation was built on
+`f731e04e`, which is 29 files / +1673 lines behind this branch's true base `5599a0b7` (the head's
+own parent chain), so its corpus was a different one; the fix stage rebuilt the emulation on the
+true base (`<scratch>` `git clone --shared` of the worktree with the 22 changed paths of the
+fix-stage tree committed on top of `5599a0b7`, `--repo <clone> --base 5599a0b7 --head HEAD`) and
+the gate exits 0: `jscpd-changed: 22 changed file(s), 1715 scanned source(s), 1264 clone(s) in the
+corpus, 0 tolerated among the added lines, none new`.
 
 ## 6. Conversions
 
@@ -225,9 +228,14 @@ Conversions (9 wait sites in the six flaked files; the 10 rows are covered becau
 
 Six-file run: exit 0, `Test Files 6 passed`, `Tests 194 passed (194)` in 31.9 s (42 + 6 + 47 + 59 +
 30 + 10). The conversions keep every name and assertion byte-identical; the twelve rf-w5-04 budget
-sites are untouched. Mutant: `goal-attention.test.tsx:243`'s budget at `{ timeout: 1 }` reddens
-that row (`Tests 1 failed | 29 passed (30)`, exit 1, `Unable to find role="heading"…` at
-`:243:25`); restored to `5_000`, the file is green.
+sites are untouched. The fix stage re-ran the six-file set twice more (both exit 0, `Tests 194
+passed (194)`, 35.2 s and 38.7 s); one additional six-file run failed the unconverted
+`router.test.tsx:948` wait (implicit 1 s default, the same load-flake class as the re-measurement
+above), and that file is green isolated (42/42 in 14.3 s) and inside both clean re-runs. Mutants:
+`goal-attention.test.tsx:243`'s budget at `{ timeout: 1 }` reddens that row (`Tests 1 failed | 29
+passed (30)`, exit 1, `Unable to find role="heading"…` at `:243:25`); the fix stage ran the same
+`{ timeout: 1 }` mutant at the named site of each of the other five converted files and every file
+exits 1 with its own `TestingLibraryElementError` (the six rows are M9 and M12–M16 in §7).
 
 The local coverage run over the full suite reports lines 94.55 % (3003/3176), functions 91.12 %
 (1130/1240), branches 84.12 % (3491/4150), statements 91.65 % (3637/3968) — all three configured
@@ -248,10 +256,23 @@ job that reddens on the PR; every job runs as the runner's non-root user, so no 
 | M5 | `scripts/ci/go-test-durations.py`: revert the unfinished-test refusal | the duration suite's cut-off-stream row | `legacy-route-audit` | red in-suite (the stream no longer refuses) |
 | M6 | a copy of the real capture with the total at 54.65 %; the floor raised without the baseline | the floor gate | `coverage-daemon` | exit 1 (`54.65% is below the committed floor 54.66%`); the floor tamper case exits 2 in-suite |
 | M7 | `frontend/vitest.config.ts`: a threshold at 0, or the thresholds block dropped | the classifier suite's floor pin | `legacy-route-audit` | red in-suite |
-| M8 | `.github/workflows/ci.yml`: `continue-on-error: true` restored on the durations step | the structure suite (and its advisory-set equality) | `legacy-route-audit` | 3 failures; flag removed, suite green (33 tests) |
+| M8 | `.github/workflows/ci.yml`: `continue-on-error: true` restored on the durations step | the structure suite (and its advisory-set equality) | `legacy-route-audit` | 3 failures; flag removed, suite green (33 tests at the apply stage, 37 after the fix-stage pins) |
 | M9 | `frontend/src/features/goals/goal-attention.test.tsx:243`: budget `5_000` → `1` | the converted `goal-attention` row | `contracts` (frontend test step) | `Tests 1 failed | 29 passed (30)`, exit 1 (§6.3) |
 | M10 | the branch's own first emulated range (a real table duplicated between two docs) | the changed-file jscpd gate | `contracts` | refused: `1 new clone(s) among the lines this range adds` (14 lines, 275 tokens); after deduplication the range is green (§5) |
 | M11 | `scripts/ci/go-test-durations.py`: the adopted classification loses its `elapsed <= ceiling` guard (the pre-fix shape) | the duration suite's over-ceiling row (`test_a_rostered_test_over_its_ceiling_fails_with_the_ceiling_named`) | `legacy-route-audit` | red (`AssertionError: 0 != 1`; the row also prints the contradictory `within its committed ceiling` line with `adopted=1`); restored byte-identical (sha256 `932c984b…`) |
+| M12 | `frontend/src/app/router.test.tsx:53`: budget `5_000` → `1` | the converted route wait | `contracts` (frontend test step) | exit 1, `TestingLibraryElementError: Unable to find role="heading" and name "Project Two"`; restored byte-identical (§6.3) |
+| M13 | `frontend/src/app/selected-project.test.tsx:59`: budget `5_000` → `1` | the converted Runtimes wait | `contracts` | exit 1, `Unable to find role="link" and name "Runtimes"`; restored byte-identical (§6.3) |
+| M14 | `frontend/src/features/chat/chat.test.tsx:199` (`openChat`): budget `5_000` → `1` | the converted `openChat` helper wait | `contracts` | exit 1, `Unable to find role="heading" and name "Chat"`; restored byte-identical (§6.3) |
+| M15 | `frontend/src/features/connections/connections.test.tsx:188`: budget `5_000` → `1` | the converted Refresh wait | `contracts` | exit 1, `Unable to find role="button" and name "Refresh"`; restored byte-identical (§6.3) |
+| M16 | `frontend/src/features/work/assignment.test.tsx:136` (`openAssignmentEditor`): budget `5_000` → `1` | the converted `openAssignmentEditor` helper wait | `contracts` | exit 1, `Unable to find role="heading" and name "Subject work item"`; restored byte-identical (§6.3) |
+| M17 | `scripts/ci/go-test-durations.py`: the skip branch moved before the terminal-event mark (`finished.add`) | the duration suite's skip row (the run+skip stream) | `legacy-route-audit` | red: the mutated gate refuses the stream (`ends with tests still running`); the in-suite mutation row `test_mutation_marking_a_skip_before_the_finished_mark_reddens_the_skip_row` pins the same shape; restored byte-identical (§3) |
+| M18 | `.github/workflows/ci.yml`: the jscpd gate step deleted | the structure suite's jscpd pin | `legacy-route-audit` | red: `the job no longer carries the step 'Refuse code clones this change adds to the files it touches'`; restored byte-identical (§5) |
+| M19 | `.github/workflows/ci.yml`: the jscpd gate invocation replaced with `exit 0` | the structure suite's jscpd pin | `legacy-route-audit` | red: `the 'Refuse code clones…' step's body must end in 'python3 scripts/ci/jscpd-changed.py --base "$JSCPD_BASE" --head HEAD'; found 'exit 0'`; restored byte-identical (§5) |
+| M20 | `scripts/ci/assert-go-coverage-floor.py`: the 0..100 total bound deleted | the floor suite's 150 % row | `legacy-route-audit` | red: the mutated gate passes the summary (`AssertionError: 0 != 2`; it prints `measured 150.00% >= floor 54.66%`); restored byte-identical (§4.1) |
+| M21 | `scripts/ci/assert-go-coverage-floor.py`: the run-not-an-object guard deleted | the floor suite's run-shape row | `legacy-route-audit` | red: `AssertionError: 1 != 2` (the mutated gate crashes on the string run); restored byte-identical (§4.1) |
+| M22 | `scripts/ci/assert-go-coverage-floor.py`: the sane hit/total guard deleted | the floor suite's hit>total row | `legacy-route-audit` | red: the pair-measures refusal replaces the message (`'sane hit/total' not found …`); restored byte-identical (§4.1) |
+| M23 | `scripts/ci/assert-go-coverage-floor.py`: the numeric-percent guard deleted | the floor suite's stringified-percent row | `legacy-route-audit` | red: the mutated gate accepts `"55.664"` (`AssertionError: 0 != 2`); restored byte-identical (§4.1) |
+| M24 | `scripts/ci/assert-go-coverage-floor.py`: the numeric baseline/floor guard deleted | the floor suite's missing-percents row | `legacy-route-audit` | red: `AssertionError: 1 != 2` (the mutated gate crashes on the missing values); restored byte-identical (§4.1) |
 
 ## 8. Re-measured census and dispositions
 
@@ -278,12 +299,12 @@ All foreground, each bounded with `timeout`; Windows and WSL suites never ran co
 | loaded repeat | `GOMAXPROCS=8 go test -count=50 -run '^TestRunIgnoresStaleChannelCloseFrames$' ./internal/notification/` (`daemon/`) | 0 | 3.58 s, 50 executions |
 | WSL linux-only | `wsl -d Ubuntu-24.04 -u accept -- go test -count=1 ./internal/platform/ ./internal/execution/ ./internal/workspace/` (mount) | 0 | platform 42.82 s, execution 2.09 s, workspace 48.91 s |
 | e2e (Windows) | `go test -count=1 -timeout 1200s ./e2e/` (`daemon/`) | 0 | 0.70 s; the env-gated witnesses skip and the linux-tagged witness files are the dispatch-only subset |
-| duration suite | `python scripts/ci/test-go-test-durations.py` | 0 | `Ran 16 tests … OK` |
-| coverage floor suite | `python scripts/ci/test-assert-go-coverage-floor.py` | 0 | `Ran 17 tests … OK` |
+| duration suite | `python scripts/ci/test-go-test-durations.py` | 0 | `Ran 17 tests … OK` |
+| coverage floor suite | `python scripts/ci/test-assert-go-coverage-floor.py` | 0 | `Ran 22 tests … OK` |
 | floor gate on the real capture | `python scripts/ci/assert-go-coverage-floor.py --summary scripts/ci/go-coverage-capture-fixture.txt` | 0 | `measured 86.20% >= floor 54.66% (baseline 55.66%, the minimum of 4 recorded runs)` |
 | planted 40 s test (real stream) | a temporary `daemon/internal/notification/zz_planted_duration_test.go` run under WSL `-race -json`, through the gate | 1 | `TestPlantedFortySecondDuration took 40.01s, over the 30s cap` + the p95 arm; the file was removed and the package re-run green (2.09 s) |
 | classifier suite | `python scripts/ci/test-ci-changed-path-classifier.py` | 0 | `Ran 37 tests … OK` |
-| structure suite | `python scripts/ci/test-ci-structure-extraction.py` | 0 | `Ran 33 tests … OK` |
+| structure suite | `python scripts/ci/test-ci-structure-extraction.py` | 0 | `Ran 37 tests … OK` |
 | folded-gate suite | `python scripts/ci/test-assert-folded-gates.py` | 0 | `Ran 6 tests … OK` |
 | jscpd suite | `python scripts/ci/test-jscpd-changed.py` | 0 | `Ran 32 tests … OK` |
 | actionlint (pinned 1.7.12) | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` | 0 | 0 findings |

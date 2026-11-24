@@ -242,10 +242,41 @@ class DurationGateTests(unittest.TestCase):
 
     def test_skipped_tests_are_counted_and_excluded_from_the_distribution(self):
         messages = pass_stream([(PACKAGE, "TestOne", 0.01)])
-        messages.insert(0, event("skip", PACKAGE, "TestSkipped"))
+        messages[0:0] = [event("run", PACKAGE, "TestSkipped"), event("skip", PACKAGE, "TestSkipped")]
         result = self.run_gate(messages)
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("skipped=1", result.stdout)
+        self.assertIn("Top 1 slowest tests:", result.stdout)
+
+    def test_mutation_marking_a_skip_before_the_finished_mark_reddens_the_skip_row(self):
+        anchor = (
+            "            finished.add(key)\n"
+            '            if action == "skip":\n'
+            "                skipped += 1\n"
+            "                continue\n"
+        )
+        gate_text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(anchor, gate_text, "the mutation's anchor must be the terminal-event bookkeeping")
+        mutated = gate_text.replace(
+            anchor,
+            '            if action == "skip":\n'
+            "                skipped += 1\n"
+            "                continue\n"
+            "            finished.add(key)\n",
+        )
+        self.assertNotEqual(mutated, gate_text, "the mutation must edit the gate text")
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as handle:
+            handle.write(mutated)
+        mutated_script = pathlib.Path(handle.name)
+        self.addCleanup(mutated_script.unlink)
+        messages = pass_stream([(PACKAGE, "TestOne", 0.01)])
+        messages[0:0] = [event("run", PACKAGE, "TestSkipped"), event("skip", PACKAGE, "TestSkipped")]
+        stream = write_stream(messages)
+        self.addCleanup(stream.unlink)
+        result = citest.run_gate(mutated_script, str(stream), encoding="utf-8")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ends with tests still running", result.stderr)
+        self.assertIn("TestSkipped", result.stderr)
 
 
 if __name__ == "__main__":

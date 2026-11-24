@@ -134,6 +134,21 @@ The two new suites run in `legacy-route-audit` beside `test-ci-changed-path-clas
 `test-assert-credo-strict-baseline.py` (W6-10's precedent for a gate's own suite); the jscpd suite
 runs inside W6-11's step; the duration suite's fixtures are synthetic streams, so it costs seconds.
 
+### D8. Recorded waiver (fix stage 2026-11-24, review finding R-05): contract D1's frozen set
+
+Contract D1 freezes "the daemon job's 7 `--assert` names, its `-run` patterns, pi_control's five
+verbatim ExUnit names and every other CI-gated test/subtest name" (the W3-15 lists) and clause 3
+counts a "renamed/skipped/deleted test" as failure. This slice's diff removes exactly one test
+declaration: the CI-tooling mutation row `test_mutation_dropping_a_coverage_jobs_advisory_flag_breaks_the_advisory_check`
+at `scripts/ci/test-ci-changed-path-classifier.py`, renamed to the stronger
+`test_mutation_restoring_a_coverage_jobs_advisory_flag_breaks_the_blocking_check`. Its subject
+check `check_coverage_jobs_are_advisory` was deleted by this slice's flip (probe at the branch
+tree: the name does not occur in the file; the base holds it at `:523` with its two callers at
+`:1024`/`:1097`), and the replacement asserts the stronger contract, so no coverage is lost. The
+waiver recorded here reads D1's frozen set as the CI-gated product test names in those W3-15
+lists, not CI-tooling mutation rows; the contract file itself is conductor-owned and is not
+edited by this slice.
+
 ## 4. Re-measured census and dispositions at `f731e04e`
 
 Go `time.Sleep(` in test files: **23 files / 73 sites at `f731e04e`** (`git grep -c 'time.Sleep(' f731e04e
@@ -228,9 +243,11 @@ budget expiring at testing-library's implicit 1000 ms default while the app's se
 was pending. Converted: nine wait sites in those six files (`router.test.tsx:53`, `:399`,
 `selected-project.test.tsx:59`, `:83`, `chat.test.tsx:199` (`openChat`), `connections.test.tsx:176`,
 `:188`, `goal-attention.test.tsx:243`, `assignment.test.tsx:136` (`openAssignmentEditor`)), each
-given the files' own `{ timeout: 5_000 }` convention. The twelve rf-w5-04 budget sites are
-byte-identical; the six-file run is 194 passed, and the `{ timeout: 1 }` mutant reddens the
-`goal-attention` row. Full table and numbers: the evidence record §6.3.
+given the suite's `{ timeout: 5_000 }` convention (the files that already carried one;
+`router`/`selected-project`/`assignment` carried none at base). The twelve rf-w5-04 budget sites
+are byte-identical; the six-file run is 194 passed, and the `{ timeout: 1 }` mutant reddens the
+converted wait in each of the six files (the six rows are in the evidence record §7). Full table
+and numbers: the evidence record §6.3.
 
 ## 7. Mutants (red, then restored)
 

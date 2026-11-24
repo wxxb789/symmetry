@@ -210,6 +210,9 @@ CREDO_STRICT_INVOCATION = 'mix credo --strict 2>&1 | tee "$credo_log"'
 DURATION_GATE_STEP = "Summarize Go test durations"
 DURATION_GATE_CONDITION = "always() && steps.daemon_race_tests.outcome != 'skipped'"
 DURATION_GATE_INVOCATION = 'python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"'
+JSCPD_GATE_STEP = "Refuse code clones this change adds to the files it touches"
+JSCPD_SUITE_INVOCATION = "python3 scripts/ci/test-jscpd-changed.py"
+JSCPD_GATE_INVOCATION = 'python3 scripts/ci/jscpd-changed.py --base "$JSCPD_BASE" --head HEAD'
 
 
 def require(condition: bool, message: str) -> None:
@@ -639,6 +642,14 @@ def check_duration_gate_step(workflow_text: str) -> None:
     )
 
 
+def check_jscpd_gate_step(workflow_text: str) -> None:
+    commands = check_blocking_gate_step(workflow_text, "contracts", JSCPD_GATE_STEP, JSCPD_GATE_INVOCATION)
+    require(
+        JSCPD_SUITE_INVOCATION in commands,
+        f"the jscpd gate step must also run {JSCPD_SUITE_INVOCATION!r}; found {commands!r}",
+    )
+
+
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
     steps, jobs = workflow_advisories(workflow_text)
     steps |= action_advisories(action_text)
@@ -693,6 +704,9 @@ class CredoGateStepTests(unittest.TestCase):
 
     def test_the_duration_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
         check_duration_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_jscpd_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
+        check_jscpd_gate_step(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -933,6 +947,39 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_duration_gate_step(mutated)
+
+    def test_mutation_dropping_the_jscpd_gate_step_reddens_the_step_pin(self) -> None:
+        step = (
+            f"      - name: {JSCPD_GATE_STEP}\n"
+            "        env:\n"
+            "          JSCPD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}\n"
+            "        run: |\n"
+            f"          {JSCPD_SUITE_INVOCATION}\n"
+            f"          {JSCPD_GATE_INVOCATION}\n"
+        )
+        self.assertIn(step, self.workflow_text, "the mutation's anchor must be the jscpd gate step")
+        mutated = self.workflow_text.replace(step, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
+
+    def test_mutation_replacing_the_jscpd_gate_invocation_with_exit_zero_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {JSCPD_GATE_INVOCATION}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
+
+    def test_mutation_restoring_the_jscpd_steps_advisory_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {JSCPD_GATE_STEP}\n",
+            f"      - name: {JSCPD_GATE_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):

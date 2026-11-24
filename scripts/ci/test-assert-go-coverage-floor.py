@@ -94,6 +94,11 @@ class CoverageFloorGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("last non-empty line", result.stderr)
 
+    def test_a_summary_total_outside_zero_to_a_hundred_is_refused(self):
+        result = self.run_gate(self.write("summary.txt", summary_text("150.0")))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("outside 0..100", result.stderr)
+
     def test_a_missing_summary_is_refused(self):
         result = self.run_gate(self.root / "absent.txt")
         self.assertEqual(result.returncode, 2)
@@ -129,6 +134,35 @@ class CoverageFloorGateTests(unittest.TestCase):
         result = self.run_gate(CAPTURE, baseline=self.write("baseline.json", json.dumps(document)))
         self.assertEqual(result.returncode, 2)
         self.assertIn("pair measures", result.stderr)
+
+    def test_a_baseline_run_that_is_not_an_object_is_refused(self):
+        document = baseline_document()
+        document["runs"][0] = "not an object"
+        result = self.run_gate(CAPTURE, baseline=self.write("baseline.json", json.dumps(document)))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not an object", result.stderr)
+
+    def test_a_baseline_run_with_hit_above_total_is_refused(self):
+        document = baseline_document()
+        document["runs"][0]["hit"] = document["runs"][0]["total"] + 1
+        result = self.run_gate(CAPTURE, baseline=self.write("baseline.json", json.dumps(document)))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("sane hit/total", result.stderr)
+
+    def test_a_baseline_run_with_a_non_numeric_percent_is_refused(self):
+        document = baseline_document()
+        document["runs"][0]["percent"] = str(document["runs"][0]["percent"])
+        result = self.run_gate(CAPTURE, baseline=self.write("baseline.json", json.dumps(document)))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("numeric percent", result.stderr)
+
+    def test_a_baseline_without_numeric_baseline_and_floor_percents_is_refused(self):
+        document = baseline_document()
+        del document["baseline_percent"]
+        del document["floor_percent"]
+        result = self.run_gate(CAPTURE, baseline=self.write("baseline.json", json.dumps(document)))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("numeric baseline_percent and floor_percent", result.stderr)
 
     def test_a_baseline_whose_baseline_is_not_the_runs_minimum_is_refused(self):
         result = self.run_gate(
