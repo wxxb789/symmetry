@@ -426,6 +426,27 @@ def pi_cleanup_witness(runtime_kind: str = "pi") -> dict:
     }
 
 
+def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
+    lines = text[text.index(f"{function}() {{") :].splitlines()
+    index = next(i for i, line in enumerate(lines) if line.strip() == header)
+    arms: dict[str, str] = {}
+    pattern = None
+    current: list[str] = []
+    for line in lines[index + 1 :]:
+        stripped = line.strip()
+        if pattern is None:
+            if stripped == "esac":
+                break
+            pattern, _, tail = stripped.partition(")")
+            pattern, current = pattern.strip(), [tail.strip()]
+        else:
+            current.append(stripped)
+        if current[-1].endswith(";;"):
+            arms[pattern] = "\n".join(current)
+            pattern = None
+    return arms
+
+
 class ExporterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1884,6 +1905,41 @@ class ExporterTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn("pi vehicle runtime_kind", result.stderr)
                     self.assertFalse((output / "manifest.json").exists())
+
+    def test_pi_durability_checks_every_allowlisted_witness_except_the_named_non_pi_documents(self) -> None:
+        exporter = load_exporter()
+        receipt_targets = {target for _, target in exporter.MANUAL_RECEIPTS}
+        self.assertEqual(
+            exporter.PI_VEHICLE_INDEPENDENT_WITNESSES,
+            receipt_targets | {"opencode-native-health.json", "unprovisioned-owner-refusal.json"},
+        )
+        witness_targets = (
+            {target for _, target in exporter.MANUAL_WITNESSES}
+            | {f"stage-crash-replay-{stage}.json" for stage in exporter.MANUAL_STAGE_HOLDS}
+            | {f"ack-loss-replay-{stage}.json" for stage in exporter.MANUAL_ACK_LOSS_STAGES}
+        )
+        shared_allowlist = exporter.MANUAL_CASE_SET_FILES["shared"]
+        self.assertEqual(
+            (witness_targets & shared_allowlist) - (shared_allowlist - exporter.PI_VEHICLE_INDEPENDENT_WITNESSES),
+            {"opencode-native-health.json", "unprovisioned-owner-refusal.json"},
+        )
+        for case_set in exporter.PI_DURABILITY_CASE_SETS:
+            checked = exporter.MANUAL_CASE_SET_FILES[case_set] - exporter.PI_VEHICLE_INDEPENDENT_WITNESSES
+            self.assertTrue(checked, case_set)
+            if case_set != "shared":
+                self.assertEqual(checked, exporter.MANUAL_CASE_SET_FILES[case_set], case_set)
+
+    def test_acceptance_case_set_lists_match_the_exporter_pi_durability_sets(self) -> None:
+        text = SCRIPT.with_name("linux-v2-native-acceptance.sh").read_text(encoding="utf-8")
+        listed = [line.strip() for line in text.splitlines() if line.strip().startswith("shared|codex_containment|")]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(
+            set(listed[0].removesuffix(") ;;").split("|")),
+            set(load_exporter().PI_DURABILITY_CASE_SETS) | {"codex_containment", "claude_containment"},
+        )
+        arms = bash_case_arms(text, "export_native_evidence", 'case "$fixture_case_set" in')
+        self.assertEqual(set(arms), {"codex_containment", "claude_containment", "*"})
+        self.assertIn("native_kind=pi", arms["*"])
 
     def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
         pin = CONTAINMENT_PINS["codex"]

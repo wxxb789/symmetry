@@ -1575,7 +1575,7 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 			return linuxV2OwnerWitnessRequest{}, errors.New("Pi owner-witness claim lacks authentic Control provider_access for resource.sync")
 		}
 	} else if request.Claim.ProviderAccess != nil {
-		return linuxV2OwnerWitnessRequest{}, errors.New("OpenCode owner-witness claim unexpectedly carries provider access")
+		return linuxV2OwnerWitnessRequest{}, fmt.Errorf("non-provider %s owner-witness claim unexpectedly carries provider access", testCase.harness)
 	}
 	barrier := request.Barrier
 	expectedHold := "none"

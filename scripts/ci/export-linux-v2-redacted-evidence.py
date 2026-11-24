@@ -328,8 +328,8 @@ CONTAINMENT_KINDS = {
     "codex": ("codex_containment", "codex-native-containment.json"),
     "claude_code": ("claude_containment", "claude-native-containment.json"),
 }
-# Every retargeted durability set's pi witnesses are its whole allowlist except `shared`; the
-# cleanup case records the vehicle (fixture.runtime_kind) because no harness turn ever launches.
+# The retargeted durability sets accept --native-kind pi; the cleanup case records the vehicle
+# (fixture.runtime_kind) because no harness turn ever launches.
 PI_DURABILITY_CASE_SETS = (
     "shared",
     "stage_replay_create_started",
@@ -344,21 +344,14 @@ PI_DURABILITY_CASE_SETS = (
     "stale_journal_subject",
     "synthetic_goal_cleanup",
 )
-PI_DURABILITY_REQUIRED = {
-    "shared": {
-        "pi-native-provider-action.json",
-        "pi-helper-sigkill-detached-child.json",
-        "pi-daemon-sigkill-helper-survives.json",
-        "receipt-persistence-failure.json",
-        "alternate-mount-refusal.json",
-        "literal-pid-reuse.json",
-        "helper-stop-response-loss.json",
-        "helper-ack-response-loss.json",
-        "helper-launcher-response-loss.json",
-        "helper-exit-after-release-before-register.json",
-        *(f"stage-crash-replay-{stage}.json" for stage in SAFE_STAGE_HOLDS),
-        *(f"ack-loss-replay-{stage}.json" for stage in SAFE_ACK_LOSS_STAGES),
-    },
+# Five names in `shared`'s allowlist stay outside the pi durability binding: the three pi
+# provider-action receipts and the two OpenCode-vehicle witnesses.
+PI_VEHICLE_INDEPENDENT_WITNESSES = {
+    "control-provider-action-pi.json",
+    "control-provider-action-helper-crash.json",
+    "control-provider-action-daemon-crash.json",
+    "opencode-native-health.json",
+    "unprovisioned-owner-refusal.json",
 }
 CLEANUP_VEHICLE_WITNESS = "synthetic-goal-cleanup.json"
 FORBIDDEN_KEYS = (
@@ -1472,10 +1465,7 @@ def validate_pi_durability_witnesses(
     version_line: str,
     source_tree_digest: str,
 ) -> None:
-    expected = PI_DURABILITY_REQUIRED.get(case_set, MANUAL_CASE_SET_FILES[case_set])
-    unallowlisted = expected - MANUAL_CASE_SET_FILES[case_set]
-    if unallowlisted:
-        fail(f"pi durability witness list is not allowlisted for {case_set}: {sorted(unallowlisted)}")
+    expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES
     for target in sorted(expected):
         document = documents.get(target)
         if document is None:

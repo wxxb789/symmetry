@@ -258,13 +258,6 @@ export_native_evidence() {
   local native_kind='' native_binary='' native_binary_sha='' native_archive_sha='' native_version_line=''
   local native_witness_document=''
   case "$fixture_case_set" in
-    shared|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup)
-      native_kind=pi
-      native_binary=/usr/local/lib/symmetry-pi/pi
-      native_binary_sha="sha256:${pi_executable_sha:-}"
-      native_archive_sha="sha256:${pi_archive_sha:-}"
-      native_version_line="${pi_version_line:-}"
-      ;;
     codex_containment)
       native_kind=codex
       native_binary=/usr/local/bin/codex
@@ -280,6 +273,13 @@ export_native_evidence() {
       native_binary_sha="sha256:${claude_executable_sha:-}"
       native_archive_sha="sha256:${claude_archive_sha:-}"
       native_version_line="${claude_version_line:-}"
+      ;;
+    *)
+      native_kind=pi
+      native_binary=/usr/local/lib/symmetry-pi/pi
+      native_binary_sha="sha256:${pi_executable_sha:-}"
+      native_archive_sha="sha256:${pi_archive_sha:-}"
+      native_version_line="${pi_version_line:-}"
       ;;
   esac
   local -a native_manifest_args=()
@@ -456,6 +456,8 @@ sudo chmod 0755 "$rootfs/usr/local/lib/symmetry-pi/pi"
   fail 'staged pi executable must be a singly-linked root-owned mode-0755 file'
 [[ "$(sudo sha256sum "$rootfs/usr/local/lib/symmetry-pi/pi" | cut -d' ' -f1)" == "$pi_executable_sha" ]] ||
   fail 'staged pi executable digest differs from the pinned 1.5.2 release archive'
+[[ "$(linux_v2_pi_tree_digest "$rootfs/usr/local/lib/symmetry-pi" sudo)" == "${pi_tree_sha:-}" ]] ||
+  fail 'staged pi release tree differs from the pinned 1.5.2 archive'
 sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
 if [[ "$fixture_case_set" == codex_containment ]]; then
   linux_v2_fetch_codex "$fixture_root"

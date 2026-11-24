@@ -105,7 +105,10 @@ The contract's owned list names the two `daemon/e2e` files that carry eight of t
 durability leg of `shared`. Left at `"opencode"`, the wrapper asks for the OpenCode pinned version,
 then `newLinuxV2NativeFixture` compares it against the pi config's `1.5.2`, so the leg fails its
 config/harness binding before the witness runs. Same class of change, same e2e fixture set, no
-`daemon/internal/**` file. Included, and named in the report as a scope addition.
+`daemon/internal/**` file. Included, and named in the report as a scope addition. The contract did
+not own this file when the increment was drafted; the conductor's DS-review ruling (2026-11-25,
+F03) amends the owned list to include it for exactly this harness-literal retarget, so the
+delivered change is inside the owned set.
 
 ### 3.3 Where the pi durability witnesses' `native_binary` binding comes from
 
@@ -137,8 +140,11 @@ harness-executed binary.
 `linux_v2_fetch_pi` unpacks a directory whose `package.json` is what `pi --version` reports from, so
 the fixture copies the tree (`cp -a`) rather than `stage_guest_binary`'s single-file install. The
 contract's intent — bind the staged bytes to the pinned fetch-script digest — is implemented as the
-same check on the staged executable (`sha256sum … == pi_executable_sha`), which is strictly stronger
-than the previous compare-against-the-download check and needs no second copy.
+same check on the staged executable (`sha256sum … == pi_executable_sha`). The DS-review ruling
+(2026-11-25, F10(ii)) additionally required the *pinned digest to cover the whole installed tree*:
+`linux-v2-native-tools.sh` now pins `pi_tree_sha` (a content digest over the release tree's files,
+checked right after extraction) and `linux-v2-native-acceptance.sh:459` verifies the staged tree
+against it before first use, so a tampered file anywhere in the tree refuses.
 
 ### 3.6 `shared` final leg order
 
@@ -170,11 +176,11 @@ Round-0/2 scratch runs named the first real refusal of every owner-witness leg: 
 with `fixed-B native HOME is outside the isolated owner witness root`
 (`daemon/internal/app/linux_owner_witness_linux.go:2902-2905`, checking `linuxV2FixedNativeHome`'s
 passwd HOME against `linuxV2NativeOwnerWitnessRoot = /opt/symmetry-owner-test`,
-`:47`/`:1166-1175`). The fixture provisioned B with `--home-dir /home/symmetry-b`
-(`linux-v2-native-acceptance.sh:603`), so **no** owner-witness leg of any kind had ever reached a
+`:47`/`:1166-1175`). The fixture provisioned B with a `/home`-prefixed passwd home
+(`linux-v2-native-acceptance.sh:605`), so **no** owner-witness leg of any kind had ever reached a
 stage on this fixture. The refusal is the daemon's isolation contract and the fixture is the
 non-conforming side, so the fix is fixture-side (owned): `B_HOME="$OWNER_TEST_ROOT/fixed-b-home"`,
-with `machine_run_as` deriving `HOME` per account instead of the literal `/home/$user`. Every other
+with `machine_run_as` deriving `HOME` per account instead of the passwd home's `/home` prefix. Every other
 B path (credentials, XDG cache, `.pi/agent`, Pi session dir, `A --x` ACLs, the e2e's
 `linuxV2ValidateFixedBSecretFiles`, the daemon's `HOME`/`TMPDIR`/`PI_CODING_AGENT_DIR`) derives from
 passwd or `$B_HOME`, so one assignment moves them together. `/opt/symmetry-owner-test` already
@@ -321,5 +327,23 @@ proves the old expectation unsatisfiable by construction (`gate.c:731-757`,
 `helper_v2_recovery.go:223-225`), the gate identity stays bound by the marker/RunJournal comparison,
 and the F3 mutant row (evidence §5 row 6, run `45488371274`) shows a wrong gate identity still fails
 the guard. The last scratch run (`45489336388`, run 13) ran the literal all-12 case-set list on the
-final bytes, bound by the evidence record §1 sha256 equality table; runs 12–13 and the
-scratch-branch deletion are recorded in evidence §3.
+implement stage's final bytes; the apply stage (evidence §9) and the fix stage (§10) changed nine
+of the ten subject files afterwards (only `register-linux-v2-claim-machine.py` still equals the
+bytes run 13 executed), so that run does not bind the delivered bytes — the literal
+all-12 re-run on them is carried to the conductor (evidence §10.11), and both stages forbid a push.
+Runs 12–13 and the scratch-branch deletion are recorded in evidence §3.
+
+### 7b. Fix stage (2026-11-25, DS review MUST_FIX F01–F10)
+
+All ten findings are dispositioned inside the owned set plus the conductor's amendments (F03 owns
+`production_linux_v2_helper_exit_witness_test.go` for the harness-literal retarget; F10(i) records
+the formatter amendment with a `docs/TODO.md` entry; F10(ii) adds the whole-tree digest
+requirement). F01 restored the configured witness output directory that the apply stage's F3
+refactor had dropped — without it no set could publish a manifest; F02's false
+behavior-neutrality sentences were removed and the pre-apply binding recorded (evidence §1, §3 row
+13, §4e); F04 names the case's harness in the provider-access refusal; F05 derives the checked set
+from the allowlist; F06 makes the acceptance script's export arm default to pi and pins the two
+lists equal in the exporter suite; F07 names the mutant's CI job and stop; F08 derives the
+provider-access cases from `CASES`; F09 stays the documented `synthetic_goal_cleanup` carve-out.
+Evidence: the record's §10 with the mutant rows (§10.9) and the local probe transcripts (§10.10);
+the all-12 run on the delivered bytes remains the conductor's dispatch.

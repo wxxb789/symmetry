@@ -26,11 +26,7 @@ STAGE_REPLAY_NATIVE_RELEASE_CASES = {
     "stage_replay_native_release_claude",
     "stage_replay_unprovisioned_refusal",
 }
-PROVIDER_ACCESS_CASES = {
-    "pi_provider_action",
-    "helper_sigkill_detached_child",
-    "daemon_sigkill_helper_survives_detached_child",
-}
+PROVIDER_ACCESS_CASES = {name for name, (_, profile, _) in CASES.items() if profile == "pi-native"}
 STAGE_REPLAY_HOLDS = {
     "reservation_durable",
     "create_started",

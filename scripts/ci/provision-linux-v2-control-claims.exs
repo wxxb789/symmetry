@@ -229,7 +229,8 @@ defmodule LinuxV2ControlClaimFixture do
           "stage_replay_native_release_codex",
           "stage_replay_native_release_claude",
           "stage_replay_unprovisioned_refusal"
-        ] -> case_name
+        ] ->
+          case_name
         String.starts_with?(case_name, "stage_replay_") -> "stage_replay"
         true -> case_name
       end

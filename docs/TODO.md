@@ -1958,3 +1958,19 @@ grandchild's stdout write) is fixed in that goal and archived in
       staged executable (`linuxV2BindDurabilityNativeBinary`) and the exporter checks the value
       against the pinned `pi_executable_sha`/`1.5.2`. If the recovery path ever records the digest,
       drop the publisher-side hash and read the response fields instead.
+
+- [ ] The literal all-12 scratch run on the delivered bytes (2026-11-25, same goal; DS-review
+      ruling F02): the last scratch run `45489336388` executed the implement stage's bytes, and the
+      apply and fix stages changed nine of the ten subject files afterwards (evidence record §9,
+      §10). The delivered-bytes run is the conductor's dispatch on the scratch branch (both stages
+      forbid a push); the evidence record §1 sha256 table is the equality anchor to bind it to.
+
+- [ ] `mix format --check-formatted` on `scripts/ci/provision-linux-v2-control-claims.exs` is red
+      under the CI-parity toolchain from pre-existing Styler drift (2026-11-25, same goal,
+      amendment F10(i); evidence record §6/§10.10): the CI-parity run (elixir 1.20.4 / OTP 29) is
+      red at the PR base `33ad88a9` (110 removed/138 added lines) and at the delivered bytes
+      (106/137); the drift is upstream Styler style over bytes this goal did not touch (alias
+      splitting, `unless` → `if !(...)`, `@cases` list re-indentation), and elixir 1.19.6 formats
+      the file clean. Resolve in a separate maintenance change (reformat the file under the
+      CI-parity toolchain, or pin the formatter version); the gate stays recorded as an amendment
+      until then, and this goal's own hunks are formatter-clean (hunk-scoped check, record §10.10).

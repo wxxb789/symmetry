@@ -264,6 +264,7 @@ func linuxV2NativeWitnessOutputDirectory(t *testing.T, fixture linuxV2NativeFixt
 		if err := os.Chmod(output, 0o700); err != nil {
 			t.Fatalf("secure redacted v2 witness output directory: %v", err)
 		}
+		return output
 	}
 	return fixture.artifactDir
 }
