@@ -184,48 +184,19 @@ jobs:
           go-version: 1.27.4
           cache-dependency-path: daemon/go.sum
       - run: mix deps.get
-      - name: Measure Credo strict findings (advisory)
+      - name: Enforce the committed Credo strict baseline
         if: always()
-        continue-on-error: true
         timeout-minutes: 15
         run: |
           set -Eeuo pipefail
-          if ! grep -qE '\{:credo,' mix.exs; then
-            echo "note: control/mix.exs does not declare :credo yet (refactor slice W1-02 owns that dependency); skipping the advisory Credo metric"
-            exit 0
-          fi
-          if [ ! -f .credo.exs ]; then
-            echo "note: control/.credo.exs is absent; skipping the advisory Credo metric"
-            exit 0
-          fi
-          if [ ! -d deps/credo ]; then
-            echo "note: deps/credo is not fetched; fetching it for the advisory Credo metric"
-            if ! mix deps.get; then
-              echo "note: mix deps.get failed; skipping the advisory Credo metric"
-              exit 0
-            fi
-          fi
           credo_log="$RUNNER_TEMP/credo-strict.log"
           set +e
-          mix credo --strict | tee "$credo_log"
+          mix credo --strict 2>&1 | tee "$credo_log"
           credo_status=${PIPESTATUS[0]}
           set -e
+          # Credo's exit status is a bitmask of issue severities, not a count; the gate below is the verdict.
           echo "credo_strict_exit_status=$credo_status"
-          credo_summary=$(grep -E '^[0-9]+ mods/funs, found ' "$credo_log" | tail -n 1 || true)
-          if [ -n "$credo_summary" ]; then
-            echo "credo_strict_summary=$credo_summary"
-            echo "credo_strict_issue_total=$(printf '%s\n' "$credo_summary" | sed 's/^.*found //' | grep -oE '[0-9]+' | awk '{ total += $1 } END { print total + 0 }')"
-          else
-            echo 'note: the Credo output carried no "N mods/funs, found ..." summary line'
-          fi
-          # Credo prints the same numbered list for a file over `parse_timeout` and for one it could not
-          # parse, so the count below keeps a slow runner from silently under-reporting the baseline.
-          credo_unparsed=$(grep -cE '^ +[0-9]+\) ' "$credo_log" || true)
-          echo "credo_strict_unparsed_files=$credo_unparsed"
-          if [ "$credo_unparsed" -ne 0 ]; then
-            echo "note: Credo skipped or excluded $credo_unparsed source file(s) (over parse_timeout, or unparsable); the issue total above under-reports the strict baseline"
-          fi
-          exit "$credo_status"
+          python3 ../scripts/ci/assert-credo-strict-baseline.py --log "$credo_log"
       - name: Measure Hex advisories (advisory)
         if: always()
         continue-on-error: true
@@ -596,12 +567,11 @@ jobs:
             browser/playwright-report
             /tmp/symmetry-playwright-results
 
-  # Advisory: a coverage failure can never gate a pull request. Separate runners keep the
-  # instrumentation off the race step's `-timeout 600s` budget and Control's canonical `mix test`.
+  # The Control floor is blocking (rf-w6-10); the Go and vitest jobs stay advisory until rf-w6-12.
+  # Separate runners keep the instrumentation off the race step's budget and Control's `mix test`.
   coverage-control:
     needs: [changes, contracts]
     if: needs.changes.outputs.run-heavy == 'true'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -638,9 +608,9 @@ jobs:
           elixir-version: 1.20.4
           otp-version: 29.0.6
       - run: mix deps.get
-      # `test_coverage: [summary: [threshold: 0]]` in control/mix.exs keeps the task's default 90%
-      # summary threshold from exiting the run, so this step's status is the suite's own (advisory).
-      - name: Run the Control suite with a coverage report (advisory)
+      # `control/mix.exs` carries the summary threshold this run must clear; a total below it
+      # makes the step exit 3 and, since the job is no longer advisory, fails the job.
+      - name: Run the Control suite with a coverage report
         run: mix test --cover
       - name: Upload the Control coverage report
         if: always()
@@ -1241,6 +1211,7 @@ jobs:
       # routes fixture diffs through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
       - run: python3 scripts/ci/test-ci-structure-extraction.py
+      - run: python3 scripts/ci/test-assert-credo-strict-baseline.py
 
       # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request
       # would never reach a `run-heavy`-gated step; unlike the lint metrics below, this step is blocking.
