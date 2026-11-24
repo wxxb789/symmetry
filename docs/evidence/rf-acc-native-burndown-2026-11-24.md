@@ -93,9 +93,10 @@ workflow files byte-identically and `daemon/**` at base bytes.
    working. Every per-set provisioning step, fence and teardown proof is unchanged.
 4. Round-1 review fixes (§10.7): the Control fixture's runtime retirement refuses any database that
    is not the job's own loopback fixture database (§6.2); the dead `probe_witness_app_refusal` is
-   deleted and the remaining daemon/App-stderr diagnostics print only through the same
-   secret-values filter and 400-byte cap as the witness-output printer; the record's repeated
-   per-set tables are deduplicated (§3.3/§3.5/§3.6).
+   deleted and three daemon/App-stderr printers now route through the same secret-values filter
+   and 400-byte cap as the witness-output printer (named in §10.7; two daemon/guest printers stay
+   unfiltered on failure paths, §8); the record's repeated per-set tables are deduplicated
+   (§3.3/§3.5/§3.6).
 
 Not touched: `scripts/ci/linux-v2-native-tools.sh` (0 diff lines: the OpenCode staging URL, archive
 hash, version assertion), the kind pin map's `"opencode": "1.18.32"`, the frozen opencode render
@@ -897,7 +898,9 @@ read `Repo.config()[:url]`, which Ecto pops into `:hostname`/`:database`, so it 
 fixture's own database) and `45426731841` (`print_filtered_output_lines` read its python program
 from the same stdin the pipeline fed, so every probe's output vanished). The third dispatch,
 `45431551609`, is the binding run; the 2-run cap overrun is recorded here under the conductor's
-explicit approval, since the alternative was an unbound or defective tree. The scratch branch is
+explicit approval, written in the `Conductor approval (2026-11-25, round 1, written record of the
+channel approval)` section of the goal contract (`goal-rf-acc-native-burndown.md`), since the
+alternative was an unbound or defective tree. The scratch branch is
 deleted from the remote after this run, and the deletion is proven with `git ls-remote` (§7); the
 local branch is retained unreferenced for a follow-up scratch loop.
 
@@ -1500,9 +1503,31 @@ branch.
   `127.0.0.1`/`localhost`/`::1` and a `symmetry_linux_v2*` name, fail closed; the mutant row is
   below). The first dispatch of the guard (`45424315178`, §10.7) exposed that `Repo.config/0` has
   already popped `:url` into `:hostname`/`:database`; the guard reads those keys, and the second
-  dispatch carries the fix. The dead `probe_witness_app_refusal` is deleted, and the remaining
-  daemon/App-stderr diagnostics print only through the same secret-values filter and 400-byte cap
-  as `print_witness_output_lines`, so no diagnostic path echoes guest output unfiltered.
+  dispatch carries the fix. The dead `probe_witness_app_refusal` is deleted; exactly three
+  daemon/App-stderr printers route through the same secret-values filter and 400-byte cap as
+  `print_witness_output_lines` — `print_witness_failure_context`'s `-verify-linux-owner-install`
+  probe (`:1695`) and native-gate probe (`:1702`), and the `run_go_test` non-JSON `grep` at the Go
+  witness gate (`:1886`) — while two daemon/guest printers stay unfiltered on failure paths
+  (residuals below).
+
+- Unfiltered non-JSON printer, the `shared` set's unprovisioned gate (round-2 audits P3-1; §10.7):
+  the failure branch at `:1556` pipes the non-JSON `grep` of `$unprovisioned_events` straight to
+  stderr with no secret-values filter and no 400-byte cap, bounded at 5 lines by `head`. The
+  binding run `45431551609` never reaches that branch, and a byte change to the script would void
+  its binding, so the fix is carried to rf-acc-native-containment-witness.
+
+- Unfiltered Change-1 daemon dump (round-2 audits P3-2; §10.7): the daemon-start failure branch
+  (`:1616-1626`) prints two `systemctl show` blocks and the `journalctl --output=cat -n 80
+  --grep=…` daemon journal straight to stderr with no secret-values filter; the `-n 80` bound and
+  the narrow `--grep` match Change 1's prescribed "bounded, narrowly filtered" dump, so ratifying
+  that exception or filtering the dump is carried to rf-acc-native-containment-witness.
+
+- Probe-pipeline unit-name reuse (round-2 audits P3-3; §10.7): the two filtered pipelines
+  (`:1694-1695`, `:1701-1702`) run `machine_run_as` in a subshell, so `machine_run_count` does not
+  advance and both probes request the same transient unit name (`${machine}-step-…`); benign in
+  the binding run `45431551609` — 280 `witness config owner preflight` + 280 `witness config
+  native gate` probes and 0 unit-start failures (0 `already exists`, 0 `Failed to start
+  transient`, 0 `Failed to connect to bus`) — and carried to rf-acc-native-containment-witness.
 
 - Round-1 run update (2026-11-24, run `45431551609`, §3.16; supersedes the earlier round-1 bullets'
   run references where they conflict): classes A, B, C, D and E stay gone on the fixed bytes
@@ -1690,11 +1715,16 @@ ratified `docs/plans/2026-11-24-rf-acc-native-burndown-plan.md` joins the owned 
     fixture's own database. The guard now reads those keys; the live positive is the binding run's
     `retired N` lines (14, §3.16).
 - Security, diagnostics (Sec277 INFO + Sol P3-1): the dead `probe_witness_app_refusal` is deleted
-  (premise falsified, §10.2), and the remaining daemon/App-stderr printers —
-  `print_witness_failure_context`'s `-verify-linux-owner-install` probe and native-gate probe, and
-  the non-JSON `grep` at the Go witness gate — now print through `print_filtered_output_lines`,
-  which applies the same secret-values filter and 400-byte cap as `print_witness_output_lines`
-  (last 40 lines per block). Probe rows: the function was extracted and fed a secrets file plus
+  (premise falsified, §10.2), and exactly three printers now route through
+  `print_filtered_output_lines`, which applies the same secret-values filter and 400-byte cap as
+  `print_witness_output_lines` (last 40 lines per block):
+  `print_witness_failure_context`'s `-verify-linux-owner-install` probe (`:1695`) and native-gate
+  probe (`:1702`), and the `run_go_test` non-JSON `grep` at the Go witness gate (`:1886`). Two
+  printers stay unfiltered and are recorded as residuals in §8 (the `shared` set's
+  unprovisioned-gate non-JSON `grep` at `:1556`, `head`-bounded to 5 lines, and the Change-1
+  daemon dump at `:1616-1626`, bounded by `-n 80` and a narrow `--grep`); each is
+  carried to rf-acc-native-containment-witness. Probe rows: the function was extracted
+  and fed a secrets file plus
   lines carrying a secret value, a 401-byte line and 51 clean lines through a pipe → only the
   clean lines print, capped at the last 40. The second dispatch (`45426731841`) caught a defect:
   the printer read its python program from the same stdin the pipeline fed, so `python3 -` saw EOF
@@ -1726,4 +1756,6 @@ ratified `docs/plans/2026-11-24-rf-acc-native-burndown-plan.md` joins the owned 
   `python3 scripts/ci/test-jscpd-changed.py` self-tests pass (32 tests); `git diff --check` clean;
   `Code.string_to_quoted!` parse 0 on the retirement script.
 - Residuals recorded, no change: §8's owner-`Before` row and Sol P3-3's one-shot/sub-case sweep
-  row; `docs/TODO.md` gains the owner-`Before` entry for the D3 `harness.md` amendment.
+  row; round 2 adds §8's unfiltered-printer, Change-1-dump and probe-pipeline unit-name rows, all
+  carried to rf-acc-native-containment-witness; `docs/TODO.md` gains the owner-`Before` entry for
+  the D3 `harness.md` amendment.
