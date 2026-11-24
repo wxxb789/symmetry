@@ -1030,7 +1030,8 @@ name unique whatever the call form, which is why the round-2 `machine_run_as` pa
 becomes a readability choice rather than the only protection.
 
 Probe: `unit-name-probe.sh`, sha256
-`9eb89fbf474586cc5d7f984a19c152250a57b588de6fc9eab6c44ba4938f9a31` (verbatim §15.5), extends the
+`9eb89fbf474586cc5d7f984a19c152250a57b588de6fc9eab6c44ba4938f9a31` (listed in §15.5, which
+elides the §14.7-shared setup preamble and marks the elision with one comment line), extends the
 §14.7 probe: it extracts `machine_run`/`machine_run_as` verbatim, stubs the guest transport, and
 calls both parent forms and two `$(machine_run …)` forms (an assignment and a
 `[[ -n "$(…)" ]]` condition) interleaved. Run under WSL Ubuntu-24.04 (bash 5.2.21) against the
@@ -1245,10 +1246,14 @@ recomputed from the final bytes. The round-3 fix kept the script's line count, s
 refs needed no renumbering beyond the DS list; the four extra stale sets are the ones §15.2
 lists.
 
-### 15.5 Appendix — round-3 probe, mutant and census artifacts, verbatim
+### 15.5 Appendix — round-3 probe, mutant and census artifacts, verbatim (the probe's shared setup preamble is §14.7's, referenced rather than repeated)
 
 `unit-name-probe.sh`, sha256
-`9eb89fbf474586cc5d7f984a19c152250a57b588de6fc9eab6c44ba4938f9a31`:
+`9eb89fbf474586cc5d7f984a19c152250a57b588de6fc9eab6c44ba4938f9a31` — the listing below is the
+artifact with its setup lines (`set -Eeuo pipefail` through the `fail()` definition) elided: those
+15 lines are byte-identical to the §14.7 probe's and are cited there, not duplicated; the elision
+is marked by one comment line (the sha256 above pins the full file, and the `fail()` the driver
+calls below is that preamble's):
 
 ```bash
 #!/usr/bin/env bash
@@ -1256,21 +1261,7 @@ lists.
 # round-3 root fix, including command-substitution call sites interleaved with parent calls.
 # Usage: unit-name-probe.sh <script>; exit 0 only when every transient unit name is unique and
 # the parent-shell step names stay strictly increasing.
-set -Eeuo pipefail
-
-script=$1
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-fixture_root=$work
-machine=symmetry-test-machine
-machine_run_count=0
-units_log="$work/units"
-sudo_log="$work/sudo-lines"
-: > "$units_log"
-: > "$sudo_log"
-
-fail() { printf 'PROBE-FAIL: %s\n' "$1" >&2; exit 3; }
-
+# [elision marker, not artifact text: the §14.7 probe's `set -Eeuo pipefail` … `fail()` preamble, byte-identical]
 # Emulates systemd-run: records the unit name, answers a getent passwd read, and relays one
 # stdout line for every other command (--pipe does).
 sudo() {
