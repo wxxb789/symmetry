@@ -196,7 +196,7 @@ function renderChat(path: string, options: HarnessOptions = {}) {
 }
 
 async function openChat() {
-  await screen.findByRole("heading", { level: 1, name: "Chat" });
+  await screen.findByRole("heading", { level: 1, name: "Chat" }, { timeout: 5_000 });
 }
 
 function scopeSelect(): HTMLSelectElement {

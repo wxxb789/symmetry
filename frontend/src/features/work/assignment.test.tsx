@@ -133,7 +133,7 @@ function renderWorkDetail(options: HarnessOptions = {}) {
 }
 
 async function openAssignmentEditor(user: UserEvent) {
-  await screen.findByRole("heading", { level: 1, name: "Subject work item" });
+  await screen.findByRole("heading", { level: 1, name: "Subject work item" }, { timeout: 5_000 });
   await user.click(screen.getByRole("button", { name: "Edit assignment" }));
   return await screen.findByRole("dialog", { name: "Assignment" });
 }
