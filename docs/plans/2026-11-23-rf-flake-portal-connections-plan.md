@@ -13,9 +13,12 @@ diagnose-before-close and TODO-discipline shape).
 
 `browser/tests/portal-connections.spec.mjs` · the slice plan (this file) ·
 `docs/evidence/rf-flake-portal-connections-2026-11-23.md` · `docs/TODO.md` (only if an entry
-closes or a debt is recorded — none does; see "Out of scope"). No helper file is added: the
-navigation barrier lives in the spec itself, which is the only file that calls it. No shared
-module, no driver, no `ci.yml` (W6-12 owns it), no other spec is touched.
+closes or a debt is recorded — none does; see "Out of scope"). One helper lives under
+`browser/tests/`: `portal-connections-recorder.mjs`, holding the navigation barrier and the
+unreadable-body rule (review fix, 2026-11-24; the conductor's PR #276 review ruling grew the
+owned set by the already-wired `browser/scripts/connection-spec-env.test.mjs`, whose four
+discriminating cases the fix added). No driver, no `ci.yml` (W6-12 owns it), no other spec is
+touched.
 
 ## Measured basis
 
@@ -86,6 +89,11 @@ Changes in `browser/tests/portal-connections.spec.mjs`:
    not fail: the navigation sentence (as a suffix, because Playwright prefixes the protocol error)
    and the torn-down-session message. Every message now prints `entry.unreadable`; every other
    unreadable body stays a failure.
+
+(Review fix, 2026-11-24: `navigate` and the unreadable-body rule now live in the
+`browser/tests/portal-connections-recorder.mjs` helper, imported by the spec and exercised by
+`browser/scripts/connection-spec-env.test.mjs`; `navigate`'s settle loop is bounded by its 30 s
+`deadlineMs`, which throws a named refusal instead of spinning — review findings F1/F4.)
 
 Trade-off (contract Change 2): a body the page discarded is not scanned for canaries. Its headers
 were already scanned, every other completed response body still is, and the CI job's own

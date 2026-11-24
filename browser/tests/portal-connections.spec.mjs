@@ -47,6 +47,7 @@ import {
   monitorBrowserErrors,
   test
 } from "./fixtures.mjs";
+import { navigate, unreadableReadFailure } from "./portal-connections-recorder.mjs";
 import { api, attachResource, capture, createProject, deviceContextOptions, login, uniqueKey } from "./readable-fixtures.mjs";
 
 const fixtureVariables = [
@@ -91,10 +92,6 @@ test.describe.configure({ timeout: 120_000 });
 const canaries = ["gho_fixture_connection_token_canary", "fixture-ado-access-token-canary"];
 const secretPattern = new RegExp([...canaries, "Bearer ", "ghp_", "github_pat_"].join("|"));
 const suffix = `${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
-// Playwright 1.65.1's own words for the two tolerated lost reads: the document
-// navigated away, or the session was torn down. No other unreadable body passes.
-const navigatedAway = "Response body is not available for a response that was navigated away from. Read response.body() before triggering any navigation.";
-const sessionClosed = "Target page, context or browser has been closed";
 
 // The identity file is written by the fixture process started for this run, and
 // it names the port that process serves; the target must be that process before
@@ -251,17 +248,6 @@ function recordApiBodies(page) {
   return { responses, requests, consoleMessages, pageErrors, cookieJarSamples };
 }
 
-// The recorder's pending reads do not survive the navigation that replaces them:
-// settle every read already started before navigating.
-const navigate = async (page, recorded, url) => {
-  let pending;
-  do {
-    pending = recorded.responses.length;
-    await Promise.all(recorded.responses.slice(0, pending));
-  } while (recorded.responses.length > pending);
-  await page.goto(url);
-};
-
 async function assertNoCredentials(page, recorded) {
   const browserState = await page.evaluate(() => ({
     html: document.documentElement.outerHTML,
@@ -287,13 +273,10 @@ async function assertNoCredentials(page, recorded) {
     expect(entry.headers.length, `response ${entry.path} must have headers for the credential scan`).toBeGreaterThan(0);
     expect(entry.headers.join("\n"), `response headers for ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
     if (entry.unreadable !== undefined) {
-      // An unreadable body is tolerated only for a GET/HEAD; with no request
-      // failure its recorded error must end in one of the two sentences above.
-      const method = entry.request?.method();
-      expect(["GET", "HEAD"], `an unreadable response must belong to a read: ${method} ${entry.path}: ${entry.unreadable}`).toContain(method);
-      if (entry.request?.failure()) continue;
-      const lost = entry.unreadable.endsWith(navigatedAway) || entry.unreadable.endsWith(sessionClosed);
-      expect(lost, `response ${entry.path} must be readable unless its request was aborted: ${entry.unreadable}`).toBe(true);
+      // An unreadable body passes only as a GET/HEAD whose request was aborted
+      // or whose error ends in one of Playwright's two lost-read sentences.
+      const refusal = unreadableReadFailure(entry);
+      expect(refusal, refusal ?? `response ${entry.path} must be readable unless its request was aborted`).toBeNull();
       continue;
     }
     expect(entry.text, `response ${entry.path} must not contain a provider credential`).not.toMatch(secretPattern);
@@ -956,7 +939,6 @@ test("a provider failure and an ambiguous outcome stay explicit and the next rea
   // request URL belongs to another repository. The console renders the
   // server's receipt, the resource takes the server's failure state, and
   // neither work item's delivery is rewritten.
-  // Back to the connections surface.
   await navigate(page, recorded, `/portal/connections?projectId=${projectId}`);
   await expect(page.getByRole("heading", { name: "Project resources" })).toBeVisible();
   allowBrowserError(page, /status of 400/);

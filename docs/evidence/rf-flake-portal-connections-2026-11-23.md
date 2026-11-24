@@ -142,6 +142,17 @@ so the range adds no second spec file. Neither edit touched an assertion. The
 bytes) are historical. Structural references in this file use the final numbers; line numbers
 quoted from earlier run logs keep the logged value with the final one noted where the two differ.
 
+The review fix (2026-11-24) changed the census shape once more: `navigate` and the
+unreadable-body rule moved out of the spec into `browser/tests/portal-connections-recorder.mjs`,
+imported by the spec and by the oracle test. The spec's counts at the final bytes are `expect(`
+324 — the same count as the base: the review fix replaced the head's two-assertion allowance
+branch with one `expect(refusal, …).toBeNull()` whose predicate is the shared helper's, and the
+discrimination moved to the oracle test — tests 11,
+`capture(page …)` 32, `page.route(` / `unroute(` 2 / 2, 1,446 lines (`git diff --numstat
+5599a0b7`: 34 insertions, 31 deletions). The truth table that distinguishes the tolerated reads
+now lives in `browser/scripts/connection-spec-env.test.mjs` (§7 review-fix re-run), so no case
+stopped being checked; the recorder's sha256 is `9ba8eef0…` and the oracle test's `67d43e95…`.
+
 ## 6. Gates (real commands, counts, exit codes)
 
 Local host: Windows 11, PostgreSQL 18.6; the baseline ran on the shared instance at
@@ -173,7 +184,15 @@ the pinned lockfile.
 | records carry no host path | the account name, drive-letter, and `/mnt` and `/home` prefixes scanned over the plan and evidence records | 0 (no hits) | plan and evidence clean |
 | whitespace/CRLF on the hand-over files (spec, plan, evidence) | `grep -cP '[ \t]+$'` / `grep -c $'\r'` | 0 | 0 trailing-whitespace lines, 0 CRLF lines each |
 | `git diff --check` | repo root | 0 | — |
-| spec bytes handed over | `sha256sum browser/tests/portal-connections.spec.mjs` | — | `8014879b15bca310c771a07516064ed181798f671cda5a2c40a3a744ea899250` (fix r1 comment trim), 52 insertions / 31 deletions against `5599a0b7`; predecessor hashes are recorded in §5 |
+| spec bytes handed over | `sha256sum browser/tests/portal-connections.spec.mjs` | — | `8014879b15bca310c771a07516064ed181798f671cda5a2c40a3a744ea899250` (fix r1 comment trim) — historical: superseded by the review-fix final-bytes row below; 52 insertions / 31 deletions against `5599a0b7`; predecessor hashes are recorded in §5 |
+| review-fix rule tests (F1) | `node --test scripts/connection-spec-env.test.mjs` (browser/); CI job `browser-fixture-linux`, step "Run the browser node suites" | 0 | 8/8 pass: the four pre-existing cases plus the unreadable-body truth table, the barrier's settle order, its named refusal at the deadline, and the spec's no-bare-`page.goto` guard |
+| review-fix mutants (F1) | three scratch mutants of the same tree (recorder `endsWith`→`includes`; spec `navigate(` call → bare `page.goto`; recorder `navigate` body → immediate `page.goto`), each red then restored | 1 → 0 each | red: the embedded-sentence tolerance, `a bare page.goto in the spec would skip the barrier that settles its pending reads`, `the navigation waits for a read that is still pending`; each restore re-ran green and left the file's sha256 unchanged |
+| second class-1 case repeats (F2) | `repeat.sh` `-g "a provider failure"` over the final bytes, one suite at a time in the foreground, `timeout 75m` | 0 / 1 / 0 | desktop 60/60 (51.9 m); mobile attempt A 59/60 (36.8 m, one fixture-stall failure — §7 review-fix re-run), rerun 60/60 (30.0 m) |
+| browser lint (final bytes) | `node node_modules/eslint/bin/eslint.js . --max-warnings 0` (browser/) | 0 | 0 findings |
+| browser suite coverage (final bytes) | `python3 scripts/ci/assert-browser-suite-coverage.py` | 0 | `suites=16 wired=14 manual=2 unclassified=0`; the recorder helper is not a suite and the oracle test is a named node suite |
+| changed-doc record sanitizer | `python3 scripts/ci/check-record-cleanliness.py --base origin/main --head <dangling tree commit>` | 0 | this record passes the sanitize tool's check on its head blob; both changed records also scan clean for profile-name, drive-letter, `/home`, `/mnt` and `/Users` host paths |
+| `git diff --check` (range and working tree, final bytes) | `git diff --check origin/main...HEAD`; `git diff --check` | 0 / 0 | — |
+| final bytes (review fix) | `sha256sum` over the spec, `browser/tests/portal-connections-recorder.mjs`, `browser/scripts/connection-spec-env.test.mjs` | — | `89e5a167…` (spec), `9ba8eef0…` (recorder), `67d43e95…` (oracle test); the two added surfaces are the helper and the oracle cases |
 | CI `browser-fixture-linux` 3× | `gh run rerun` on the PR | — | conductor-owned; needs the pushed PR head (this stage does not push) |
 
 ## 7. Loaded repeats (CI configuration: workers 1, retries 0)
@@ -471,28 +490,87 @@ desktop suite and the stage ended while that command was a background job, after
 (`class1-desktop-final.log` in the scratch directory); its JSON report never closed, so it is not
 part of the count. The three counts above come from the foreground re-run.
 
+### Review-fix re-run — the second class-1 case on the final bytes (fix stage, 2026-11-24/25)
+
+The PR #276 review's F1-F4 fixes changed the spec bytes again: the `navigate` barrier and the
+unreadable-body rule moved to `browser/tests/portal-connections-recorder.mjs` (one helper under
+`browser/tests/`, imported by the spec), the discriminating cases landed in the already-wired
+`browser/scripts/connection-spec-env.test.mjs` (F1), the `spec:~959` step label was deleted (F3),
+and `navigate` gained the 30 s `deadlineMs` bound whose lapse throws the named refusal (F4).
+Final bytes: spec `89e5a167…` (34 insertions / 31 deletions against `5599a0b7`), recorder
+`9ba8eef0…`, oracle test `67d43e95…`; the fixes are uncommitted working-tree changes on head
+`4c8fbbdb`.
+
+The review (F2) found the second class-1 case — `a provider failure and an ambiguous outcome stay
+explicit and the next readback writes the provider's answer`, final `spec:731` — had not been
+re-run on the fix bytes although its two navigation sites changed. It was run over the final
+bytes with the apply-stage re-run's rig, runner and configuration: the same `repeat.sh`, one
+suite at a time in the foreground, `timeout 75m`, `workers: 1`, `retries: 0`, each suite on a
+database dropped and recreated immediately before it (`cycle-port.sh`, fixture at High
+priority), one `probe.sh` (a `/healthz` curl, a `/portal/login` curl, a raw `select 1` every
+~3 s) beside each run.
+
+| suite | command | executions | passed | failed | wall |
+| --- | --- | ---: | ---: | ---: | ---: |
+| class 1b, desktop | `-g "a provider failure" --project=desktop-chromium --repeat-each=60` (4021, fresh database) | 60 | 60 | 0 | 51.9 m (3127 s) |
+| class 1b, mobile, attempt A | the same filter, `--project=mobile-chromium --repeat-each=60` (fresh database) | 60 | 59 | 1 | 36.8 m (2214 s) |
+| class 1b, mobile, rerun | the same suite again, fresh database | 60 | 60 | 0 | 30.0 m (1805 s) |
+
+Desktop JSON `expected 60, unexpected 0, skipped 0`; the rerun the same; attempt A `expected 59,
+unexpected 1`. The recorder assertion (`must be readable unless its request was aborted`) appears
+0 times in all three logs. Stalls were present in every window: desktop probe max `/healthz`
+14.71 s / `/portal/login` 13.49 s; attempt A 22.40 s / 6.92 s; rerun 21.76 s / 12.69 s. A
+two-execution mobile sanity run before the budget passed 2/2 (49.0 s).
+
+Attempt A's one failure (repetition 12) is a host-stall loss, not a spec or product defect, and
+the record of it is deliberate:
+
+- the failed assertion is `expect(issuesRow).toContainText(/Failed/)` after the second
+  `Sync Issues` click; the row kept reading `Healthy Synced` with the successful sync's
+  timestamp through 62 locator polls and the whole 30 s window;
+- the fixture's transport log holds exactly two provider reads for that reference: status 200
+  (the successful sync) and status 500 (the injected failure) — the failure read was served;
+- the run's trace shows the console's sync `POST /portal/api/resources/…/sync` returning the
+  app's documented `provider_failure` mapping (`502`, `lib/symmetry_control_web/protocol.ex:87`),
+  then three refresh `GET`s (workspace, connections, workspace) at 16:06:07Z recorded with
+  status `-1` — never completed — and no further reads before the assertion timed out;
+- the probe's own samples jump from `08:05:58` to `08:06:31`, the 08:06:31 sample timing
+  `/healthz` at 22.40 s and `/portal/login` at 6.92 s: the fixture/host stalled from ≈08:06:01
+  for ~22-30 s, exactly when the console's refresh reads went out and never returned. The row
+  could not change while the reads hung, and the 30 s assertion window closed while the stall
+  was still running;
+- the rerun passed 60/60 with the same stall class still present (probe max 21.76 s), so the
+  stall is survivable and attempt A's loss is the tail of the documented stall class rather than
+  a property of the bytes.
+
+One earlier mobile attempt is voided and recorded for the judge: started 06:50, its dedicated
+PostgreSQL 18.6 cluster at 127.0.0.1:55444 was stopped externally and cleanly at 07:06:35 (its
+log reads `database system was shut down at 2026-11-24 07:06:35`; the fixture's next lines are
+`connection refused`), so repetitions 15-60 failed on server 500s, login guards and one
+`JSON.parse` of the DB-down error body: JSON `expected 14, unexpected 46`. Repeats 1-14 had
+passed, the recorder assertion appears 0 times in that log too, and the run is not part of the
+counts above. The cluster was restarted detached and the runs above were made against it.
+
 ## 8. Residual risks and limits
 
 - The `navigate` barrier settles reads already started; a response event that fires between its
   last check and the navigation commit can still strand a body — that is exactly the documented
   navigation allowance, and it is the only tolerated class beyond an aborted request.
-- The barrier is load-bearing but unguarded by static checks: a bare `page.goto` added to this
-  spec later would redden only the forced delayed-read pin, not a deterministic test (§4's
-  mutation row), so the flake could return silently in CI — the mutant reddens only outside CI,
-  an oracle gap. The candidate guards (a scoped
-  `no-restricted-syntax` block in `browser/eslint.config.mjs`, or a source-text case in
-  `browser/scripts/connection-spec-env.test.mjs`) are outside this slice's owned files and are
-  recorded here instead (apply-stage finding F2).
+- The barrier is now guarded in CI: the oracle cases in
+  `browser/scripts/connection-spec-env.test.mjs` (job `browser-fixture-linux`, step "Run the
+  browser node suites") redden on a widened allowance, on a bare `page.goto` re-entering the
+  spec, and on a settle bypass in the helper (§6 review-fix rows). A later edit could still
+  widen the rule by editing the oracle along with it, but not silently.
 - The class-2 pin uses CPU throttling as the contract's example permits; it reproduces the hosted
   call log, not the hosted host.
 - Local runs are Windows + native PostgreSQL 18.6 on 5432 rather than the CI Ubuntu + service
   container on 5432; the fixture, the SPA build and the spec bytes are the revision's.
 - The CI acceptance (3 consecutive green `browser-fixture-linux` attempts) is conductor-owned.
-- The repeat budget's class-1 filter is the "external work items" case only. The contract also
-  names `a provider failure and an ambiguous outcome stay explicit ...` (base `:720`, final `:748`)
-  as a class-1 case: its bytes are identical in base, reordered and final revisions, its two
-  `navigate()` sites are the shared helper under test here, and the previous stage's whole-spec
-  repeats ran it inside a 121-execution clean stretch; it is not re-exercised by this budget.
+- The repeat budget's second class-1 case (`a provider failure and an ambiguous outcome stay
+  explicit ...`, final `:731`) was re-run on the final bytes for this review fix: desktop 60/60,
+  mobile 59/60 (one diagnosed stall) and rerun 60/60 (§7 review-fix re-run), so the case is
+  exercised by this budget now. The first class-1 case and class 2 keep their fix r1 counts on
+  those bytes.
 - `pnpm --filter symmetry-browser-acceptance lint` cannot run on this checkout: the local
   `browser/node_modules/.bin` carries playwright shims only, so the script's `eslint` is not on
   PATH (exit 1, `'eslint' is not recognized`). The equivalent command the script names,
@@ -500,6 +578,7 @@ part of the count. The three counts above come from the foreground re-run.
   The repo has no Prettier config or script for `browser/`; `.editorconfig` (LF, two spaces,
   final newline, no trailing whitespace) is the formatting contract and `git diff --check` is its
   check.
-- The `navigate` settle loop re-checks until no new response arrives while it awaits; it is
-  bounded here because the surfaces read on demand and on 200 ms invalidation batches rather
-  than on a fixed interval, and no execution of the 240 budgeted runs stalled inside it.
+- `navigate`'s settle loop is now explicitly bounded: `deadlineMs` (30 s default) throws `the
+  recorder's reads did not settle within …ms before navigating to …` instead of spinning, so a
+  sustained response stream fails by name rather than as a generic test timeout. No budgeted
+  execution reached the deadline.

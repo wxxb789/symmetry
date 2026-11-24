@@ -9,9 +9,11 @@
 // a module-scope throw fails the whole suite before any test runs.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { navigate, navigatedAway, sessionClosed, unreadableReadFailure } from "../tests/portal-connections-recorder.mjs";
 
 const browserRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const playwrightCli = path.join(browserRoot, "node_modules", "@playwright", "test", "cli.js");
@@ -79,4 +81,99 @@ test("the complete fixture environment collects the twenty-two fixture tests", (
   });
   assert.equal(run.status, 0, run.output);
   assert.match(run.output, /Total: 22 tests in 1 file/);
+});
+
+// The recorder rules the connection spec relies on are exercised here, where
+// ci.yml's "Run the browser node suites" step of browser-fixture-linux runs them.
+const unreadableEntry = (method, unreadable, failure = null) => ({
+  path: "/portal/api/probe",
+  unreadable,
+  request: { method: () => method, failure: () => failure },
+});
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test("the unreadable-body rule tolerates only a read lost to a navigation or a teardown", () => {
+  const tolerated = [
+    unreadableEntry("GET", "socket hang up", "net::ERR_ABORTED"),
+    unreadableEntry("HEAD", "socket hang up", "net::ERR_ABORTED"),
+    unreadableEntry(
+      "GET",
+      `Error: response.text: Protocol error (Network.getResponseBody): No resource with given identifier found\n${navigatedAway}`,
+    ),
+    unreadableEntry("HEAD", `Error: response.text: ${sessionClosed}`),
+  ];
+  for (const entry of tolerated) {
+    assert.equal(unreadableReadFailure(entry), null, `${entry.request.method()} ${entry.unreadable}`);
+  }
+  const refused = [
+    unreadableEntry("POST", navigatedAway, "net::ERR_ABORTED"),
+    unreadableEntry("DELETE", sessionClosed),
+    unreadableEntry("GET", "Response body is unavailable for redirect responses"),
+    unreadableEntry("GET", `${navigatedAway} (retried)`),
+    unreadableEntry("HEAD", `prefix ${sessionClosed} suffix`),
+    unreadableEntry("GET", navigatedAway.replace("Read response.body()", "read response.text()")),
+    unreadableEntry("GET", "socket hang up"),
+  ];
+  for (const entry of refused) {
+    const method = entry.request.method();
+    const refusal = unreadableReadFailure(entry);
+    assert.equal(typeof refusal, "string", `${method} ${entry.unreadable}`);
+    assert.ok(refusal.includes(entry.unreadable), refusal);
+    if (["GET", "HEAD"].includes(method)) {
+      assert.match(refusal, /^response \/portal\/api\/probe must be readable unless its request was aborted: /);
+    } else {
+      assert.match(refusal, new RegExp(`^an unreadable response must belong to a read: ${method} /portal/api/probe: `));
+    }
+  }
+});
+
+test("navigate settles every recorded read before it navigates, including reads that land while it waits", async () => {
+  const order = [];
+  const page = { goto: async (url) => { order.push(`goto ${url}`); } };
+  await navigate(page, { responses: [] }, "/portal/connections");
+  assert.deepEqual(order, ["goto /portal/connections"], "a recorder with no pending read navigates at once");
+  order.length = 0;
+
+  const recorded = { responses: [] };
+  let releaseFirst;
+  recorded.responses.push(new Promise((resolve) => {
+    releaseFirst = () => { order.push("first read settled"); resolve({ path: "/portal/api/first" }); };
+  }));
+  const navigation = navigate(page, recorded, "/portal/connections");
+  await tick();
+  assert.deepEqual(order, [], "the navigation waits for a read that is still pending");
+  let releaseSecond;
+  recorded.responses.push(new Promise((resolve) => {
+    releaseSecond = () => { order.push("second read settled"); resolve({ path: "/portal/api/second" }); };
+  }));
+  releaseFirst();
+  await tick();
+  assert.deepEqual(order, ["first read settled"], "the navigation waits for the read that landed during the settle");
+  releaseSecond();
+  await navigation;
+  assert.deepEqual(order, ["first read settled", "second read settled", "goto /portal/connections"]);
+});
+
+test("navigate refuses by name when its reads cannot settle inside the deadline", async () => {
+  const order = [];
+  const page = { goto: async (url) => { order.push(`goto ${url}`); } };
+  await assert.rejects(
+    navigate(page, { responses: [new Promise(() => {})] }, "/portal/connections", { deadlineMs: 25 }),
+    /the recorder's reads did not settle within 25ms before navigating to \/portal\/connections/,
+  );
+  await assert.rejects(
+    navigate(page, { responses: [Promise.resolve({ path: "/portal/api/probe" })] }, "/portal/connections", { deadlineMs: 0 }),
+    /the recorder's reads did not settle within 0ms before navigating to \/portal\/connections/,
+  );
+  assert.deepEqual(order, [], "a refused navigation must not reach page.goto");
+});
+
+test("the connection spec navigates only through the shared barrier", () => {
+  const source = readFileSync(path.join(browserRoot, specFile), "utf8");
+  assert.ok(
+    !source.includes("page.goto"),
+    "a bare page.goto in the spec would skip the barrier that settles its pending reads",
+  );
+  assert.match(source, /import \{ navigate, unreadableReadFailure \} from "\.\/portal-connections-recorder\.mjs"/);
 });
