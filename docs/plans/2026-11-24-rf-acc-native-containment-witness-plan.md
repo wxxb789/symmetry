@@ -19,7 +19,7 @@ This plan records only the implementation choices the accepted contract leaves u
   ≤4 KiB / ≤40 lines, replaces every known credential value with one constant marker
   (`<redacted>`), and then refuses — returns an error and no text — if any known value survives.
   Known values: every `os.Environ` entry whose name matches `linuxV2IsCredentialEnvironmentName`
-  or is `SYMMETRY_OPERATOR_TOKEN` / `SYMMETRY_ENROLLMENT_TOKEN` (the writer's own two cases,
+  (which covers the writer's `SYMMETRY_OPERATOR_TOKEN` / `SYMMETRY_ENROLLMENT_TOKEN` cases,
   `writeLinuxV2NativeWitness`), plus the request's `Claim.LeaseToken` and
   `Claim.ProviderAccess.Token`. Empty values are skipped, like the writer skips them.
 - Reporting (`owner_cli_test.go`): `linuxV2ReportOwnerWitnessFailure(t, fixture, command)` first
@@ -36,12 +36,12 @@ This plan records only the implementation choices the accepted contract leaves u
 
 ## 2. Change 1 — call sites instrumented
 
-The contract names the barrier wait (`:4414`) and the stage waits at `:1721`, `:3770`, `:3935`.
-All eight `waitLinuxV2OwnerWitnessStage` call sites hold the live command and share the same
-failure shape, so every one of them reports through the new helper before `t.Fatalf`:
-`:1720`, `:2352`, `:3361`, `:3539`, `:3769`, `:3934`, `:4092`, `:4413`. The extra four are
-report-only and cannot change pass behaviour; leaving them silent would keep the `ack_loss` and
-helper-response-loss rows unnamed in the same run.
+The contract names the barrier wait and the stage waits (its base-tree refs `:4414`, `:1721`,
+`:3770`, `:3935`). All eight `waitLinuxV2OwnerWitnessStage` call sites hold the live command and
+share the same failure shape, so every one of them reports through the new helper before
+`t.Fatalf`: `:1744`, `:2377`, `:3387`, `:3566`, `:3797`, `:3963`, `:4122`, `:4444`. The extra four
+are report-only and cannot change pass behaviour; leaving them silent would keep the `ack_loss`
+and helper-response-loss rows unnamed in the same run.
 
 ## 3. Change 2 — cleanup witness admission callback
 

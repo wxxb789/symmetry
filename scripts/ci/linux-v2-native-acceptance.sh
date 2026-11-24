@@ -1662,8 +1662,8 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
-# The owner-witness command's stderr is discarded by its own harness, so a failed witness
-# is named from the fixture state it leaves: its document, journals, markers, and configs.
+# A failed witness is named from the fixture state it leaves: its document, journals,
+# markers, and configs.
 print_witness_failure_context() {
   local output_directory=$1
   shift

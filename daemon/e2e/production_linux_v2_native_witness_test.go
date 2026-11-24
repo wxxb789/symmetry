@@ -2022,7 +2022,7 @@ func linuxV2KnownCredentialValues(request linuxV2OwnerWitnessRequest) []linuxV2C
 	values := make([]linuxV2CredentialValue, 0, 4)
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
-		if !ok || value == "" || !linuxV2IsCredentialEnvironmentName(key) && key != "SYMMETRY_OPERATOR_TOKEN" && key != "SYMMETRY_ENROLLMENT_TOKEN" {
+		if !ok || value == "" || !linuxV2IsCredentialEnvironmentName(key) {
 			continue
 		}
 		values = append(values, linuxV2CredentialValue{name: key, value: value})

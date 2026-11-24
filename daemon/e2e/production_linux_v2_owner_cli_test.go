@@ -1586,10 +1586,6 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 		t.Logf("owner-witness stderr capture refused: %v", err)
 		return
 	}
-	if len(lines) == 0 {
-		t.Logf("owner-witness stderr capture is empty")
-		return
-	}
 	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
 		t.Logf("owner-witness stderr: %s", line)
 	}
