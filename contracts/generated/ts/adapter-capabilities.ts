@@ -11,7 +11,7 @@ export interface SymmetryAdapterCapabilitiesV1 {
   adapter?: Adapter;
 }
 export interface Adapter {
-  kind: ShortIdentifier;
+  kind: "generic" | "codex" | "claude_code" | "pi" | "omp" | "omo" | "opencode";
   native_version: ShortIdentifier;
   implementation_version: ShortIdentifier;
   protocol_version: PositiveInteger;

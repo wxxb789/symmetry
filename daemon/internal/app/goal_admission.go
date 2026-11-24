@@ -46,13 +46,6 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 		return err
 	}
 	if providerAccess != nil {
-		if capabilities.Kind != harness.KindPi {
-			return &harness.CapabilityError{
-				Kind:       capabilities.Kind,
-				Capability: harness.CapabilityProviderAccess,
-				Reason:     "native provider broker bridge is implemented only for pi",
-			}
-		}
 		if err := capabilities.Require(harness.CapabilityProviderAccess); err != nil {
 			return err
 		}
@@ -68,11 +61,6 @@ func admissionLaunchFailure(admission protocol.Admission, capabilities harness.C
 			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: fresh native Goal sessions cannot name a retained session", protocol.TaskResultReasonResumeRejected))
 		}
 	case protocol.SessionModeResume:
-		// Retained resume requires an implemented transport as well as a
-		// verified capability; other adapters cannot consume a reservation.
-		if capabilities.Kind != harness.KindPi && capabilities.Kind != harness.KindOMP && capabilities.Kind != harness.KindOmO {
-			return taskResultFailure(protocol.TaskResultReasonResumeRejected, fmt.Errorf("%s: native retained resume is not implemented for harness %q", protocol.TaskResultReasonResumeRejected, capabilities.Kind))
-		}
 		if err := capabilities.Require(harness.CapabilityResume); err != nil {
 			return taskResultFailure(protocol.TaskResultReasonResumeRejected, err)
 		}

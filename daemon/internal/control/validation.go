@@ -566,9 +566,9 @@ func validateGoalSessionAttach(runID string, request GoalSessionAttachRequest) e
 			return fmt.Errorf("%s must not be empty", field)
 		}
 	}
-	switch request.HarnessKind {
-	case "codex", "claude_code", "pi", "omp", "omo", "opencode":
-	default:
+	// Control's attach gate admits only the six native kinds; generic must fail locally
+	// before any request is sent, while the wire set itself stays owned by protocol.
+	if kind, ok := protocol.ParseHarnessKind(request.HarnessKind); !ok || kind == protocol.HarnessKindGeneric {
 		return fmt.Errorf("harness_kind %q is invalid", request.HarnessKind)
 	}
 	if request.RepositoryResourceID != nil {

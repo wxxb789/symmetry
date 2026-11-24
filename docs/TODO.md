@@ -85,13 +85,6 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
       decoder, W4-15b's driver), so the sentence waits for the slice that next opens it. Owner
       area: daemon harness.
 
-- [ ] Unify the `controlCapability` switch copy in `daemon/internal/harness/claude/adapter.go:576`
-      with the root helper in `daemon/internal/harness/generic.go:255`: the two bodies are
-      byte-identical outside the `harness.` qualifier, but the root helper is unexported and
-      `generic.go` was outside the rf-w4-15c owned file set, so the relocation kept a package-local
-      copy. Export the root helper and delete the copy in the slice that next owns `generic.go`
-      (A3 adapter policy, W5). Owner area: daemon harness.
-
 - [ ] Re-pin `codex.Probe`'s own nil-context guard: `daemon/internal/harness/codex/probe.go`
       rejects a nil context with `"codex probe context must not be nil"`, and after the rf-w4-15c
       relocation deleted the root registry-seam case that exercised a nil context end to end, no
@@ -1038,15 +1031,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
 
 ## Deferred review findings (PR #205)
 
-- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
-      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
-      `(partial)` label on a timeout-truncated package once any test in that package failed.
-      `scripts/ci/go-test-durations.py:213` computes
-      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
-      so a package that has a failed test counts as fully explained even when its stream is cut
-      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
-      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
-      must fix the partial-run detection first.
 - [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
       misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
       `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
@@ -1268,31 +1252,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       with the next lever named by the conductor: profile the longest async module and split it,
       not more conversions. No further work in this slice.
 
-## Deferred review findings (PR #197)
-
-- [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
-      `linuxpreflight` extraction (2026-11-21, branch `refactor/rf-w4-19-linuxpreflight-package`;
-      found by the round-1 review of PR #197 (P3-2)). The extraction could not move the vocabulary
-      out of `internal/app`: `configuredHarnessKind` and `nativeGoalHarnessKind` are copied from
-      `internal/app/probe.go:123,156` into `daemon/internal/linuxpreflight/cgroup_linux.go:31-63`,
-      and the same seven-kind table exists a third time in the config loader
-      (`internal/config/config.go:321-323`, message at `:323`, byte-identical to
-      `internal/app/probe.go:140`). Only the "new kind" direction fails closed: a kind the copy does
-      not know is rejected by `verifyLinuxNativeRuntimeSelection`, never admitted; if `app` dropped a
-      kind from its native-goal set, preflight would still accept it — though the runtime would still
-      refuse it, so this is not an authority gap. The pin test
-      `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
-      (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
-      hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
-      undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
-      predicate — consumed by `internal/config`, `internal/app/probe.go` and
-      `validateConfiguredHarness` (`internal/app/goal_admission_tx.go`) and `linuxpreflight`, with
-      the pin test reading that shared table instead of a literal. That touches `internal/harness`,
-      `internal/app/probe.go` and `internal/app/goal_admission_tx.go`, all
-      outside the rf-w4-19 owned set (plan
-      `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
-      vocabulary"), so the slice kept the copy and recorded this entry instead.
-
 ## Deferred review findings (PR #200)
 
 - [ ] Harden the goal-session uncertain-reason budget against invalid UTF-8 at the store
@@ -1510,14 +1469,10 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       them clean.
 
 - [ ] `.github/workflows/ci.yml`: shellcheck-enabled `actionlint` still does not terminate on the
-      Windows development host (reproduced while running this sweep's gate), and Credo still prints
-      the same numbered list for files skipped over `parse_timeout` and for unparsable files, so the
-      strict baseline can deflate even with the `credo_strict_unparsed_files` guard printing.
-
-- [ ] `daemon/internal/linuxpreflight/cgroup_linux.go`: `configuredHarnessKind` is a verbatim copy
-      of the app-side vocabulary owner (`internal/app/probe.go`) and the config loader's set; the
-      package test pins a literal table, not the app-side copy, so drift is undetected. The package
-      cannot import `internal/app`.
+      Windows development host (reproduced while running this sweep's gate). The Credo half of the
+      item — that a source file skipped over `parse_timeout` or unparsable could deflate the strict
+      baseline with only a guard printing — closed at rf-w6-10 and moved to
+      `docs/archive/CLOSED-TODO.md`.
 
 - [ ] `daemon/cmd/symmetry-fake-agent/autonomous.go`: on a carrier whose `Close` cannot unblock a
       parked read (the inherited stdio pipe), the reader goroutine is not joined before the run
@@ -1590,7 +1545,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer` and
       `TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames` (`daemon/internal/platform/anchor_wire_shape_test.go`,
       `//go:build linux && amd64`; package `daemon/internal/platform`): failed once in the hosted
-      `coverage-daemon` job (advisory, `continue-on-error: true`; `go test -count=1 -timeout 1200s
+      `coverage-daemon` job (advisory at the time, `continue-on-error: true`; `go test -count=1 -timeout 1200s
       -coverprofile=coverage.out ./...` through `scripts/ci/stdio-only-caller-boundary.py`), run
       `44973284689` attempt 1, on PR #223 head `ca173870` — whose own change is records-only
       (`docs/evidence/comment-policy-sweep-2026-11-22.md` and its plan) over a PR whose code hunks are
@@ -1811,6 +1766,67 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       public specs and again in `control/lib/symmetry_control/orchestration/task_reads.ex:333-338`
       (typedoc at `:328`) for the moved specs. A drifted copy would mis-document the retry
       projection without failing a test.
+
+## Credo strict ratchet: count-0 blocking (rf-w6-10, 2026-11-23)
+
+- [ ] `.github/workflows/ci.yml` / `control/.credo.exs`: the Credo gate blocks against the committed
+      ratchet (`scripts/ci/credo-strict-baseline.json`: 564 issues over 225 files at `95d1df45`),
+      not at count 0: the 2026-11-21 reconcile replaced the zero target because zero is not reachable
+      inside W6. The residual burn-down is the remaining 326 refactoring / 160 readability / 73
+      design / 5 warning findings, after the alias-class share Styler delivered (rf-w6-11) and the
+      web-tree clean-up (#147). Every decrease is recorded in the same change as the fix; a check is
+      never disabled and no `credo:disable` is added.
+
+## Claude Goal-session attach carries the internal harness-kind spelling (rf-a3 observation, 2026-11-23)
+
+- [ ] Fix the claude harness-kind spelling leak across the Control boundary (observed 2026-11-23
+      while auditing the rf-a3 kind vocabulary; the same-day conductor ruling Q2=a recorded it
+      instead of folding a wire-value change into that refactor). The daemon's internal spelling
+      `harness.KindClaude` is `"claude"` while the wire/config spelling is `"claude_code"`; the
+      Goal-session launch intent and attach payload persist and send the internal value
+      (`daemon/internal/app/goal_admission_tx.go:502,518,653,670` →
+      `daemon/internal/app/goal_delivery.go:531`), while Control's attach inclusion list and DB
+      constraint admit `"claude_code"` only
+      (`control/lib/symmetry_control/goals/schemas.ex:509`,
+      `control/priv/repo/migrations/20260909000000_add_goal_0006_control_plane.exs:517`). A claude
+      native Goal-session attach would therefore be refused `:invalid_request` by Control. Nothing
+      reaches it today because claude resolves to the unavailable adapter, so fixing it (map the
+      attach request's kind through the wire spelling at that one boundary, plus a Control-side
+      test) changes a wire field value and enables a previously refused flow — it needs its own
+      authorization and independent review. Line numbers are the rf-a3 base `b9d4b4a4`; no test
+      covers the cross-language boundary today (the app tests use a fake Control client).
+      Owner area: daemon app + control goals.
+
+## Retained-resume owner gate still answers by kind list (rf-a3 observation, 2026-11-23)
+
+- [ ] Decide the retained-resume owner gate that still answers by kind list.
+      `daemon/internal/app/native_run.go:2017` (`verifyNativeTaskResultSubject`) admits a
+      retained-resume subject only while the running capability kind is pi/omp/omo. Since the
+      rf-a3 Q1=a change, `admissionLaunchFailure` answers retained resume purely from the
+      capability projection (probe: the truth table's `resume.advertised` rows pass for every
+      kind), so a resume-advertising kind outside pi/omp/omo now passes admission and is then
+      refused by this owner gate — a divergence no test covers (the table pins the admission
+      answer only). Align the gate with the projection answer or record it as the deliberate
+      retained-resume owner allowlist; do not delete the kind list silently. Owner area:
+      daemon app.
+
+## Duration ratchet: the adopted over-cap rows (rf-w6-12, 2026-11-24)
+
+- [ ] Burn down the five rows the duration gate adopts instead of failing
+      (`scripts/ci/go-test-durations.py` `ADOPTED_TEST_CEILINGS`, committed by the rf-w6-12 branch):
+      `internal/app`'s `TestOutputBackpressureRecoversWithOneTruncationMarker` (167.20 s measured
+      max on the race runner) and `TestRawOutputBudgetDropsWithoutFailingSemanticEvents` (124.96 s),
+      plus `internal/state`'s
+      `TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation` (34.58 s),
+      `TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded` (32.91 s) and
+      `TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch` (33.88 s). The two
+      `internal/app` rows do journal throughput work proportional to their 5 MiB fixture under
+      `-race` (no timer in the body; the ten-run measurements live in
+      `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md`), so a smaller fixture at the same
+      semantics or a production-side batching fix is the honest route; the three `internal/state`
+      rows straddle the 30 s cap and are the first candidates. Owner area: `internal/app` and
+      `internal/state` performance. Until then each row is ratcheted at 1.2x its measured max, and
+      any test the roster does not name stays under the 30 s cap.
 
 ## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)
 

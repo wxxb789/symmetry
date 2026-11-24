@@ -17,6 +17,7 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
   import SymmetryControlWeb.TestConn, only: [api_conn: 0, operator_conn: 1, assert_error: 3]
 
   alias SymmetryControl.Goals.ContextSnapshot
+  alias SymmetryControl.Goals.Goal
   alias SymmetryControl.Goals.GoalDecision
   alias SymmetryControl.Goals.GoalEvent
   alias SymmetryControl.Goals.GoalExternalWait
@@ -137,14 +138,28 @@ defmodule SymmetryControlWeb.PortalGoalAttentionTest do
     conn: conn
   } do
     project = create_project()
-    # The feed is ordered by `updated_at` descending, so distinct durable
-    # timestamps make the page order deterministic instead of a same-second
-    # accident.
+    # The feed is ordered by `updated_at` descending; explicit stamps keep the
+    # page order deterministic without sleeping through the wall clock.
     first = create_goal(conn, project, "First attention goal")
-    Process.sleep(1_100)
+
+    Repo.update_all(
+      from(g in Goal, where: g.id == ^first),
+      set: [updated_at: ~U[2026-01-01 00:00:01.000000Z]]
+    )
+
     second = create_goal(conn, project, "Second attention goal")
-    Process.sleep(1_100)
+
+    Repo.update_all(
+      from(g in Goal, where: g.id == ^second),
+      set: [updated_at: ~U[2026-01-01 00:00:02.000000Z]]
+    )
+
     third = create_goal(conn, project, "Third attention goal")
+
+    Repo.update_all(
+      from(g in Goal, where: g.id == ^third),
+      set: [updated_at: ~U[2026-01-01 00:00:03.000000Z]]
+    )
 
     # All three draft goals are attention-relevant (`draft` is a served
     # attention reason), so the page is paginated by the server cursor over the

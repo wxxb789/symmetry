@@ -13,7 +13,7 @@
       # Credo *skips* a source file above this cap and still prints a summary, silently
       # under-reporting the count; 30000 is a hang guard, not a budget.
       parse_timeout: 30_000,
-      # CI greps the summary line; colour escapes would make the counts differ from a local run.
+      # The baseline gate parses the raw report and refuses colour escapes; keep colour off.
       color: false,
       # An empty `checks: %{}` falls back to Credo's built-in defaults and silently
       # shifts the counted set; keep the enabled/disabled lists explicit.
