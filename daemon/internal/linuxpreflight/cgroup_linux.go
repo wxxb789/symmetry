@@ -20,44 +20,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func configuredHarnessKind(value string) (harness.Kind, error) {
-	switch value {
-	case config.RuntimeHarnessGeneric:
-		return harness.KindGeneric, nil
-	case config.RuntimeHarnessCodex:
-		return harness.KindCodex, nil
-	case config.RuntimeHarnessClaudeCode:
-		return harness.KindClaude, nil
-	case config.RuntimeHarnessPi:
-		return harness.KindPi, nil
-	case config.RuntimeHarnessOMP:
-		return harness.KindOMP, nil
-	case config.RuntimeHarnessOmO:
-		return harness.KindOmO, nil
-	case config.RuntimeHarnessOpenCode:
-		return harness.KindOpenCode, nil
-	default:
-		return "", fmt.Errorf("runtime.harness_kind %q is unsupported", value)
-	}
-}
-
-// Adapter families whose launch contract is staged: process identity, then native
-// session handle, then a native turn. Verbatim copy of the app-side owner.
-func nativeGoalHarnessKind(kind harness.Kind) bool {
-	switch kind {
-	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOmO, harness.KindOpenCode:
-		return true
-	default:
-		return false
-	}
-}
-
 func verifyLinuxNativeRuntimeSelection(value config.Config) error {
-	kind, err := configuredHarnessKind(value.Runtime.HarnessKind)
+	kind, err := harness.ParseKind(value.Runtime.HarnessKind)
 	if err != nil {
 		return fmt.Errorf("select configured Linux native harness: %w", err)
 	}
-	if !nativeGoalHarnessKind(kind) || kind == "generic" {
+	if !kind.NativeGoal() {
 		return fmt.Errorf("Linux owner preflight rejects generic/native-fallback harness selection %q", value.Runtime.HarnessKind)
 	}
 	if value.Runtime.HarnessVersion == "legacy" || value.Runtime.AdapterVersion == "legacy" || value.Runtime.AdapterProtocolVersion <= 0 {

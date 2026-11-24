@@ -206,6 +206,42 @@ func (capabilities *RuntimeCapabilities) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type HarnessKind string
+
+const (
+	HarnessKindGeneric    HarnessKind = "generic"
+	HarnessKindCodex      HarnessKind = "codex"
+	HarnessKindClaudeCode HarnessKind = "claude_code"
+	HarnessKindPi         HarnessKind = "pi"
+	HarnessKindOMP        HarnessKind = "omp"
+	HarnessKindOmO        HarnessKind = "omo"
+	HarnessKindOpenCode   HarnessKind = "opencode"
+)
+
+// harnessKindWireOrder is wire-visible; harness_kind_test.go binds it to the schema enum.
+var harnessKindWireOrder = [...]HarnessKind{
+	HarnessKindGeneric,
+	HarnessKindCodex,
+	HarnessKindClaudeCode,
+	HarnessKindPi,
+	HarnessKindOMP,
+	HarnessKindOmO,
+	HarnessKindOpenCode,
+}
+
+func HarnessKinds() []HarnessKind {
+	return append([]HarnessKind(nil), harnessKindWireOrder[:]...)
+}
+
+func ParseHarnessKind(value string) (HarnessKind, bool) {
+	for _, kind := range harnessKindWireOrder {
+		if string(kind) == value {
+			return kind, true
+		}
+	}
+	return "", false
+}
+
 func validateRuntimeMetadata(kind, harnessVersion, adapterVersion string, protocolVersion int) error {
 	if strings.TrimSpace(kind) == "" || strings.TrimSpace(harnessVersion) == "" || strings.TrimSpace(adapterVersion) == "" {
 		return errors.New("harness metadata must include harness_kind, harness_version, and adapter_version")
@@ -213,9 +249,7 @@ func validateRuntimeMetadata(kind, harnessVersion, adapterVersion string, protoc
 	if len(kind) > 120 || len(harnessVersion) > 240 || len(adapterVersion) > 240 {
 		return errors.New("harness metadata exceeds its wire length limit")
 	}
-	switch kind {
-	case "generic", "codex", "claude_code", "pi", "omp", "omo", "opencode":
-	default:
+	if _, ok := ParseHarnessKind(kind); !ok {
 		return fmt.Errorf("harness_kind %q is invalid", kind)
 	}
 	if protocolVersion <= 0 || int64(protocolVersion) > maxRuntimeAdapterProtocolVersion {

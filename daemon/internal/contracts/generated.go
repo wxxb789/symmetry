@@ -12,7 +12,7 @@ type SymmetryAdapterCapabilitiesV1 struct {
 
 type SymmetryAdapterCapabilitiesV1Adapter struct {
 	ImplementationVersion string                  `json:"implementation_version"`
-	Kind                  string                  `json:"kind"`
+	Kind                  AdapterKind             `json:"kind"`
 	NativeVersion         string                  `json:"native_version"`
 	Operations            PurpleAdapterOperations `json:"operations"`
 	ProtocolVersion       int64                   `json:"protocol_version"`
@@ -2055,7 +2055,7 @@ type RuntimeCapabilities struct {
 
 type CapabilitiesAdapter struct {
 	ImplementationVersion string                  `json:"implementation_version"`
-	Kind                  string                  `json:"kind"`
+	Kind                  AdapterKind             `json:"kind"`
 	NativeVersion         string                  `json:"native_version"`
 	Operations            FluffyAdapterOperations `json:"operations"`
 	ProtocolVersion       int64                   `json:"protocol_version"`
@@ -2073,6 +2073,18 @@ type FluffyAdapterOperations struct {
 	Start            bool      `json:"start"`
 	Usage            Usage     `json:"usage"`
 }
+
+type AdapterKind string
+
+const (
+	ClaudeCode AdapterKind = "claude_code"
+	Codex      AdapterKind = "codex"
+	Generic    AdapterKind = "generic"
+	Omo        AdapterKind = "omo"
+	Omp        AdapterKind = "omp"
+	Opencode   AdapterKind = "opencode"
+	Pi         AdapterKind = "pi"
+)
 
 type Guidance string
 

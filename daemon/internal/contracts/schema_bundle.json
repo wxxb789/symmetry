@@ -37,7 +37,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -1874,7 +1882,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -3774,7 +3790,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -5952,7 +5976,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -9374,7 +9406,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -11345,7 +11385,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -13213,7 +13261,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -15149,7 +15205,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -16910,7 +16974,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -18718,7 +18790,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -20465,7 +20545,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -22562,7 +22650,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -25077,7 +25173,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -26823,7 +26927,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -29852,7 +29964,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -31634,7 +31754,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -33359,7 +33487,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -35257,7 +35393,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -37114,7 +37258,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -40288,7 +40440,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"
@@ -42311,7 +42471,15 @@
             "$ref": "#/definitions/ShortIdentifier"
           },
           "kind": {
-            "$ref": "#/definitions/ShortIdentifier"
+            "enum": [
+              "generic",
+              "codex",
+              "claude_code",
+              "pi",
+              "omp",
+              "omo",
+              "opencode"
+            ]
           },
           "native_version": {
             "$ref": "#/definitions/ShortIdentifier"

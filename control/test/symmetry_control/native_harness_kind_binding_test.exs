@@ -14,7 +14,9 @@ defmodule SymmetryControl.NativeHarnessKindBindingTest do
   session-attribute gates read the single source themselves, and the probes
   below hold them to it: every admitted kind must register a runtime through
   `Orchestration.register_runtimes/4` and clear `Goals.attach_harness_session/5`'s
-  attribute gate, while a kind outside the vocabulary is refused by both.
+  attribute gate, while a kind outside the vocabulary is refused by both. The
+  contract schema's `Adapter.kind` enum is the shared cross-language source and
+  this case also holds the Elixir list to it.
   """
 
   use SymmetryControl.DataCase, async: true
@@ -112,6 +114,19 @@ defmodule SymmetryControl.NativeHarnessKindBindingTest do
              fence(),
              session_attrs("foreign_harness")
            ) == {:error, :invalid_request}
+  end
+
+  test "the contract schema enumerates exactly the wire kind vocabulary" do
+    schema =
+      "../../../contracts/v1/common.schema.json"
+      |> Path.expand(__DIR__)
+      |> File.read!()
+      |> Jason.decode!()
+
+    enum = get_in(schema, ["definitions", "Adapter", "properties", "kind", "enum"])
+    assert is_list(enum), "contracts/v1/common.schema.json Adapter.kind is not an enumerated kind vocabulary"
+
+    assert Enum.sort(enum) == Enum.sort(Orchestration.native_harness_kinds() ++ ["generic"])
   end
 
   defp runtime_specification(kind) do

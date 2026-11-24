@@ -57,19 +57,19 @@ type Runtime struct {
 
 const (
 	// RuntimeHarnessGeneric is the legacy direct-process adapter.
-	RuntimeHarnessGeneric = "generic"
+	RuntimeHarnessGeneric = string(protocol.HarnessKindGeneric)
 	// RuntimeHarnessCodex identifies the Codex app-server adapter.
-	RuntimeHarnessCodex = "codex"
+	RuntimeHarnessCodex = string(protocol.HarnessKindCodex)
 	// RuntimeHarnessClaudeCode identifies the Claude Code adapter.
-	RuntimeHarnessClaudeCode = "claude_code"
+	RuntimeHarnessClaudeCode = string(protocol.HarnessKindClaudeCode)
 	// RuntimeHarnessPi identifies the pi RPC adapter.
-	RuntimeHarnessPi = "pi"
+	RuntimeHarnessPi = string(protocol.HarnessKindPi)
 	// RuntimeHarnessOMP identifies the Oh My Pi RPC adapter.
-	RuntimeHarnessOMP = "omp"
+	RuntimeHarnessOMP = string(protocol.HarnessKindOMP)
 	// RuntimeHarnessOmO identifies the OmO Native RPC adapter.
-	RuntimeHarnessOmO = "omo"
+	RuntimeHarnessOmO = string(protocol.HarnessKindOmO)
 	// RuntimeHarnessOpenCode identifies the OpenCode server adapter.
-	RuntimeHarnessOpenCode = "opencode"
+	RuntimeHarnessOpenCode = string(protocol.HarnessKindOpenCode)
 
 	defaultHarnessVersion         = "legacy"
 	defaultAdapterVersion         = "legacy"
@@ -317,9 +317,7 @@ func normalizeRuntimeAdapterMetadata(runtime *Runtime) error {
 		strings.TrimSpace(runtime.AdapterVersion) == "" || runtime.AdapterProtocolVersion <= 0 {
 		return fmt.Errorf("runtime adapter metadata must include harness_kind, harness_version, adapter_version, and adapter_protocol_version")
 	}
-	switch runtime.HarnessKind {
-	case RuntimeHarnessGeneric, RuntimeHarnessCodex, RuntimeHarnessClaudeCode, RuntimeHarnessPi, RuntimeHarnessOMP, RuntimeHarnessOmO, RuntimeHarnessOpenCode:
-	default:
+	if _, ok := protocol.ParseHarnessKind(runtime.HarnessKind); !ok {
 		return fmt.Errorf("runtime.harness_kind %q is unsupported", runtime.HarnessKind)
 	}
 	if runtime.HarnessKind != RuntimeHarnessGeneric && (runtime.HarnessVersion == defaultHarnessVersion || runtime.AdapterVersion == defaultAdapterVersion) {

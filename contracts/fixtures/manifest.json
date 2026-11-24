@@ -688,6 +688,16 @@
       ]
     },
     {
+      "id": "adapter.unknown-kind",
+      "schema": "adapter-capabilities",
+      "path": "invalid/adapter.unknown-kind.json",
+      "valid": false,
+      "tags": [
+        "adapter-capabilities",
+        "unknown-kind"
+      ]
+    },
+    {
       "id": "adapter.missing-handoff",
       "schema": "adapter-capabilities",
       "path": "invalid/adapter.missing-handoff.json",

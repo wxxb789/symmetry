@@ -4737,3 +4737,82 @@ decision as open while this entry and the goal record carry the closure.
       `daemon/internal/harness/testdata/claude/2.1.323` lists exactly those two READMEs, and the
       claude package suite stays green. The same slice retires the unread claude 2.1.259
       directory, whose bytes remain in git history.
+
+## Harness-kind vocabulary and adapter policy (rf-a3, 2026-11-23)
+
+- [ ] Unify the `controlCapability` switch copy in `daemon/internal/harness/claude/adapter.go:576`
+      with the root helper in `daemon/internal/harness/generic.go:255`: the two bodies are
+      byte-identical outside the `harness.` qualifier, but the root helper is unexported and
+      `generic.go` was outside the rf-w4-15c owned file set, so the relocation kept a package-local
+      copy. Export the root helper and delete the copy in the slice that next owns `generic.go`
+      (A3 adapter policy, W5). Owner area: daemon harness.
+
+      **Closed (2026-11-23, branch `refactor/rf-a3-adapter-policy-kind-vocabulary`, base
+      `b9d4b4a4`, plan `docs/plans/2026-11-23-rf-a3-adapter-policy-kind-vocabulary-plan.md`):** the
+      root helper is exported as `harness.ControlCapability` (`daemon/internal/harness/generic.go`),
+      both call sites (`genericSession.Control` and claude `candidateSession.Control`) consume it,
+      and the byte-identical claude copy is deleted. The omo copy in
+      `daemon/internal/harness/omo/adapter.go` is deliberately kept and recorded: its default
+      answers `CapabilityCancel`, not the command name, so it is not a copy. New pin
+      `daemon/internal/harness/control_capability_test.go`.
+
+- [ ] Unify the three copies of the runtime harness-kind vocabulary left by the rf-w4-19
+      `linuxpreflight` extraction (2026-11-21, branch `refactor/rf-w4-19-linuxpreflight-package`;
+      found by the round-1 review of PR #197 (P3-2)). The extraction could not move the vocabulary
+      out of `internal/app`: `configuredHarnessKind` and `nativeGoalHarnessKind` are copied from
+      `internal/app/probe.go:123,156` into `daemon/internal/linuxpreflight/cgroup_linux.go:31-63`,
+      and the same seven-kind table exists a third time in the config loader
+      (`internal/config/config.go:321-323`, message at `:323`, byte-identical to
+      `internal/app/probe.go:140`). Only the "new kind" direction fails closed: a kind the copy does
+      not know is rejected by `verifyLinuxNativeRuntimeSelection`, never admitted; if `app` dropped a
+      kind from its native-goal set, preflight would still accept it — though the runtime would still
+      refuse it, so this is not an authority gap. The pin test
+      `TestNativeRuntimeSelectionVocabularyMatchesTheConfiguredKinds`
+      (`daemon/internal/linuxpreflight/preflight_linux_test.go:326`) compares the copy against a
+      hard-coded literal table, not against `app`'s copy, so drift between the two copies goes
+      undetected. Fix direction: one `internal/harness` vocabulary — `ParseKind` plus the native-goal
+      predicate — consumed by `internal/config`, `internal/app/probe.go` and
+      `validateConfiguredHarness` (`internal/app/goal_admission_tx.go`) and `linuxpreflight`, with
+      the pin test reading that shared table instead of a literal. That touches `internal/harness`,
+      `internal/app/probe.go` and `internal/app/goal_admission_tx.go`, all
+      outside the rf-w4-19 owned set (plan
+      `docs/plans/2026-11-21-rf-w4-19-linuxpreflight-package-plan.md`, "The runtime-selection
+      vocabulary"), so the slice kept the copy and recorded this entry instead.
+
+      **Closed (2026-11-23, branch `refactor/rf-a3-adapter-policy-kind-vocabulary`, base
+      `b9d4b4a4`, plan `docs/plans/2026-11-23-rf-a3-adapter-policy-kind-vocabulary-plan.md`):** the
+      wire set now has one Go owner — `protocol.HarnessKind`/`HarnessKinds`/`ParseHarnessKind`
+      (`daemon/internal/protocol/protocol.go`) — and the wire→internal mapping plus the native-goal
+      and unavailable-probe predicates have one owner, `harness.ParseKind`/`Kind.NativeGoal`/
+      `Kind.UnavailableProbe` (`daemon/internal/harness/kind.go`). `config`'s seven constant names
+      are compiled aliases of protocol's, `app/probe.go`'s `configuredHarnessKind` is a one-line
+      delegate, and both linuxpreflight copies are deleted. Drift is bound three ways: the contract
+      schema's `Adapter.kind` inline enum (with `daemon/internal/protocol/harness_kind_test.go`
+      reading it and a new invalid fixture), `harness/kind_test.go` holding `ParseKind` to
+      `protocol.HarnessKinds()`, and the Elixir assertion in
+      `control/test/symmetry_control/native_harness_kind_binding_test.exs`. The fix direction's
+      literal pin table survives in `preflight_linux_test.go`, now read through the shared
+      functions. The contract's direction was followed with the wire set in `protocol` instead of
+      `internal/harness` (rationale in the slice's plan §2): `config` and `control` must consume the
+      wire set without pulling `harness`'s execution/platform transitives in.
+
+      Recorded out-of-STRICT-set edits (review R4): `daemon/internal/app/harness_test.go` carries
+      the two pin updates the Q1 deletion forced (`:749-753` resume refusal now asserts the typed
+      `resume_rejected` reason; `:4421-4450` provider-access loop asserts the advertised projection
+      passes for codex/omp/omo) and the conductor-authorized rename to
+      `TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection`; no production code is
+      touched (probe: the file's diff against origin/main on this branch; plan §1 table row and
+      §8.3).
+
+- [ ] `daemon/internal/linuxpreflight/cgroup_linux.go`: `configuredHarnessKind` is a verbatim copy
+      of the app-side vocabulary owner (`internal/app/probe.go`) and the config loader's set; the
+      package test pins a literal table, not the app-side copy, so drift is undetected. The package
+      cannot import `internal/app`.
+
+      **Closed (2026-11-23, branch `refactor/rf-a3-adapter-policy-kind-vocabulary`, base
+      `b9d4b4a4`, plan `docs/plans/2026-11-23-rf-a3-adapter-policy-kind-vocabulary-plan.md`):** the
+      same change deletes both copies; `verifyLinuxNativeRuntimeSelection` consumes
+      `harness.ParseKind`/`Kind.NativeGoal`, the redundant `kind == "generic"` disjunct drops, and
+      the literal pin table now exercises the shared functions (drift against app/config is
+      impossible because none of them keeps a private set; drift against the schema and the Elixir
+      list is covered by the assertions named in the entry above).
