@@ -339,6 +339,9 @@ FORBIDDEN_KEYS = (
     "raw_journal",
     "request_json",
 )
+# The owner-witness harness keeps the App's bounded stderr beside its A-private artifacts; it is
+# never evidence, so an input root that carries it refuses instead of risking publication.
+EXCLUDED_WITNESS_NAMES = ("owner-witness.stderr",)
 MAX_EVIDENCE_SIZE = 2 << 20
 SAFE_TEXT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/+@ -]{0,255}$")
 SAFE_HASH = re.compile(r"^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{64})$")
@@ -699,6 +702,20 @@ DAEMON_LOG_INT_LIMIT = 1 << 31
 
 def fail(message: str) -> None:
     raise SystemExit(f"redacted evidence export failed: {message}")
+
+
+def require_no_excluded_witness_file(
+    roots: tuple[pathlib.Path, ...], sources: tuple[pathlib.Path, ...] = ()
+) -> None:
+    for root in roots:
+        for name in EXCLUDED_WITNESS_NAMES:
+            candidate = root / name
+            if candidate.is_symlink() or candidate.exists():
+                fail(f"{name} is a harness-private App stderr capture and is never exported")
+    for source in sources:
+        for name in EXCLUDED_WITNESS_NAMES:
+            if name in source.parts:
+                fail(f"{name} is a harness-private App stderr capture and is never exported")
 
 
 def reject_duplicate_keys(pairs):
@@ -1525,12 +1542,14 @@ def main() -> int:
         expected = [
             (source, target) for source, target in expected if target in MANUAL_CASE_SET_FILES[arguments.case_set]
         ]
+        require_no_excluded_witness_file((witness_root, receipt_root), tuple(source for source, _ in expected))
     elif arguments.mode == "compose":
         if not arguments.witness_root:
             fail("Compose mode requires the private witness staging directory")
         witness_root = pathlib.Path(arguments.witness_root)
         expected.extend((witness_root / name, name) for name in COMPOSE_WITNESSES)
         expected.extend((witness_root / name, name) for name in COMPOSE_DIAGNOSTICS)
+        require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))
     else:
         if not arguments.witness_root:
             fail("legacy mode requires the private witness root")
@@ -1538,6 +1557,7 @@ def main() -> int:
             fail("legacy mode accepts only --witness-root and optional credential scan input")
         witness_root = pathlib.Path(arguments.witness_root)
         expected.extend((witness_root / name / "witness-evidence.json", f"{name}.json") for name in LEGACY_WITNESSES)
+        require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))
 
     copied = []
     missing = []

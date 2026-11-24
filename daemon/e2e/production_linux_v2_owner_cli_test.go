@@ -49,10 +49,17 @@ func startLinuxV2OwnerWitnessCommandWithRequestPath(
 	if err != nil {
 		t.Fatalf("open private owner-witness response file: %v", err)
 	}
-	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	stderrFD, err := unix.Open(linuxV2OwnerWitnessStderrPath(fixture),
+		unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		_ = stdout.Close()
-		t.Fatalf("open owner-witness diagnostic sink: %v", err)
+		t.Fatalf("open owner-witness App stderr capture: %v", err)
+	}
+	stderr := os.NewFile(uintptr(stderrFD), "owner-witness-stderr")
+	if stderr == nil {
+		_ = unix.Close(stderrFD)
+		_ = stdout.Close()
+		t.Fatalf("wrap owner-witness App stderr capture")
 	}
 	command := exec.Command(binary,
 		"-linux-v2-native-owner-witness", "-config", fixture.configPath, "-request", requestPath,
@@ -1568,6 +1575,29 @@ func linuxV2OwnerCommandExitCode(command *linuxV2OwnerWitnessCommand) int {
 	return exitErr.ExitCode()
 }
 
+// linuxV2ReportOwnerWitnessFailure reaps an already-refused command for its exit status and
+// prints the bounded, redacted tail of the App stderr the harness captured as its sink.
+func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture, command *linuxV2OwnerWitnessCommand) {
+	t.Helper()
+	if command == nil {
+		t.Logf("owner-witness command is unavailable for refusal diagnostics")
+		return
+	}
+	if err := waitLinuxV2OwnerWitnessCommand(command, 5*time.Second, true); err != nil {
+		t.Logf("owner-witness command stayed live after its failed wait: %v", err)
+	} else {
+		t.Logf("owner-witness command exit status: %d", linuxV2OwnerCommandExitCode(command))
+	}
+	lines, err := linuxV2OwnerWitnessStderrTail(linuxV2OwnerWitnessStderrPath(fixture), fixture.request)
+	if err != nil {
+		t.Logf("owner-witness stderr capture refused: %v", err)
+		return
+	}
+	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
+		t.Logf("owner-witness stderr: %s", line)
+	}
+}
+
 func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwners) error {
 	for _, pair := range []struct {
 		name     string
@@ -1718,6 +1748,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 	witness.InstalledOwnerVerified = true
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact durable stage %s: %v", stage, err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, stage)
@@ -2350,6 +2381,7 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 		t.Fatalf("production App and A do not share the exact guest PID namespace: %v", err)
 	}
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact leaf_removed stop-receipt barrier: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "leaf_removed")
@@ -3359,6 +3391,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 		}
 	}()
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact %s ACK boundary: %v", stage, err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, stage)
@@ -3537,6 +3570,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		}
 	}()
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact helper response-loss %s marker: %v", responseLoss.hold, err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, responseLoss.hold)
@@ -3767,6 +3801,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 	witness.InstalledOwnerVerified = true
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact OpenCode native_release boundary: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "native_release")
@@ -3932,6 +3967,7 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 	witness.InstalledOwnerVerified = true
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact durable stop receipt: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "stop_receipt_durable")
@@ -4090,6 +4126,7 @@ func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot st
 	witness.InstalledOwnerVerified = true
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 		t.Fatalf("wait for exact native_release before Store fault: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "native_release")
@@ -4411,6 +4448,7 @@ func runProductionLinuxV2NativeOwnerWitness(t *testing.T, testCase linuxV2Native
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if fixture.request.Barrier.HoldAfter != "none" {
 		if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
+			linuxV2ReportOwnerWitnessFailure(t, fixture, command)
 			t.Fatalf("wait for requested production owner-witness barrier: %v", err)
 		}
 	}
