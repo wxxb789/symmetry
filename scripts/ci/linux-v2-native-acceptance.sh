@@ -936,7 +936,9 @@ pin_guest_cgroup_while_active || fail 'could not pin the live disposable guest u
 
 machine_run() {
   machine_run_count=$((machine_run_count + 1))
-  local unit="${machine}-step-${machine_run_count}"
+  # A command substitution runs this in a subshell: its increment dies there, so the counter alone
+  # would repeat a name; the subshell's own BASHPID keeps every call form's unit unique.
+  local unit="${machine}-step-${machine_run_count}-${BASHPID}"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" -- "$@"
 }
@@ -945,8 +947,6 @@ machine_run_as() {
   local user=$1
   local group=$2
   shift 2
-  # The passwd read runs here, not in a command substitution: its machine_run only advances the
-  # counter in this shell, while a subshell would lose the increment and still burn the unit name.
   local passwd_log="$fixture_root/machine-run-as-passwd.log"
   machine_run /usr/bin/getent passwd "$user" >"$passwd_log" 2>&1 ||
     fail "read the guest passwd home directory for $user"

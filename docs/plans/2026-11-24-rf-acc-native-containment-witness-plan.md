@@ -29,10 +29,13 @@ This plan records only the implementation choices the accepted contract leaves u
   (which covers the writer's `SYMMETRY_OPERATOR_TOKEN` / `SYMMETRY_ENROLLMENT_TOKEN` cases,
   `writeLinuxV2NativeWitness`), plus the request's `Claim.LeaseToken` and
   `Claim.ProviderAccess.Token`. Empty values are skipped, like the writer skips them. Round 2
-  narrows the claim: under the harness the env-derived leg is inert because `run_go_test` hands
-  the guest test an explicit `--setenv` list with no `*_TOKEN`/`*_API_KEY` entry, so the effective
-  capture set is the request's lease/provider tokens plus the fixture printer's
-  `evidence_secret_values_file`; the guest env is deliberately not widened (record §11/§14).
+  narrows the claim: under the harness the env-derived leg is inert — the capture-bearing cases'
+  `--setenv` lists carry no `*_TOKEN`/`*_API_KEY` entry — so the effective capture set is the
+  request's lease/provider tokens plus the fixture printer's `evidence_secret_values_file`; the
+  guest env is deliberately not widened (record §11/§14). Round 3 qualifies the reason (record
+  §15.2): the `legacy-v1` replay case does set two dev dummy `*_TOKEN` entries
+  (`scripts/ci/linux-v2-native-acceptance.sh:1897-1898`), but it never starts the owner-witness
+  command, so no capture path inherits them.
 - Reporting (`owner_cli_test.go`): `linuxV2ReportOwnerWitnessFailure(t, fixture, command)` first
   waits ≤5 s for the pidfd to exit (`waitLinuxV2OwnerWitnessCommand`, `allowNonzero=true`) and
   logs `owner-witness command exit status: <n>` (`linuxV2OwnerCommandExitCode`) or the
@@ -55,14 +58,16 @@ The contract names the barrier wait and the stage waits (its base-tree refs `:44
 `:3770`, `:3935`). Nine `waitLinuxV2OwnerWitnessStage` call sites exist; the eight in
 `production_linux_v2_owner_cli_test.go` hold the live command and share the same failure shape,
 so every one of them reports through the new helper before `t.Fatalf`: `:1744`, `:2377`, `:3387`,
-`:3566`, `:3797`, `:3963`, `:4122`, `:4444` (the barrier wait at `:4444` included; four of the
+`:3566`, `:3797`, `:3963`, `:4122`, `:4444` at the apply bytes; round 2's sink change shifted
+them seven lines to `:1751`, `:2384`, `:3394`, `:3573`, `:3804`, `:3970`, `:4129`, `:4451` (the
+barrier wait at `:4451` included; four of the
 eight are report-only and cannot change pass behaviour — leaving them silent would keep the
 `ack_loss` and helper-response-loss rows unnamed in the same run). Two groups stay unnamed by
 explicit exemption and outside the eight: the ninth call site in
 `daemon/e2e/production_linux_v2_helper_exit_witness_test.go:188` (the helper-exit witness the
-`shared` set reaches at `scripts/ci/linux-v2-native-acceptance.sh:2936`, a file this goal's owned
+`shared` set reaches at `scripts/ci/linux-v2-native-acceptance.sh:2955`, a file this goal's owned
 set does not cover) and the recovery/replay exit waits on a live command
-(`production_linux_v2_owner_cli_test.go:1841-1843`, `:3465-3466`, `:3700-3701`, `:4515-4516`),
+(`production_linux_v2_owner_cli_test.go:1848-1850`, `:3472-3473`, `:3707-3708`, `:4522-4523`),
 whose rows stop at their own named stage waits first.
 
 ## 3. Change 2 — cleanup witness admission callback
@@ -183,12 +188,10 @@ bytes stays conductor-owned.
 
 ## 10. Fix round 2 (2026-11-25, conductor ruling items 1-6)
 
-- Item 1: `machine_run_as` reads the guest passwd entry with the transport in the parent shell
-  (`machine_run … >"$fixture_root/machine-run-as-passwd.log" || fail`, then `cut -d: -f6`), so the
-  nested getent's `machine_run_count` increment is no longer lost in a command substitution and
-  every transient unit name is unique and monotonic. Probe (record §14): the final bytes print a
-  9/9 unique monotonic sequence over five calls; the pre-fix bytes show 3 duplicates and a
-  non-monotonic sequence (mutant row).
+- Item 1: round 2 moved `machine_run_as`'s passwd read into the parent shell
+  (`machine_run … >"$fixture_root/machine-run-as-passwd.log" || fail`, then `cut -d: -f6`), which
+  fixed the named site but left seven `$(machine_run …)` substitutions burning a name without
+  advancing the counter. Round 3 completes the root fix (§11) and extends the probe.
 - Item 2: the round-2 capture-then-filter sites — the installed daemon's
   `-verify-linux-owner-install` call and both guest `journalctl` dumps in
   `start_literal_pid_reuse_watcher` — print through `print_filtered_output_lines`; the census of
@@ -199,3 +202,21 @@ bytes stays conductor-owned.
 - Item 6: one literal all-14 scratch run on the final bytes; its id, per-set stops and the
   sha256 equality against the delivered files are in record §14, and the scratch branch is
   deleted with `git ls-remote` proof.
+
+## 11. Fix round 3 (2026-11-25, PR #280 round-2 ruling)
+
+- Item 1: `machine_run`'s unit name is unique by construction —
+  `local unit="${machine}-step-${machine_run_count}-${BASHPID}"`
+  (`scripts/ci/linux-v2-native-acceptance.sh:941`), with a two-line why-comment; the round-2
+  parent-shell capture in `machine_run_as` stays and its obsolete subshell comment is dropped, so
+  the script's line count is unchanged (3001) and every line reference survives. The extended
+  §14.7 probe (record §15.1) exercises the `$(machine_run …)` assignment and `[[ -n "$(…)" ]]`
+  forms interleaved with parent calls: final bytes `units=10 duplicates=0 parent_monotonic=1`
+  (exit 0), the BASHPID-removed mutant `duplicates=2` (exit 3). Record §15.1 lists every
+  `machine_run`/`machine_run_as` call form (103 call sites, commands and output verbatim in
+  §15.5).
+- Item 2: the DS stale-ref list is refreshed (record §4, §2, §12, §13; this plan §2), the
+  env-leg reason is qualified for the `legacy-v1` arm (§1 above), and the record's §14.2 `:1996`
+  row is relabelled guest-side, captured at `:1999` and filtered at `:2000`.
+- Item 3: one fresh literal all-14 scratch run on the final bytes; its id, the per-set comparison
+  against `45486208881`, the sha256 equality table and the scratch deletion are in record §15.3.
