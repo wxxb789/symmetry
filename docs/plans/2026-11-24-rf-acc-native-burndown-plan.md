@@ -233,7 +233,7 @@ foreground; its rows go in record §3.7.3.
 
 Round 2 (`45320631643`, head `926e26e7`) proved the parse fix (zero invocation-guard lines; every set
 executes its named `go test`) and named the next root with the non-JSON diagnostic: the A user's
-`/home/symmetry-a/.cache` was not usable, so the guest `go` refused its build cache in all 14 sets.
+`<A_HOME>/.cache` was not usable, so the guest `go` refused its build cache in all 14 sets.
 Fix in the owned script: name `.cache` itself in the A-owned `install -d` list and fence the three A
 XDG cache directories; the same scan over every `install -d` path named
 `$OWNER_BARRIER_ROOT/unprovisioned` explicitly (the one other implicit parent on an A-owned barrier
@@ -279,7 +279,7 @@ reported as the remaining fixture-side unknown. Dispatches used: 6 of the ruling
 
 Round 6 failed in setup, not in a witness: with the full-history checkout, the guest's A-owned clone
 of the read-only runner-owned mount hit git's ownership guard
-(`fatal: detected dubious ownership in repository at '/home/symmetry-a/ci-source/.git'`) and every
+(`fatal: detected dubious ownership in repository at '<A_HOME>/ci-source/.git'`) and every
 case set exited 128. The shipping tree adds the minimal fix for that one command
 (`-c 'safe.directory=*'`, read-only mount, commented). That was the sixth dispatch, so the tree
 carries three changes — `fetch-depth: 0`, the pi release tree, and this guard — that no run has

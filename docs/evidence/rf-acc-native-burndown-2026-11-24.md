@@ -14,6 +14,8 @@ branch). Every scratch run therefore stopped before the first real model turn: a
 credential-dependent steps past the recorded stop remain unproven until the owner dispatches the
 real workflow.
 
+Placeholders: `<A_HOME>`/`<B_HOME>` = the fixture A/B user homes, `<A_HOME>/ci-source` = A's source mount, `<RUNNER_TEMP>` = the hosted runner's temp directory, `<STATE_DIR>` = the fixture-provided Linux v2 StateDir.
+
 ## 1. Subject bytes (final tree, sha256)
 
 | File | sha256 |
@@ -123,7 +125,7 @@ case-set step 48 s, job 2 m 27 s.
 
 | Case set | Last step reached | Exit | First failing line / check |
 | --- | --- | --- | --- |
-| `codex_containment` | installed `symmetry-daemon.service` smoke: direct preflight refused the missing OpenCode credential directory | 1 | `-verify-linux-owner-install: inspect B credential directory /home/symmetry-b/.local/share/opencode: lstat /home/symmetry-b/.local: no such file or directory` |
+| `codex_containment` | installed `symmetry-daemon.service` smoke: direct preflight refused the missing OpenCode credential directory | 1 | `-verify-linux-owner-install: inspect B credential directory <B_HOME>/.local/share/opencode: lstat <B_HOME>/.local: no such file or directory` |
 
 Byte-identical to the baseline's class A text (`log:3626-3627`, `log:5273-5274`), followed by
 `redacted evidence export failed: containment witness is unavailable`. The before/after pair for
@@ -321,10 +323,10 @@ case-set step is the same length as round 1 even though every set now executes a
 new diagnostics printed the same line in all 14 sets:
 
 ```
-failed to initialize build cache at /home/symmetry-a/.cache/go-build: mkdir /home/symmetry-a/.cache/go-build: permission denied
+failed to initialize build cache at <A_HOME>/.cache/go-build: mkdir <A_HOME>/.cache/go-build: permission denied
 ```
 
-Root: the A user's fixed Go build cache sits under `/home/symmetry-a/.cache`, and the staging lists
+Root: the A user's fixed Go build cache sits under `<A_HOME>/.cache`, and the staging lists
 `.cache/go-build` and `.cache/tmp` as `install -d` arguments without naming `.cache`. `install -d`
 applies `-o/-g/-m` to each *named* directory only, so the implicit `.cache` parent is left with that
 coreutils' default attributes; on this runner's `install` it is not usable by A (the guest's `go`
@@ -469,7 +471,7 @@ Run 6 (`45334300138`, head `d22a6b31`) shipped fixes 1 and 2 above and failed in
 *setup*: every case set exited 128 within ~30 s, each with
 
 ```
-fatal: detected dubious ownership in repository at '/home/symmetry-a/ci-source/.git'
+fatal: detected dubious ownership in repository at '<A_HOME>/ci-source/.git'
 ```
 
 from the guest's A-owned clone of the read-only runner-owned source mount
@@ -600,8 +602,8 @@ OpenCode-vehicle rows:
   (`daemon/internal/app/linux_owner_witness_linux.go:3857-3870`).
 - The per-config `-verify-linux-owner-install` probe ran 156 times: 112 configs print the success
   boundary, 20 fail on the containment guests' deliberately absent foreign credential directory
-  (`inspect B credential directory /home/symmetry-b/.local/share/opencode: lstat
-  /home/symmetry-b/.local: no such file or directory`), 12 on `.codex` and 12 on `.claude`. Only
+  (`inspect B credential directory <B_HOME>/.local/share/opencode: lstat
+  <B_HOME>/.local: no such file or directory`), 12 on `.codex` and 12 on `.claude`. Only
   configs whose kind the guest does not provision are refused — class A's reviewed scope, §2.2 — so
   every witness config is clean at the owner-install layer.
 - The App's witness-specific config gate
@@ -752,7 +754,7 @@ Job 28m55s (`11:54:50`→`12:23:45`); step 13 `Build the shared disposable Ubunt
 5m08s; step 14 `Run isolated A/B Linux v2 acceptance case sets` 22m28s; all 14 sets exited 1. The
 base build stays one per job and the case-set step logs exactly 14
 `Cloning the shared disposable guest rootfs base for this case set` lines against the one base path
-(`/home/runner/work/_temp/linux-v2-native-rootfs-base-45388258526-1`) with no per-set debootstrap, so
+(`<RUNNER_TEMP>/linux-v2-native-rootfs-base-45388258526-1`) with no per-set debootstrap, so
 the class-B stop is gone in this run. Every set's installed-daemon smoke started, stayed active with
 a real MainPID and `NRestarts=0` (`scripts/ci/linux-v2-native-acceptance.sh:1570-1577`), and every
 set reached `Stopping installed daemon.service before direct witnesses` (`:1579`); the Change-1
@@ -883,7 +885,7 @@ OpenCode cause), and six `verified …: run=1 pass=1 skip=0` lines, all in `shar
 | 12-14 | `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject` | same | 1 | `:269: wait for exact durable stage handoff_committed: …`; same cause |
 
 Every witness row also prints `:1838: production Linux v2 StateDir remains at fixture-provided path
-/var/lib/symmetry-v2; private scratch retained at …` as its cleanup context. No row ends at class A,
+<STATE_DIR>; private scratch retained at …` as its cleanup context. No row ends at class A,
 B, C, D or E, and no row ends at a silent daemon start failure: rows 1-2 end inside their named
 witness with the App's refusal unnamed (follow-up), rows 5-14 end at the App's own witness gate
 (F2-excluded OpenCode configs), row 4 ends at its test's own launcher assertion (follow-up), and
