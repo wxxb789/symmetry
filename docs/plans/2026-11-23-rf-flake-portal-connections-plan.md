@@ -90,10 +90,15 @@ Changes in `browser/tests/portal-connections.spec.mjs`:
    and the torn-down-session message. Every message now prints `entry.unreadable`; every other
    unreadable body stays a failure.
 
-(Review fix, 2026-11-24: `navigate` and the unreadable-body rule now live in the
-`browser/tests/portal-connections-recorder.mjs` helper, imported by the spec and exercised by
+(Review fix, 2026-11-24: the recorded-response rules shared by the spec and its CI oracle live in
+the `browser/tests/portal-connections-recorder.mjs` helper — the tolerance for an unreadable body
+(`unreadableReadFailure` returns null when the body passes the rule, else the refusal message) and
+the barrier every navigation must cross — imported by the spec and exercised by
 `browser/scripts/connection-spec-env.test.mjs`; `navigate`'s settle loop is bounded by its 30 s
-`deadlineMs`, which throws a named refusal instead of spinning — review findings F1/F4.)
+`deadlineMs`, which throws a named refusal instead of spinning — review findings F1/F4. Review
+round 2, 2026-11-25: the helper's module header and its return doc are deleted under the comment
+policy (the sentence above is their record), and the oracle's no-bare-`page.goto` guard now strips
+comments before checking, so only code can redden it.)
 
 Trade-off (contract Change 2): a body the page discarded is not scanned for canaries. Its headers
 were already scanned, every other completed response body still is, and the CI job's own

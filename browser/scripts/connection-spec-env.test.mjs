@@ -170,7 +170,9 @@ test("navigate refuses by name when its reads cannot settle inside the deadline"
 });
 
 test("the connection spec navigates only through the shared barrier", () => {
-  const source = readFileSync(path.join(browserRoot, specFile), "utf8");
+  const source = readFileSync(path.join(browserRoot, specFile), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
   assert.ok(
     !source.includes("page.goto"),
     "a bare page.goto in the spec would skip the barrier that settles its pending reads",

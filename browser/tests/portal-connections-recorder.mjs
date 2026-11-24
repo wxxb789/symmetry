@@ -1,5 +1,3 @@
-// Recorded-response rules shared by the connection spec and its CI oracle: the
-// tolerance for an unreadable body, and the barrier a navigation must cross.
 export const READ_METHODS = ["GET", "HEAD"];
 
 // Playwright 1.65.1's own words for the two tolerated lost reads: the document
@@ -12,7 +10,6 @@ export function isLostReadSentence(unreadable) {
   return unreadable.endsWith(navigatedAway) || unreadable.endsWith(sessionClosed);
 }
 
-// Null when the unreadable body passes the rule; otherwise the refusal message.
 export function unreadableReadFailure(entry) {
   const method = entry.request?.method();
   if (!READ_METHODS.includes(method)) {

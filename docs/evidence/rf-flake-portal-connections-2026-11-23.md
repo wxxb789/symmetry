@@ -151,7 +151,9 @@ discrimination moved to the oracle test — tests 11,
 `capture(page …)` 32, `page.route(` / `unroute(` 2 / 2, 1,446 lines (`git diff --numstat
 5599a0b7`: 34 insertions, 31 deletions). The truth table that distinguishes the tolerated reads
 now lives in `browser/scripts/connection-spec-env.test.mjs` (§7 review-fix re-run), so no case
-stopped being checked; the recorder's sha256 is `9ba8eef0…` and the oracle test's `67d43e95…`.
+stopped being checked; the recorder's sha256 is `30834141…` and the oracle test's `72f0d02b…`
+(review round 2, §7: the recorder's module header and return doc are deleted and the guard strips
+comments; the review-fix bytes were `9ba8eef0…` / `67d43e95…`).
 
 ## 6. Gates (real commands, counts, exit codes)
 
@@ -187,12 +189,13 @@ the pinned lockfile.
 | spec bytes handed over | `sha256sum browser/tests/portal-connections.spec.mjs` | — | `8014879b15bca310c771a07516064ed181798f671cda5a2c40a3a744ea899250` (fix r1 comment trim) — historical: superseded by the review-fix final-bytes row below; 52 insertions / 31 deletions against `5599a0b7`; predecessor hashes are recorded in §5 |
 | review-fix rule tests (F1) | `node --test scripts/connection-spec-env.test.mjs` (browser/); CI job `browser-fixture-linux`, step "Run the browser node suites" | 0 | 8/8 pass: the four pre-existing cases plus the unreadable-body truth table, the barrier's settle order, its named refusal at the deadline, and the spec's no-bare-`page.goto` guard |
 | review-fix mutants (F1) | three scratch mutants of the same tree (recorder `endsWith`→`includes`; spec `navigate(` call → bare `page.goto`; recorder `navigate` body → immediate `page.goto`), each red then restored | 1 → 0 each | red: the embedded-sentence tolerance, `a bare page.goto in the spec would skip the barrier that settles its pending reads`, `the navigation waits for a read that is still pending`; each restore re-ran green and left the file's sha256 unchanged |
+| round-2 guard proof and rule re-run (P3-3) | `node --test scripts/connection-spec-env.test.mjs` (browser/) on the delivered tree; the spec's guard case re-run with a comment naming `page.goto`, then with the same site as a bare `page.goto`, each restored | 0 / 0 → 1 | 8/8 pass; the comment stays green; the bare goto reddens with `a bare page.goto in the spec would skip the barrier that settles its pending reads`; spec restored to `89e5a167…` |
 | second class-1 case repeats (F2) | `repeat.sh` `-g "a provider failure"` over the final bytes, one suite at a time in the foreground, `timeout 75m` | 0 / 1 / 0 | desktop 60/60 (51.9 m); mobile attempt A 59/60 (36.8 m, one fixture-stall failure — §7 review-fix re-run), rerun 60/60 (30.0 m) |
 | browser lint (final bytes) | `node node_modules/eslint/bin/eslint.js . --max-warnings 0` (browser/) | 0 | 0 findings |
 | browser suite coverage (final bytes) | `python3 scripts/ci/assert-browser-suite-coverage.py` | 0 | `suites=16 wired=14 manual=2 unclassified=0`; the recorder helper is not a suite and the oracle test is a named node suite |
 | changed-doc record sanitizer | `python3 scripts/ci/check-record-cleanliness.py --base origin/main --head <dangling tree commit>` | 0 | this record passes the sanitize tool's check on its head blob; both changed records also scan clean for profile-name, drive-letter, `/home`, `/mnt` and `/Users` host paths |
 | `git diff --check` (range and working tree, final bytes) | `git diff --check origin/main...HEAD`; `git diff --check` | 0 / 0 | — |
-| final bytes (review fix) | `sha256sum` over the spec, `browser/tests/portal-connections-recorder.mjs`, `browser/scripts/connection-spec-env.test.mjs` | — | `89e5a167…` (spec), `9ba8eef0…` (recorder), `67d43e95…` (oracle test); the two added surfaces are the helper and the oracle cases |
+| final bytes (review fix r2 + round-2 P3) | `sha256sum` over the spec, `browser/tests/portal-connections-recorder.mjs`, `browser/scripts/connection-spec-env.test.mjs` | — | `89e5a167…` (spec, unchanged), `30834141…` (recorder; was `9ba8eef0…`, module header + return doc removed), `72f0d02b…` (oracle test; was `67d43e95…`, guard strips comments); the two added surfaces are the helper and the oracle cases |
 | CI `browser-fixture-linux` 3× | `gh run rerun` on the PR | — | conductor-owned; needs the pushed PR head (this stage does not push) |
 
 ## 7. Loaded repeats (CI configuration: workers 1, retries 0)
@@ -498,8 +501,8 @@ unreadable-body rule moved to `browser/tests/portal-connections-recorder.mjs` (o
 `browser/scripts/connection-spec-env.test.mjs` (F1), the `spec:~959` step label was deleted (F3),
 and `navigate` gained the 30 s `deadlineMs` bound whose lapse throws the named refusal (F4).
 Final bytes: spec `89e5a167…` (34 insertions / 31 deletions against `5599a0b7`), recorder
-`9ba8eef0…`, oracle test `67d43e95…`; the fixes are uncommitted working-tree changes on head
-`4c8fbbdb`.
+`9ba8eef0…`, oracle test `67d43e95…`; these F1-F4 fixes are committed in `82d4c4b4` and delivered
+on head `1b474bbf`, which merges `origin/main` `5c297c25`.
 
 The review (F2) found the second class-1 case — `a provider failure and an ambiguous outcome stay
 explicit and the next readback writes the provider's answer`, final `spec:731` — had not been
@@ -551,6 +554,26 @@ log reads `database system was shut down at 2026-11-24 07:06:35`; the fixture's 
 passed, the recorder assertion appears 0 times in that log too, and the run is not part of the
 counts above. The cluster was restarted detached and the runs above were made against it.
 
+### Review round 2 — P3 items (fix stage, 2026-11-25)
+
+The review's three non-blocking P3 items were applied on top of head `1b474bbf`:
+
+- Records provenance (P3-1): the re-run paragraph above now reads that the F1-F4 bytes are
+  committed in `82d4c4b4` and delivered on head `1b474bbf` (merge of `origin/main` `5c297c25`),
+  and the stale round-1-head clause it replaces is gone; the PR body carries the same correction.
+- Comment policy (P3-2): the recorder's two-line module-intent header and its `Null when…` return
+  doc are deleted. Their content, recorded here and in the plan's Change 1: the helper holds the
+  recorded-response rules the spec and its CI oracle share — the tolerance for an unreadable body
+  and the barrier a navigation must cross; `unreadableReadFailure` returns the refusal message, or
+  null when the body passes the rule.
+- Guard precision (P3-3): the oracle test's no-bare-`page.goto` guard strips `//` and `/* */`
+  comments from the spec source before the check (two simple regexes), so a spec comment that
+  names `page.goto` stays green while the bare-goto mutant still reddens; both proved on the
+  delivered tree (§6), and the spec was restored to `89e5a167…`.
+
+Delivered bytes after this round: recorder `30834141…` (50 lines, was 53), oracle test `72f0d02b…`
+(181 lines, was 179), spec unchanged.
+
 ## 8. Residual risks and limits
 
 - The `navigate` barrier settles reads already started; a response event that fires between its
@@ -561,6 +584,9 @@ counts above. The cluster was restarted detached and the runs above were made ag
   browser node suites") redden on a widened allowance, on a bare `page.goto` re-entering the
   spec, and on a settle bypass in the helper (§6 review-fix rows). A later edit could still
   widen the rule by editing the oracle along with it, but not silently.
+- The no-bare-`page.goto` guard strips comments with two simple regexes before checking, so a
+  `//` inside a string literal truncates the rest of that line for the check; it is a shape
+  backstop for the spec (the round-2 mutant proof, §6), not a parser.
 - The class-2 pin uses CPU throttling as the contract's example permits; it reproduces the hosted
   call log, not the hosted host.
 - Local runs are Windows + native PostgreSQL 18.6 on 5432 rather than the CI Ubuntu + service
