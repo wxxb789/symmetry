@@ -16,11 +16,13 @@ moved the test bytes from the implement-stage revision
 ## 1. Method and toolchain
 
 - Windows x64, `go1.27.4 windows/amd64`; WSL Ubuntu-24.04 (`accept`), `go1.27.0 linux/amd64` for
-  the `-race` oracle. Storage: the goal worktree `Q:/repos/wt-flake-omo-attach/symmetry`; two
-  disposable clones outside the repository under `Q:/scratch-rf-flake-omo-attach/` — `before` (the
-  P1-only arm, the pre-fix repeat, P2-before) and `after` (the final test file, the pins, the
-  mutants). The repository tree holds only the final state; every scratch edit was restored and
-  hash-checked (§5).
+  the `-race` oracle. Storage: the goal worktree `<worktree>`; two disposable clones outside the
+  repository under `<scratch>` — `before` (the P1-only arm, the pre-fix repeat, P2-before) and
+  `after` (the final test file, the pins, the mutants). The repository tree holds only the final
+  state; every scratch edit was restored and hash-checked (§5). `<worktree>` and `<scratch>` are the
+  placeholder names for the goal worktree and the disposable scratch root; this record and the plan
+  carry no absolute paths, and the commands below quote the runs with those placeholders
+  substituted.
 - Every command ran foreground and bounded with `timeout`; the loaded repeats ran beside one
   bounded heavy carrier started in the same shell and reaped by `wait`, never beside a full-suite
   measurement. No job was left pending. The host is shared (16 cores); wall times vary between runs
@@ -77,7 +79,7 @@ beside `timeout 25m go test -count=1 -timeout 1400s ./internal/state/ ./internal
 | pre-fix loaded | 1 | 622.797 s | 22 | 21 starved-A (`requests=[]`, `native_calls=[start details open details close wait]`, `context deadline exceeded`) + 1 in-flight readback (`requests=[GET]`, PUT refused client-side: `perform request: Put …: context deadline exceeded`) |
 
 Every red's P1 timeline is in `red-timelines-before.txt` beside the run log
-(`Q:/scratch-rf-flake-omo-attach/`). All 22 carry only `t0` and `claim` marks (no request reached
+(`<scratch>`). All 22 carry only `t0` and `claim` marks (no request reached
 the server within the budget) except the in-flight one:
 `t0=+0.000s(until=+2.000s) claim=+0.029s(until=+1.971s) first_request=+1.551s(until=+0.449s)
 after_put_enter=+2.955s(until=-0.955s)` — its `first request - t0 = 1.551 s < 2 s`, so the
@@ -123,22 +125,32 @@ every row on the post-apply bytes); P2-before's subject is the pre-fix arm in th
 (its assertion path is the base `:629` line, which the binding revision keeps verbatim in the
 intended branch).
 
-| id | scratch edit | command (`after` clone unless noted) | observed | restore |
-| --- | --- | --- | --- | --- |
-| P2-before | `harness_test.go` fake `Open` sleeps 2.5 s | `-count=1 -v -run '…/admission_deadline'` (`before`) | exit 1, `attachment requests=[], want [GET PUT]`, `native_calls=[start details open details close wait]`, `context deadline exceeded`, timeline `t0/claim` only | sha256 `b95b4f69…` |
-| P2-after | same edit | same | exit 0, accepted starved-A: `requests=[] native_calls=[start details open details close wait]`, timeline `t0/claim` only | sha256 `b95b4f69…` |
-| shape-B pin | committed `admission_deadline_refused` mode (offset `-1 s`) | `-count=1 -v -run '…/admission_deadline_refused'` | exit 0, `requests=[] native_calls=[]`, refusal classification asserted; green in every 200-count repeat (200 pins per run) | committed |
-| in-flight pin | fixture transport sleeps 2.1 s before the PUT round trip | `-count=1 -v -run '…/admission_deadline$'` | exit 0, accepted in-flight readback: `requests=[GET]`, `first_request=+0.058 s(until=+1.944 s)`, `after_put_return=+2.159 s`, PUT refused by the expired budget | binding bytes |
-| M1 | arm's `afterPut` returns immediately | `-count=1 -v -run '…/admission_deadline$'` ×2 | exit 1 ×2, `requests=[GET PUT GET]`, `native_calls=[… start_turn wait_turn …]`, `terminal_state=completed`, the classifier naming the trajectory outside the closed set | binding bytes |
-| M2 | product `goal_delivery.go` uncertain readback on `controlContext(context.WithoutCancel(ctx))` (guard included) | same ×2 | exit 1 ×2, `requests=[GET PUT GET]`, `start_turn`, `terminal_state=completed` | sha256 `89a9857d…` |
-| M3 | product `goal_admission_tx.go` elapsed-deadline refusal removed | `-count=1 -v -run '…/admission_deadline_refused'` | exit 1, the pin's own refusal assertion: `deadline refusal did not precede native launch: requests=[] native_calls=[start details open details close wait]` | sha256 `76bcca94…` |
-| M1′ | M1 plus a 30 s anchor (removes host luck) | same | exit 1, `requests=[GET PUT GET]`: the readback appears whenever the budget is live, so the missing hold cannot hide behind starvation | binding bytes |
+Table columns: `CI job that must redden` names the job whose run of the committed test family
+catches the mutated state (every job runs as the runner's non-root user, so no row depends on
+root); rows marked `oracle gap` live only in the scratch copies — no CI job executes them today,
+and the committed M1-M3 rows carry the CI oracle for their families.
+
+| id | scratch edit | command (`after` clone unless noted) | CI job that must redden (runner user) | observed | restore |
+| --- | --- | --- | --- | --- | --- |
+| P2-before | `harness_test.go` fake `Open` sleeps 2.5 s | `-count=1 -v -run '…/admission_deadline'` (`before`) | `daemon`, `daemon-windows` (non-root) | exit 1, `attachment requests=[], want [GET PUT]`, `native_calls=[start details open details close wait]`, `context deadline exceeded`, timeline `t0/claim` only | sha256 `b95b4f69…` |
+| P2-after | same edit | same | n/a — pin (green by design) | exit 0, accepted starved-A: `requests=[] native_calls=[start details open details close wait]`, timeline `t0/claim` only | sha256 `b95b4f69…` |
+| shape-B pin | committed `admission_deadline_refused` mode (offset `-1 s`) | `-count=1 -v -run '…/admission_deadline_refused'` | n/a — pin; a removal reddens through M3 | exit 0, `requests=[] native_calls=[]`, refusal classification asserted; green in every 200-count repeat (200 pins per run) | committed |
+| in-flight pin | fixture transport sleeps 2.1 s before the PUT round trip | `-count=1 -v -run '…/admission_deadline$'` | oracle gap (scratch pin) | exit 0, accepted in-flight readback: `requests=[GET]`, `first_request=+0.058 s(until=+1.944 s)`, `after_put_return=+2.159 s`, PUT refused by the expired budget | binding bytes |
+| late-served pin (fix r1) | fixture holds the PUT's server-side handling to 50 ms past the anchored deadline (body buffered at handler entry; `<scratch>/fix-pin-lateserved.patch`, pin bytes sha256 `2ed35401…`) | `GOMAXPROCS=8 -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved'` beside one carrier at a time | oracle gap (scratch pin); M4/M5 mutate its expectations | exit 0, 200/200 green: 197 late-served with the PUT entry 50-55 ms past the anchored deadline (`until=-0.050..-0.055 s`; first request live by +1.709..+1.966 s) + 3 accepted starved-A (`requests=[]`, native open+close) | binding bytes (`24931a59…` re-verified) |
+| M1 | arm's `afterPut` returns immediately | `-count=1 -v -run '…/admission_deadline$'` ×2 | `daemon`, `daemon-windows` (non-root) | exit 1 ×2, `requests=[GET PUT GET]`, `native_calls=[… start_turn wait_turn …]`, `terminal_state=completed`, the classifier naming the trajectory outside the closed set | binding bytes |
+| M2 | product `goal_delivery.go` uncertain readback on `controlContext(context.WithoutCancel(ctx))` (guard included) | same ×2 | `daemon`, `daemon-windows` (non-root) | exit 1 ×2, `requests=[GET PUT GET]`, `start_turn`, `terminal_state=completed` | sha256 `89a9857d…` |
+| M3 | product `goal_admission_tx.go` elapsed-deadline refusal removed | `-count=1 -v -run '…/admission_deadline_refused'` | `daemon`, `daemon-windows` (non-root) | exit 1, the pin's own refusal assertion: `deadline refusal did not precede native launch: requests=[] native_calls=[start details open details close wait]` | sha256 `76bcca94…` |
+| M1′ | M1 plus a 30 s anchor (removes host luck) | same | oracle gap (scratch variant); M1 carries the CI jobs | exit 1, `requests=[GET PUT GET]`: the readback appears whenever the budget is live, so the missing hold cannot hide behind starvation | binding bytes |
+| M4 (fix r1) | late-served branch: the PUT-error allowance narrowed to `io.EOF` only | `-count=1 -v -run '…/admission_deadline_lateserved'` | oracle gap (mutates the scratch pin) | exit 1, `late-served trajectory did not carry a lost-acknowledgement or expired PUT: PUT error=perform request: Put "…/session": context deadline exceeded` — the class the pin serves | binding bytes |
+| M5 (fix r1) | late-served branch: the terminal expectation changed to `attach native Goal session refused` | same | oracle gap (mutates the scratch pin) | exit 1, `terminal classification = {"error":"attach native Goal session: perform request: Put "…/session": context deadline exceeded","reason":"unknown_outcome","stage":"goal_admission","summary":"daemon failed during goal_admission"}, want … carrying "attach native Goal session refused"` | binding bytes |
+| readback-crossing probe (fix r1) | the same hold moved onto the first served request (the readback GET) | same | oracle gap (characterization, not a mutant) | exit 1 by design: `in-flight readback trajectory did not fail the PUT on the expired budget: PUT error=<nil>`, `first_request=+2.054s(until=-0.050s)` | binding bytes |
 
 Earlier attempts on superseded revisions (audit trail): M1 also redded 3/3 with the same
 `[GET PUT GET] + turn` shape; one M1 attempt on a very slow host served no request at all and
 presented as the accepted starved-A shape (7.46 s arm) — which is why M1′ exists; M2 redded 3/3.
-CI on dedicated runners (`daemon` and `daemon-windows`) remains the oracle for the M1-M3 rows, as
-the contract's mutant table states.
+The fix-r1 rows (the late-served pin, M4, M5, the probe) run on the shipping bytes plus
+`<scratch>/fix-pin-lateserved.patch` (§9.1); CI on dedicated runners (`daemon` and `daemon-windows`)
+remains the oracle for the M1-M3 rows, as the contract's mutant table states.
 
 ## 6. Assertion census (base `9d113eb6` vs HEAD, same file)
 
@@ -166,7 +178,7 @@ stays red.
 | --- | --- | ---: | --- |
 | loaded repeat | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline' ./internal/app/` + carrier (`daemon/`, worktree) | 0 | 0 red / 200, 482.614 s, carrier overlap full window |
 | companion | same command plus `-v`, no carrier | 0 | 0 red / 200, 439.569 s; 196 intended with margins, 4 starved-A, 200 pins |
-| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-flake-omo-attach/symmetry/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 22.846s`, 59 s wall, no race report |
+| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <worktree>/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 22.846s`, 59 s wall, no race report |
 | focused family | `go test -count=1 -timeout 600s -run 'TestOmOAttachAckRegression' ./internal/app/` (`daemon/`) | 0 | `ok … 24.778s` (every test in the owned file, including the unmodified attach-ack family) |
 | vet | `go vet ./...` (`daemon/`) | 0 | clean |
 | format | `gofmt -l internal/app/omo_attach_ack_test.go` | 0 | empty |
@@ -182,19 +194,21 @@ green).
 
 ## 8. Residual risks and known limits
 
-- **The accepted set is the recovered inventory** (plan D3/D3a): intended, late-served, starved-A,
-  in-flight readback, starved-B. A starved host can in principle recover a further fail-closed
-  micro-shape — for example a readback GET aborted by the budget with no PUT attempt
+- **The accepted set is the recovered inventory** (plan D3/D3a, amended by the conductor ruling on
+  review r1): intended, late-served, starved-A, in-flight readback, starved-B — each accepted family
+  carrying an executed pin or a binding-bytes loaded red. A starved host can in principle recover a
+  further fail-closed micro-shape — a readback GET aborted by the budget before any PUT attempt
   (`requests=[GET]`, `putErr == nil`) — and such a shape stays red by design, needing the same
-  treatment as the recovered families. None was observed in the runs recorded here. Reverting to the
-  narrower three-shape reading of the contract is a two-branch deletion (plan D3a).
-- **Late-served coverage:** no run on the binding revision has executed the late-served branch —
-  the companion histogram above is 196 intended / 4 starved-A / 200 pins with no late-served, and
-  the only two late-served observations remain the reds of the superseded intermediate run. The
-  shape is the net/http write-after-expiry race, so a deterministic scratch pin would have to
-  suppress the platform's own expired-context rejection; none was constructed. The branch stands as
-  a reasoned acceptance under plan D3a pending the owner adjudication of the accepted-set width
-  (D3a's reading (b) against the contract's three named shapes).
+  treatment as the recovered families. The fix-stage readback-crossing probe (§9) executes that
+  residual shape deterministically: exit 1 with `PUT error=<nil>`. Reverting to the narrower
+  three-shape reading of the contract is a two-branch deletion (plan D3a, rejected alternative).
+- **Late-served coverage (closed by review r1):** the late-served branch is executed
+  deterministically on the shipping bytes by the fix-stage pin (§9): the fixture holds the PUT's
+  server-side handling to 50 ms past the anchored deadline and the pin runs green under load
+  (200/200, 197 of them taking the late branch), plus once under WSL `-race`; the pin's own
+  expectation mutants (M4/M5) red, naming the observed PUT error class (`context deadline exceeded`)
+  and the real terminal classification. The two natural observations from the superseded
+  intermediate run remain the only unforced reds of the family.
 - The `[GET]` family is accepted only when the PUT was actually attempted and refused by the expired
   budget (`errors.Is(putErr, context.DeadlineExceeded)`), so a product that skips the PUT after the
   readback stays red.
@@ -205,3 +219,93 @@ green).
   production-bound arm (W4-13 §5.2) and was not converted.
 - The `afterPut` *entry* mark is recorded but not asserted: the PUT leg's resolution can be starved
   past the deadline (observed once), so liveness binds the served requests and the hold's return.
+
+## 9. Fix stage (review r1 findings, 2026-11-25)
+
+Review r1 held `DECISION_NEEDED` on the accepted-set width (SPEC-A01) and the missing late-served
+execution on the shipping bytes (STD-A01), with three P3 record defects. The conductor's ruling of
+2026-11-25 settled all five: keep the five closed families with F2 amended to "the accepted set is
+the trajectories P1 recovers or that a deterministic P2 pin executes", pin late-served
+deterministically or delete the branch, and correct the records. The amended rule and its rationale
+are recorded once, in the plan's D3a; this section carries the fix stage's evidence.
+
+### 9.1 Late-served pin (STD-A01)
+
+Scratch edit on the shipping bytes (`<scratch>/fix-pin-lateserved.patch`, numstat vs the shipping
+file 43/1; pin file sha256 `2ed35401…`, patch sha256 `316ad1a7…`): a fixture hook stalls a PUT's
+server-side handling before the `put` mark — the handler buffers the request body at entry and waits
+for a release at the anchored deadline + 50 ms — so the recorded PUT entry lands past the deadline
+while the readback GET stays live and the product serves both requests. The test waits on a channel
+the handler closes right after the mark (bounded at 5 s, after which the ordinary trajectory
+assertions run and name whatever shape occurred), so no assertion races the stall. The arm then
+selects the late branch (the complement predicate) and asserts the branch's expectations against
+the real product output.
+
+| run | command (cwd `<scratch>/after/daemon`) | exit | result |
+| --- | --- | ---: | --- |
+| single | `go test -count=1 -timeout 300s -v -run '…/admission_deadline_lateserved' ./internal/app/` | 0 | `requests=[GET PUT]`, `first_request=+0.084s(until=+1.920s)`, `put=+2.054s(until=-0.051s)`, `after_put_return=+2.004s` |
+| 40 repeats, 3-process oversubscription | `GOMAXPROCS=8 go test -count=40 -timeout 900s -v -run '…/admission_deadline_lateserved' ./internal/app/` beside the 25-round backpressure carrier and two full `internal/state` runs | 0 | 40/40 late-served with the PUT entry 50-56 ms past the anchored deadline (`until=-0.050..-0.056 s`; first request live by +1.634..+1.957 s); carriers exit 0 |
+| 200 under the one-carrier recipe | `GOMAXPROCS=8 go test -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved' ./internal/app/` beside 25 backpressure carrier rounds then two full `internal/state` runs, one carrier at a time | 0 | 200/200 green: 197 late-served with the PUT entry 50-55 ms past the anchored deadline (`until=-0.050..-0.055 s`; first request live by +1.709..+1.966 s) + 3 accepted starved-A (`requests=[]`, native open+close, `t0/claim` only); carriers exit 0 |
+| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <scratch>/after/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline_lateserved ./internal/app/'` | 0 | `ok … 4.412s`, `put=+2.063s(until=-0.053s)`, no race report |
+
+Readings: 197 of the 200 recorded runs executed the late branch (the other 3 served no request at
+all: the accepted starved-A family, whose wait expiry the bounded fall-through routes to the
+ordinary assertions instead of a red). The observed PUT error is `context deadline exceeded` and the
+observed terminal payload is `{"error":"attach native Goal session: …","reason":"unknown_outcome",
+"stage":"goal_admission",…}` — each named by a failing expectation mutant (§5's M4/M5), so both of
+the branch's expectations are served by the product's real fail-closed output. Acceptance clause 2's
+late-served gap is closed: the histogram now carries the pin's late-served executions with their
+timelines.
+
+Boundary probe (recorded; not a pass): moving the same hold onto the first served request produces
+the §8 residual shape — exit 1, `requests=[GET]`, `PUT error=<nil>` — because the client's readback
+call resolves on the expired budget and no PUT is attempted. The two natural late-served reds of the
+superseded run therefore crossed the deadline where the pin crosses it: at the PUT entry, not in the
+readback.
+
+Audit trail (pin revision v1, superseded): the first pin revision ended its wait with a 20 s hard
+`t.Fatal` and reported `the stalled PUT never reached the server` in 10 of 200 iterations run
+beside two additional carriers (three test processes on the shared host). Each red subtest had
+stretched to 27-33 s against the ~2.1 s nominal, i.e. the process was starved several times past
+the pin's release schedule; the wait redded before any product assertion ran, and no further cause
+is claimed from that log. The bounded-wait revision above then ran 40/40 late-served green under
+the identical three-process load, so the shape is not reproducible there; the 200-count row above uses
+the contract's one-carrier recipe.
+
+### 9.2 Expectation controls
+
+M4 (the late branch's PUT-error allowance narrowed to `io.EOF` only), M5 (its terminal expectation
+changed to a wrong message) and the readback-crossing probe are rows of §5; each ran on the pin
+bytes and was restored afterwards. M4 and M5 red, naming respectively the observed PUT error class
+and the real terminal classification; the probe reds by design as the recorded residual shape.
+
+### 9.3 Record edits (fix stage)
+
+- plan D3: the late-served trigger is stated as the complement predicate (STD-A02).
+- plan D3a: the amended accepted-set rule and rationale, with the pin's pointer (SPEC-A01); the plan's
+  `What lands` and D2 wording aligned to the same rule.
+- §5: the `CI job that must redden` column with the runner-user note and the oracle gaps (SPEC-A03).
+- `docs/archive/CLOSED-TODO.md`: the closure paragraph carries "CI `daemon`/`daemon-windows` on the
+  PR head: pending (conductor-owned)." (SPEC-A02).
+- Host paths in these records were replaced by the `<worktree>`/`<scratch>` placeholders (§1); no
+  verbatim log text was rewritten and no pre-existing entry was touched.
+- No test byte changed: the binding file is `24931a59…` before and after the stage, so §4/§7's
+  measured numbers stand as recorded (re-verified, not re-measured).
+
+### 9.4 Fix-stage gates (document delta; no test byte changed)
+
+| gate | command (cwd `<worktree>` unless noted) | exit | result |
+| --- | --- | ---: | --- |
+| focused family | `go test -count=1 -timeout 600s -run 'TestOmOAttachAckRegression' ./internal/app/` (`daemon/`) | 0 | `ok … 23.582s`; the 8 test functions of the owned file, unchanged in count |
+| format / hygiene | `gofmt -l internal/app/omo_attach_ack_test.go`; `git diff --check` | 0 | empty / clean |
+| binding re-verify | `sha256sum daemon/internal/app/omo_attach_ack_test.go` (and the restored scratch copy) | 0 | `24931a59…` both; the pin copy was `2ed35401…` before the restore |
+| late-served pin | §9.1's runs (`<scratch>/after/daemon`) | 0 | 200/200 green: 197 late-served + 3 accepted starved-A; 40/40 under 3-process load; WSL `-race` green |
+| expectation controls | §5's M4/M5 rows and the readback-crossing probe | 1 / 1 / 1 | each red for its named expectation; the probe red by design |
+| citation existence | emulation repo of the final tree (`git archive HEAD` plus the fix-stage documents, committed; `python3 scripts/ci/check-citation-existence.py --repo . --base <base> --head <head>`) | 0 | `1 changed document(s) pass the path and symbol check (580 path citation(s))`; the three pre-existing ignore-covered notices unchanged |
+| record path scans | the added lines of `git diff origin/main -- docs`, the two new records read whole, and the committed branch diff, each checked for drive-letter, guest-mount, temp, home and profile-directory tokens (patterns described, not pasted, per the stage brief) | 0 | no hits; no host path and no account name in any of the records |
+| comment runs | added Go comment lines in `git diff origin/main...HEAD -- daemon/` (longest consecutive run) | 0 | 2, at the plan's cap |
+
+Not re-run at this stage: the loaded repeat and the companion (the test bytes are unchanged,
+`24931a59…` re-verified, so §4.2/§7's measured numbers stand), CI `daemon`/`daemon-windows` on a PR
+head (conductor-owned), and the changed-file clone gate (pinned `jscpd` unavailable locally; CI's
+`contracts` job owns it).

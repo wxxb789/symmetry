@@ -4915,3 +4915,4 @@ decision as open while this entry and the goal record carry the closure.
       histogram, the pins and mutant rows with restored blob hashes, WSL `-race` exit 0. Residual:
       a further fail-closed micro-shape (for example a readback aborted by the budget with no PUT
       attempt) would still red and needs the same treatment as the recovered families.
+      CI `daemon`/`daemon-windows` on the PR head: pending (conductor-owned).

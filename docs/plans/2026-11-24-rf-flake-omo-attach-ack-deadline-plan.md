@@ -16,7 +16,7 @@ in this slice are temporary mutants in a scratch copy, restored byte-identical.
 
 | file | change |
 | --- | --- |
-| `daemon/internal/app/omo_attach_ack_test.go` | P1 timeline probe; F1 claim-anchored `DeadlineAt`; F2 closed 2 s trajectory set with the three accepted trajectories strictly asserted; the shape-B pin mode |
+| `daemon/internal/app/omo_attach_ack_test.go` | P1 timeline probe; F1 claim-anchored `DeadlineAt`; F2 closed 2 s trajectory set with the accepted families strictly asserted (D3/D3a); the shape-B pin mode |
 | `docs/plans/2026-11-24-rf-flake-omo-attach-ack-deadline-plan.md` | this plan |
 | `docs/evidence/rf-flake-omo-attach-ack-deadline-2026-11-24.md` | the evidence record (commands, counts, timelines, mutant rows with restored hashes) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | the `:1389-1405` entry moves to the archive with a pointer to the evidence |
@@ -45,8 +45,8 @@ reads. Verified natively on Windows and under WSL `-race` (both gates below).
 The recorded starvation is 6-8x and the arm's duration is production-bounded
 (`controlRequestLimit = 15s`, `app.go:38`); a budget raise is still a wall clock and lengthens the
 arm, and a product clock seam is outside the owned set. F2 keeps the 2 s budget and accepts exactly
-the three trajectories the probe and the pins recover; everything else stays a failure, and no
-trajectory is accepted by wildcard.
+the fail-closed trajectories the probe and the deterministic pins recover (D3a's amended rule);
+everything else stays a failure, and no trajectory is accepted by wildcard.
 
 ## D3. The closed trajectory set and what each accepted trajectory asserts (F2)
 
@@ -57,7 +57,7 @@ their exact `assertRequests([GET, PUT])` assertions.
 | --- | --- | --- |
 | intended | `[GET, PUT]` | the base assertions (`assertRequests`, `assertStoppedWithoutTurn`, `assertExactPending`) plus the timeline: the anchored deadline is live at the first served request and at the PUT entry, and the hold returns no earlier than the deadline (the expiry is consumed inside the PUT leg) |
 | starved-A | `[]` | native session opened once and closed once, no turn, no context fetch, exact pending (compared against the delivery captured at the pre-PUT readback), terminal failure classified `unknown_outcome` at stage `goal_admission` naming `context deadline exceeded` |
-| late-served | `[GET, PUT]` | the intended assertions minus the liveness predicate, which the branch *inverts*: the first served request crossed the deadline; the PUT error is a lost acknowledgement (`io.EOF`) or the expired budget (`context.DeadlineExceeded`); terminal failure classified `unknown_outcome` at stage `goal_admission` naming the attach stage |
+| late-served | `[GET, PUT]` | the intended assertions minus the liveness predicate, which the branch *inverts* (the complement: the first served request or the PUT entry is at/after the anchored deadline); the PUT error is a lost acknowledgement (`io.EOF`) or the expired budget (`context.DeadlineExceeded`); terminal failure classified `unknown_outcome` at stage `goal_admission` naming the attach stage |
 | in-flight readback | `[GET]` | the PUT was dispatched on the expired budget and refused client-side (`context.DeadlineExceeded`), so no second request reached the server; native session opened and closed, no turn, exact pending, terminal failure classified `unknown_outcome` at stage `goal_admission` naming `context deadline exceeded` |
 | starved-B | `[]` | no native call at all, no goal delivery ever queued/delivered/retired, terminal failure classified `unknown_outcome` at stage `goal_admission` naming `Goal admission deadline has elapsed before native launch` |
 
@@ -67,8 +67,8 @@ trajectory. The intended trajectory's request assertion is byte-identical to the
 so no assertion is removed; the two starved branches add call-set and classification equalities the
 base line did not have.
 
-### D3a. The two boundary families were recovered by the probe, and the accepted set is
-### "exactly the trajectories P1/P2 recover" (the contract's own definition)
+### D3a. The accepted set is the trajectories P1 recovers or a deterministic P2 pin executes
+### (contract F2, as amended by the conductor ruling on review r1, 2026-11-25)
 
 P1's loaded repeat and the companion run recovered four red families at base: 21/22 of the loaded
 reds were starved-A and one was the in-flight-readback shape (`requests=[GET]`, PUT refused
@@ -78,23 +78,28 @@ the hijack `EOF`, terminal failure `unknown_outcome` at `goal_admission` naming 
 All four are fail-closed: the original budget is honoured (no readback, no turn, exact pending,
 unchanged journal).
 
-The contract's F2 defines the accepted set as "exactly the trajectories P1/P2 recover" and names
-the three expected shapes; the probe recovered two further fail-closed families. Options:
+The contract's F2 defined the accepted set as "exactly the trajectories P1/P2 recover" and names
+the three expected shapes; the probe recovered two further fail-closed families. Review r1 held
+that no accepted family may stand without a deterministic execution on the shipping bytes; the
+conductor's ruling of 2026-11-25 amended F2 to the rule recorded here (the amendment and its
+rationale live in this section):
 
-- (a) Accept only the three named shapes. The arm stays red at roughly 1 % on a busy host (2/200 in
-  the companion run) for trajectories that show no product defect, i.e. the goal's own promise —
-  deterministic under host load — stays unmet.
-- (b) **Adopted:** accept exactly the recovered families, each strictly pinned (D3). The set stays
-  closed: every branch asserts an exact request set, an exact native call log, the fail-closed
-  postconditions, the terminal classification, and — for the served pair — the *complementary*
-  liveness predicate, so the intended and late-served branches cannot absorb each other. No
-  wildcard acceptance, no budget raise, no retry, no skip, no removed assertion; the mutants below
-  re-verify that defect detection is unchanged (M1/M2/M3 still red).
+- (a) Accept only the three named shapes — rejected: the arm stays red at roughly 1 % on a busy host
+  (2/200 in the companion run) for trajectories that show no product defect, i.e. the goal's own
+  promise — deterministic under host load — stays unmet.
+- (b) **Adopted (amended rule):** accept exactly the families P1 recovers or a deterministic P2 pin
+  executes, each strictly pinned (D3) with an executed pin or a loaded red on the binding bytes. The
+  set stays closed: every branch asserts an exact request set, an exact native call log, the
+  fail-closed postconditions, the terminal classification, and — for the served pair — the
+  *complementary* liveness predicate, so the intended and late-served branches cannot absorb each
+  other. No wildcard acceptance, no budget raise, no retry, no skip, no removed assertion; the
+  mutants below re-verify that defect detection is unchanged (M1/M2/M3 still red).
 
-Reading adopted: the contract's definitional clause governs the delivered set; the bullet list
-names the inventory the dispatcher expected from the recorded evidence. Named for review in
-`docs/evidence/rf-flake-omo-attach-ack-deadline-2026-11-24.md` §8; reverting to (a) is a
-two-branch deletion if the conductor prefers the narrower reading.
+The late-served family's deterministic pin is recorded in the evidence record §9 (fix r1): the
+fixture holds the PUT's server-side handling until 50 ms past the anchored deadline, and the branch
+executes green on the shipping bytes under load (197/200 runs took the late branch; the other 3
+were the accepted starved-A family), plus once under WSL `-race`. Reverting to (a) remains a
+two-branch deletion; it is the recorded rejected alternative, not an open question.
 
 ## D4. Starved-A's exact-pending capture
 
@@ -146,18 +151,29 @@ measurement harness, and recorded with its measured wall time in the evidence re
 
 Subject: worktree `9d113eb6` + `daemon/internal/app/omo_attach_ack_test.go` sha256
 `24931a59649d80e92c5e58bb4566072b0e949ad2d9a1a34cb9381f9143006a19` (`git diff --numstat` 236/21;
-`git diff --check` clean). Scratch clones `Q:/scratch-rf-flake-omo-attach/{before,after}`. Each row
-below is the apply-stage re-run on the binding bytes unless it names the pre-fix arm; the
-implement-stage rows for the intermediate revisions are in the evidence record §4.2.
+`git diff --check` clean). Scratch clones `<scratch>/{before,after}` — `<worktree>` and `<scratch>`
+are the placeholder names for the goal worktree and the disposable scratch root; this plan and the
+evidence record carry no absolute paths. Each row below is the apply-stage re-run on the binding
+bytes unless it names the pre-fix arm; the implement-stage rows for the intermediate revisions are
+in the evidence record §4.2.
 
 | row | command | exit | result |
 | --- | --- | ---: | --- |
 | pre-fix loaded repeat | `GOMAXPROCS=8 timeout 30m go test -count=200 -timeout 1500s -run 'TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline' ./internal/app/` (`before`, P1-only arm) | 1 | 22 red / 200 in 622.797 s: 21 starved-A + 1 in-flight readback, each with its P1 timeline |
 | post-fix loaded repeat | same command (worktree, binding bytes) beside 7 bounded rounds of `go test -count=4 -run '^TestOutputBackpressureRecoversWithOneTruncationMarker$' ./internal/app/` | 0 | 0 red / 200 in 482.614 s; the carrier rounds covered the whole measurement |
 | post-fix companion | same command plus `-v`, no carrier | 0 | 0 red / 200; 400 trajectory lines: 196 intended (margin min 0.923 s / max 1.968 s / mean 1.915 s), 4 starved-A, 200 pins |
-| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd /mnt/q/repos/wt-flake-omo-attach/symmetry/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 22.846s`, no race report |
+| WSL `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <worktree>/daemon && go test -race -count=1 -timeout 1200s -run TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget ./internal/app/'` | 0 | `ok … 22.846s`, no race report |
 | focused family | `go test -count=1 -run 'TestOmOAttachAckRegression' ./internal/app/` | 0 | `ok … 24.778s` |
 | vet / format | `go vet ./...`; `gofmt -l internal/app/omo_attach_ack_test.go` | 0 | clean, empty |
 | pins and mutants | §5 of the evidence record | P2-before 1, P2-after 0, in-flight pin 0, M1 1 (×2; M1′ 1, deterministic), M2 1 (×2), M3 1 | product files restored to sha256 `89a9857d…` (`goal_delivery.go`), `76bcca94…` (`goal_admission_tx.go`), `b95b4f69…` (`harness_test.go`) |
 | citation existence (emulation) | `python3 scripts/ci/check-citation-existence.py --repo . --base 9d113eb6 --head HEAD` | 0 | 573 path citations pass |
 | changed-file clone gate | `python3 scripts/ci/jscpd-changed.py …` | 2 | not run: pinned `jscpd` not installed locally (verification limit; CI owns it) |
+
+Fix-stage rows (review r1, 2026-11-25; the test bytes are unchanged — binding sha256 re-verified
+`24931a59…`; full rows in the evidence record §9):
+
+| row | command | exit | result |
+| --- | --- | ---: | --- |
+| late-served pin | `GOMAXPROCS=8 go test -count=200 -timeout 1500s -v -run '…/admission_deadline_lateserved' ./internal/app/` (`after` clone + `<scratch>/fix-pin-lateserved.patch`, pin bytes sha256 `2ed35401…`) beside bounded carrier rounds (one at a time) | 0 | 200/200 green: 197 late-served (PUT entry 50-55 ms past the anchored deadline) + 3 accepted starved-A |
+| pin `-race` | `timeout 30m wsl -d Ubuntu-24.04 -u accept -- bash -lc 'cd <scratch>/after/daemon && go test -race -count=1 -timeout 1200s -run …/admission_deadline_lateserved ./internal/app/'` | 0 | `ok … 4.412s`, no race report |
+| pin-expectation mutants M4/M5, readback-crossing probe | the same pin command (M4: EOF-only allowance; M5: wrong terminal message; probe: the hold moved to the GET) | 1 / 1 / 1 | M4 names the observed `context deadline exceeded`, M5 the real terminal classification; the probe reds by design as the recorded `[GET]`/`putErr=nil` residual shape |
