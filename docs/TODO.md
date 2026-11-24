@@ -395,6 +395,34 @@ where it is and is neither moved to `docs/archive/CLOSED-TODO.md` nor deleted wi
   digests in `docs/evidence/goal-0007c-safe-work-planning-2026-11-16.md` name it as the algorithm of
   record, so that receipt can no longer be recomputed from the tree; the file remains in git history.
 
+- [ ] Control review: goal-less assignment ignores the repository resource by design (C1 verdict);
+      the one open slice is excluding Linux pi/opencode from legacy selection (2026-11-24, goal
+      `rf-acc-native-burndown`; C1 verdict in `decision-native-opencode-2026-11-24.md`, GDD state
+      root; evidence `docs/evidence/rf-acc-native-burndown-2026-11-24.md` §5.3 and §7, runs
+      `45309039777`, `45315493474`, `45402706492`): repository affinity is Goal-scoped by the
+      binding design (`docs/design/data.md:106-123`, `docs/design/protocol.md:194-207`; goal-less
+      behaviour is frozen, `docs/design/data.md:12-14,397-398`). A goal-less Task has no WorkItem
+      link, so the v1 selector has no resource to bind: it joins on
+      `agent_profile`/`workspace`/`capabilities` and takes the oldest matching runtime
+      (`control/lib/symmetry_control/orchestration/assignment.ex:260-306`,
+      `runtime_matches_binding/0`), while the goal path requires the runtime's
+      `repository_resource_id` to equal the goal's resource (`Assignment.goal_runtime_matches?/3`,
+      `assignment.ex:505-512`, through `Eligibility.runtime_matches_goal_resource?/3`,
+      `control/lib/symmetry_control/goals/eligibility.ex:209-224`). The two discriminating tests:
+      `control/test/symmetry_control/orchestration/claims_test.exs` "claim_run refuses a goal claim
+      whose runtime lost repository affinity" (`:89`) and
+      `control/test/symmetry_control/orchestration/assignment_test.exs` "assign_one assigns a queued
+      legacy task and moves it to assigned" (`:13`). Consequence (P3, routing only, no authority
+      leak): a goal-less codex/claude/generic run may execute in another repository's machine-local
+      workspace, and Linux pi/opencode refuse it with `linux_v2_required` only after the claim
+      grant. No Control goal opens for this; the optional later Control slice retires Linux
+      pi/opencode from legacy selection the way omp/omo already are. The fixture-side isolation
+      (retiring earlier case sets' runtimes, `scripts/ci/provision-linux-v2-control-claims.exs:98-101,
+      425-436`) lands with the exact-profile/resource guard (`:206`) unchanged, and the workflow's
+      `SYMMETRY_HEARTBEAT_INTERVAL_MS=3600000` stays unchanged by decision. The closed half of the
+      original item (the installed-daemon smoke's owner `Before` check) is in
+      `docs/archive/CLOSED-TODO.md`.
+
 ## Browser acceptance under host load
 
 - [ ] Re-measure the pre-existing browser suites on a quiesced host and take their verdicts off
@@ -1000,9 +1028,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
       be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
       per check in a separate maintenance slice.
-- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1733` pins
-      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
-      HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 
 ## Deferred review findings (PR #205)
 
@@ -1691,6 +1716,12 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       is unverified for the guest launcher
       (its userns creation is a privileged root one, unlike the probe's ambient-cap worker): the
       first dispatch records the real behavior before any fixture work is scheduled there.
+      Status update (2026-11-24, goal `rf-acc-native-burndown`): dispatched runs have now exercised
+      both kinds and neither reached a witness leg: `45200662557` stopped the containment sets at the
+      smoke config's OpenCode credential refusal, and the scratch narrow runs of that goal stop them
+      at the installed-daemon smoke (the entry above); no per-kind green run and no
+      `containment.native_open_reached` is recorded yet
+      (`docs/evidence/rf-acc-native-burndown-2026-11-24.md`).
 
 ## Orchestration concept split (rf-w5-18, 2026-11-22)
 
@@ -1805,3 +1836,58 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 The descendant-window item the same goal's gate runs found (a fixed-sleep helper mode racing the
 grandchild's stdout write) is fixed in that goal and archived in
 `docs/archive/CLOSED-TODO.md`.
+
+## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)
+
+- [ ] Capture a bounded, redacted App stderr (or otherwise name the first post-seed refusal) in the
+      Linux v2 witness harness, then root-cause the two containment sets' stop (2026-11-24, goal
+      `rf-acc-native-burndown`; evidence `docs/evidence/rf-acc-native-burndown-2026-11-24.md`
+      §3.13.1 and §3.15, runs `45388258526` and `45402706492`): `codex_containment` and
+      `claude_containment` reach their named witness and stop at
+      `daemon/e2e/production_linux_v2_native_witness_test.go:101`/`:109` (`wait for requested
+      production owner-witness barrier: owner-witness command did not reach its requested durable
+      stage`) ~30 s after the App seeded its claim (one surviving RunJournal, no stage marker), and
+      the App's own refusal is unobservable: the harness opens `/dev/null` as the App child's
+      stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52-66`) and the App writes its
+      response only on structured outcomes (`daemon/internal/app/linux_owner_witness_linux.go:613-630`);
+      the in-fixture early-phase probe cannot name it (its second App run returns at
+      `validateLinuxV2NativeWitnessExistingJournal`, `:2625-2633`). The conductor opens a follow-up
+      goal for the bounded, redacted App stderr capture plus the root cause.
+      `synthetic_goal_cleanup`'s stop belongs to the same goal: its test-built
+      `execution.LinuxV2Invocation` sets no `Callbacks.CheckNativeAdmission`, so the App refuses the
+      test's own launch (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:499`,
+      `daemon/internal/execution/linux_owner_v2_linux.go:339`).
+
+- [ ] Root-cause the three product-test stops the installed-owner leg now reaches (2026-11-24, goal
+      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15): `shared`'s leg
+      `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
+      passed `CloneCleanupScratch` and failed the other three —
+      `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259` (`A cleanup caller exited
+      without the requested parent-death signal`; run `45398550682` stopped one check earlier at
+      `:207`, cleared by the fixture's six-digit `z-later-` name fix, §3.14/§3.15),
+      `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
+      the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
+      and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`).
+      All three sit in `daemon/native/linux-gate/**` and were unreachable until the fifth leg's pin
+      was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
+      goal with guest-side debugging; no fixture change is proposed without a named root.
+
+- [ ] Keep the twelve OpenCode-vehicle case sets as F2-excluded rows until `rf-acc-pi-durability-matrices`
+      retargets the durability matrices to pi under the D3 `harness.md` amendment (2026-11-24, owner
+      rulings A1/C1 in `decision-native-opencode-2026-11-24.md`): on the final bytes the App's own
+      witness gate refuses every OpenCode-family config — `owner witness config native harness
+      version differs from the tested release` observed 210 times in run `45402706492` — because the
+      fixture's frozen `opencode: "1.18.32"` pin differs from `opencode.TestedVersion = "2.3.0"`
+      (`daemon/internal/harness/opencode/adapter.go:28`). The pin, the opencode render tokens and
+      the frozen lines stay untouched by decision; the evidence record's per-set table records each
+      excluded row (§3.15).
+
+- [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
+      round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
+      effective owner `Before` (systemd's reverse of the daemon's own required
+      `After=symmetry-owner.service`), so the owner's effective `Before` set is no longer inspected
+      at all. It is ordering-only — it pulls no unit into the transaction — but a root-installed
+      third-party unit that declares `After=symmetry-owner.service` adds an entry to that set with
+      no refusal. Declared fragment/drop-in `Before=` edges to the daemon stay refused
+      (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
+      residual explicitly.

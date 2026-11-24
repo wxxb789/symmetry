@@ -33,6 +33,7 @@ defmodule LinuxV2ControlClaimFixture do
     "journal_cleared"
   ]
   @expected_fixture_runs 48
+  @fixture_database_prefix "symmetry_linux_v2"
 
   @cases [
     {"pi_provider_action", "pi-native", :pi,
@@ -98,6 +99,7 @@ defmodule LinuxV2ControlClaimFixture do
   def run!("prepare", [output_path, repository_ref, repository_owner, commit, tree_digest]) do
     require_ephemeral_ci!()
     start_repo!()
+    retire_earlier_case_set_runtimes!()
     validate_subject!(repository_ref, commit, tree_digest)
     suffix = Ecto.UUID.generate() |> String.replace("-", "")
 
@@ -411,14 +413,40 @@ defmodule LinuxV2ControlClaimFixture do
   end
 
   defp launch_one_shot_work_item!(work_item_id, case_name) do
+    # Legacy (goal-less) tasks must not carry goal-admission fields
+    # (control constraint tasks_goal_fields_all_or_none).
     {:ok, %{task: %{task: task}}, :created} =
       Workspaces.launch_work_item(work_item_id, "linux-v2-owner-#{case_name}", notify: false)
 
-    case Repo.update_all(from(current in Task, where: current.id == ^task.id),
-           set: [max_run_attempts: 1]
-         ) do
-      {1, _} -> task.id
-      other -> raise "could not pin one legacy Run attempt for #{case_name}: #{inspect(other)}"
+    task.id
+  end
+
+  # Case sets share one Control database per job and legacy assignment takes the oldest online
+  # runtime (assignment.ex:260-304), so every online runtime here belongs to an earlier case set.
+  defp retire_earlier_case_set_runtimes!() do
+    require_fixture_local_database!()
+
+    retired =
+      from(runtime in Runtime, where: runtime.status == "online")
+      |> Repo.all()
+      |> Enum.map(fn runtime ->
+        runtime
+        |> Runtime.changeset(%{status: "offline"})
+        |> Repo.update!()
+      end)
+
+    IO.puts("retired #{length(retired)} runtime(s) left online by earlier case sets")
+  end
+
+  # The sweep may touch only the job's own fixture database: the loopback service the workflow
+  # names. Any other target refuses before a query; this fail-closed check is defense in depth.
+  defp require_fixture_local_database!() do
+    config = Repo.config()
+
+    unless config[:hostname] in ["127.0.0.1", "localhost", "::1"] and
+             String.starts_with?(to_string(config[:database]), @fixture_database_prefix) do
+      raise "runtime retirement refuses a Control database that is not the fixture's own local one: " <>
+              "host=#{inspect(config[:hostname])} database=#{inspect(config[:database])}"
     end
   end
 

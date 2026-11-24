@@ -522,6 +522,9 @@ func TestLinuxSystemdCandidateEnforcesExactOwnerAndDaemonTopology(t *testing.T) 
 		"reverse dependency": func(values map[string][]string) {
 			values["after"] = []string{"local-fs.target", "symmetry-daemon.service"}
 		},
+		"declared before edge": func(values map[string][]string) {
+			values["before"] = []string{"symmetry-daemon.service"}
+		},
 		"stop post added": func(values map[string][]string) { values["execstoppost"] = []string{"/bin/true"} },
 		"list reset":      func(values map[string][]string) { values["after"] = []string{"local-fs.target", ""} },
 	} {
@@ -532,6 +535,9 @@ func TestLinuxSystemdCandidateEnforcesExactOwnerAndDaemonTopology(t *testing.T) 
 				t.Fatal("unsafe owner candidate was accepted")
 			}
 		})
+	}
+	if err := validateLinuxSystemdOverrides(map[string][]string{"before": {"symmetry-daemon.service"}}, owner, a, b); err == nil {
+		t.Fatal("owner drop-in declaring an ordering edge to the daemon was accepted")
 	}
 
 	daemon := linuxSystemdUnitPolicy{
@@ -849,7 +855,6 @@ func TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands(t *test
 		"ignore stop failure": func(values map[string]string) {
 			values["ExecStop"] = strings.Replace(values["ExecStop"], "ignore_errors=no", "ignore_errors=yes", 1)
 		},
-		"reverse dependency": func(values map[string]string) { values["Before"] = "symmetry-daemon.service" },
 		"unknown drop-in": func(values map[string]string) {
 			values["DropInPaths"] = "/run/systemd/system/symmetry-owner.service.d/override.conf"
 		},
@@ -859,6 +864,27 @@ func TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands(t *test
 			mutate(mutated)
 			if err := validateEffectiveLinuxSystemdProperties(mutated, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err == nil {
 				t.Fatal("unsafe effective systemd state was accepted")
+			}
+		})
+	}
+	// systemd registers the inverse of the daemon's own required After edge on the owner
+	// (inverse_table[UNIT_AFTER] = UNIT_BEFORE), so an effective owner Before is expected here.
+	inverseOrdering := cloneStringMap(properties)
+	inverseOrdering["Before"] = "symmetry-daemon.service"
+	if err := validateEffectiveLinuxSystemdProperties(inverseOrdering, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004}); err != nil {
+		t.Fatalf("systemd's inverse owner ordering edge to the daemon was rejected: %v", err)
+	}
+	for _, key := range []string{"After", "BindsTo", "Requires", "Requisite", "Wants", "PartOf", "Conflicts"} {
+		t.Run("owner/"+key, func(t *testing.T) {
+			mutated := cloneStringMap(properties)
+			if key == "After" {
+				mutated[key] = "local-fs.target symmetry-daemon.service"
+			} else {
+				mutated[key] = "symmetry-daemon.service"
+			}
+			err := validateEffectiveLinuxSystemdProperties(mutated, policy, nil, ACLSubject{UID: 1001, GID: 1002}, ACLSubject{UID: 1003, GID: 1004})
+			if err == nil || !strings.Contains(err.Error(), "through "+key) {
+				t.Fatalf("effective owner %s edge to the daemon was accepted: %v", key, err)
 			}
 		})
 	}

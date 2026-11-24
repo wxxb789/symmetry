@@ -153,6 +153,73 @@ stage_guest_binary() {
     fail "staged $label digest differs from the pinned $release release"
 }
 
+# Defined before the EXIT trap's exporter: an early fixture failure must still export cleanly.
+print_witness_document() {
+  local document=$1
+  sudo test -s "$document" || return 0
+  sudo jq -c '{case, harness, native_version, owner_witness_outcome, failure_category, recovery_state,
+    installed_owner_verified, native_binary, native_open_reached: .containment.native_open_reached}' \
+    "$document" >&2 || true
+}
+
+# Defined before its earliest caller: the shared set's unprovisioned gate failure prints through it.
+print_witness_output_lines() {
+  local event_file=$1
+  shift
+  python3 - "$event_file" "$evidence_secret_values_file" "$@" >&2 <<'PY' || true
+import json, pathlib, sys
+
+events, secrets_path, *names = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+try:
+    with open(events, encoding="utf-8", errors="strict") as stream:
+        for line in stream:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("Action") != "output":
+                continue
+            name = event.get("Test")
+            if not isinstance(name, str) or not any(name == target or name.startswith(target + "/") for target in names):
+                continue
+            text = event.get("Output") or ""
+            raw = text.encode("utf-8", errors="replace")
+            if len(raw) > 400 or any(secret in raw for secret in secrets):
+                continue
+            lines.append(text.rstrip())
+except OSError:
+    raise SystemExit(0)
+for text in lines[-10:]:
+    print("witness output: " + text)
+PY
+}
+
+# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
+# as the witness event lines; each caller names the block the lines belong to.
+print_filtered_output_lines() {
+  python3 -c '
+import pathlib, sys
+
+secrets_path, = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+for line in sys.stdin.buffer:
+    if len(line.rstrip(b"\r\n")) > 400 or any(secret in line for secret in secrets):
+        continue
+    lines.append(line)
+for line in lines[-40:]:
+    sys.stdout.buffer.write(line)
+' "$evidence_secret_values_file" >&2 || true
+}
+
 export_native_evidence() {
   local original_status=$1
   local witness_home=${A_HOME:-/home/symmetry-a}
@@ -164,10 +231,12 @@ export_native_evidence() {
     run_status=passed
   fi
   local native_kind='' native_binary='' native_binary_sha='' native_archive_sha='' native_version_line=''
+  local native_witness_document=''
   case "$fixture_case_set" in
     codex_containment)
       native_kind=codex
       native_binary=/usr/local/bin/codex
+      native_witness_document="$witness_root/codex_containment/TestProductionLinuxV2CodexNativeContainment.json"
       native_binary_sha="sha256:${codex_executable_sha:-}"
       native_archive_sha="sha256:${codex_archive_sha:-}"
       native_version_line="${codex_version_line:-}"
@@ -175,6 +244,7 @@ export_native_evidence() {
     claude_containment)
       native_kind=claude_code
       native_binary=/usr/local/bin/claude
+      native_witness_document="$witness_root/claude_containment/TestProductionLinuxV2ClaudeNativeContainment.json"
       native_binary_sha="sha256:${claude_executable_sha:-}"
       native_archive_sha="sha256:${claude_archive_sha:-}"
       native_version_line="${claude_version_line:-}"
@@ -191,13 +261,19 @@ export_native_evidence() {
       --source-tree-digest "$source_tree_digest"
     )
   fi
+  local export_status=0
   sudo python3 "$repo/scripts/ci/export-linux-v2-redacted-evidence.py" \
     manual "$evidence_directory" "$GITHUB_SHA" "$run_status" \
     --witness-root "$witness_root" --receipt-root "$receipt_root" \
     --case-set "$fixture_case_set" \
     --secret-values-file "$evidence_secret_values_file" \
     --runner-uid "$(id -u)" --runner-gid "$(id -g)" \
-    "${native_manifest_args[@]}"
+    "${native_manifest_args[@]}" || export_status=$?
+  if (( export_status != 0 )) && [[ -n "$native_witness_document" ]]; then
+    # The exporter reports only the first violated field; the witness document names the stop.
+    print_witness_document "$native_witness_document"
+  fi
+  return "$export_status"
 }
 
 cleanup() {
@@ -320,31 +396,34 @@ printf 'Building static production Linux amd64 owner binaries.\n'
 source "$repo/scripts/ci/linux-v2-native-tools.sh"
 linux_v2_fetch_native_tools "$fixture_root"
 
-. /etc/os-release
-codename=${VERSION_CODENAME:?Ubuntu release codename is unavailable}
-# The public archive drops individual packages from the hosted runner network; mirror
-# the first archive URI in the image's own apt mirrorlist, as debootstrap's source.
-ubuntu_mirror=
-apt_mirror_uri=$(awk '/^[[:space:]]*https?:\/\/[^ ]*\/ubuntu\/?[[:space:]]/ { sub(/\/$/, "", $1); print $1; exit }' /etc/apt/apt-mirrors.txt 2>/dev/null || true)
-case "$apt_mirror_uri" in
-http://*/ubuntu|https://*/ubuntu) ubuntu_mirror=$apt_mirror_uri ;;
-*)
-  sources_uri=$(awk '/^URIs:/ { print $2; exit }' /etc/apt/sources.list.d/*.sources 2>/dev/null || true)
-  case "$sources_uri" in
-  http://*/ubuntu|https://*/ubuntu|http://*/ubuntu/|https://*/ubuntu/) ubuntu_mirror=${sources_uri%/} ;;
-  esac
-  ;;
-esac
-[[ -n "$ubuntu_mirror" ]] || fail 'the image apt mirrorlist and apt sources name no Ubuntu archive for debootstrap'
-printf 'Using the image apt archive mirror for the disposable rootfs: %s\n' "$ubuntu_mirror"
-sudo debootstrap --variant=minbase \
-  --include=acl,binutils,bash,ca-certificates,coreutils,curl,dbus,git,libacl1,libcap2-bin,libgcc-s1,libstdc++6,passwd,procps,python3,sudo,systemd,systemd-sysv,tar,util-linux \
-  "$codename" "$rootfs" "$ubuntu_mirror"
+native_rootfs_base=${SYMMETRY_LINUX_V2_NATIVE_ROOTFS_BASE:-}
+if [[ -n "$native_rootfs_base" ]]; then
+  [[ "$native_rootfs_base" == /* && -d "$native_rootfs_base" && ! -L "$native_rootfs_base" ]] ||
+    fail 'the shared disposable guest rootfs base must be an absolute directory'
+  printf 'Cloning the shared disposable guest rootfs base for this case set: %s\n' "$native_rootfs_base"
+  sudo cp -a -- "$native_rootfs_base" "$rootfs"
+else
+  bash "$repo/scripts/ci/linux-v2-native-rootfs-base.sh" "$rootfs"
+fi
 sudo chroot "$rootfs" /usr/bin/test -x /usr/bin/readelf
 sudo install -d -o root -g root -m 0755 "$rootfs/root" "$rootfs/etc/symmetry" "$rootfs/usr/local/bin" \
   "$rootfs/usr/libexec" "$rootfs/usr/libexec/symmetry-test" "$rootfs/home" "$rootfs/var/lib" "$rootfs/workspace" \
   "$rootfs/opt"
-sudo install -o root -g root -m 0755 "$pi_unpack/pi/pi" "$rootfs/usr/local/bin/pi"
+sudo install -d -o root -g root -m 0755 "$rootfs/usr/local/lib" "$rootfs/usr/local/lib/symmetry-pi"
+# pi reports its version from the package.json beside the executable, so the release tree ships whole.
+sudo cp -a -- "$pi_unpack/pi/." "$rootfs/usr/local/lib/symmetry-pi/"
+sudo chown -R root:root "$rootfs/usr/local/lib/symmetry-pi"
+sudo chmod 0755 "$rootfs/usr/local" "$rootfs/usr/local/lib"
+sudo find "$rootfs/usr/local/lib/symmetry-pi" -type d -exec chmod 0755 {} +
+sudo find "$rootfs/usr/local/lib/symmetry-pi" -type f ! -perm -u+x -exec chmod 0644 {} +
+sudo find "$rootfs/usr/local/lib/symmetry-pi" -type f -perm -u+x -exec chmod 0755 {} +
+sudo chmod 0755 "$rootfs/usr/local/lib/symmetry-pi/pi"
+[[ "$(sudo stat -c '%u:%g:%a' "$rootfs/usr/local/lib/symmetry-pi")" == '0:0:755' ]] ||
+  fail 'staged pi share directory must be root-owned mode-0755 so A can traverse it'
+[[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs/usr/local/lib/symmetry-pi/pi")" == '0:0:755:1' ]] ||
+  fail 'staged pi executable must be a singly-linked root-owned mode-0755 file'
+[[ "$(sudo sha256sum "$rootfs/usr/local/lib/symmetry-pi/pi" | cut -d' ' -f1)" == "$(sha256sum "$pi_unpack/pi/pi" | cut -d' ' -f1)" ]] ||
+  fail 'staged pi executable digest differs from the verified 1.5.2 release archive'
 sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
 if [[ "$fixture_case_set" == codex_containment ]]; then
   linux_v2_fetch_codex "$fixture_root"
@@ -495,9 +574,12 @@ sudo chroot "$rootfs" /usr/sbin/useradd --uid "$B_UID" --user-group --create-hom
 [[ "$(sudo chroot "$rootfs" /usr/bin/id -g "$B_USER")" == "$B_GID" ]] || fail 'the native execution account did not receive its dedicated B primary group'
 [[ "$(sudo chroot "$rootfs" /usr/bin/id -G "$B_USER")" == "$B_GID" ]] || fail 'B must have no supplementary groups beyond its dedicated primary group'
 sudo chmod 0700 "$rootfs$A_HOME" "$rootfs$B_HOME"
+# install -d applies -o/-g/-m to each named directory only; the implicit .cache parent is left
+# root-owned on this runner, so name .cache itself and fence all three A XDG cache directories.
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
-  "$rootfs$A_HOME/ci-fixture" "$rootfs$A_HOME/.cache/go-build" \
-  "$rootfs$A_HOME/.cache/tmp" "$rootfs$A_HOME/ci-source" "$rootfs$A_HOME/.ci-go" \
+  "$rootfs$A_HOME/ci-fixture" "$rootfs$A_HOME/.cache" \
+  "$rootfs$A_HOME/.cache/go-build" "$rootfs$A_HOME/.cache/tmp" \
+  "$rootfs$A_HOME/ci-source" "$rootfs$A_HOME/.ci-go" \
   "$rootfs$A_HOME/.ci-gomod" "$rootfs$A_SOURCE" "$rootfs$STATE_ROOT" \
   "$rootfs$DAEMON_SERVICE_STATE_DIR" \
   "$rootfs$SEED_ROOT"
@@ -521,9 +603,14 @@ sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$DAEMON_SERVICE_WORKSPAC
 sudo install -d -o "$A_UID" -g "$B_GID" -m 2750 "$rootfs$PI_SHARE"
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs/home")" == '0:0:755' ]] || fail 'the shared /home parent must remain root-owned and traversable'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$A_HOME")" == "$A_UID:$A_GID:700" ]] || fail 'A passwd HOME must remain A-owned mode 0700'
+for a_cache_directory in "$rootfs$A_HOME/.cache" "$rootfs$A_HOME/.cache/go-build" "$rootfs$A_HOME/.cache/tmp"; do
+  [[ "$(sudo stat -c '%u:%g:%a' "$a_cache_directory")" == "$A_UID:$A_GID:700" ]] ||
+    fail "A XDG cache directory must be A-owned mode 0700: $a_cache_directory"
+done
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$B_HOME")" == "$B_UID:$B_GID:700" ]] || fail 'B passwd HOME must remain B-owned mode 0700'
 b_native_credential_directories=(
   "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
+  "$B_HOME/.pi/agent/sessions" \
   "$B_HOME/.local" "$B_HOME/.local/share" "$B_HOME/.local/share/opencode"
 )
 b_native_credential_files=(
@@ -538,9 +625,11 @@ elif [[ "$native_containment_kind" == claude_code ]]; then
   b_native_credential_directories=("$B_HOME/.claude")
   b_native_credential_files=("$B_HOME/.claude/.credentials.json")
 fi
+# The installed owner's native preflight requires the fixed-B XDG cache before any release.
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$B_HOME/hooks" \
+  "$rootfs$B_HOME/.cache" \
   "${b_native_credential_directories[@]/#/$rootfs}"
-for private_directory in "$B_HOME" "$B_HOME/hooks" "${b_native_credential_directories[@]}"; do
+for private_directory in "$B_HOME" "$B_HOME/hooks" "$B_HOME/.cache" "${b_native_credential_directories[@]}"; do
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$private_directory")" == "$B_UID:$B_GID:700" ]] ||
     fail "B private HOME directory must be B-owned mode 0700 before A search ACLs: $private_directory"
 done
@@ -594,7 +683,7 @@ os.chown(link, b_uid, b_gid, follow_symlinks=False)
 root = pathlib.Path(parent_death_root)
 write_b_file(root / "--cleanup-first", b"first cleanup entry\n")
 for index in range(20_000):
-    write_b_file(root / f"z-later-{index:05d}", b"later cleanup entry\n")
+    write_b_file(root / f"z-later-{index:06d}", b"later cleanup entry\n")
 PY
 for cleanup_directory in \
   "$CLONE_TEST_CLEANUP_SIBLING" \
@@ -679,7 +768,9 @@ sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/nega
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
   "$rootfs$OWNER_BARRIER_ROOT/negative-root/stale_journal_run_key/setup-legacy" \
   "$rootfs$OWNER_BARRIER_ROOT/negative-root/stale_journal_run_key/stale-legacy"
-sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/unprovisioned/request"
+sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
+  "$rootfs$OWNER_BARRIER_ROOT/unprovisioned" \
+  "$rootfs$OWNER_BARRIER_ROOT/unprovisioned/request"
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 "$rootfs$OWNER_BARRIER_ROOT/stage-replay/$hold_after"
   sudo install -d -o root -g "$A_GID" -m 0750 "$rootfs$OWNER_STAGE_REPLAY_ROOT/$hold_after"
@@ -887,7 +978,16 @@ for private_directory in "$B_HOME" "${b_native_credential_directories[@]}"; do
 done
 
 printf 'Preparing the A-owned source repository and B-only native credentials.\n'
-machine_run_as "$A_USER" "$A_USER" /usr/bin/git -c "safe.directory=$A_HOME/ci-source" \
+# The staged native tools are executed by A, so their traversability is proven from A's side.
+machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -x "$1"' bash /usr/local/lib/symmetry-pi/pi ||
+  fail 'staged pi executable must be executable by A inside the guest'
+machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -r "$1"' bash /usr/local/lib/symmetry-pi/package.json ||
+  fail 'staged pi package.json must be readable by A inside the guest'
+machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c 'test -x "$1"' bash /usr/local/bin/opencode ||
+  fail 'staged opencode executable must be executable by A inside the guest'
+# The read-only runner-owned source mount cannot be chowned for A, and git's ownership guard also
+# inspects its .git, so allow any directory for this one read-only clone.
+machine_run_as "$A_USER" "$A_USER" /usr/bin/git -c 'safe.directory=*' \
   clone --no-hardlinks --no-checkout "$A_HOME/ci-source" "$A_SOURCE"
 machine_run_as "$A_USER" "$A_USER" /usr/bin/git -C "$A_SOURCE" checkout --quiet -B main "$GITHUB_SHA"
 machine_run_as "$A_USER" "$A_USER" /usr/bin/chmod -R go-rwx "$A_SOURCE"
@@ -935,7 +1035,7 @@ fixture = pathlib.Path(fixture_root)
 
 def config(kind, profile, model, resource_id):
     agent = {
-        "command": "/usr/local/bin/pi" if kind == "pi" else "/usr/local/bin/opencode",
+        "command": "/usr/local/lib/symmetry-pi/pi" if kind == "pi" else "/usr/local/bin/opencode",
         "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
         "native_model": model,
         "native_model_provider": "openai",
@@ -1209,7 +1309,12 @@ for name in ("unprovisioned",):
     config["state_dir"] = f"{state_root}/{name}"
     (bundle / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
-python3 - "$fixture_root/opencode-health.json" "$fixture_root/daemon-service.json" \
+daemon_service_template="$fixture_root/opencode-health.json"
+case "$fixture_case_set" in
+codex_containment) daemon_service_template="$fixture_root/codex-containment.json" ;;
+claude_containment) daemon_service_template="$fixture_root/claude-containment.json" ;;
+esac
+python3 - "$daemon_service_template" "$fixture_root/daemon-service.json" \
   "$DAEMON_SERVICE_STATE_DIR" "$DAEMON_SERVICE_WORKSPACE_ROOT" "$fixture_identity_suffix" <<'PY'
 import json
 import pathlib
@@ -1217,13 +1322,14 @@ import sys
 
 template_path, output_path, state_dir, workspace_root, fixture_identity_suffix = sys.argv[1:]
 config = json.loads(pathlib.Path(template_path).read_text(encoding="utf-8"))
+kind = config["runtime"]["harness_kind"]
 config["state_dir"] = state_dir
 config["machine_name"] = f"symmetry-linux-v2-installed-daemon-service-{fixture_identity_suffix}"
 service_workspace = dict(config["workspaces"]["native"])
 service_workspace["root"] = workspace_root
 config["workspaces"]["daemon-service"] = service_workspace
 config["runtime"]["runtime_key"] = f"symmetry-linux-v2-installed-daemon-service-{fixture_identity_suffix}"
-config["runtime"]["name"] = f"Installed Linux v2 OpenCode daemon service smoke {fixture_identity_suffix}"
+config["runtime"]["name"] = f"Installed Linux v2 {kind} daemon service smoke {fixture_identity_suffix}"
 config["runtime"]["workspace"] = "daemon-service"
 pathlib.Path(output_path).write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
@@ -1446,6 +1552,9 @@ if ! python3 "$repo/scripts/ci/assert-go-test-json.py" \
   "$unprovisioned_events" TestProductionLinuxV2UnprovisionedHostRefusal; then
   printf 'Unprovisioned production witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' \
     "$unprovisioned_status" >&2
+  # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
+  grep --invert-match --extended-regexp '^\{' "$unprovisioned_events" | head -n 5 >&2 || true
+  print_witness_output_lines "$unprovisioned_events" TestProductionLinuxV2UnprovisionedHostRefusal
   exit 1
 fi
 if (( unprovisioned_status != 0 )); then
@@ -1504,6 +1613,17 @@ else
   daemon_service_start_status=$?
 fi
 if (( daemon_service_start_status != 0 )); then
+  machine_run /usr/bin/systemctl show --no-pager \
+    --property=Result,ExecMainStatus,ExecMainCode,ActiveState,SubState,ControlGroup,NRestarts,After,BindsTo,ExecStartPre,ExecStart \
+    symmetry-daemon.service >&2 || true
+  # systemd materializes the inverse of a unit's ordering edge on the other unit, so the
+  # owner's effective edges name the source of any owner/daemon relation the preflight rejects.
+  machine_run /usr/bin/systemctl show --no-pager \
+    --property=Before,After,BindsTo,Requires,Requisite,Wants,PartOf,Conflicts \
+    symmetry-owner.service >&2 || true
+  machine_run /usr/bin/journalctl --no-pager --output=cat -n 80 \
+    --grep='-verify-linux-owner-install:|load config:|run daemon:|probe runtime harness:|build runtime registration:|register daemon session:|registration did not return|enroll machine:|load machine identity:|Failed at step|Main process exited|Failed to start|Start request repeated' \
+    -u symmetry-daemon.service >&2 || true
   fail "installed daemon.service could not pass ExecStartPre/start (status=$daemon_service_start_status)"
 fi
 sleep 6
@@ -1535,6 +1655,54 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
+# The owner-witness command's stderr is discarded by its own harness, so a failed witness
+# is named from the fixture state it leaves: its document, journals, markers, and configs.
+print_witness_failure_context() {
+  local output_directory=$1
+  shift
+  local name document
+  if [[ -n "$output_directory" ]]; then
+    for name in "$@"; do
+      document="$rootfs$output_directory/${name//\//_}.json"
+      print_witness_document "$document"
+    done
+  fi
+  # The staged native tools run as A, so a permission fault names itself only from the guest view.
+  printf 'guest view of the staged native tools (as A):\n' >&2
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/ls -ld \
+    /usr/local /usr/local/lib /usr/local/lib/symmetry-pi /usr/local/bin 2>&1 || true
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/stat -c '%F %U:%G %a %h %n' \
+    /usr/local/lib/symmetry-pi/pi /usr/local/bin/opencode 2>&1 || true
+  # Names and sizes only: journals and staged requests can hold claim credentials.
+  printf 'daemon StateDir inventory (names and sizes):\n' >&2
+  sudo find "$rootfs$DAEMON_SERVICE_STATE_DIR" -mindepth 1 -maxdepth 3 -printf '%y %P %s\n' 2>/dev/null |
+    sort | head -n 40 >&2 || true
+  printf 'owner witness fixture inventory (names and sizes):\n' >&2
+  sudo find "$rootfs$OWNER_TEST_ROOT" -mindepth 1 -maxdepth 4 -type f -printf '%P %s\n' 2>/dev/null |
+    sort | head -n 80 >&2 || true
+  # Witness configs are staged root:A mode 0640; the 0440 request files are excluded.
+  local -a witness_configs=()
+  mapfile -t witness_configs < <(
+    sudo find "$rootfs$OWNER_TEST_ROOT" -maxdepth 3 -type f -name '*.json' -perm -0640 2>/dev/null |
+      sort | head -n 20
+  )
+  local guest_config
+  for guest_config in "${witness_configs[@]}"; do
+    [[ -n "$guest_config" ]] || continue
+    guest_config=${guest_config#"$rootfs"}
+    printf 'witness config owner preflight %s:\n' "$guest_config" >&2
+    machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
+      -verify-linux-owner-install -config "$guest_config" 2>&1 | print_filtered_output_lines || true
+    # The witness gate runs before any mutation and before the request is read, so a missing
+    # request path names the config refusal without touching the barrier or StateDir.
+    printf 'witness config native gate %s:\n' "$guest_config" >&2
+    machine_run_as "$A_USER" "$A_USER" /usr/bin/env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 \
+      /usr/libexec/symmetry/symmetry-daemon -linux-v2-native-owner-witness \
+      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" 2>&1 |
+      print_filtered_output_lines || true
+  done
+}
+
 # inside A's mode-0700 HOME; B cannot inspect A's checkout or test environment.
 run_go_test() {
   local event_file=$1
@@ -1545,15 +1713,9 @@ run_go_test() {
   local request_path=$6
   local output_directory=$7
   shift 7
-  local -a expected_tests=()
-  while (($#)); do
-    if [[ "$1" == -- ]]; then
-      shift
-      break
-    fi
-    expected_tests+=("$1")
-    shift
-  done
+  [[ "${1:-}" == -- ]] || fail 'each exact Go witness invocation requires -- before its named test events'
+  shift
+  local -a expected_tests=("$@")
   (( ${#expected_tests[@]} > 0 )) || fail 'each exact Go witness invocation requires named test events'
   case "$test_mode" in
     pi-baseline|opencode-baseline|scratch|owner-fd-scratch|cleanup-root|cleanup-mounts-root|production|stage-replay|negative|synthetic-cleanup|peer-negative|legacy-v1|marker-reader) ;;
@@ -1605,7 +1767,7 @@ run_go_test() {
     pi-baseline)
       command+=(
         --setenv=SYMMETRY_PI_PROVIDER_ACTION_SMOKE=1
-        --setenv=SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE=/usr/local/bin/pi
+        --setenv=SYMMETRY_PI_NATIVE_SMOKE_EXECUTABLE=/usr/local/lib/symmetry-pi/pi
       )
       ;;
     opencode-baseline)
@@ -1720,17 +1882,23 @@ run_go_test() {
   "${command[@]}" >"$event_file" 2>&1 || status=$?
   if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file" "${expected_tests[@]}"; then
     printf 'Required native Go witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' "$status" >&2
+    # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
+    grep --invert-match --extended-regexp '^\{' "$event_file" | head -n 5 | print_filtered_output_lines || true
+    print_witness_output_lines "$event_file" "${expected_tests[@]}"
+    print_witness_failure_context "$output_directory" "${expected_tests[@]}"
     return 1
   fi
   if (( status != 0 )); then
     printf 'Required native Go witness exited with status %s.\n' "$status" >&2
+    print_witness_output_lines "$event_file" "${expected_tests[@]}"
+    print_witness_failure_context "$output_directory" "${expected_tests[@]}"
     return "$status"
   fi
 }
 
-run_unexpected_cgroup_kill_fd_witness() {
+run_unexpected_cgroup_procs_fd_witness() {
   local event_file=$1
-  local test_name=TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD
+  local test_name=TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD
   machine_run /usr/bin/test -d "$OWNER_TEST_LEAF"
   machine_run /usr/bin/test ! -s "$OWNER_TEST_LEAF/cgroup.procs"
   machine_run /usr/bin/grep --fixed-strings --line-regexp --quiet \
@@ -2154,7 +2322,9 @@ import sys
 
 source, destination, stage = sys.argv[1:]
 request = json.loads(pathlib.Path(source).read_text(encoding="utf-8"))
-request["barrier"]["hold_after"] = stage
+if request["barrier"]["hold_after"] != stage or request.get("drop_ack_after") != stage:
+    raise SystemExit("ACK-loss request does not hold its exact drop boundary")
+del request["drop_ack_after"]
 path = pathlib.Path(destination)
 path.write_text(json.dumps(request, separators=(",", ":")), encoding="utf-8")
 path.chmod(0o600)
@@ -2690,7 +2860,7 @@ v2_alternate_mount_events="$fixture_root/linux-v2-native-alternate-mount.json"
 v2_pid_reuse_events="$fixture_root/linux-v2-native-literal-pid-reuse.json"
 v2_b_cleanup_denial_events="$fixture_root/linux-owner-b-cleanup-denial.json"
 v2_cgroup_mount_cleanup_events="$fixture_root/linux-owner-cross-mount-cleanup.json"
-v2_unexpected_cgroup_kill_fd_events="$fixture_root/linux-owner-unexpected-cgroup-kill-fd.json"
+v2_unexpected_cgroup_procs_fd_events="$fixture_root/linux-owner-unexpected-cgroup-procs-fd.json"
 v2_v1_replay_events="$fixture_root/linux-v2-native-v1-replay.json"
 v2_marker_reader_events="$fixture_root/linux-v2-native-marker-reader.json"
 v2_synthetic_goal_cleanup_events="$fixture_root/linux-v2-synthetic-goal-cleanup.json"
@@ -2713,7 +2883,7 @@ case "$fixture_case_set" in
     run_go_test "$v2_cgroup_mount_cleanup_events" ./internal/launchercore \
       '^TestCloneCleanupRejectsCrossMountEntry$' cleanup-mounts-root \
       '' '' '' -- TestCloneCleanupRejectsCrossMountEntry
-    run_unexpected_cgroup_kill_fd_witness "$v2_unexpected_cgroup_kill_fd_events"
+    run_unexpected_cgroup_procs_fd_witness "$v2_unexpected_cgroup_procs_fd_events"
     run_go_test "$owner_events" ./native/linux-gate/protocol \
       '^TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)$' \
       scratch '' '' '' -- \
