@@ -33,6 +33,10 @@ on 2026-11-23 from branch `refactor/rf-w6-10-elixir-lint-coverage-flips`.
 The closed STD-A09 partial-run detection appended to the `## Deferred review findings (PR #205)`
 section below was moved on 2026-11-24 from branch `refactor/rf-w6-12-wall-clock-ratchets`.
 
+The descendant-window item appended under `## Descendant window under host load
+(rf-flake-stdout-drain-64kib)` below was recorded directly in this file on 2026-11-24 from branch
+`refactor/rf-flake-stdout-drain-64kib` (it was never a `docs/TODO.md` item).
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -4840,3 +4844,35 @@ decision as open while this entry and the goal record carry the closure.
       same change: the duration step is blocking, and
       `scripts/ci/test-go-test-durations.py` pins the refusal on the exact stream shape
       (one failed test, one unfinished test, a package-level failure).
+
+## Descendant window under host load (rf-flake-stdout-drain-64kib)
+
+- [ ] The descendant window under host load (found by the goal's gate runs; brought into scope and
+      fixed by the 2026-11-24 ruling). `daemon/internal/execution/runner_test.go`'s helper mode
+      `root-exits-child-holding-stdout` spawns a grandchild, sleeps a fixed 100 ms and exits; the
+      runner tears the containment tree down on root exit, so the grandchild's first stdout write is
+      delivered only inside that window. Under this host's load the grandchild's own spawn+exit wall
+      time is 109–756 ms (median 131 ms plain, 134 ms instrumented), and
+      `TestRunBoundedCommandStopsDescendantHoldingOutputPipe`
+      (`probe_test.go:83`, empty output) and
+      `TestRootExitDoesNotLeaveADescendantHoldingStdoutOnWindows` (`runner_windows_test.go:218`, the
+      30 s hang guard) red 7–8 of 20 focused iterations **without** `-coverprofile` and on the
+      pre-change tree alike. Fix shape: a readiness handshake (the root waits for the grandchild's
+      first write or a marker instead of sleeping), which the rf-w6-12 census had already deferred as
+      a new seam (`docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` §4 G3); a timeout raise
+      is not the route (the w6-12 slice and this contract both refuse it). Candidate row for the
+      conductor's known-flakes ledger (its `daemon` `TestStartDrains…` entry is a different,
+      now-resolved signature). Owner area: daemon execution test harness.
+
+      **Closed (2026-11-24, branch `refactor/rf-flake-stdout-drain-64kib`, base `9d113eb6`, plan
+      `docs/plans/2026-11-24-rf-flake-stdout-drain-64kib-plan.md`):** the conductor ruling of
+      2026-11-24 brought the item into scope for the goal that found it. The helper mode now waits for
+      a readiness marker instead of sleeping: the grandchild creates the marker (path from the
+      `GO_RUNNER_DESCENDANT_MARKER` env the test supplies) immediately after its first stdout write,
+      and the root polls for the marker (1 ms interval, bounded by `testHangGuard`) and exits only
+      then — so the write can no longer land after the containment teardown. All three call sites
+      (`probe_test.go:76`, `runner_unix_test.go:50`, `runner_windows_test.go:211`) supply the marker
+      path via `descendantHoldingStdoutInvocation`; `minimalEnvironment`, the payload assertions and
+      `ci.yml` are untouched; no timeout was raised, retried or skipped. Red-without / green-with
+      evidence, the mutant row that restores the fixed 100 ms sleep, and the coverage-mode repeats:
+      `docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md`.

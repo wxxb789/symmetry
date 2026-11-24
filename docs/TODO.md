@@ -1796,3 +1796,30 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       rows straddle the 30 s cap and are the first candidates. Owner area: `internal/app` and
       `internal/state` performance. Until then each row is ratcheted at 1.2x its measured max, and
       any test the roster does not name stays under the 30 s cap.
+
+## Coverage-mode helper flake: the exit-hook diagnostic (resolved, decision note) (rf-flake-stdout-drain-64kib, 2026-11-24)
+
+- note — resolved, decision only: `TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB` no longer fails
+      when an instrumented helper child loses the shared `covmeta` rename race under
+      `go test -coverprofile`. `daemon/internal/execution/runner_test.go` now strips a trailing block
+      of exactly the three documented coverage-runtime exit-hook lines
+      (`error: coverage meta-data emit failed: `, `error: coverage counter data emit failed: `,
+      `warning: GOCOVERDIR not set, no coverage data emitted`) from the helper's stderr — only while
+      the helper environment forwards `GOCOVERDIR`, only as a trailing block of documented lines
+      matching those exact prefixes, each one logged — and the exact 196731-byte payload assertions
+      plus `requireStrictSequence` are unchanged. This supersedes the rf-w4-12c §8 "the profile above comes from a pass that skips
+      that one test" workaround (`docs/evidence/rf-w4-12c-process-recorder-port-2026-11-22.md`) and
+      the matching residual in `docs/plans/2026-11-21-rf-w2-17-coverage-plane-plan.md`. Measurements,
+      the verbatim capture and the mutant rows:
+      `docs/evidence/rf-flake-stdout-drain-64kib-2026-11-24.md`.
+
+      The race itself is untouched: concurrent instrumented helper children still rename
+      `covmeta.<hash>` into the tool's shared merge directory, and Windows still loses the rename to
+      `Access is denied`. The recorded alternative — one warm-up instrumented child per package, or a
+      private `GOCOVERDIR` per helper — stays unapplied because it changes the shared helper every
+      test in the package uses (the contract's rejected-as-larger option). A fourth coverage-runtime
+      message, or a diagnostic that does not start at the payload end, still fails the test by design.
+
+The descendant-window item the same goal's gate runs found (a fixed-sleep helper mode racing the
+grandchild's stdout write) is fixed in that goal and archived in
+`docs/archive/CLOSED-TODO.md`.
