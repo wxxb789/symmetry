@@ -4872,7 +4872,7 @@ decision as open while this entry and the goal record carry the closure.
 
 ## rf-acc-native-burndown: the `shared` fifth leg's stale pin (2026-11-24)
 
-- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1804` pins
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1733` pins
       `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
       HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
 

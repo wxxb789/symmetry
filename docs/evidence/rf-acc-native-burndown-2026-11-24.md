@@ -1374,3 +1374,44 @@ the two throwaway files stay untracked in the working tree and never reach the P
   unmet, but per the closing ruling its stop is recorded as a follow-up instead of blocking this
   goal. Every credential-dependent step remains unproven: the scratch doubles never reach a
   provider turn or a GitHub provider action.
+
+## 9. Apply stage (2026-11-24, after the simplify review of `9d113eb6..4c305861`)
+
+Applied from the accepted simplify set (no commit: the stage's rules forbid one; the deletions and
+the record edit are working-tree changes):
+
+- Both scratch-only files are removed from the tree:
+  `.github/workflows/scratch-native-burndown.yml` and `scripts/ci/scratch-gh-shim`. They were
+  tracked at the pushed PR head `4c305861` (`git cat-file -e` succeeds on both), so §1/§7's "never
+  reach the PR branch" was false at that head; the worktree now holds their deletion (222 lines).
+  The retained local scratch branch `8339f991` still carries both byte-identically
+  (`git diff --stat 4c305861 8339f991 -- <paths>` empty), so a follow-up re-push is unaffected.
+  §4's actionlint row for the scratch workflow stays as history.
+- The moved CLOSED-TODO item's citation of the phantom pin's line is corrected from `:1804` — no
+  revision holds the pin there: base `668e75de` and range start `9d113eb6` have `:1733`, the
+  scratch heads `:1734`-`:1902`, the landed head zero occurrences — to `:1733`, the line the item
+  was filed against. The `:1804` occurrences in this record's §7 and in the plan's §1 table are
+  the implement stage's dispatch-time intent and stay as history.
+
+Withheld, not applied: the two findings that edit `scripts/ci/linux-v2-native-acceptance.sh` (the
+containment probe's falsified premise comment, and the `// null` jq selector). Any byte change
+there breaks §1's `05d81032…` row and §3.15's binding of the final all-14 run `45402706492` to blob
+`19ed563b…`, while the acceptance requires that run on the PR-head script bytes; re-proof needs one
+fresh literal all-14 scratch run, which this stage cannot dispatch (no push; the scratch branch is
+deleted), so both wait on a conductor amendment. Rejected: the writer-request test (finding 4)
+needs a step line in `.github/workflows/ci.yml`, outside the contract's owned set.
+
+Gates re-run on this tree: `bash -n` 0 on the acceptance script, `linux-v2-native-rootfs-base.sh`
+and `linux-v2-native-tools.sh`; `shellcheck --severity=warning` exit 1 with 16 findings on the
+acceptance script — the same code histogram as `668e75de`'s copy (SC2174, SC2154 ×8, SC2043,
+SC2024, SC2276 ×2, SC2289, SC1078, SC2288), delta 0 — and 0 on both helpers; `actionlint
+.github/workflows/linux-native-v2-acceptance.yml` 0; `check-citation-existence.py --base 9d113eb6
+--head HEAD` 0 (the gate strips `file:line` suffixes by design; the edited citation's path resolves
+at HEAD). One §1 row moved after the implement stage: `preflight_linux_test.go` hashes to
+`465293fa…` at the merged head `4c305861` (`08b5367d…` at `dbdd807c`/`8339f991`, where the F1 live
+proof binds it) because the merge unions main's six-line rename (`configuredHarnessKind` →
+`harness.ParseKind`, lines 438-455) into the branch's file. At the merged bytes the F1 clauses stay
+green: `go test ./internal/linuxpreflight/ -count=1` exit 0 (the accept block and the seven
+`owner/<key>` refuse rows included), `go vet` 0, `gofmt -l` empty (Go 1.27.4, `GOOS=linux`). The
+other six subject rows hash identically at the merged head; refreshing the Go row's value is left to
+the conductor, outside this apply set.
