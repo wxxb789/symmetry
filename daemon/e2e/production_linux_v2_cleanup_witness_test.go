@@ -1075,6 +1075,10 @@ func linuxV2CleanupJournalCallbacks(
 		return readback, nil
 	}
 	return execution.LinuxV2JournalCallbacks{
+		// Production's own pre-RELEASE admission CAS; the fixture keeps its nil live-owner map.
+		CheckNativeAdmission: func() error {
+			return store.CheckLinuxV2NativeAdmission(key, fence, time.Now().UTC(), nil)
+		},
 		Reserve: func(reservation state.LinuxCgroupReservation) error {
 			_, err := mutate(func() (state.RunJournal, error) { return store.ReserveLinuxCgroup(key, fence, reservation, nil) })
 			return err

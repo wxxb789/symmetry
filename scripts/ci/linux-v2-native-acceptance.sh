@@ -490,8 +490,7 @@ B_UID=52001
 B_GID=52001
 A_HOME="/home/$A_USER"
 OWNER_TEST_ROOT=/opt/symmetry-owner-test
-# The isolated owner witness rejects a fixed-B passwd HOME outside
-# /opt/symmetry-owner-test, so the B account's provisioned HOME lives under it.
+# The installed witness refuses a fixed-B native HOME outside its isolated owner witness root.
 B_HOME="$OWNER_TEST_ROOT/fixed-b-home"
 SYNTHETIC_GOAL_CLEANUP_ROOT=$OWNER_TEST_ROOT/synthetic-goal-cleanup
 SYNTHETIC_GOAL_CLEANUP_SOURCE=$SYNTHETIC_GOAL_CLEANUP_ROOT/source
@@ -644,6 +643,8 @@ for a_cache_directory in "$rootfs$A_HOME/.cache" "$rootfs$A_HOME/.cache/go-build
     fail "A XDG cache directory must be A-owned mode 0700: $a_cache_directory"
 done
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$B_HOME")" == "$B_UID:$B_GID:700" ]] || fail 'B passwd HOME must remain B-owned mode 0700'
+b_passwd_home=$(sudo awk -F: -v user="$B_USER" '$1 == user {print $6}' "$rootfs/etc/passwd")
+[[ "$b_passwd_home" == "$B_HOME" ]] || fail 'B passwd HOME must be the isolated owner witness root home'
 b_native_credential_directories=(
   "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
   "$B_HOME/.pi/agent/sessions" \
@@ -969,7 +970,9 @@ pin_guest_cgroup_while_active || fail 'could not pin the live disposable guest u
 
 machine_run() {
   machine_run_count=$((machine_run_count + 1))
-  local unit="${machine}-step-${machine_run_count}"
+  # A command substitution runs this in a subshell: its increment dies there, so the counter alone
+  # would repeat a name; the subshell's own BASHPID keeps every call form's unit unique.
+  local unit="${machine}-step-${machine_run_count}-${BASHPID}"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" -- "$@"
 }
@@ -978,17 +981,17 @@ machine_run_as() {
   local user=$1
   local group=$2
   shift 2
+  local passwd_log="$fixture_root/machine-run-as-passwd.log"
+  machine_run /usr/bin/getent passwd "$user" >"$passwd_log" 2>&1 ||
+    fail "read the guest passwd home directory for $user"
+  local home
+  home=$(cut -d: -f6 <"$passwd_log")
+  [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   machine_run_count=$((machine_run_count + 1))
   local unit="${machine}-step-${machine_run_count}"
-  local user_home
-  case "$user" in
-    "$A_USER") user_home=$A_HOME ;;
-    "$B_USER") user_home=$B_HOME ;;
-    *) fail "machine_run_as supports only the fixture A and B accounts, not '$user'" ;;
-  esac
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
-    --setenv="HOME=$user_home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+    --setenv="HOME=$home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
     -- "$@"
 }
 
@@ -1602,7 +1605,7 @@ if ! python3 "$repo/scripts/ci/assert-go-test-json.py" \
   printf 'Unprovisioned production witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' \
     "$unprovisioned_status" >&2
   # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
-  grep --invert-match --extended-regexp '^\{' "$unprovisioned_events" | head -n 5 >&2 || true
+  grep --invert-match --extended-regexp '^\{' "$unprovisioned_events" | head -n 5 | print_filtered_output_lines || true
   print_witness_output_lines "$unprovisioned_events" TestProductionLinuxV2UnprovisionedHostRefusal
   exit 1
 fi
@@ -1636,6 +1639,8 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.serv
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-daemon.service.in"
 
 printf 'Installing production owner artifacts inside the disposable systemd guest.\n'
+installer_log="$fixture_root/install-linux-owner.log"
+installer_status=0
 machine_run /root/install-linux-owner.sh \
   "$A_USER" "$B_USER" \
   /root/symmetry-linux-owner-stage/symmetry-linux-launcher \
@@ -1644,7 +1649,10 @@ machine_run /root/install-linux-owner.sh \
   /root/symmetry-linux-owner-stage/symmetry-linux-clone-bootstrap \
   /root/symmetry-linux-owner-stage/symmetry-daemon \
   /root/symmetry-linux-owner-stage/symmetry-owner.service.in \
-  /root/symmetry-linux-owner-stage/symmetry-daemon.service.in
+  /root/symmetry-linux-owner-stage/symmetry-daemon.service.in >"$installer_log" 2>&1 || installer_status=$?
+print_filtered_output_lines <"$installer_log"
+(( installer_status == 0 )) ||
+  fail "install-linux-owner.sh did not install the staged owner artifacts (status=$installer_status)"
 machine_run /usr/bin/systemctl enable symmetry-owner.service
 machine_run /usr/bin/systemctl start symmetry-owner.service
 machine_run /usr/bin/systemctl is-active --quiet symmetry-owner.service
@@ -1653,8 +1661,14 @@ sudo install -o root -g root -m 0644 "$fixture_root/daemon-service.json" \
   "$rootfs/etc/symmetry/daemon.json"
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs/etc/symmetry/daemon.json")" == '0:0:644' ]] ||
   fail 'installed daemon service config must be root-owned mode 0644'
+daemon_verify_log="$fixture_root/daemon-verify-linux-owner-install.log"
+daemon_verify_status=0
 machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
-  -verify-linux-owner-install -config /etc/symmetry/daemon.json
+  -verify-linux-owner-install -config /etc/symmetry/daemon.json >"$daemon_verify_log" 2>&1 ||
+  daemon_verify_status=$?
+print_filtered_output_lines <"$daemon_verify_log"
+(( daemon_verify_status == 0 )) ||
+  fail 'installed daemon -verify-linux-owner-install refused the staged daemon config'
 daemon_service_start_status=0
 if machine_run /usr/bin/systemctl start symmetry-daemon.service; then
   daemon_service_start_status=0
@@ -1662,17 +1676,21 @@ else
   daemon_service_start_status=$?
 fi
 if (( daemon_service_start_status != 0 )); then
+  daemon_failure_log="$fixture_root/daemon-service-failure.log"
   machine_run /usr/bin/systemctl show --no-pager \
     --property=Result,ExecMainStatus,ExecMainCode,ActiveState,SubState,ControlGroup,NRestarts,After,BindsTo,ExecStartPre,ExecStart \
-    symmetry-daemon.service >&2 || true
+    symmetry-daemon.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   # systemd materializes the inverse of a unit's ordering edge on the other unit, so the
   # owner's effective edges name the source of any owner/daemon relation the preflight rejects.
   machine_run /usr/bin/systemctl show --no-pager \
     --property=Before,After,BindsTo,Requires,Requisite,Wants,PartOf,Conflicts \
-    symmetry-owner.service >&2 || true
+    symmetry-owner.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   machine_run /usr/bin/journalctl --no-pager --output=cat -n 80 \
     --grep='-verify-linux-owner-install:|load config:|run daemon:|probe runtime harness:|build runtime registration:|register daemon session:|registration did not return|enroll machine:|load machine identity:|Failed at step|Main process exited|Failed to start|Start request repeated' \
-    -u symmetry-daemon.service >&2 || true
+    -u symmetry-daemon.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   fail "installed daemon.service could not pass ExecStartPre/start (status=$daemon_service_start_status)"
 fi
 sleep 6
@@ -1704,18 +1722,19 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
-# A failed witness is named from its document, journals, markers, configs and the bounded private
-# stderr log the e2e runner keeps beside its output; nothing else preserves the refusal.
+# A failed witness is named from its document, journals, markers and configs, and from the
+# bounded private stderr log the e2e keeps beside its witnesses.
 print_witness_failure_context() {
   local output_directory=$1
   shift
   local name document
+  local probe_log="$fixture_root/witness-config-probe.log"
   if [[ -n "$output_directory" ]]; then
     for name in "$@"; do
       document="$rootfs$output_directory/${name//\//_}.json"
       print_witness_document "$document"
     done
-    print_witness_stderr_tail "$rootfs$output_directory/owner-witness-stderr.log"
+    print_witness_stderr_tail "$rootfs$output_directory/owner-witness.stderr"
   fi
   # A witness that stalls before its requested boundary leaves its progress only in the
   # journal, the stage markers and the owner service journal; print all three, redacted.
@@ -1761,14 +1780,15 @@ done' bash "$rootfs$DAEMON_SERVICE_STATE_DIR" >&2 || true
     guest_config=${guest_config#"$rootfs"}
     printf 'witness config owner preflight %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
-      -verify-linux-owner-install -config "$guest_config" 2>&1 | print_filtered_output_lines || true
+      -verify-linux-owner-install -config "$guest_config" >"$probe_log" 2>&1 || true
+    print_filtered_output_lines <"$probe_log"
     # The witness gate runs before any mutation and before the request is read, so a missing
     # request path names the config refusal without touching the barrier or StateDir.
     printf 'witness config native gate %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/bin/env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 \
       /usr/libexec/symmetry/symmetry-daemon -linux-v2-native-owner-witness \
-      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" 2>&1 |
-      print_filtered_output_lines || true
+      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" >"$probe_log" 2>&1 || true
+    print_filtered_output_lines <"$probe_log"
   done
 }
 
@@ -2002,6 +2022,8 @@ publish_control_provider_receipt() {
 start_literal_pid_reuse_watcher() {
   # Probe clone3(set_tid) in the guest PID namespace; never write ns_last_pid,
   # remount procfs, retry the target PID, or substitute numeric-PID observation.
+  local watcher_log="$fixture_root/literal-pid-reuse-watcher.log"
+  local watcher_status=0
   machine_run /usr/bin/systemd-run --no-block --quiet --collect \
     --unit="$PID_REUSE_WATCHER_UNIT" --service-type=exec \
     --property=Restart=no --property=KillMode=control-group --property=TimeoutStopSec=30s \
@@ -2040,7 +2062,9 @@ start_literal_pid_reuse_watcher() {
     printf "literal PID-reuse watcher did not become ready within 30 seconds\n" >&2
     exit 1
   ' bash "$PID_REUSE_WATCHER_UNIT" "$OWNER_PID_REUSE_ROOT" \
-    "$OWNER_PID_REUSE_HELPER" "$A_GID"
+    "$OWNER_PID_REUSE_HELPER" "$A_GID" >"$watcher_log" 2>&1 || watcher_status=$?
+  print_filtered_output_lines <"$watcher_log"
+  (( watcher_status == 0 )) || fail 'the literal PID-reuse watcher did not become ready'
 }
 
 stage_owner_request_file() {

@@ -16,6 +16,12 @@ import unittest
 import citest
 
 SCRIPT = pathlib.Path(__file__).with_name("export-linux-v2-redacted-evidence.py")
+ACCEPTANCE_SCRIPT = pathlib.Path(__file__).with_name("linux-v2-native-acceptance.sh")
+NATIVE_WITNESS_SOURCE = (
+    pathlib.Path(__file__).resolve().parents[2] / "daemon" / "e2e" / "production_linux_v2_native_witness_test.go"
+)
+REPORT_TAIL_BUDGET = re.compile(r"linuxV2OwnerWitnessStderrLogLines\s*=\s*(\d+)")
+WITNESS_OUTPUT_WINDOW = 10
 DAEMON_LOG_SCAN_DIRECTORIES = ("daemon/internal/app", "daemon/internal/platform", "daemon/cmd")
 DAEMON_LOG_SCANNED_PRODUCERS = (
     # call, zero-based argument index, allowlist field
@@ -1684,6 +1690,45 @@ class ExporterTest(unittest.TestCase):
                 for name in pin["exported"]:
                     self.assertTrue((output / name).is_file())
 
+    def test_manual_containment_refuses_the_owner_witness_stderr_capture(self) -> None:
+        source = self.private_dir("stderr-capture-source")
+        receipts = self.private_dir("stderr-capture-receipts")
+        output = self.private_dir("stderr-capture-output")
+        self.populate_containment(source, "codex")
+        self.write_log(source / "owner-witness.stderr", [b"the refused owner witness printed a diagnostic"])
+        result = self.run_containment_gate("codex", source, receipts, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owner-witness.stderr", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_excluded_capture_in_a_computed_source_path_refuses(self) -> None:
+        exporter = load_exporter()
+        captured = pathlib.Path("stage-replay") / "owner-witness.stderr"
+        with self.assertRaises(SystemExit) as refusal:
+            exporter.require_no_excluded_witness_file((), (captured,))
+        self.assertIn("owner-witness.stderr", str(refusal.exception))
+
+    def test_compose_refuses_the_owner_witness_stderr_capture(self) -> None:
+        source = self.private_dir("compose-capture-source")
+        output = self.private_dir("compose-capture-output")
+        self.write_log(source / "owner-witness.stderr", [b"the refused owner witness printed a diagnostic"])
+        result = citest.run_gate(SCRIPT, "compose", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owner-witness.stderr", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_legacy_refuses_the_owner_witness_stderr_capture(self) -> None:
+        source = self.private_dir("legacy-capture-source")
+        output = self.private_dir("legacy-capture-output")
+        self.write_log(source / "owner-witness.stderr", [b"the refused owner witness printed a diagnostic"])
+        result = citest.run_gate(SCRIPT, "legacy", str(output), "1" * 40, "passed", "--witness-root", str(source))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owner-witness.stderr", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(list(output.iterdir()), [])
+
     def test_manual_containment_digest_mismatch_refuses_publication(self) -> None:
         pin = CONTAINMENT_PINS["codex"]
         source = self.private_dir("mismatch-source")
@@ -1988,6 +2033,74 @@ class ExporterTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
                 self.assertEqual(list(output.iterdir()), [])
+
+
+def extract_witness_output_printer() -> str:
+    source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+    start = source.index("print_witness_output_lines() {\n")
+    end = source.index("\n}\n", start)
+    return source[start : end + len("\n}\n")]
+
+
+def report_tail_budget() -> int:
+    match = REPORT_TAIL_BUDGET.search(NATIVE_WITNESS_SOURCE.read_text(encoding="utf-8"))
+    if match is None:
+        raise AssertionError("the native witness report no longer declares its tail line budget")
+    return int(match.group(1))
+
+
+class WitnessOutputWindowTest(unittest.TestCase):
+    """The report's line budget must keep its status line inside the printer's last window."""
+
+    def printer_events(self, tail_lines: list[str]) -> list[dict]:
+        name = "TestWitness"
+        lines = [
+            "=== RUN   " + name,
+            "    production_linux_v2_native_witness_test.go:101: owner-witness command exit status: 1",
+            *(f"    production_linux_v2_native_witness_test.go:101: owner-witness stderr: {line}" for line in tail_lines),
+            "    production_linux_v2_native_witness_test.go:101: wait for requested production owner-witness barrier",
+            "    production_linux_v2_native_witness_test.go:1838: production Linux v2 StateDir fixture cleanup",
+            "--- FAIL: " + name,
+        ]
+        return [{"Action": "output", "Test": name, "Output": line + "\n"} for line in lines]
+
+    def run_printer(self, events: list[dict]) -> str:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            root.joinpath("events.jsonl").write_text(
+                "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8"
+            )
+            root.joinpath("secrets.bin").write_bytes(b"")
+            root.joinpath("printer.sh").write_text(
+                'set -u\nevidence_secret_values_file=$2\n'
+                + extract_witness_output_printer()
+                + '\nprint_witness_output_lines "$1" TestWitness\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["bash", "printer.sh", "events.jsonl", "secrets.bin"],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stderr
+
+    def test_report_budget_keeps_its_status_line_and_every_tail_line(self) -> None:
+        budget = report_tail_budget()
+        tail = [f"witness diagnostic line {index}" for index in range(budget)]
+        printed = self.run_printer(self.printer_events(tail))
+        self.assertIn("owner-witness command exit status: 1", printed)
+        self.assertIn(tail[0], printed)
+        self.assertIn(tail[-1], printed)
+        self.assertEqual(printed.count("witness output: "), WITNESS_OUTPUT_WINDOW)
+
+    def test_a_full_window_tail_evicts_the_status_line(self) -> None:
+        tail = [f"witness diagnostic line {index}" for index in range(WITNESS_OUTPUT_WINDOW)]
+        printed = self.run_printer(self.printer_events(tail))
+        self.assertNotIn("owner-witness command exit status: 1", printed)
+        self.assertIn(tail[-1], printed)
 
 
 if __name__ == "__main__":

@@ -1839,24 +1839,32 @@ grandchild's stdout write) is fixed in that goal and archived in
 
 ## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)
 
-- [ ] Capture a bounded, redacted App stderr (or otherwise name the first post-seed refusal) in the
-      Linux v2 witness harness, then root-cause the two containment sets' stop (2026-11-24, goal
-      `rf-acc-native-burndown`; evidence `docs/evidence/rf-acc-native-burndown-2026-11-24.md`
-      §3.13.1 and §3.15, runs `45388258526` and `45402706492`): `codex_containment` and
-      `claude_containment` reach their named witness and stop at
-      `daemon/e2e/production_linux_v2_native_witness_test.go:101`/`:109` (`wait for requested
-      production owner-witness barrier: owner-witness command did not reach its requested durable
-      stage`) ~30 s after the App seeded its claim (one surviving RunJournal, no stage marker), and
-      the App's own refusal is unobservable: the harness opens `/dev/null` as the App child's
-      stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52-66`) and the App writes its
-      response only on structured outcomes (`daemon/internal/app/linux_owner_witness_linux.go:613-630`);
-      the in-fixture early-phase probe cannot name it (its second App run returns at
-      `validateLinuxV2NativeWitnessExistingJournal`, `:2625-2633`). The conductor opens a follow-up
-      goal for the bounded, redacted App stderr capture plus the root cause.
-      `synthetic_goal_cleanup`'s stop belongs to the same goal: its test-built
-      `execution.LinuxV2Invocation` sets no `Callbacks.CheckNativeAdmission`, so the App refuses the
-      test's own launch (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:499`,
-      `daemon/internal/execution/linux_owner_v2_linux.go:339`).
+The capture half of this section's first item and the `synthetic_goal_cleanup` callback closed on
+2026-11-24 (goal `rf-acc-native-containment-witness`, branch
+`refactor/rf-acc-native-containment-witness`, base `477e4c62`); the closed text is in
+`docs/archive/CLOSED-TODO.md` under `## rf-acc-native-containment-witness: the containment
+witness's invisible App refusal (2026-11-24)`. What the capture named stays open as the item below.
+
+- [ ] Decide the Linux v2 native owner witness's clone-admission contradiction (2026-11-24, goal
+      `rf-acc-native-containment-witness`; evidence
+      `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §7.2, runs `45452357027`,
+      `45455325059`, `45458181149`): with the captured App stderr now visible, both containment
+      sets stop after the claim seed with `reserve owner witness clone before source Git effects:
+      Linux clone intent does not match the current admitted Subject`. The witness requires a
+      `git_clone_v2` workspace (`daemon/internal/app/linux_owner_witness_linux.go:2981`) whose
+      reservation demands an admitted Control Subject
+      (`daemon/internal/state/linux_clone_journal.go:208-216,864-878`), while the witness request
+      validation refuses a claim that carries an admission
+      (`daemon/e2e/production_linux_v2_native_witness_test.go:1565-1567`: `owner-witness claim must
+      be a real non-Goal Control task`) and Control's `tasks_goal_fields_all_or_none` forbids goal
+      fields on a goal-less task (`scripts/ci/provision-linux-v2-control-claims.exs:415-421`); no
+      fixture claim satisfies both, so the rows never reach the credential-dependent step. Smallest
+      proposed fix: run the witness on a Goal-backed admitted claim whose admission Subject equals
+      the request Subject — relax the harness check to `present && admission.Subject ==
+      request.Subject` and provision the fixture's tasks through the Goal/admission flow (pattern
+      `scripts/ci/omo-control-native-fixture.exs:190,262-284,297-303,376`) — which grows the owned
+      set by that harness block. The alternative, exempting the witness from the shared clone-v2
+      admission guard, would weaken a production guard (`daemon/internal/**`).
 
 - [ ] Root-cause the three product-test stops the installed-owner leg now reaches (2026-11-24, goal
       `rf-acc-native-burndown`; run `45402706492`, evidence §3.15): `shared`'s leg
