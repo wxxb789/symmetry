@@ -73,7 +73,7 @@ func TestRunBoundedCommandTerminatesOnCallerDeadline(t *testing.T) {
 }
 
 func TestRunBoundedCommandStopsDescendantHoldingOutputPipe(t *testing.T) {
-	output, err := RunBoundedCommand(context.Background(), helperInvocation("root-exits-child-holding-stdout"), 1024)
+	output, err := RunBoundedCommand(context.Background(), descendantHoldingStdoutInvocation(t), 1024)
 	if err != nil {
 		t.Fatalf("RunBoundedCommand() error = %v", err)
 	}
