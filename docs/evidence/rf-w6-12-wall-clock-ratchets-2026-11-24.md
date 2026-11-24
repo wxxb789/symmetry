@@ -34,7 +34,7 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | `scripts/ci/go-coverage-capture-fixture.txt` | new 19 lines | a verbatim `go tool cover -func` capture |
 | `scripts/ci/test-assert-go-coverage-floor.py` | new 197 lines | the floor gate's suite (22 tests) |
 | `scripts/ci/test-ci-changed-path-classifier.py` | 72 / 26 | the blocking check, the Go-floor and vitest pins, four new mutations |
-| `scripts/ci/test-ci-structure-extraction.py` | 108 / 11 | allowlists, the duration- and jscpd-gate pins, six mutations |
+| `scripts/ci/test-ci-structure-extraction.py` | 154 / 11 | allowlists, the duration-, jscpd- and legacy-route-audit suite-step pins, eight mutations |
 | `frontend/vitest.config.ts` | 7 / 0 | the coverage thresholds |
 | `daemon/internal/notification/client_test.go` | 19 / 5 | the conversion (§6.1) |
 | `control/test/…/portal_goal_attention_test.exs` | 20 / 5 | the conversion (§6.2) |
@@ -45,8 +45,8 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | `frontend/src/features/goals/goal-attention.test.tsx` | 1 / 1 | one converted wait (§6.3) |
 | `frontend/src/features/work/assignment.test.tsx` | 1 / 1 | the `openAssignmentEditor` wait (§6.3) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 19 / 10, 24 / 0 | the closed partial-run entry and the adopted-rows debt |
-| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 297 lines | the plan |
-| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 361 lines | this record |
+| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 303 lines | the plan |
+| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 386 lines | this record |
 
 No production file change: the only production edits were temporary mutants, each restored and
 verified (§7).
@@ -56,6 +56,13 @@ verified (§7).
 `scripts/ci/go-test-durations.py` keeps `MAX_TEST_SECONDS = 30.0`, `P95_LIMIT_FACTOR = 1.2` and
 `P95_BASELINE_SECONDS = 0.26`; the cap verdict gains the committed adoption roster, whose ceiling per
 row is `ceil(measured max × 1.2)` over the ten recorded runs:
+
+Roster scope (fix r2, P3-2): the contract owns this script for "W2-01's threshold constants/baseline
+data only, no rule change". The conductor's 2026-11-24 PR #275 review ruling ratifies the roster —
+the `adopted` verdict branch and its per-test measured ceilings — as accepted part of this slice: a
+tightening derived from measured baseline data, not a raised cap. The plan's D1 keeps the rationale
+and D8's test-rename waiver stands; the `unfinished` refusal is separately mandated by the closed
+STD-A09 entry (D6).
 
 | package | test | measured max (s) | ceiling (s) | runs over cap |
 | --- | --- | ---: | ---: | ---: |
@@ -69,16 +76,24 @@ Ten green `main` runs (2026-11-22/23), per-run p95 and over-cap rows:
 
 | run | tests | p95 (s) | over-cap rows (s) |
 | --- | ---: | ---: | --- |
-| 45047053979 | 5714 | 0.25 | app 167.20/124.96; state 34.58/33.78/32.33 |
-| 45087709518 | 5722 | 0.25 | app 162.48/123.65; state 33.15/32.69 |
-| 45098932836 | 5872 | 0.21 | app 135.42/112.51; state 31.37/31.60 |
-| 45101489043 | 5872 | 0.22 | app 163.59/124.57; state 33.78/31.29 |
-| 45109921118 | 5872 | 0.23 | app 161.41/122.93; state 33.04/32.74 |
-| 45119101867 | 5872 | 0.24 | app 159.14/120.36; state 32.70/30.68 |
-| 45120528766 | 5872 | 0.24 | app 163.90/124.76; state 33.88/33.69/31.60 |
-| 45154249296 | 6072 | 0.17 | app 125.00/93.64 |
-| 45186872699 | 6079 | 0.16 | app 124.62/94.06 |
-| 45200375602 | 6086 | 0.21 | app 163.79/124.77; state 34.42/32.91/30.24 |
+| 45047053979 | 5714 | 0.25 | `backpressure` 167.20, `raw-budget` 124.96; `unknown` 34.58, `journal` 32.33, `reserves` 33.78 |
+| 45087709518 | 5722 | 0.25 | `backpressure` 162.48, `raw-budget` 123.65; `journal` 32.69, `reserves` 33.15 |
+| 45098932836 | 5872 | 0.21 | `backpressure` 135.42, `raw-budget` 112.51; `unknown` 31.37, `reserves` 31.60 |
+| 45101489043 | 5872 | 0.22 | `backpressure` 163.59, `raw-budget` 124.57; `unknown` 33.78, `reserves` 31.29 |
+| 45109921118 | 5872 | 0.23 | `backpressure` 161.41, `raw-budget` 122.93; `unknown` 33.04, `reserves` 32.74 |
+| 45119101867 | 5872 | 0.24 | `backpressure` 159.14, `raw-budget` 120.36; `unknown` 32.70, `reserves` 30.68 |
+| 45120528766 | 5872 | 0.24 | `backpressure` 163.90, `raw-budget` 124.76; `unknown` 33.69, `journal` 31.60, `reserves` 33.88 |
+| 45154249296 | 6072 | 0.17 | `backpressure` 125.00, `raw-budget` 93.64 |
+| 45186872699 | 6079 | 0.16 | `backpressure` 124.62, `raw-budget` 94.06 |
+| 45200375602 | 6086 | 0.21 | `backpressure` 163.79, `raw-budget` 124.77; `unknown` 34.42, `journal` 32.91, `reserves` 30.24 |
+
+Each row carries the suite's `MEASURED_RUNS` entry in that entry's own order, so the replay table
+can be audited value by value (`backpressure` = `TestOutputBackpressureRecoversWithOneTruncationMarker`,
+`raw-budget` = `TestRawOutputBudgetDropsWithoutFailingSemanticEvents`, `unknown` =
+`TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation`, `journal` =
+`TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded`, `reserves` =
+`TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch`); an absent name was not over
+the cap in that run and the suite records it as `None`.
 
 p95 min 0.16 / max 0.25 / mean 0.218 against the committed 0.26 baseline and the 0.312 limit: the
 variance stays inside the band (max observed ratio 0.96× of the baseline, 0.80× of the limit), so no
@@ -143,7 +158,10 @@ Thresholds (min − 1.00 point, floored to two decimals): lines **93.55**, funct
 branches **83.12**; `statements` stays unset because the four baseline runs were measured from
 `lcov.info` totals, which carry lines/functions/branches only.
 The job drops `continue-on-error` and `frontend/vitest.config.ts` carries the thresholds; the
-classifier suite pins them at or above these numbers.
+classifier suite pins them at or above these numbers. Fix r2 proves the enforcement itself (P3-3):
+with `branches` raised to 85.12 (the local measured 84.12 + 1.00) the local `vitest run --coverage`
+exits 1 on vitest's own threshold refusal; restored to 83.12 it exits 0 with the same report
+(§7 M7, §9).
 
 ## 5. W6-11's jscpd step
 
@@ -255,7 +273,7 @@ job that reddens on the PR; every job runs as the runner's non-root user, so no 
 | M4 | `scripts/ci/go-test-durations.py`: `P95_LIMIT_FACTOR` 1.2 → 1.01 | the duration suite's p95 row | `legacy-route-audit` | red in-suite (limit 0.263 s) |
 | M5 | `scripts/ci/go-test-durations.py`: revert the unfinished-test refusal | the duration suite's cut-off-stream row | `legacy-route-audit` | red in-suite (the stream no longer refuses) |
 | M6 | a copy of the real capture with the total at 54.65 %; the floor raised without the baseline | the floor gate | `coverage-daemon` | exit 1 (`54.65% is below the committed floor 54.66%`); the floor tamper case exits 2 in-suite |
-| M7 | `frontend/vitest.config.ts`: a threshold at 0, or the thresholds block dropped | the classifier suite's floor pin | `legacy-route-audit` | red in-suite |
+| M7 | `frontend/vitest.config.ts`: the `branches` floor 83.12 → 85.12 (the local measured 84.12 + 1.00); in-suite also a threshold at 0 or the block dropped | the vitest coverage run; in-suite the classifier suite's floor pin | `coverage-frontend` (breach run); `legacy-route-audit` (pin) | breach (fix r2, P3-3): `Test Files 27 passed (27)`, `Tests 633 passed (633)`, then `ERROR: Coverage for branches (84.12%) does not meet global threshold (85.12%)`, exit 1; restored byte-identical (sha256 `05f2f26c…` and git blob `8c73d9ff` equal to the pre-mutation hashes) → exit 0 with the same report and no error (§9). The in-suite shapes redden the classifier suite |
 | M8 | `.github/workflows/ci.yml`: `continue-on-error: true` restored on the durations step | the structure suite (and its advisory-set equality) | `legacy-route-audit` | 3 failures; flag removed, suite green (33 tests at the apply stage, 37 after the fix-stage pins) |
 | M9 | `frontend/src/features/goals/goal-attention.test.tsx:243`: budget `5_000` → `1` | the converted `goal-attention` row | `contracts` (frontend test step) | `Tests 1 failed | 29 passed (30)`, exit 1 (§6.3) |
 | M10 | the branch's own first emulated range (a real table duplicated between two docs) | the changed-file jscpd gate | `contracts` | refused: `1 new clone(s) among the lines this range adds` (14 lines, 275 tokens); after deduplication the range is green (§5) |
@@ -273,6 +291,8 @@ job that reddens on the PR; every job runs as the runner's non-root user, so no 
 | M22 | `scripts/ci/assert-go-coverage-floor.py`: the sane hit/total guard deleted | the floor suite's hit>total row | `legacy-route-audit` | red: the pair-measures refusal replaces the message (`'sane hit/total' not found …`); restored byte-identical (§4.1) |
 | M23 | `scripts/ci/assert-go-coverage-floor.py`: the numeric-percent guard deleted | the floor suite's stringified-percent row | `legacy-route-audit` | red: the mutated gate accepts `"55.664"` (`AssertionError: 0 != 2`); restored byte-identical (§4.1) |
 | M24 | `scripts/ci/assert-go-coverage-floor.py`: the numeric baseline/floor guard deleted | the floor suite's missing-percents row | `legacy-route-audit` | red: `AssertionError: 1 != 2` (the mutated gate crashes on the missing values); restored byte-identical (§4.1) |
+| M25 | `.github/workflows/ci.yml`: the `python3 scripts/ci/test-go-test-durations.py` step deleted from `legacy-route-audit` | the structure suite's suite-step pin | `legacy-route-audit` | red: `the legacy-route-audit step invocations changed: (… 'test-assert-go-coverage-floor.py' …)`, the duration suite missing from the tuple (the in-suite deletion mutant's anchor also misses the line); restored byte-identical (git blob `4fa0ea4f`) → 40 tests OK |
+| M26 | `.github/workflows/ci.yml`: the `python3 scripts/ci/test-assert-go-coverage-floor.py` step deleted from `legacy-route-audit` | the structure suite's suite-step pin | `legacy-route-audit` | red: the same pin with the Go floor suite missing from the tuple; restored byte-identical (git blob `4fa0ea4f`) → 40 tests OK |
 
 ## 8. Re-measured census and dispositions
 
@@ -304,7 +324,7 @@ All foreground, each bounded with `timeout`; Windows and WSL suites never ran co
 | floor gate on the real capture | `python scripts/ci/assert-go-coverage-floor.py --summary scripts/ci/go-coverage-capture-fixture.txt` | 0 | `measured 86.20% >= floor 54.66% (baseline 55.66%, the minimum of 4 recorded runs)` |
 | planted 40 s test (real stream) | a temporary `daemon/internal/notification/zz_planted_duration_test.go` run under WSL `-race -json`, through the gate | 1 | `TestPlantedFortySecondDuration took 40.01s, over the 30s cap` + the p95 arm; the file was removed and the package re-run green (2.09 s) |
 | classifier suite | `python scripts/ci/test-ci-changed-path-classifier.py` | 0 | `Ran 37 tests … OK` |
-| structure suite | `python scripts/ci/test-ci-structure-extraction.py` | 0 | `Ran 37 tests … OK` |
+| structure suite | `python scripts/ci/test-ci-structure-extraction.py` | 0 | `Ran 40 tests … OK` (fix r2: the `legacy-route-audit` suite-step pin and its two deletion mutants, §7 M25/M26) |
 | folded-gate suite | `python scripts/ci/test-assert-folded-gates.py` | 0 | `Ran 6 tests … OK` |
 | jscpd suite | `python scripts/ci/test-jscpd-changed.py` | 0 | `Ran 32 tests … OK` |
 | actionlint (pinned 1.7.12) | `actionlint -color -shellcheck= -pyflakes= .github/workflows/ci.yml` | 0 | 0 findings |
@@ -321,6 +341,8 @@ All foreground, each bounded with `timeout`; Windows and WSL suites never ran co
 | frontend lint | `pnpm --filter @symmetry/frontend lint` | 0 | 219 warnings, 0 errors (the pinned cap is 229) |
 | six converted files | `pnpm … exec vitest run <six paths>` | 0 | `Tests 194 passed (194)` in 31.9 s |
 | full frontend suite + coverage | `pnpm … exec vitest run --coverage` | 0 | `Test Files 27 passed (27)`, `Tests 633 passed (633)`, 59.19 s; coverage lines 94.55 %, functions 91.12 %, branches 84.12 % — all three thresholds clear |
+| vitest coverage breach (M7, fix r2) | `CI=1 timeout 900 mise x pnpm@12.17.0 -- pnpm --trust-lockfile --config.verify-deps-before-run=false --filter @symmetry/frontend exec vitest run --coverage` (repo root) with `branches: 85.12` in `frontend/vitest.config.ts` | 1 | `Test Files 27 passed (27)`, `Tests 633 passed (633)` (no flake in the recorded run), then `ERROR: Coverage for branches (84.12%) does not meet global threshold (85.12%)`; local provider `@vitest/coverage-v8@5.1.0` (§11) |
+| vitest coverage restored (M7, fix r2) | the same command after `branches` is restored to 83.12 (sha256 `05f2f26c…`, git blob `8c73d9ff` equal to the pre-mutation hashes) | 0 | same report: statements 91.65 %, branches 84.12 % (3491/4150), functions 91.12 %, lines 94.55 %; no threshold error |
 | per-file durations | `pnpm … exec vitest run --reporter=json --outputFile=…` | 0 | 27 files, 633 tests; slowest files: connections 26.8 s/59, chat 19.4 s/47, goal-attention 15.8 s/30, planning 12.4 s/35, goal-settle 12.3 s/8, router 8.7 s/42, then assignment 3.7 s and every other file under 2.8 s |
 
 ## 10. D2 report-only rows
@@ -345,6 +367,9 @@ All foreground, each bounded with `timeout`; Windows and WSL suites never ran co
   the recorded worst reddens the gate. The burn-down debt is in `docs/TODO.md`.
 - The frontend host runs `@vitest/coverage-v8@5.1.0`/`msw@3.0.5` (mirror limits, restored lockfile);
   CI runs the locked 5.1.1/3.0.7.
+- The fix r2 breach proof needed one retry: the first coverage run failed 5 rows across 4 files in
+  the §6.3 host-load flake class, and vitest skips the coverage report on a failed run
+  (`reportOnFailure` stays default), so §9 records the clean retry.
 - The Go floor's `go tool cover -func` reads the tree's sources in the same job that wrote the
   profile; a later source/tree mismatch inside one job is not modelled.
 - The `internal/state` rows straddle the 30 s cap, so their ceiling (40–42 s) is the coarse

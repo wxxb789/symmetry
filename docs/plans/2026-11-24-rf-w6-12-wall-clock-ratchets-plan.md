@@ -25,7 +25,7 @@ jscpd step text this slice inserts).
 | `scripts/ci/test-assert-go-coverage-floor.py` | new: the Go floor gate's suite (a real `go tool cover -func` capture, every refusal, the baseline arithmetic) |
 | `frontend/vitest.config.ts` | the coverage thresholds at the measured floor (min of four CI runs − 1.00 point) |
 | `scripts/ci/test-ci-changed-path-classifier.py` | the coverage-advisory split becomes the all-three blocking check with the Go floor step and the vitest thresholds pinned; mutations for each |
-| `scripts/ci/test-ci-structure-extraction.py` | both advisory allowlists lose the flipped entries; the duration gate step gets its own pin plus mutations |
+| `scripts/ci/test-ci-structure-extraction.py` | both advisory allowlists lose the flipped entries; the duration gate step and the `legacy-route-audit` suite-step list each get their own pin plus mutations |
 | `daemon/internal/notification/client_test.go` | conversion (in-process settle → predicate) |
 | `control/test/symmetry_control_web/controllers/portal_goal_attention_test.exs` | conversion (the `Process.sleep(1_100)` pair → stamped `updated_at`) |
 | `frontend/src/**/*.test.*` | the re-measured wait conversions (post-W4-11/W5-04/W5-08/W6-07) |
@@ -64,6 +64,8 @@ Options considered:
   the whole tree (a new 40 s test reddens anywhere, including a scoped stream), and it is a
   *tightening* over a raised constant: every adopted row is ratcheted at 1.2× its measured worst.
   This is "adopt ... the threshold" read as the measured baseline data W2-01's plan anticipated.
+  The conductor's 2026-11-24 PR #275 review round ratified that reading (recorded in the evidence
+  record §3).
 
 The adopted roster (max over the ten recorded runs → ceiling):
 
@@ -133,6 +135,8 @@ same refusal (exit 2) with the unfinished tests named. The entry moves to
 The two new suites run in `legacy-route-audit` beside `test-ci-changed-path-classifier.py` and
 `test-assert-credo-strict-baseline.py` (W6-10's precedent for a gate's own suite); the jscpd suite
 runs inside W6-11's step; the duration suite's fixtures are synthetic streams, so it costs seconds.
+The structure suite pins that job's whole `- run:` list, so deleting either new suite step reddens
+it (fix r2, P3-1; the deletion mutants are in the evidence record §7).
 
 ### D8. Recorded waiver (fix stage 2026-11-24, review finding R-05): contract D1's frozen set
 
@@ -267,6 +271,8 @@ byte-identical (blob hash compared against `f731e04e`), and the test green again
 
 Planted reds (temporary, not committed): a 40 s test's stream through the flipped gate (exit 1,
 cap named); a coverage drop below the Go floor (job red) and below a vitest threshold.
+The vitest one is executed in fix r2 as M7: `branches` raised to 85.12 makes the local
+`vitest run --coverage` exit 1 on the threshold refusal, restored it exits 0 (evidence §9).
 
 ## 8. Evidence plan (foreground, serialized)
 

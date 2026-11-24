@@ -213,6 +213,18 @@ DURATION_GATE_INVOCATION = 'python3 ../scripts/ci/go-test-durations.py "$RUNNER_
 JSCPD_GATE_STEP = "Refuse code clones this change adds to the files it touches"
 JSCPD_SUITE_INVOCATION = "python3 scripts/ci/test-jscpd-changed.py"
 JSCPD_GATE_INVOCATION = 'python3 scripts/ci/jscpd-changed.py --base "$JSCPD_BASE" --head HEAD'
+# The job is the workflow's only unconditional gate runner, so a dropped `- run:` line would
+# disarm its suite silently; no other pin or assertion reads this job's step list.
+LEGACY_ROUTE_AUDIT_INVOCATIONS = (
+    "scripts/audit-no-legacy-routes.sh",
+    "python3 scripts/ci/test-no-legacy-routes-audit.py",
+    "python3 scripts/ci/test-ci-changed-path-classifier.py",
+    "python3 scripts/ci/test-ci-structure-extraction.py",
+    "python3 scripts/ci/test-assert-credo-strict-baseline.py",
+    "python3 scripts/ci/test-go-test-durations.py",
+    "python3 scripts/ci/test-assert-go-coverage-floor.py",
+    "python3 scripts/ci/assert-browser-suite-coverage.py",
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -650,6 +662,19 @@ def check_jscpd_gate_step(workflow_text: str) -> None:
     )
 
 
+def check_legacy_route_audit_invocations(workflow_text: str) -> None:
+    invocations = []
+    for step_lines in split_steps(job_blocks(workflow_text)["legacy-route-audit"], WORKFLOW_INDENT[0]):
+        scalars = scalars_at(normalized_step(step_lines, *WORKFLOW_INDENT), WORKFLOW_INDENT[1])
+        invocation = scalars.get("run")
+        if invocation not in (None, "|"):
+            invocations.append(invocation)
+    require(
+        tuple(invocations) == LEGACY_ROUTE_AUDIT_INVOCATIONS,
+        f"the legacy-route-audit step invocations changed: {tuple(invocations)!r}",
+    )
+
+
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
     steps, jobs = workflow_advisories(workflow_text)
     steps |= action_advisories(action_text)
@@ -707,6 +732,11 @@ class CredoGateStepTests(unittest.TestCase):
 
     def test_the_jscpd_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
         check_jscpd_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+
+class LegacyRouteAuditStepTests(unittest.TestCase):
+    def test_the_gate_suite_steps_stay_wired_and_ordered(self) -> None:
+        check_legacy_route_audit_invocations(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -980,6 +1010,22 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_jscpd_gate_step(mutated)
+
+    def test_mutation_deleting_the_duration_gate_suite_step_reddens_the_audit_pin(self) -> None:
+        deleted = "      - run: python3 scripts/ci/test-go-test-durations.py\n"
+        self.assertIn(deleted, self.workflow_text, "the mutation's anchor must be the duration suite step")
+        mutated = self.workflow_text.replace(deleted, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_legacy_route_audit_invocations(mutated)
+
+    def test_mutation_deleting_the_go_floor_suite_step_reddens_the_audit_pin(self) -> None:
+        deleted = "      - run: python3 scripts/ci/test-assert-go-coverage-floor.py\n"
+        self.assertIn(deleted, self.workflow_text, "the mutation's anchor must be the Go floor suite step")
+        mutated = self.workflow_text.replace(deleted, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_legacy_route_audit_invocations(mutated)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):
