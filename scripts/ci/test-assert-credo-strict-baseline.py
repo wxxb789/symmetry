@@ -46,6 +46,8 @@ RENDERED_WORDING = {
     "design": ("software design suggestion", "software design suggestions"),
 }
 SUMMARY_ORDER = ("consistency", "warning", "refactor", "readability", "design")
+# The evidence record's measured counts; raising one is a baseline increase and needs a contract amendment.
+EVIDENCE_COUNTS = {"issues": 564, "by_category": {"design": 73, "readability": 160, "refactor": 326, "warning": 5}}
 
 
 def small_baseline(**overrides):
@@ -424,6 +426,13 @@ class ShippedBaselineTests(unittest.TestCase):
         self.assertGreater(baseline.files_analyzed, 0)
         self.assertGreater(baseline.checks_run, 0)
         self.assertRegex(baseline.revision, r"^[0-9a-f]{40}$")
+
+    def test_the_shipped_baseline_never_exceeds_the_evidence_counts(self):
+        baseline = GATE.Baseline(BASELINE)
+        self.assertLessEqual(baseline.issues, EVIDENCE_COUNTS["issues"])
+        self.assertLessEqual(set(baseline.by_category), set(EVIDENCE_COUNTS["by_category"]))
+        for category, recorded in EVIDENCE_COUNTS["by_category"].items():
+            self.assertLessEqual(baseline.by_category.get(category, 0), recorded)
 
 
 if __name__ == "__main__":

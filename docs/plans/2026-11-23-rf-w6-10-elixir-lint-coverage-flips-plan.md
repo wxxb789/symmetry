@@ -11,18 +11,20 @@ wave-6 `ci.yml`-adjacent slice that landed immediately before this one).
 
 | file | change |
 | --- | --- |
-| `.github/workflows/ci.yml` | the Credo step becomes the blocking ratchet gate: the three `exit 0` skip branches and the job-level `continue-on-error: true` are gone, the step is renamed, and it ends in `assert-credo-strict-baseline.py` instead of `exit "$credo_status"`; `coverage-control` loses its job-level `continue-on-error: true` (its `needs`/`if`/artifact upload and the two other coverage jobs are untouched) |
+| `.github/workflows/ci.yml` | the Credo step becomes the blocking ratchet gate: the three `exit 0` skip branches and the job-level `continue-on-error: true` are gone, the step is renamed, and it ends in `assert-credo-strict-baseline.py` instead of `exit "$credo_status"`; `coverage-control` loses its job-level `continue-on-error: true` (its `needs`/`if`/artifact upload and the two other coverage jobs are untouched); `legacy-route-audit` gains the step that runs the gate's own suite |
+| `.gitattributes` | the capture fixture is exempted from the whitespace check (`-whitespace`, the one exact path): its padded section headers and edge lines are Credo's own bytes, so `git diff --check` would otherwise report the verbatim capture |
 | `scripts/ci/assert-credo-strict-baseline.py` | new: the fail-closed report parser and the ratchet verdict (exit 0 green / 1 breach or unusable report / 2 unreadable log or missing or malformed baseline) |
-| `scripts/ci/test-assert-credo-strict-baseline.py` | new: the gate's suite (44 tests: the shipped baseline's own report, a verbatim Credo 1.7.19 capture, every refusal the parser and the ratchet can raise, and both baseline-validation failures) |
+| `scripts/ci/test-assert-credo-strict-baseline.py` | new: the gate's suite (45 tests: the shipped baseline's own report, the committed baseline's magnitude against the evidence record's counts, a verbatim Credo 1.7.19 capture, every refusal the parser and the ratchet can raise, and both baseline-validation failures) |
 | `scripts/ci/credo-strict-baseline.json` | new: the committed baseline artefact (revision, issue total, per-category split, analyzed-file floor, check floor) |
 | `scripts/ci/credo-strict-capture-fixture.log` | new: the verbatim capture of a real Credo 1.7.19 `--strict` run (three `control/lib` files) the gate's suite parses green |
 | `scripts/ci/test-ci-changed-path-classifier.py` | the coverage-advisory pin becomes per job: `coverage-control` must *not* carry `continue-on-error`, `coverage-daemon`/`coverage-frontend` must; one mutation case restores the flag to prove the new check is not vacuous; the `control/mix.exs` coverage threshold is pinned above zero, with mutations for `threshold: 0` and for the key's removal |
-| `scripts/ci/test-ci-structure-extraction.py` | the two advisory allowlists the flip makes stale: the Credo step leaves `ADVISORY_STEPS` and `coverage-control` leaves `ADVISORY_JOBS`; one mutation case marks the Control coverage job advisory again to prove the job-set equality is not vacuous, and the Credo gate step gets its own pin (present, no advisory flag, no `exit 0` skip path, body ending in the gate program) with three mutations |
+| `scripts/ci/test-ci-structure-extraction.py` | the two advisory allowlists the flip makes stale: the Credo step leaves `ADVISORY_STEPS` and `coverage-control` leaves `ADVISORY_JOBS`; one mutation case marks the Control coverage job advisory again to prove the job-set equality is not vacuous, and the Credo gate step gets its own pin (present, no advisory flag, no `exit 0` skip path, the exact `mix credo --strict` invocation, body ending in the gate program) with four mutations |
 | `control/mix.exs` | `test_coverage: [summary: [threshold: <baseline − 1 point>]]` and the one comment that names where the number comes from |
-| `control/.credo.exs` | **unchanged**: its check list is the instrument the ratchet measures; the head measurement and revision live in `scripts/ci/credo-strict-baseline.json`, so restating them in the config comment would be a second copy |
+| `control/.credo.exs` | the check list is byte-identical (the instrument the ratchet measures is never touched): the one line that changes is the `color: false` comment, which now names the live reason (the gate's parser refuses colour escapes; the CI grep it cited is gone); the head measurement and revision live in `scripts/ci/credo-strict-baseline.json` rather than in a second copy here |
 | `docs/plans/2026-11-23-rf-w6-10-elixir-lint-coverage-flips-plan.md` | this plan |
 | `docs/evidence/rf-w6-10-elixir-lint-coverage-flips-2026-11-23.md` | the evidence record |
 | `docs/TODO.md` | the count-0 residual (the ruling keeps it open) and the amended `parse_timeout` clause of the existing Credo/actionlint item |
+| `docs/archive/CLOSED-TODO.md` | the closed Credo deflation half of the actionlint item, under the same-named section the sweep left, with the top-of-file pointer |
 
 ## The binding decision this implements
 
@@ -48,17 +50,20 @@ delivered, plus the formatter's own +120 `MaxLineLength`, leave the total above 
    a disabled/skipped check refuses. The contract's clause 3 ("a count above baseline accepted", "a
    disabled/removed check") is enforced by the same comparison.
 
-2. **Two new `scripts/ci/` artefacts and a suite, which the drafted owned-file list does not name.**
+2. **The new `scripts/ci/` artefacts and the gate's suite, ratified into the owned set.**
    The owned list predates the reconcile that introduced the ratchet: it still describes a flip at
-   zero and lists only `ci.yml`, `control/.credo.exs`, `control/mix.exs` (plus the classifier suite
+   zero and names only `ci.yml`, `control/.credo.exs`, `control/mix.exs` (plus the classifier suite
    "only if the flip requires a fixture update" and the plan file). The ruling's mechanism needs a
    committed baseline *artefact* and a fail-closed *parser*; both live beside the gate conventions
    the repository already uses (`assert-*.py` + `test-assert-*.py` + `citest`, the shape
    `assert-folded-gates.py`, `assert-exunit-json.py` and `jscpd-changed.py` use). The alternative —
    inlining a 1500-line-report parser as shell inside `ci.yml` — was rejected as untestable and
    against the repo's own gate convention. Nothing under `control/` moves, no job is added or
-   removed, and the classifier's routing pins are untouched, so the permission breach is three new
-   files in the CI-gate directory, recorded here rather than guessed silently.
+   removed, and the classifier's routing pins are untouched. The 2026-11-23 conductor ruling
+   ratified the four new CI-gate files (parser, baseline, fixture, suite), the structure-suite edit,
+   the evidence record and the `.gitattributes` exemption into the owned set, and wired the gate's
+   suite into `legacy-route-audit` in the same job as its siblings instead of deferring the wiring
+   to the next `ci.yml` owner.
    The two structural suites are the contract's own "only if the flip requires a fixture update"
    case: they pin the advisory *sets* the flip changes (`Measure Credo strict findings (advisory)`
    in `ADVISORY_STEPS`, `coverage-control` in `ADVISORY_JOBS`, and the per-job advisory pin in the
@@ -133,9 +138,10 @@ delivered, plus the formatter's own +120 `MaxLineLength`, leave the total above 
    shim): green with the ratchet's metrics; the mutant (an alias-order violation in a `control/lib`
    file) reddens the same body, and the revert restores green — the control-flow evidence the
    conductor's 2026-11-21 lesson 32 asks for.
-3. `python scripts/ci/test-assert-credo-strict-baseline.py` (44 tests) and
-   `python scripts/ci/test-ci-changed-path-classifier.py` (34 tests, unmodified routing pins);
-   `python scripts/ci/test-assert-folded-gates.py`.
+3. `python scripts/ci/test-assert-credo-strict-baseline.py` (45 tests; the CI `legacy-route-audit`
+   job runs it beside the two structural suites, so the pins below are CI-run), the classifier's
+   34 tests (routing pins unmodified), the structure suite's 29 and `test-assert-folded-gates.py`'s
+   6.
 4. `mix format --check-formatted`, `MIX_ENV=test mix compile --warnings-as-errors`, the targeted
    `mix test test/symmetry_control_web/`, the full `mix test`, then `mix test --cover` ×3 (locally)
    plus the threshold mutant (`threshold: 100` → exit 3) and the restored run.
@@ -165,10 +171,12 @@ delivered, plus the formatter's own +120 `MaxLineLength`, leave the total above 
   `Total` is the oracle. The measured local minimum is the weakest of three runs, and the floor sits
   a further point below it, so a platform delta has to exceed a point before it bites — and if it
   does, the CI number re-runs the arithmetic (rule 4).
-- **The ratchet's count is a committed artefact, not a history check**: a *manual* raise of
-  `credo-strict-baseline.json` is not caught by the gate (no shallow CI checkout holds the old
-  value). Review and the "only decreases" rule own that direction; the same limit applies to every
-  committed count in this repository.
+- **The ratchet's count is a committed artefact, pinned from above by its own suite**: the gate's
+  suite (CI-run in `legacy-route-audit`) refuses a baseline whose total or per-category counts
+  exceed the evidence record's measured numbers, so a raise is a deliberate two-file edit rather
+  than a quiet JSON change, and the ruling ties any raise to a contract amendment. A *decrease* is
+  enforced at run time: the gate refuses a stale ceiling until the artefact is lowered in the same
+  change as the fix.
 - **The grammar is pinned to Credo 1.7.19's rendering.** A `mix.lock` bump that changes the summary
   wording, the section titles or the issue-line shape refuses until the grammar and the baseline are
   re-measured — the intended fail-closed direction, at the cost of a re-measure in that change.
@@ -187,10 +195,11 @@ delivered, plus the formatter's own +120 `MaxLineLength`, leave the total above 
 | what | result |
 | --- | --- |
 | Credo, base and head | 564 issues over 225 files and 70 checks (identical in `dev` and `test`), unchanged by this slice's own files; 98 of the 225 files carry an issue |
-| the ratchet gate | the extracted `ci.yml` step body green (exit 0); the alias mutant red (exit 1, `Code Readability: 161 issue(s) against the baseline's 160`); the revert green |
+| the ratchet gate | the extracted `ci.yml` step body green (exit 0); the alias mutant red (exit 1, `Code Readability: 161 issue(s) against the baseline's 160`); the revert green; re-run at the final tree through the installed mise toolchain (`mix credo --strict`, Elixir 1.20.4): exit 30 with 564 issues over 225 files and 70 checks, and the gate over that log exits 0 |
 | coverage | three runs 87.64 / 87.62 / 87.58 % → `test_coverage: [summary: [threshold: 86.58]]`; the delivered threshold green at 87.65 %; a below-floor subset run red at 61.21 % (exit 3) |
-| suites | the gate's 44, the classifier's 34, the structure suite's 28, the folded-gate suite's 6 — all OK |
-| the fix round's new pins | the Credo gate-step pin reddens on an `exit 0` body swap, on an inserted skip branch and on a restored advisory flag; the threshold pin reddens on `threshold: 0` and on the key's removal; the real-capture test reddens on a perturbed capture — each restored green |
+| suites | the gate's 45, the classifier's 34, the structure suite's 29, the folded-gate suite's 6 — all OK |
+| the fix round's new pins | the Credo gate-step pin reddens on an `exit 0` body swap, on an inserted skip branch, on a restored advisory flag and on a dropped `--strict`; the threshold pin reddens on `threshold: 0` and on the key's removal; the real-capture test reddens on a perturbed capture; the committed baseline's magnitude pin reddens on a coordinated raise of `issues` and one category together — each restored green |
+| the gate's suite in CI | `legacy-route-audit` runs `test-assert-credo-strict-baseline.py`, and `git diff --check origin/main` is clean with the capture fixture exempted by its exact path in `.gitattributes` |
 | tree | `mix format --check-formatted` 0, `MIX_ENV=test mix compile --warnings-as-errors` 0, `mix test` 1163 passed / 21 skipped, the web tree 291 passed / 1 skipped |
-| `ci.yml` | +9 / −39; the control job's other steps and `coverage-daemon`/`coverage-frontend` byte-identical |
+| `ci.yml` | +10 / −39; the control job's other steps and `coverage-daemon`/`coverage-frontend` byte-identical |
 | record | `docs/evidence/rf-w6-10-elixir-lint-coverage-flips-2026-11-23.md` (every row with its command, exit code and counts) |

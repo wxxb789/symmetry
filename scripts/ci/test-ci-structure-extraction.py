@@ -207,6 +207,7 @@ ADVISORY_STEPS = frozenset(
 ADVISORY_JOBS = frozenset({"coverage-daemon", "coverage-frontend"})
 CREDO_GATE_STEP = "Enforce the committed Credo strict baseline"
 CREDO_GATE_INVOCATION = 'python3 ../scripts/ci/assert-credo-strict-baseline.py --log "$credo_log"'
+CREDO_STRICT_INVOCATION = 'mix credo --strict 2>&1 | tee "$credo_log"'
 
 
 def require(condition: bool, message: str) -> None:
@@ -604,6 +605,10 @@ def check_credo_gate_step(workflow_text: str) -> None:
     require(body is not None, "the Credo gate step must keep a `run: |` body")
     commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
     require(
+        CREDO_STRICT_INVOCATION in commands,
+        f"the Credo gate step must run {CREDO_STRICT_INVOCATION!r}; found {commands!r}",
+    )
+    require(
         bool(commands) and commands[-1] == CREDO_GATE_INVOCATION,
         f"the Credo gate step's body must end in {CREDO_GATE_INVOCATION!r}; "
         f"found {commands[-1] if commands else '<an empty body>'!r}",
@@ -855,6 +860,16 @@ class MutationTests(unittest.TestCase):
             f"      - name: {CREDO_GATE_STEP}\n        continue-on-error: true\n",
         )
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_credo_gate_step(mutated)
+
+    def test_mutation_dropping_the_credo_strict_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {CREDO_STRICT_INVOCATION}\n",
+            '          mix credo 2>&1 | tee "$credo_log"\n',
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertNotIn(f"          {CREDO_STRICT_INVOCATION}\n", mutated)
         with self.assertRaises(AssertionError):
             check_credo_gate_step(mutated)
 

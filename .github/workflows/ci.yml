@@ -1211,6 +1211,7 @@ jobs:
       # routes fixture diffs through it and pins the routing those outputs gate.
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
       - run: python3 scripts/ci/test-ci-structure-extraction.py
+      - run: python3 scripts/ci/test-assert-credo-strict-baseline.py
 
       # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request
       # would never reach a `run-heavy`-gated step; unlike the lint metrics below, this step is blocking.
