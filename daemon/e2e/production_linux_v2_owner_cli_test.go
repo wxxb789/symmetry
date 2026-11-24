@@ -49,10 +49,17 @@ func startLinuxV2OwnerWitnessCommandWithRequestPath(
 	if err != nil {
 		t.Fatalf("open private owner-witness response file: %v", err)
 	}
-	stderr, err := os.OpenFile(linuxV2OwnerWitnessStderrPath(fixture), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	stderrFD, err := unix.Open(linuxV2OwnerWitnessStderrPath(fixture),
+		unix.O_WRONLY|unix.O_CREAT|unix.O_TRUNC|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		_ = stdout.Close()
 		t.Fatalf("open owner-witness App stderr capture: %v", err)
+	}
+	stderr := os.NewFile(uintptr(stderrFD), "owner-witness-stderr")
+	if stderr == nil {
+		_ = unix.Close(stderrFD)
+		_ = stdout.Close()
+		t.Fatalf("wrap owner-witness App stderr capture")
 	}
 	command := exec.Command(binary,
 		"-linux-v2-native-owner-witness", "-config", fixture.configPath, "-request", requestPath,

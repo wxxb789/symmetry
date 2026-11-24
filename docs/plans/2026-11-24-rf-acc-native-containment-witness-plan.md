@@ -8,9 +8,10 @@ This plan records only the implementation choices the accepted contract leaves u
 
 ## 1. Change 1 — capture sink, redaction, and failure reporting
 
-- Sink: `fixture.artifactDir/owner-witness.stderr`, opened
-  `O_CREATE|O_TRUNC|O_WRONLY` mode 0600 exactly like the sibling `owner-witness-response.json`,
-  and kept as `command.Stderr` for the whole witness lifetime. Each command start truncates it,
+- Sink: `fixture.artifactDir/owner-witness.stderr`, opened `O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC|
+  O_NOFOLLOW` mode 0600 (`unix.Open`, matching `writeLinuxV2NativeWitness`; the round-1 code and
+  the sibling response file use the plain `os.OpenFile` shape), kept as `command.Stderr` for the
+  whole witness lifetime. Each command start truncates it,
   so a report reads the tail of the last-started command. Commands can share one fixture's
   capture: the unresolved-journal witness starts its fresh command while the setup command's
   owner processes are still live (`production_linux_v2_native_witness_test.go:495`, its live
@@ -27,7 +28,11 @@ This plan records only the implementation choices the accepted contract leaves u
   Known values: every `os.Environ` entry whose name matches `linuxV2IsCredentialEnvironmentName`
   (which covers the writer's `SYMMETRY_OPERATOR_TOKEN` / `SYMMETRY_ENROLLMENT_TOKEN` cases,
   `writeLinuxV2NativeWitness`), plus the request's `Claim.LeaseToken` and
-  `Claim.ProviderAccess.Token`. Empty values are skipped, like the writer skips them.
+  `Claim.ProviderAccess.Token`. Empty values are skipped, like the writer skips them. Round 2
+  narrows the claim: under the harness the env-derived leg is inert because `run_go_test` hands
+  the guest test an explicit `--setenv` list with no `*_TOKEN`/`*_API_KEY` entry, so the effective
+  capture set is the request's lease/provider tokens plus the fixture printer's
+  `evidence_secret_values_file`; the guest env is deliberately not widened (record §11/§14).
 - Reporting (`owner_cli_test.go`): `linuxV2ReportOwnerWitnessFailure(t, fixture, command)` first
   waits ≤5 s for the pidfd to exit (`waitLinuxV2OwnerWitnessCommand`, `allowNonzero=true`) and
   logs `owner-witness command exit status: <n>` (`linuxV2OwnerCommandExitCode`) or the
@@ -175,3 +180,22 @@ drops to 1 status + 5 tail lines against the printer's last-10 window; `machine_
 path component. Docs: §1/§2/§4/§5 above, and the record's §13 carries the per-finding deltas,
 probes and mutant rows. No dispatch was spent in this round; the hosted re-proof of the changed
 bytes stays conductor-owned.
+
+## 10. Fix round 2 (2026-11-25, conductor ruling items 1-6)
+
+- Item 1: `machine_run_as` reads the guest passwd entry with the transport in the parent shell
+  (`machine_run … >"$fixture_root/machine-run-as-passwd.log" || fail`, then `cut -d: -f6`), so the
+  nested getent's `machine_run_count` increment is no longer lost in a command substitution and
+  every transient unit name is unique and monotonic. Probe (record §14): the final bytes print a
+  9/9 unique monotonic sequence over five calls; the pre-fix bytes show 3 duplicates and a
+  non-monotonic sequence (mutant row).
+- Item 2: the round-2 capture-then-filter sites — the installed daemon's
+  `-verify-linux-owner-install` call and both guest `journalctl` dumps in
+  `start_literal_pid_reuse_watcher` — print through `print_filtered_output_lines`; the census of
+  every `>&2`-style echo in the script (filtered or exempt with a reason) is in record §14.
+- Item 3: the record narrows the env-derived redaction leg to a residual (§1 above).
+- Item 4: the capture sink opens with `O_NOFOLLOW` (§1 above).
+- Item 5: the record §8 citation row is refreshed to the measured count.
+- Item 6: one literal all-14 scratch run on the final bytes; its id, per-set stops and the
+  sha256 equality against the delivered files are in record §14, and the scratch branch is
+  deleted with `git ls-remote` proof.

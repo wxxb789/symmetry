@@ -945,12 +945,16 @@ machine_run_as() {
   local user=$1
   local group=$2
   shift 2
+  # The passwd read runs here, not in a command substitution: its machine_run only advances the
+  # counter in this shell, while a subshell would lose the increment and still burn the unit name.
+  local passwd_log="$fixture_root/machine-run-as-passwd.log"
+  machine_run /usr/bin/getent passwd "$user" >"$passwd_log" 2>&1 ||
+    fail "read the guest passwd home directory for $user"
+  local home
+  home=$(cut -d: -f6 <"$passwd_log")
+  [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   machine_run_count=$((machine_run_count + 1))
   local unit="${machine}-step-${machine_run_count}"
-  local home
-  home=$(machine_run /usr/bin/getent passwd "$user" | cut -d: -f6) ||
-    fail "read the guest passwd home directory for $user"
-  [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
     --setenv="HOME=$home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
@@ -1594,6 +1598,8 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.serv
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-daemon.service.in"
 
 printf 'Installing production owner artifacts inside the disposable systemd guest.\n'
+installer_log="$fixture_root/install-linux-owner.log"
+installer_status=0
 machine_run /root/install-linux-owner.sh \
   "$A_USER" "$B_USER" \
   /root/symmetry-linux-owner-stage/symmetry-linux-launcher \
@@ -1602,7 +1608,10 @@ machine_run /root/install-linux-owner.sh \
   /root/symmetry-linux-owner-stage/symmetry-linux-clone-bootstrap \
   /root/symmetry-linux-owner-stage/symmetry-daemon \
   /root/symmetry-linux-owner-stage/symmetry-owner.service.in \
-  /root/symmetry-linux-owner-stage/symmetry-daemon.service.in
+  /root/symmetry-linux-owner-stage/symmetry-daemon.service.in >"$installer_log" 2>&1 || installer_status=$?
+print_filtered_output_lines <"$installer_log"
+(( installer_status == 0 )) ||
+  fail "install-linux-owner.sh did not install the staged owner artifacts (status=$installer_status)"
 machine_run /usr/bin/systemctl enable symmetry-owner.service
 machine_run /usr/bin/systemctl start symmetry-owner.service
 machine_run /usr/bin/systemctl is-active --quiet symmetry-owner.service
@@ -1611,8 +1620,14 @@ sudo install -o root -g root -m 0644 "$fixture_root/daemon-service.json" \
   "$rootfs/etc/symmetry/daemon.json"
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs/etc/symmetry/daemon.json")" == '0:0:644' ]] ||
   fail 'installed daemon service config must be root-owned mode 0644'
+daemon_verify_log="$fixture_root/daemon-verify-linux-owner-install.log"
+daemon_verify_status=0
 machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
-  -verify-linux-owner-install -config /etc/symmetry/daemon.json
+  -verify-linux-owner-install -config /etc/symmetry/daemon.json >"$daemon_verify_log" 2>&1 ||
+  daemon_verify_status=$?
+print_filtered_output_lines <"$daemon_verify_log"
+(( daemon_verify_status == 0 )) ||
+  fail 'installed daemon -verify-linux-owner-install refused the staged daemon config'
 daemon_service_start_status=0
 if machine_run /usr/bin/systemctl start symmetry-daemon.service; then
   daemon_service_start_status=0
@@ -1941,6 +1956,8 @@ publish_control_provider_receipt() {
 start_literal_pid_reuse_watcher() {
   # Probe clone3(set_tid) in the guest PID namespace; never write ns_last_pid,
   # remount procfs, retry the target PID, or substitute numeric-PID observation.
+  local watcher_log="$fixture_root/literal-pid-reuse-watcher.log"
+  local watcher_status=0
   machine_run /usr/bin/systemd-run --no-block --quiet --collect \
     --unit="$PID_REUSE_WATCHER_UNIT" --service-type=exec \
     --property=Restart=no --property=KillMode=control-group --property=TimeoutStopSec=30s \
@@ -1979,7 +1996,9 @@ start_literal_pid_reuse_watcher() {
     printf "literal PID-reuse watcher did not become ready within 30 seconds\n" >&2
     exit 1
   ' bash "$PID_REUSE_WATCHER_UNIT" "$OWNER_PID_REUSE_ROOT" \
-    "$OWNER_PID_REUSE_HELPER" "$A_GID"
+    "$OWNER_PID_REUSE_HELPER" "$A_GID" >"$watcher_log" 2>&1 || watcher_status=$?
+  print_filtered_output_lines <"$watcher_log"
+  (( watcher_status == 0 )) || fail 'the literal PID-reuse watcher did not become ready'
 }
 
 stage_owner_request_file() {

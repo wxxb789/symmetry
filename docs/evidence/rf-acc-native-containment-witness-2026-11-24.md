@@ -1,4 +1,4 @@
-# rf-acc-native-containment-witness — evidence record (2026-11-24, implement + apply + fix stages)
+# rf-acc-native-containment-witness — evidence record (2026-11-24/25, implement + apply + fix rounds 1-2)
 
 Contract: `goal-rf-acc-native-containment-witness.md` (GDD state root, external to the repository).
 Base `477e4c62` (#277, the rf-acc-native-burndown merge). Branch
@@ -9,29 +9,31 @@ working-tree byte hash; the §1 rows cite the final (post-fix) bytes.
 Two clauses are proven green by the binding run `45465331434` on its bytes: the containment rows
 name their post-seed App refusal (bounded, redacted, in the job log) and end at a recorded
 `DECISION_NEEDED` product cause; `synthetic_goal_cleanup` is past its admission refusal and stops
-at a later named check. The fix stage (§13) changes four code/script files after that run; the
-hosted re-proof of the acceptance clause on the final bytes stays conductor-owned.
+at a later named check. Fix rounds 1-2 (§13, §14) then changed five code/script rows; the round-2
+binding run `45486208881` re-proves both clauses on the delivered bytes (§14.8) — identical stop
+signatures, ledger counts and failing-test sets against `45465331434`, no new stop class.
 
 ## 1. Binding — final bytes, runs, and scratch-only bytes
 
 | File (working tree) | sha256 |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `80b9f557b396118dbb7f3b0b369e2054ec5010aeeceec43083c3fd243e02e23c` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `71980151ffebbb39142e5d4a8620f1f43de1256723d3f17cd3e04a9d06d495a4` |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `29366dd82495027dcbaa23bdb1b8270a5ee67d4255a6bee94b3e4b57710a546c` |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `01550959d9f1797d56018914155709002ba8a5a77d5a69868561a25c22d09b7d` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `25137250d15b7c23cd1b6a5dfe15229e217250c837de7ff69b2a431ceffd4b7c` |
 | `scripts/ci/export-linux-v2-redacted-evidence.py` | `e3c2c1554d046d234dcd29a9ac1c79f0d526f1e27f4f61ce82eb97451bba9466` |
 | `scripts/ci/test-linux-v2-evidence.py` | `00342bc23cbbb08c7569b95049ddb68e7d61a640ba0c481eda0db59847a1f234` |
-| `docs/plans/2026-11-24-rf-acc-native-containment-witness-plan.md` | `77c18856e3e872b335cdeef1892d78b03e8f3a3893c6b6b516fac52ea9a53037` |
+| `docs/plans/2026-11-24-rf-acc-native-containment-witness-plan.md` | `9f332ec4806bee6a8d13735bf18b9444736d5283e2d74e34bad3b369649a73f6` |
 
 Run `45465331434` ran on scratch head `65bfeaf2`, whose six code/script rows were byte-identical
 to the pre-apply copies of the rows above (`cmp` clean for each) plus the two scratch-only files
-of §10. The apply stage's four simplifications (§12) were behavior-neutral; the fix stage then
-changed four code/script rows (§13: the containment capture helper, the acceptance script, the
-exporter and its suite), so the rows above are the final bytes and no hosted run covers them
-verbatim. The hosted re-proof of the acceptance clause is conductor-owned, because neither apply
-nor fix stage can push. `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are
-documentation-only and postdate the run.
+of §10; fix rounds 1-2 then changed five code/script rows (§13: the containment capture helper,
+the acceptance script, the exporter and its suite; §14: the acceptance script again and
+`production_linux_v2_owner_cli_test.go`). The round-2 binding run `45486208881` ran on scratch
+head `5e2c6dfd`, whose copies of all six code/script rows above are byte-identical to the table
+(§14.8); the plan was byte-identical at that head too, and only this record (plus the out-of-tree
+PR body) postdates the run because it cites it. The hosted proof was possible because the
+conductor authorized one round-2 dispatch and the stage could push only the scratch branch.
 
 | Run | Head | Sets | Result |
 | --- | --- | --- | --- |
@@ -41,34 +43,40 @@ documentation-only and postdate the run.
 | `45455325059` | `305a5d0f` | same four | attempt 1 died in the `contracts` job (known frontend flake, §11); `gh run rerun` passed it; the acceptance job (8m10s) names the clone-admission refusal (§7.2) |
 | `45458181149` | `1ff5ad44` | all 14 | every row named; job 23m04s; its failure blocks are byte-identical to run 4's, but one doc comment was trimmed to the two-line comment policy afterwards, so it is not the binding run |
 | `45465331434` | `65bfeaf2` | all 14 (final literal, §6) | every row named; job 23m23s |
+| `45486208881` | `5e2c6dfd` (round-2 final bytes, §14) | all 14 (final literal) | identical 91-line stop signature, failing-test set and ledger against `45465331434`; job 21m44s; no new stop class (§14.8) |
 
 ## 2. Change 1 — the captured App stderr, its redaction, and the failure report
 
 - Sink: `linuxV2OwnerWitnessStderrPath` (`owner-witness.stderr` beside the response file) replaces
-  `os.DevNull` as the command's stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52`), opened
-  `O_CREATE|O_TRUNC|O_WRONLY` 0600, one per command start, in the A-private `artifactDir`.
+  `os.DevNull` as the command's stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52-63`),
+  opened `O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC|O_NOFOLLOW` 0600 (round 2; §14), one per command
+  start, in the A-private `artifactDir`.
 - Helpers (`production_linux_v2_native_witness_test.go:2001-2081`):
   `linuxV2KnownCredentialValues` (every `os.Environ` name matching
   `linuxV2IsCredentialEnvironmentName` — which covers the writer's `SYMMETRY_OPERATOR_TOKEN` /
-  `SYMMETRY_ENROLLMENT_TOKEN` cases — the request's lease token, and the provider token),
+  `SYMMETRY_ENROLLMENT_TOKEN` cases — the request's lease token, and the provider token; round 2
+  narrows the effective set under the harness to the request tokens plus the printer's
+  `evidence_secret_values_file`, because `run_go_test` passes an explicit `--setenv` list with no
+  `*_TOKEN`/`*_API_KEY` entry, so the env-derived leg is inert in CI — residual §11/§14),
   `linuxV2OwnerWitnessStderrTail` (`:2041-2066`: replaces every known value in the whole capture
   with `<redacted>`, then refuses — error, no text — if a value survives in the marker-stripped
   view, and only then returns the last ≤40 lines / ≤4 KiB window; §13 lists the round-1 change),
   `linuxV2OwnerWitnessStderrBoundedLines` (≤5 lines, each ≤300 content bytes).
-- Report: `linuxV2ReportOwnerWitnessFailure` (`owner_cli_test.go:1573-1592`) waits ≤5 s for the
+- Report: `linuxV2ReportOwnerWitnessFailure` (`owner_cli_test.go:1580-1598`) waits ≤5 s for the
   pidfd, logs `owner-witness command exit status: <n>`, then the tail as separate `t.Logf` lines
   before each `t.Fatalf`. Line budget: 1 status line, then last ≤5 tail lines (`:2008`); the
   fixture printer keeps the last 10 lines of a test and four of them surround the report
   (`=== RUN`, the `t.Fatalf` body, the fixture's `:1838` StateDir cleanup line, `--- FAIL`), so
   the maximum report stream fills the window exactly and keeps the status line and every tail
   line. Call sites: eight `waitLinuxV2OwnerWitnessStage` waits report
-  (`:1744`, `:2377`, `:3387`, `:3566`, `:3797`, `:3963`, `:4122`, `:4444`, the barrier wait at
-  `:4444` included). Census and exemptions (round 1, §13): nine
+  (`:1751`, `:2384`, `:3394`, `:3573`, `:3804`, `:3970`, `:4129`, `:4451`, the barrier wait at
+  `:4451` included; round 2's sink change shifts every ref after `:57` by seven lines, §14).
+  Census and exemptions (round 1, §13): nine
   `waitLinuxV2OwnerWitnessStage` call sites exist — the ninth,
   `production_linux_v2_helper_exit_witness_test.go:188` (reached by the `shared` set at
   `linux-v2-native-acceptance.sh:2936`), is outside this goal's owned set and stays unnamed; the
-  recovery/replay exit waits on a live command (`owner_cli_test.go:1841-1843`, `:3465-3466`,
-  `:3700-3701`, `:4515-4516`) stay unnamed too, and their rows stop at their own named stage
+  recovery/replay exit waits on a live command (`owner_cli_test.go:1848-1850`, `:3472-3473`,
+  `:3707-3708`, `:4522-4523`) stay unnamed too, and their rows stop at their own named stage
   waits first.
 - Local probes, before any dispatch:
   - `print_witness_output_lines` extracted verbatim from the script and fed a real non-verbose
@@ -284,7 +292,7 @@ delivered artifact):
 | Command (`scripts/ci`, `--base 477e4c62 --head <temporary commit>`) | Exit | Result |
 | --- | --- | --- |
 | `python3 check-record-cleanliness.py` | 0 | `1 changed record(s) pass the root-only check` (the first attempt refused the fixed-B legacy home path quoted in §7.1; the sentence was rewritten to a placeholder) |
-| `python3 check-citation-existence.py` | 0 | `1 changed document(s) pass the path and symbol check (593 path citation(s))`; three pre-existing `CLOSED-TODO.md` notes name gitignored paths |
+| `python3 check-citation-existence.py` | 0 | `1 changed document(s) pass the path and symbol check (600 path citation(s))` on the delivered bytes (§14.8, base `33ad88a9`; the apply-stage measurement was 593); three pre-existing `CLOSED-TODO.md` notes name gitignored paths |
 | `python3 jscpd-changed.py` | not run | the pinned `node_modules/jscpd` is not installed on this host and the registry is unreachable (the burndown's round-1 constraint); replacement proxy: every 10-line whitespace-normalized window containing an added line was searched against the whole head tree (1,798 scanned-format files, 647,423 distinct windows) → 0 clone candidates |
 
 The Go unit tests, `gofmt`, `go vet` and the fixture-contract scripts run in the `daemon` CI job
@@ -293,8 +301,8 @@ The Go unit tests, `gofmt`, `go vet` and the fixture-contract scripts run in the
 witnesses themselves need the installed A/B fixture and were exercised only by the hosted scratch
 runs, as the contract allows. Git-diff hygiene: `git diff --check` clean; the profile-name and
 host-path scans used by the burndown apply (no Windows/WSL host prefixes in added lines).
-The fix stage re-ran every row above on the final bytes (§13 carries its mutant rows); §12 keeps
-the apply-stage counts and §13 the final document gates.
+Fix rounds 1-2 re-ran every row above on the final bytes (§13 carries round 1's mutant rows, §14.6
+and §14.8 the round-2 gates); §12 keeps the apply-stage counts and §13 the round-1 document gates.
 
 ## 9. Scope and scratch hygiene
 
@@ -344,14 +352,19 @@ secret-bearing lines.
 
 ## 11. Residual risks and known limits
 
-- The fix stage changed four code/script files after the binding run `45465331434`: the report's
-  line budget, the capture helper's redaction order and refusal view, `machine_run_as`'s HOME
-  source, and the exporter guard's computed-source check. Each carries a local probe and a mutant
-  row (§13); none is re-exercised by a hosted run, so the acceptance clause's bytes-for-bytes
-  binding moves to the conductor's re-proof.
+- The round-1/round-2 code/script deltas after `45465331434` (the report budget, the capture
+  helper's redaction order and refusal view, `machine_run_as`'s HOME source and unit counter, the
+  round-2 filter captures and the sink's `O_NOFOLLOW`) are re-covered by the round-2 binding run
+  `45486208881`, which reproduces the same stop signatures, ledger and failing-test sets (§14.8).
+  What that run cannot discriminate is the deltas' mutation behavior — the local probes and mutant
+  rows (§13, §14.7) are that evidence — and the watcher capture path, which no run reached.
 - `machine_run_as`'s passwd-derived HOME is exercised by the extraction probe only (positive and
   negative rows, §13); the guest transport itself needs the installed A/B fixture, so its mutant
   is an oracle gap: removing the derivation reddens no CI job, only that probe.
+- Capture redaction's env-derived leg is inert under the harness (§14.3): `run_go_test` passes an
+  explicit `--setenv` list with no `*_TOKEN`/`*_API_KEY` entry, so the effective known-value set is
+  the request's lease/provider tokens, and the fixture printer's `evidence_secret_values_file`
+  filters the echoed lines independently. The guest env is deliberately not widened.
 - The containment judging clause stays unmet beyond the recorded stop: no run reaches the
   credential-dependent step, because the witness cannot reserve its clone until §7.2 is decided.
   Every credential-dependent step of every row remains unproven (the scratch doubles reach no
@@ -658,3 +671,290 @@ Final-tree gates this stage ran (exact commands, WSL Ubuntu-24.04 unless noted):
 | `python3 scripts/ci/check-citation-existence.py --base <same> --head <same>` | 0 | `1 changed document(s) pass the path and symbol check (600 path citation(s))`; the three pre-existing `CLOSED-TODO.md` ignore notes unchanged |
 | `git diff --check` | 0 | clean |
 | host-path scans: the sanitize tool's root set (`/home /Users /root /tmp /var /mnt /private`, drive letters) over the two changed Markdown files → 0 hits; the program rule's case-insensitive profile-directory scan over `git diff origin/main...HEAD` and over a `git stash create` commit of the final bytes → 0 and 0 matches | 0 | no host absolute path in the changed documents and no profile-name path in the branch diff |
+
+## 14. Fix round 2 (2026-11-25) — the PR #280 round-1 conductor ruling, items 1-6
+
+Source: the contract's binding ruling "PR #280 round 1, triple audit reconciled", reconciling Sol
+`findings/280-opus-review-1.md` (P1-1, P2-1, P3-1, P3-2), DS `findings/280-ds-audit-1.md`
+(P2-1, P3-1) and the security review's F1-F3. Lessons 74-79/82 apply: every added function runs in
+isolation locally before any dispatch, every "every" clause gets a census, artifacts go in
+verbatim with full sha256, and records cite bytes, not commits.
+
+Changed rows (§1 table): `scripts/ci/linux-v2-native-acceptance.sh` and
+`daemon/e2e/production_linux_v2_owner_cli_test.go`; the plan gains §10; this record gains §14.
+`production_linux_v2_native_witness_test.go`, the cleanup witness, the exporter and its suite are
+byte-unchanged from round 1.
+
+### 14.1 Item 1 — transient unit names are unique and monotonic (`machine_run_as`)
+
+`machine_run_as` (`linux-v2-native-acceptance.sh:944-962`) now runs the passwd read in the parent
+shell: `machine_run /usr/bin/getent passwd "$user" >"$fixture_root/machine-run-as-passwd.log"
+2>&1 || fail …` (`:950-952`), then `home=$(cut -d: -f6 <"$passwd_log")` (`:954`), and only then
+reserves the outer unit (`:956-957`). The previous `home=$(machine_run … | cut …)` ran
+`machine_run` in a command substitution: its `step-(n+1)` increment died with the subshell while
+the name stayed burned, so the outer call reused `step-(n+1)` one call later.
+
+Probe (verbatim in §14.7; sha256 `05f207dc…`), extracting `machine_run` and `machine_run_as`
+verbatim from the shipped bytes with the guest transport stubbed, five calls, unit names printed
+in creation order:
+
+- final bytes: `step-1 … step-9`, `units=9 duplicates=0 monotonic=1`, outer `--setenv=HOME`
+  values (the synthetic guest home of A ×3 and of B ×1) → `PROBE-PASS`, exit 0.
+- pre-fix bytes (`git show 5e109813:scripts/ci/linux-v2-native-acceptance.sh`, sha256
+  `01550959…`): `step-2, step-1, step-3, step-2, …`, `units=9 duplicates=3 monotonic=0` →
+  `PROBE-FAIL`, exit 3 (mutant row).
+
+Unit-name census for the same "transient unit names stay unique" clause: `machine_run` /
+`machine_run_as` `step-n` names share `machine_run_count` and are strictly monotonic (probe);
+`-go-test-n` (`:1540`, `:1768`) reserves from the same counter; `-ready` (`:967`) is one fixed
+name retried by one loop with `--collect` retiring each attempt; `-poweroff` (`:289`) is a
+single-shot cleanup and `$PID_REUSE_WATCHER_UNIT` is stopped between sets.
+
+### 14.2 Item 2 — round-2 echo sites routed, and the full echo census
+
+| Site (final tree) | Change |
+| --- | --- |
+| `:1625-1630` daemon `-verify-linux-owner-install -config /etc/symmetry/daemon.json` | captured to `$fixture_root/daemon-verify-linux-owner-install.log` (`:1626`), printed at `:1628`; a failure prints the filtered tail and then `fail`s |
+| `:1977` and `:1995` guest `journalctl … >&2` in `start_literal_pid_reuse_watcher` | the whole guest bash run is captured (`:1999`) and printed at `:2000` through the filter (both journalctl dumps and the guest's own "did not become ready" line) |
+| `:1603-1614` the guest `install-linux-owner.sh` invocation | captured (`:1611`), printed at `:1612`; a fresh guest runs the installer's legacy-drain branch, which executes the staged daemon (`-verify-legacy-owner-drained`) whose fixed status line would otherwise bypass the filter |
+
+Census of every `>&2` / `2>&1` site in the script (`grep -n '>&2\|2>&1'`, 52 sites, final tree):
+
+| Classification | Sites | Reason |
+| --- | --- | --- |
+| filtered — the printers | `:169`, `:220` | the witness printer and `print_filtered_output_lines` are the filtered path |
+| filtered — round-2 captures | `:1611`→`:1612`, `:1626`→`:1628`, `:1977`+`:1995` (guest, +`:1999` capture)→`:2000` | captured to a host file, printed through `print_filtered_output_lines` |
+| filtered — earlier rounds | `:1641`→`:1642`, `:1647`→`:1648`, `:1651`→`:1652` (P3-2 service dumps), `:1722`→`:1723`, `:1729`→`:1730` (config probes); the file-only event captures below print through `:1567` / `:1914` + the printer | daemon failure context, config probes and go-test event lines |
+| exempt — host-authored fixture text | `:6`, `:298`, `:306`, `:326`, `:330`, `:338`, `:344`, `:1565`, `:1698`, `:1704`, `:1707`, `:1720`, `:1726`, `:1912`, `:1920`, `:1996`, `:2242`, `:2734` | the script's own labels, statuses and retention messages; no guest text |
+| exempt — discarded or file-only | `:289`, `:292`, `:294`, `:308`, `:315`, `:318`, `:337`, `:350`, `:369`, `:370`, `:951`, `:967`, `:1465`, `:1470`, `:1561`, `:1910`, `:2233` | sent to `/dev/null`, to a private log file, or consumed by `cut`; never echoed |
+| exempt — tool metadata only | `:1700`, `:1702`, `:1706`, `:1709` | as-A `ls -ld` / `stat` path-mode-owner listings and the `find -printf '%y %P %s' \| sort \| head` name-and-size inventories |
+| exempt — structured witness-document projection | `:162` | fixed `jq` field list (case, harness, version, outcome, category, state, binary flags); no free-form process output |
+
+With the round-2 captures the invariant at `:204-206` holds on this script's paths: every echoed
+byte of guest daemon/journal/App text passes `print_filtered_output_lines` (or the witness
+printer's identical 400-byte/secret rule); the remaining sites are the script's own text,
+discarded or consumed output, tool metadata listings, or the bounded document projection.
+
+### 14.3 Item 3 — the env-derived redaction leg is narrowed, not widened
+
+§2 and plan §1 now state the effective set under the harness: `run_go_test` builds an explicit
+`--setenv` list with no `*_TOKEN`/`*_API_KEY` entry, so `linuxV2KnownCredentialValues`' env-derived
+leg adds nothing in CI and the effective known-value set is the request's
+`Claim.LeaseToken`/`Claim.ProviderAccess.Token`; the fixture printer's
+`evidence_secret_values_file` filters the echoed lines independently (§11 residual). The guest env
+is deliberately not widened.
+
+### 14.4 Item 4 — the capture sink opens with `O_NOFOLLOW`
+
+`startLinuxV2OwnerWitnessCommandWithRequestPath` (`owner_cli_test.go:52-63`) opens the capture via
+`unix.Open(path, O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC|O_NOFOLLOW, 0o600)` +
+`os.NewFile`, matching `writeLinuxV2NativeWitness` (`native_witness_test.go:3419`); a symlink at
+the sink path now refuses instead of being followed. The response file keeps its round-1
+`os.OpenFile` shape; the sink stays 0600, one per command start.
+
+### 14.5 Item 5 — §8's citation count
+
+§8's `check-citation-existence` row is refreshed to the round-2 measurement over the final bytes
+(§14.8); the round-1 row had carried the apply-stage 593 against the later 600.
+
+### 14.6 Round-2 gates (final bytes)
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | clean |
+| `shellcheck --severity=warning -f gcc` on the script, Windows 0.11.0 / WSL 0.9.0 | 1 / 1 | 16 findings on each, line:col-stripped multiset identical to the base `33ad88a9` and `477e4c62` scripts (delta 0 on both binaries; both installed builds signal findings on this invocation) |
+| `gofmt -l .` (`daemon/`, Windows and WSL) | 0 | 0 lines |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./e2e/...` (`daemon/`, WSL) | 0 | clean |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...` (`daemon/`, WSL) | 0 | clean |
+| `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` (`daemon/`, WSL) | 0 | clean |
+| `go test -c -o <tmp> ./e2e` + `-test.run TestLinuxV2OwnerWitnessStderrCapture -test.v` (WSL linux/amd64) | 0 | 4/4 PASS |
+| `python3 scripts/ci/test-linux-v2-evidence.py` (WSL, python 3.12.3) | 0 | `Ran 48 tests in 31.457s … OK` |
+| `python3 scripts/ci/test-linux-v2-go-events.py` (same) | 0 | `Ran 6 tests … OK` |
+| `python3 -m py_compile scripts/ci/export-linux-v2-redacted-evidence.py` (same) | 0 | clean |
+| `git diff --check` | 0 | clean |
+| unit-name probe, filter probe (§14.7) | 0, 0 | final bytes pass; the unit probe reddens (exit 3) on the pre-fix script (mutant row) |
+
+Changed-document gates over the final record/plan (round-2 measurements; run against a
+`git stash create` commit of the final working tree) are in §14.8 with the binding run.
+
+### 14.7 Round-2 probe appendix (verbatim; run under WSL Ubuntu-24.04, bash 5.2.21, python 3.12.3)
+
+`unit-name-probe.sh`, sha256 `05f207dc1a58e1ee50d6aacb0273d58ca5f3991dc5880d3d6e8da623b1b86b50`:
+
+```bash
+#!/usr/bin/env bash
+# Local probe (conductor lesson 74): unit-name sequence of machine_run/machine_run_as after the
+# round-2 counter fix. Usage: unit-name-probe.sh <script>; exit 0 only when every transient unit
+# name over several calls is unique and strictly monotonic in creation order.
+set -Eeuo pipefail
+
+script=$1
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fixture_root=$work
+machine=symmetry-test-machine
+machine_run_count=0
+units_log="$work/units"
+sudo_log="$work/sudo-lines"
+: > "$units_log"
+: > "$sudo_log"
+
+fail() { printf 'PROBE-FAIL: %s\n' "$1" >&2; exit 3; }
+
+sudo() {
+  printf '%s\n' "$*" >> "$sudo_log"
+  local arg unit='' user='' i
+  local -a args=("$@")
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    arg=${args[i]}
+    [[ "$arg" == --unit=* ]] && unit=${arg#--unit=}
+    if [[ "$arg" == /usr/bin/getent ]]; then
+      user=${args[i + 2]}
+      echo "$user:x:52000:52000::/synthetic-guest-home/$user:/bin/bash"
+    fi
+  done
+  printf '%s\n' "$unit" >> "$units_log"
+}
+
+eval "$(sed -n '/^machine_run() {/,/^}/p' "$script")"
+eval "$(sed -n '/^machine_run_as() {/,/^}/p' "$script")"
+
+printf 'machine_run     A A first\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true
+printf 'machine_run_as  A A second\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true
+printf 'machine_run_as  B B third\n'
+machine_run_as symmetry-b symmetry-b /usr/bin/true
+printf 'machine_run     A plain\n'
+machine_run /usr/bin/true
+printf 'machine_run_as  A A fourth\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true
+
+echo '--- unit sequence (creation order)'
+cat "$units_log"
+echo '--- outer HOME values'
+grep -o -- '--setenv=HOME=[^ ]*' "$sudo_log" || true
+
+mapfile -t units < "$units_log"
+duplicates=$(printf '%s\n' "${units[@]}" | sort | uniq -d | wc -l)
+monotonic=1
+prev=0
+for u in "${units[@]}"; do
+  n=${u##*-step-}
+  (( n > prev )) || monotonic=0
+  prev=$n
+done
+printf 'units=%d duplicates=%d monotonic=%d last=%s\n' \
+  "${#units[@]}" "$duplicates" "$monotonic" "$prev"
+
+grep -q -- '--setenv=HOME=/synthetic-guest-home/symmetry-b' "$sudo_log" ||
+  { echo 'PROBE-FAIL: the B run did not receive the passwd home' >&2; exit 3; }
+(( duplicates == 0 && monotonic == 1 )) ||
+  { echo 'PROBE-FAIL: unit names are not unique and monotonic' >&2; exit 3; }
+echo 'PROBE-PASS: all transient unit names unique and monotonic'
+```
+
+`filter-probe.sh`, sha256 `fe8be99dbf877b09cc65678c25f7daa872b57d267f0f6b9ba766a9de201d59b6`:
+
+```bash
+#!/usr/bin/env bash
+# Local probe for print_filtered_output_lines on the round-2 capture-then-filter sites: bounded
+# guest/journal lines print, secret-bearing or over-400-byte lines are dropped, exit stays 0, and
+# the last-40-line window holds. Usage: filter-probe.sh <script>
+set -Eeuo pipefail
+
+script=$1
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+evidence_secret_values_file="$work/secrets"
+printf 'development-operator-token\0scratch-dummy-secret\0' > "$evidence_secret_values_file"
+eval "$(sed -n '/^print_filtered_output_lines() {/,/^}/p' "$script")"
+
+{
+  printf 'watcher ready: unit=symmetry-test-machine-step-9 MainPID=4242 cgroup=/system.slice/kept\n'
+  printf 'journal line carrying scratch-dummy-secret\n'
+  python3 -c 'print("o" * 420)'
+  printf 'literal-pid-reuse-helper: bounded tail line\n'
+} > "$work/capture.log"
+
+status=0
+out=$(print_filtered_output_lines < "$work/capture.log" 2>&1) || status=$?
+printf '%s\n' "$out"
+(( status == 0 )) || { echo "PROBE-FAIL: filter exited $status" >&2; exit 3; }
+grep -q 'watcher ready' <<<"$out" || { echo 'PROBE-FAIL: bounded watcher line dropped' >&2; exit 3; }
+grep -q 'bounded tail line' <<<"$out" || { echo 'PROBE-FAIL: bounded journal line dropped' >&2; exit 3; }
+! grep -q 'scratch-dummy-secret' <<<"$out" || { echo 'PROBE-FAIL: secret value printed' >&2; exit 3; }
+! grep -q 'ooooo' <<<"$out" || { echo 'PROBE-FAIL: oversized line printed' >&2; exit 3; }
+
+for i in $(seq 1 45); do printf 'window line %s\n' "$i"; done > "$work/window.log"
+window_out=$(print_filtered_output_lines < "$work/window.log" 2>&1)
+window_count=$(grep -c 'window line' <<<"$window_out")
+printf 'window lines=%s\n' "$window_count"
+(( window_count == 40 )) || { echo 'PROBE-FAIL: the last-40-line window did not hold' >&2; exit 3; }
+! grep -q 'window line 5$' <<<"$window_out" || { echo 'PROBE-FAIL: evicted line printed' >&2; exit 3; }
+grep -q 'window line 45$' <<<"$window_out" || { echo 'PROBE-FAIL: last line dropped' >&2; exit 3; }
+
+echo 'PROBE-PASS: bounded lines through, secret/oversized dropped, exit 0, last 40 kept'
+```
+
+### 14.8 Item 6 — the binding all-14 run on the final bytes (`45486208881`, head `5e2c6dfd`)
+
+One fresh literal all-14 run, waited for in the foreground (`gh run watch 45486208881 --repo
+wxxb789/symmetry --interval 60`): `contracts` passed in 1m23s, `linux-native-v2-acceptance` (job
+138772996317) in 21m44s, all 14 case sets armed, the throwaway workflow and the ratified gh shim
+unchanged (§10). The scratch head `5e2c6dfd127e9d49b7dbbcb882d0a90df2504d9a` is the delivered
+working tree (rsync, then per-file sha256 equality against the goal worktree) plus the two
+scratch-only files; the branch was deleted after the run, `git push origin --delete` printed
+`- [deleted]`, and `git ls-remote origin scratch/rf-acc-native-containment-witness` prints nothing
+(0 lines, exit 0; the only remaining `scratch/*` ref is the unrelated
+`scratch/rf-acc-pi-durability-matrices`).
+
+sha256 equality, scratch head vs the delivered rows of §1 (`git cat-file blob HEAD:<path>` piped
+to `sha256sum`): `production_linux_v2_owner_cli_test.go` `71980151…`; `native_witness_test.go`
+`29366dd8…`; `cleanup_witness_test.go` `d120677d…`; `linux-v2-native-acceptance.sh` `25137250…`;
+`export-linux-v2-redacted-evidence.py` `e3c2c155…`; `test-linux-v2-evidence.py` `00342bc2…` — all
+six equal the §1 table. The plan (`9f332ec4…`) was at the scratch head byte-identically; only
+this record and the out-of-tree PR body postdate the run because they cite it, and every other
+delivered file equals the scratch head.
+
+Per-set comparison with the binding run `45465331434` (both logs downloaded; timestamps,
+durations and scratch temp-dir names normalized away): the 91-line stop signature
+(`--- FAIL:`, `_test.go:<line>:`, and the captured `owner-witness` status/stderr lines) is
+byte-identical, the failing-test-name multiset is identical, and the ledger counts match:
+
+| Pattern | `45465331434` | `45486208881` |
+| --- | --- | --- |
+| case sets exited 1 | 14 (same names, same order) | 14 |
+| `owner-witness command exit status: 1` | 12 | 12 |
+| `stayed live` / `requires an App admission check` / `fixed-B native HOME is outside` | 0 / 0 / 0 | 0 / 0 / 0 |
+| `native harness version differs from the tested release` | 220 | 220 |
+| `Linux clone intent does not match the current admitted Subject` | 4 | 4 |
+| clones / daemon smokes / `retired` histogram | 14 / 14 / `0`×1 `5`×13 | same |
+| verified legs (`…RejectsUnexpectedCgroupProcsFD`, `…CleanupRejectsBCallerScratch`) | 2 | 2 |
+
+Rows: 1-2 containment carry the named post-seed refusal with exit status 1 (`:101`/`:109`); 3 the
+three `shared` scratch failures (`clone_cleanup_linux_test.go:259`, `clone_integration_linux_test.go:240`
++ `:113`, `launcher_integration_linux_test.go:439`); 4 `synthetic_goal_cleanup` past `:499` at the
+helper's `release_outcome_unknown`; 5-14 the F2-excluded version gate. No new stop class: the
+round-2 failure strings never fired (`did not install the staged owner artifacts`,
+`verify-linux-owner-install refused the staged daemon config`, `literal PID-reuse watcher did not
+become ready`, the passwd refusals: 0 each), and no previously green row reddened.
+
+What the run exercised of round 2: the installer capture→filter prints its success lines in all 14
+sets (14 `Verified fixed Linux owner assets`, 14 `one-time legacy drain proof passed`; the same
+counts appear in the binding run) and the daemon `-verify-linux-owner-install` boundary line
+prints 220 times (identical count, now through the filter); the `machine_run_as` passwd read ran
+on every set's `--setenv=HOME` path with no refusal. The watcher capture path (`:1956-2001`) was
+not reached by any set in either run (0 `literal PID-reuse watcher` lines: the sets stop before
+`run_literal_pid_reuse_witness` at `:2959`), so its shape rests on the filter probe (§14.7) and
+the census, not on the hosted run.
+
+Changed-document gates on the delivered record and plan, run against a `git stash create` commit of
+the final working tree (`--base 33ad88a9…`):
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `python3 scripts/ci/check-record-cleanliness.py` | 0 | `1 changed record(s) pass the root-only check` |
+| `python3 scripts/ci/check-citation-existence.py` | 0 | `1 changed document(s) pass the path and symbol check (600 path citation(s))` |
+| `git diff --check` | 0 | clean |
+| host-path and profile-directory scans: the sanitize tool's root set over the record and plan → 0 hits; the case-insensitive profile-directory scan over the branch-diff added lines → 0 hits, over every changed file at a `git stash create` commit → 1 hit that is the substring inside the pre-existing identifier `ensureLocalHandleAvailableLocked` in `docs/archive/CLOSED-TODO.md` (not a path) | 0 | no host absolute path and no profile-directory path in any changed document |
