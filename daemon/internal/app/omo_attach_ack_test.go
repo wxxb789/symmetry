@@ -47,9 +47,28 @@ type omoAttachAckControl struct {
 }
 
 func (client *omoAttachAckControl) Claim(ctx context.Context, runID string, request protocol.ClaimRequest) (protocol.ClaimResponse, error) {
+	if offset := client.fixture.claimDeadlineOffset; offset != 0 {
+		client.anchorClaimDeadline(offset)
+	}
 	claim, err := client.nativeAdmissionControl.Claim(ctx, runID, request)
 	claim.LeaseToken = omoAttachAckLeaseToken
+	client.fixture.timeline.mark("claim")
 	return claim, err
+}
+
+// The product parses the admission from the claim's Work (app.go), so the 2 s budget is
+// anchored here: every stage before this point would otherwise race the arm's own clock.
+func (client *omoAttachAckControl) anchorClaimDeadline(offset time.Duration) {
+	deadline := time.Now().Add(offset)
+	admission := client.admission
+	admission.Limits.DeadlineAt = deadline.UTC().Format(time.RFC3339Nano)
+	client.admission = admission
+	input, err := json.Marshal(admission)
+	if err != nil {
+		client.t.Errorf("marshal the re-anchored admission: %v", err)
+	}
+	client.work.Input = input
+	client.fixture.timeline.setDeadline(deadline)
 }
 
 func (client *omoAttachAckControl) AttachHarnessSession(ctx context.Context, runID string, request control.GoalSessionAttachRequest) (control.GoalSessionReceipt, error) {
@@ -59,6 +78,7 @@ func (client *omoAttachAckControl) AttachHarnessSession(ctx context.Context, run
 }
 
 func (client *omoAttachAckControl) FetchHarnessSessionAttachment(ctx context.Context, runID string, fence protocol.Fence) (control.GoalSessionReceipt, error) {
+	client.fixture.capturePendingAttach()
 	receipt, err := client.attachment.FetchHarnessSessionAttachment(ctx, runID, fence)
 	if err == nil && client.fixture.afterRead != nil {
 		client.fixture.afterRead()
@@ -93,6 +113,66 @@ func (transport omoAttachAckRoundTripper) RoundTrip(request *http.Request) (*htt
 	return transport(request)
 }
 
+// A loaded host starves the fixture pipeline past the arm's own budget; the recorded
+// stage margins are what the trajectory assertion and the evidence runs read.
+type omoAttachAckTimeline struct {
+	mu       sync.Mutex
+	deadline time.Time
+	marks    []omoAttachAckMark
+}
+
+type omoAttachAckMark struct {
+	stage string
+	at    time.Time
+}
+
+func (timeline *omoAttachAckTimeline) setDeadline(deadline time.Time) {
+	timeline.mu.Lock()
+	timeline.deadline = deadline
+	timeline.mu.Unlock()
+}
+
+func (timeline *omoAttachAckTimeline) mark(stage string) {
+	timeline.mu.Lock()
+	timeline.marks = append(timeline.marks, omoAttachAckMark{stage: stage, at: time.Now()})
+	timeline.mu.Unlock()
+}
+
+func (timeline *omoAttachAckTimeline) deadlineSnapshot() time.Time {
+	timeline.mu.Lock()
+	defer timeline.mu.Unlock()
+	return timeline.deadline
+}
+
+func (timeline *omoAttachAckTimeline) entry(stage string) (time.Time, bool) {
+	timeline.mu.Lock()
+	defer timeline.mu.Unlock()
+	for _, mark := range timeline.marks {
+		if mark.stage == stage {
+			return mark.at, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func (timeline *omoAttachAckTimeline) format() string {
+	timeline.mu.Lock()
+	defer timeline.mu.Unlock()
+	if len(timeline.marks) == 0 {
+		return "none"
+	}
+	base := timeline.marks[0].at
+	parts := make([]string, 0, len(timeline.marks))
+	for _, mark := range timeline.marks {
+		until := "until=-"
+		if !timeline.deadline.IsZero() {
+			until = fmt.Sprintf("until=%+.3fs", timeline.deadline.Sub(mark.at).Seconds())
+		}
+		parts = append(parts, fmt.Sprintf("%s=+%.3fs(%s)", mark.stage, mark.at.Sub(base).Seconds(), until))
+	}
+	return strings.Join(parts, " ")
+}
+
 type omoAttachAckFixture struct {
 	t            *testing.T
 	app          *daemon
@@ -115,6 +195,10 @@ type omoAttachAckFixture struct {
 	mutate       func(*control.GoalSessionReceipt)
 	afterPut     func(context.Context)
 	afterRead    func()
+	// Non-zero: Claim re-anchors admission.Limits.DeadlineAt to Now()+offset
+	// before delegating, where the product parses the claim's Work.
+	claimDeadlineOffset time.Duration
+	timeline            omoAttachAckTimeline
 }
 
 func newOmOAttachAckFixture(t *testing.T, kind harness.Kind) *omoAttachAckFixture {
@@ -144,7 +228,9 @@ func newOmOAttachAckFixture(t *testing.T, kind harness.Kind) *omoAttachAckFixtur
 		fixture.mu.Unlock()
 		response, err := transport.RoundTrip(request)
 		if request.Method == http.MethodPut && fixture.afterPut != nil {
+			fixture.timeline.mark("after_put_enter")
 			fixture.afterPut(request.Context())
+			fixture.timeline.mark("after_put_return")
 		}
 		if request.Method == http.MethodPut && fixture.putMode == "local_deadline" {
 			return nil, context.DeadlineExceeded
@@ -175,6 +261,12 @@ func (fixture *omoAttachAckFixture) serveHTTP(writer http.ResponseWriter, reques
 	defer fixture.mu.Unlock()
 	fixture.methods = append(fixture.methods, request.Method)
 	fixture.queries = append(fixture.queries, request.URL.Query())
+	if len(fixture.methods) == 1 {
+		fixture.timeline.mark("first_request")
+	}
+	if request.Method == http.MethodPut {
+		fixture.timeline.mark("put")
+	}
 	if request.URL.Path != "/api/v1/runs/"+omoAttachAckRunID+"/session" {
 		fixture.t.Errorf("unexpected attachment path: %s", request.URL.Path)
 		http.Error(writer, "unexpected path", http.StatusBadRequest)
@@ -291,6 +383,20 @@ func (fixture *omoAttachAckFixture) run(ctx context.Context) state.RunJournal {
 	return journal
 }
 
+// Starved trajectories serve no PUT, so the exact-ready delivery is captured from the
+// store immediately before the readback GET the illegal trajectory would never issue.
+func (fixture *omoAttachAckFixture) capturePendingAttach() {
+	journal, err := fixture.app.store.LoadJournal(state.RunKey{RunID: omoAttachAckRunID, Generation: 1})
+	if err != nil || len(journal.PendingGoalDeliveries) != 1 {
+		return
+	}
+	fixture.mu.Lock()
+	if fixture.original.SessionAttach == nil {
+		fixture.original = journal.PendingGoalDeliveries[0]
+	}
+	fixture.mu.Unlock()
+}
+
 func (fixture *omoAttachAckFixture) assertRequests(want []string) {
 	fixture.t.Helper()
 	fixture.mu.Lock()
@@ -304,7 +410,7 @@ func (fixture *omoAttachAckFixture) assertRequests(want []string) {
 				break
 			}
 		}
-		fixture.t.Fatalf("attachment requests=%v, want %v (PUT error=%v local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v)", fixture.methods, want, fixture.putErr, journal.LocalState, journal.TerminalState, failure, fixture.session.callsSnapshot(), loadErr)
+		fixture.t.Fatalf("attachment requests=%v, want %v (PUT error=%v local_state=%s terminal_state=%s failure=%s native_calls=%v journal_error=%v timeline=%s)", fixture.methods, want, fixture.putErr, journal.LocalState, journal.TerminalState, failure, fixture.session.callsSnapshot(), loadErr, fixture.timeline.format())
 	}
 	if len(fixture.contexts) != len(want) {
 		fixture.t.Fatalf("request contexts=%d, want %d", len(fixture.contexts), len(want))
@@ -347,6 +453,107 @@ func (fixture *omoAttachAckFixture) assertExactPending(journal state.RunJournal)
 	session, err := fixture.app.store.LoadGoalSessionByHandle(original.SessionAttach.LocalHandleID)
 	if err != nil || session.ControlSessionID != "" || session.ControlAttachmentReceiptID != "" || session.NativeSessionID != "native-thread-1" {
 		fixture.t.Fatalf("unresolved readback changed native/control identities: session=%#v error=%v", session, err)
+	}
+}
+
+// The 2 s arms race a wall clock against host-dependent pipeline latency; exactly the
+// fail-closed trajectories the probe and pins recover are accepted, everything else red.
+func (fixture *omoAttachAckFixture) assertBudgetArmTrajectory(journal state.RunJournal) {
+	fixture.t.Helper()
+	fixture.mu.Lock()
+	methods := append([]string(nil), fixture.methods...)
+	fixture.mu.Unlock()
+	calls := fixture.session.callsSnapshot()
+	if testing.Verbose() {
+		fixture.t.Logf("attachment trajectory: requests=%v native_calls=%v timeline=%s", methods, calls, fixture.timeline.format())
+	}
+	switch {
+	case reflect.DeepEqual(methods, []string{http.MethodGet, http.MethodPut}):
+		fixture.assertRequests([]string{http.MethodGet, http.MethodPut})
+		fixture.assertStoppedWithoutTurn()
+		fixture.assertExactPending(journal)
+		fixture.assertServedBudgetPlacement(journal)
+	case len(methods) == 0 && countNativeStartCall(calls, "open") == 1:
+		fixture.assertStoppedWithoutTurn()
+		fixture.assertExactPending(journal)
+		fixture.assertTerminalFailure(journal, "context deadline exceeded")
+	case reflect.DeepEqual(methods, []string{http.MethodGet}) && countNativeStartCall(calls, "open") == 1:
+		if !errors.Is(fixture.putErr, context.DeadlineExceeded) {
+			fixture.t.Fatalf("in-flight readback trajectory did not fail the PUT on the expired budget: PUT error=%v timeline=%s", fixture.putErr, fixture.timeline.format())
+		}
+		fixture.assertStoppedWithoutTurn()
+		fixture.assertExactPending(journal)
+		fixture.assertTerminalFailure(journal, "context deadline exceeded")
+	case len(methods) == 0 && countNativeStartCall(calls, "open") == 0:
+		fixture.assertRefusedBeforeNativeLaunch(journal)
+	default:
+		fixture.t.Fatalf("attachment trajectory left the closed 2 s set: requests=%v native_calls=%v terminal_state=%s timeline=%s", methods, calls, journal.TerminalState, fixture.timeline.format())
+	}
+}
+
+// The served pair consumed the expiry inside the PUT leg: the hold returns no earlier
+// than the anchored deadline, and the late branch inverts the liveness predicate.
+func (fixture *omoAttachAckFixture) assertServedBudgetPlacement(journal state.RunJournal) {
+	fixture.t.Helper()
+	deadline := fixture.timeline.deadlineSnapshot()
+	if deadline.IsZero() {
+		fixture.t.Fatalf("2 s arm served the intended trajectory without an anchored deadline")
+	}
+	first, firstOK := fixture.timeline.entry("first_request")
+	put, putOK := fixture.timeline.entry("put")
+	if !firstOK || !putOK {
+		fixture.t.Fatalf("served trajectory is missing its request marks (timeline=%s)", fixture.timeline.format())
+	}
+	if at, ok := fixture.timeline.entry("after_put_return"); !ok || at.Before(deadline) {
+		fixture.t.Fatalf("PUT leg returned at %s before the deadline %s (timeline=%s)", at, deadline, fixture.timeline.format())
+	}
+	if first.Before(deadline) && put.Before(deadline) {
+		return
+	}
+	if fixture.putErr == nil || !(errors.Is(fixture.putErr, io.EOF) || errors.Is(fixture.putErr, context.DeadlineExceeded)) {
+		fixture.t.Fatalf("late-served trajectory did not carry a lost-acknowledgement or expired PUT: PUT error=%v timeline=%s", fixture.putErr, fixture.timeline.format())
+	}
+	fixture.assertTerminalFailure(journal, "attach native Goal session")
+}
+
+// An already-elapsed admission deadline refuses before any native launch; nothing
+// durable may exist behind the refusal and the classification is the recorded one.
+func (fixture *omoAttachAckFixture) assertRefusedBeforeNativeLaunch(journal state.RunJournal) {
+	fixture.t.Helper()
+	fixture.mu.Lock()
+	methods := append([]string(nil), fixture.methods...)
+	fixture.mu.Unlock()
+	calls := fixture.session.callsSnapshot()
+	if testing.Verbose() {
+		fixture.t.Logf("attachment trajectory: requests=%v native_calls=%v timeline=%s", methods, calls, fixture.timeline.format())
+	}
+	if len(methods) != 0 || len(calls) != 0 || fixture.contextCalls != 0 {
+		fixture.t.Fatalf("deadline refusal did not precede native launch: requests=%v native_calls=%v contexts=%d timeline=%s", methods, calls, fixture.contextCalls, fixture.timeline.format())
+	}
+	if len(journal.PendingGoalDeliveries) != 0 || len(journal.DeliveredGoalDeliveries) != 0 || len(journal.RetiredGoalDeliveries) != 0 {
+		fixture.t.Fatalf("deadline refusal left a goal delivery behind: journal=%#v", journal)
+	}
+	fixture.assertTerminalFailure(journal, "Goal admission deadline has elapsed before native launch")
+}
+
+func (fixture *omoAttachAckFixture) assertTerminalFailure(journal state.RunJournal, want string) {
+	fixture.t.Helper()
+	if journal.TerminalState != "failed" {
+		fixture.t.Fatalf("terminal state = %q, want failed (journal=%#v)", journal.TerminalState, journal)
+	}
+	terminals := 0
+	for _, transition := range journal.PendingTransitions {
+		if !isTerminalTransition(transition.State) {
+			continue
+		}
+		terminals++
+		payload := string(transition.Payload)
+		if !strings.Contains(payload, `"stage":"goal_admission"`) || !strings.Contains(payload, `"reason":"unknown_outcome"`) || !strings.Contains(payload, want) {
+			fixture.t.Fatalf("terminal classification = %s, want stage goal_admission and reason unknown_outcome carrying %q", payload, want)
+		}
+	}
+	if terminals != 1 {
+		fixture.t.Fatalf("terminal transitions = %d, want exactly one (journal=%#v)", terminals, journal)
 	}
 }
 
@@ -600,35 +807,41 @@ func TestOmOAttachAckRegressionReadbackRejectionKeepsDefiniteSemantics(t *testin
 }
 
 func TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget(t *testing.T) {
-	for _, mode := range []string{"caller_cancel", "caller_deadline", "admission_deadline", "request_deadline"} {
+	for _, mode := range []string{"caller_cancel", "caller_deadline", "admission_deadline", "admission_deadline_refused", "request_deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newOmOAttachAckFixture(t, harness.KindOmO)
+			fixture.timeline.mark("t0")
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			if mode == "caller_cancel" {
+			switch mode {
+			case "caller_cancel":
 				fixture.afterPut = func(context.Context) { cancel() }
-			} else {
+			case "caller_deadline":
 				deadline := time.Now().Add(2 * time.Second)
-				if mode == "caller_deadline" {
-					var deadlineCancel context.CancelFunc
-					ctx, deadlineCancel = context.WithDeadline(ctx, deadline)
-					defer deadlineCancel()
-				} else if mode == "admission_deadline" {
-					admission := fixture.control.admission
-					admission.Limits.DeadlineAt = deadline.UTC().Format(time.RFC3339Nano)
-					fixture.control.admission = admission
-					input, err := json.Marshal(admission)
-					if err != nil {
-						t.Fatal(err)
-					}
-					fixture.control.work.Input = input
-				}
+				fixture.timeline.setDeadline(deadline)
+				var deadlineCancel context.CancelFunc
+				ctx, deadlineCancel = context.WithDeadline(ctx, deadline)
+				defer deadlineCancel()
+				fixture.afterPut = func(requestContext context.Context) { <-requestContext.Done() }
+			case "admission_deadline":
+				fixture.claimDeadlineOffset = 2 * time.Second
+				fixture.afterPut = func(requestContext context.Context) { <-requestContext.Done() }
+			case "admission_deadline_refused":
+				fixture.claimDeadlineOffset = -time.Second
+			case "request_deadline":
 				fixture.afterPut = func(requestContext context.Context) { <-requestContext.Done() }
 			}
 			journal := fixture.run(ctx)
-			fixture.assertRequests([]string{http.MethodGet, http.MethodPut})
-			fixture.assertStoppedWithoutTurn()
-			fixture.assertExactPending(journal)
+			switch mode {
+			case "caller_deadline", "admission_deadline":
+				fixture.assertBudgetArmTrajectory(journal)
+			case "admission_deadline_refused":
+				fixture.assertRefusedBeforeNativeLaunch(journal)
+			default:
+				fixture.assertRequests([]string{http.MethodGet, http.MethodPut})
+				fixture.assertStoppedWithoutTurn()
+				fixture.assertExactPending(journal)
+			}
 			if mode == "request_deadline" && ctx.Err() != nil {
 				t.Fatalf("request-limit fixture exhausted caller rather than original request context: %v", ctx.Err())
 			}

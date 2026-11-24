@@ -1386,24 +1386,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       helper funnels are covered by `validateLinuxSupervisorWitnessMarkerParent`.
       owner: daemon app/execution.
 
-## Daemon: the `admission_deadline` attach-ack subtest flakes on its wall-clock deadline (PR #217 review)
-
-- [ ] Revalidate and diagnose the pre-existing flake in
-      `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`
-      (`daemon/internal/app/omo_attach_ack_test.go`; the `admission_deadline` arm sets a 2 s
-      wall-clock admission `DeadlineAt` and then requires a loopback GET+PUT inside it). The PR #217
-      review observed it fail twice on `394859a9` (once under concurrent load, once alone) with
-      `assertRequests`'s `attachment requests=[] … context deadline exceeded`, then pass 2/2 alone
-      and 3/3 on the PR head. Failures take one of two shapes: the attach GET leg hits the deadline
-      (`native_calls=[start details open details close wait]`), or the admission check fires first
-      (`Goal admission deadline has elapsed before native launch`, `resolveGoalAdapter` in
-      `goal_admission_tx.go`); both are recorded under load in
-      `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
-      (the app-suite failure paragraph). The failure is consistent with the deadline expiring when
-      the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
-      production limit, so a fix needs an owner decision on the deadline or the assertion;
-      revalidate against a recovered failure before changing either.
-
 ## Frontend test double: the WebSocket interception trap (rf-w4-11)
 
 - [ ] A suite that seeds a `socket_token` in the shared portal double (`frontend/src/app/portal-double.ts`)
