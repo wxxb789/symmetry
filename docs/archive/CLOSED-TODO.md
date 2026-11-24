@@ -37,6 +37,9 @@ The descendant-window item appended under `## Descendant window under host load
 (rf-flake-stdout-drain-64kib)` below was recorded directly in this file on 2026-11-24 from branch
 `refactor/rf-flake-stdout-drain-64kib` (it was never a `docs/TODO.md` item).
 
+The closed `admission_deadline` attach-ack flake moved from `docs/TODO.md` was appended to the
+archived closures below on 2026-11-24 from branch `refactor/rf-flake-omo-attach-ack-deadline`.
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -4931,6 +4934,43 @@ decision as open while this entry and the goal record carry the closure.
       `run_unexpected_cgroup_procs_fd_witness`) and proven in the guest: run `45398550682` prints
       `verified TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD: run=1 pass=1 skip=0`,
       re-confirmed on the final bytes in run `45402706492`. Evidence record §3.14/§3.15.
+
+## Daemon: the `admission_deadline` attach-ack subtest flakes on its wall-clock deadline (PR #217 review)
+
+- [ ] Revalidate and diagnose the pre-existing flake in
+      `TestOmOAttachAckRegressionCancellationAndDeadlineDoNotRenewBudget/admission_deadline`
+      (`daemon/internal/app/omo_attach_ack_test.go`; the `admission_deadline` arm sets a 2 s
+      wall-clock admission `DeadlineAt` and then requires a loopback GET+PUT inside it). The PR #217
+      review observed it fail twice on `394859a9` (once under concurrent load, once alone) with
+      `assertRequests`'s `attachment requests=[] … context deadline exceeded`, then pass 2/2 alone
+      and 3/3 on the PR head. Failures take one of two shapes: the attach GET leg hits the deadline
+      (`native_calls=[start details open details close wait]`), or the admission check fires first
+      (`Goal admission deadline has elapsed before native launch`, `resolveGoalAdapter` in
+      `goal_admission_tx.go`); both are recorded under load in
+      `docs/evidence/rf-w4-03-runner-decomposition-2026-11-21.md`
+      (the app-suite failure paragraph). The failure is consistent with the deadline expiring when
+      the suite is starved, but the cause is unconfirmed. The arm's duration is bounded by a
+      production limit, so a fix needs an owner decision on the deadline or the assertion;
+      revalidate against a recovered failure before changing either.
+
+      **Closed (2026-11-24, branch `refactor/rf-flake-omo-attach-ack-deadline`, plan
+      `docs/plans/2026-11-24-rf-flake-omo-attach-ack-deadline-plan.md`):** the revalidation
+      recovered 22 reds in a 200-iteration loaded repeat at the base revision (21 starved-A, 1
+      in-flight readback) with monotonic stage marks in the fixture: every red's budget died in the
+      post-claim pipeline (the one boundary red reached the first served request at 1.551 s of the
+      2 s budget and had its PUT refused 0.955 s past the deadline; the rest never reached the
+      server), confirming a host wall-clock miss rather than a product defect. The arm now anchors
+      `Limits.DeadlineAt` inside the fixture's `Claim` — where the product parses the claim's
+      `Work` (`daemon/internal/app/app.go:1359`) — and accepts exactly the fail-closed trajectories
+      the probe and pins recover (intended, late-served, starved-A, in-flight readback, starved-B),
+      each strictly asserted; a third request, a post-expiry readback, a turn start, a changed
+      journal or an unaccounted `[GET]` stays red. No budget raise, retry, skip or removed
+      assertion. Evidence: `docs/evidence/rf-flake-omo-attach-ack-deadline-2026-11-24.md` — loaded
+      repeat 22 red/200 before → 0 red/200 after, companion 0 red/200 with the trajectory
+      histogram, the pins and mutant rows with restored blob hashes, WSL `-race` exit 0. Residual:
+      a further fail-closed micro-shape (for example a readback aborted by the budget with no PUT
+      attempt) would still red and needs the same treatment as the recovered families.
+      CI `daemon`/`daemon-windows` on the PR head: pending (conductor-owned).
 
 ## rf-acc-native-containment-witness: the containment witness's invisible App refusal (2026-11-24)
 
