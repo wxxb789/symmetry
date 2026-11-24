@@ -76,13 +76,15 @@ def main() -> int:
         return 2
 
     harness, profile_name, default_hold_after = CASES[case]
+    drop_ack_after = ""
     if case == "stage_replay":
         require(len(sys.argv) == 9, "stage replay request requires an explicit barrier hold")
-        hold_after = sys.argv[8]
-        ack_loss_stage = hold_after.removeprefix("drop_ack_after=")
+        selector = sys.argv[8]
+        if selector.startswith("drop_ack_after="):
+            drop_ack_after = selector.removeprefix("drop_ack_after=")
+        hold_after = drop_ack_after or selector
         require(
-            hold_after in STAGE_REPLAY_HOLDS
-            or (hold_after.startswith("drop_ack_after=") and ack_loss_stage in ACK_LOSS_STAGES),
+            selector in STAGE_REPLAY_HOLDS or (drop_ack_after != "" and drop_ack_after in ACK_LOSS_STAGES),
             "stage replay hold is unsupported",
         )
     elif case in STAGE_REPLAY_NATIVE_RELEASE_CASES:
@@ -236,6 +238,8 @@ def main() -> int:
         request["subject"]["resource_id"] == runtime.get("repository_resource_id"),
         "request Subject does not bind to the exact daemon repository resource",
     )
+    if drop_ack_after:
+        request["drop_ack_after"] = drop_ack_after
 
     output = pathlib.Path(output_path)
     output.write_text(json.dumps(request, separators=(",", ":")), encoding="utf-8")

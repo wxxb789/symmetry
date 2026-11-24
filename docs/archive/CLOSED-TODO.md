@@ -4722,3 +4722,53 @@ decision as open while this entry and the goal record carry the closure.
       `daemon/internal/harness/testdata/claude/2.1.323` lists exactly those two READMEs, and the
       claude package suite stays green. The same slice retires the unread claude 2.1.259
       directory, whose bytes remain in git history.
+
+## Installed-daemon smoke owner check (rf-acc-native-burndown, 2026-11-24)
+
+- [ ] Decide the product-side fix for the installed-daemon smoke's first failing check (2026-11-24,
+      goal `rf-acc-native-burndown`; evidence
+      `docs/evidence/rf-acc-native-burndown-2026-11-24.md`): `symmetry-daemon.service`'s own
+      `ExecStartPre` (`/usr/libexec/symmetry/symmetry-daemon -verify-linux-owner-install`) failed
+      deterministically with `effective symmetry-owner.service unit violates the owner service
+      contract: effective owner unit depends on or orders against symmetry-daemon.service through
+      Before` — the owner unit's effective `Before` contains `symmetry-daemon.service` because
+      systemd registers the inverse of the daemon unit's own required
+      `After=symmetry-owner.service` (`scripts/systemd/symmetry-daemon.service.in:3`) on the owner,
+      and `daemon/internal/linuxpreflight/systemd_linux.go:233` rejected that inverse entry, while
+      the owner fragment stays forbidden to declare `Before=`/an edge to the daemon
+      (`systemd_linux.go:498` `rejectLinuxSystemdUnitLists`, `systemd_linux.go:773-784`
+      `validateLinuxSystemdOverrides`).
+
+      **Closed (2026-11-24, branch `refactor/rf-acc-native-burndown`, base `668e75de`):** the
+      conductor ruled the check broken and its fix in scope. `Before` is removed from the owner
+      effective-key list (`systemd_linux.go:235`); `After`, `BindsTo`, `Requires`, `Requisite`,
+      `Wants`, `PartOf` and `Conflicts` stay refused. Tests kept in
+      `daemon/internal/linuxpreflight/preflight_linux_test.go`: an effective owner
+      `Before=symmetry-daemon.service` passes (`:870-876`), each remaining key reddens its own
+      `owner/<key>` row (`:877-889`), and a declared `before` in the owner fragment (`:525-527`) or
+      drop-in (`:539-541`) is still refused. Mutants: re-adding `Before` reddens the accept test;
+      dropping `After` reddens `owner/After` (record §6). The class-E half of the original item
+      stayed open and moved to `docs/TODO.md` under `## CI consolidation owner decisions
+      (2026-11-17)` as the Control assignment product question; the OpenCode `TestedVersion` pin
+      staleness stays `F2-excluded` per `refactor/decision-native-opencode-2026-11-24.md`.
+
+## rf-acc-native-burndown: the `shared` fifth leg's stale pin (2026-11-24)
+
+- [ ] `scripts/ci/linux-v2-native-acceptance.sh:1804` pins
+      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD`, which no Go file defines (base and
+      HEAD); owner: the acceptance-script maintainer — restore the test or drop the pin.
+
+      **Closed (2026-11-24, branch `refactor/rf-acc-native-burndown`, base `668e75de`; moved from
+      `docs/TODO.md`'s `## Deferred review findings (PR #198)`):** no Go file ever defined that
+      name — `git log -S 'TestInstalledLinuxOwnerRejectsUnexpectedCgroupKillFD' --all` finds it
+      only in the script and docs since `41e64851` — and the rule it describes is pinned by
+      `TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD`
+      (`daemon/native/linux-gate/protocol/launcher_integration_linux_test.go:122`): same package
+      (`./native/linux-gate/protocol`), same opt-in environment
+      (`SYMMETRY_LINUX_OWNER_TEST_SCRATCH=1`, `SYMMETRY_LINUX_OWNER_TEST_LEAF`), same shape (an
+      unexpected fifth cgroup-control FD in a guarded RELEASE is rejected with `SIGCHLD`/code 1
+      and the exact scratch leaf stays unpopulated and PID-free). The leg is re-pointed
+      (`linux-v2-native-acceptance.sh:1902`, helper renamed to
+      `run_unexpected_cgroup_procs_fd_witness`) and proven in the guest: run `45398550682` prints
+      `verified TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD: run=1 pass=1 skip=0`,
+      re-confirmed on the final bytes in run `45402706492`. Evidence record §3.14/§3.15.

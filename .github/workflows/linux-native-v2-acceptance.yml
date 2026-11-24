@@ -51,6 +51,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # The installed Linux owner validates the A-owned Git source as complete history and
+          # refuses a `shallow` entry, so this job needs the full repository, not one commit.
+          fetch-depth: 0
       - uses: actions/download-artifact@v8
         with:
           name: portal-assets
@@ -95,6 +98,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           path: ${{ runner.temp }}/linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}.json
+      - name: Build the shared disposable Ubuntu guest rootfs base
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="$RUNNER_TEMP/linux-v2-native-rootfs-base-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          bash scripts/ci/linux-v2-native-rootfs-base.sh "$base"
+          printf 'SYMMETRY_LINUX_V2_NATIVE_ROOTFS_BASE=%s\n' "$base" >> "$GITHUB_ENV"
       - name: Run isolated A/B Linux v2 acceptance case sets
         shell: bash
         env:

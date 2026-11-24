@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if [[ "${1:-}" == auth && "${2:-}" == login ]]; then
+  with_token=0
+  hostname=github.com
+  previous=
+  for argument in "$@"; do
+    if [[ "$previous" == --hostname ]]; then hostname=$argument; fi
+    if [[ "$argument" == --with-token ]]; then with_token=1; fi
+    previous=$argument
+  done
+  if ((with_token)); then
+    token=$(cat)
+    config_dir=${GH_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/gh}
+    mkdir -p -- "$config_dir"
+    umask 077
+    hosts="$config_dir/hosts.yml"
+    {
+      printf '%s:\n' "$hostname"
+      printf '    git_protocol: https\n'
+      printf '    users:\n'
+      printf '        scratch-dummy:\n'
+      printf '            oauth_token: %s\n' "$token"
+      printf '    oauth_token: %s\n' "$token"
+      printf '    user: scratch-dummy\n'
+    } > "$hosts"
+    chmod 0600 -- "$hosts"
+    exit 0
+  fi
+fi
+
+for candidate in /usr/bin/gh /usr/local/bin/gh /snap/bin/gh; do
+  if [[ -x "$candidate" ]]; then
+    exec "$candidate" "$@"
+  fi
+done
+printf 'scratch gh shim could not locate the real gh binary\n' >&2
+exit 127
