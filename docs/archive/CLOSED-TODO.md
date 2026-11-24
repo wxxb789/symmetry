@@ -127,6 +127,11 @@ The reconciled stale-claude-README item appended to the new `## Harness capture 
 claude testdata READMEs (rf-w5-10, 2026-11-23)` section at the end of this file was moved on
 2026-11-23 from branch `refactor/rf-w5-10-harness-capture-fixtures`.
 
+The closed capture-and-cleanup half of the containment follow-up appended to the new
+`## rf-acc-native-containment-witness: the containment witness's invisible App refusal (2026-11-24)`
+section at the end of this file was moved on 2026-11-24 from branch
+`refactor/rf-acc-native-containment-witness`; its root-cause half stays in `docs/TODO.md`.
+
 ## Model-routing evaluation records
 
 - [x] Fixed the half-applied usage-receipt import (serialization gap) reported by the cancelled 0008a round-2
@@ -4926,3 +4931,45 @@ decision as open while this entry and the goal record carry the closure.
       `run_unexpected_cgroup_procs_fd_witness`) and proven in the guest: run `45398550682` prints
       `verified TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD: run=1 pass=1 skip=0`,
       re-confirmed on the final bytes in run `45402706492`. Evidence record §3.14/§3.15.
+
+## rf-acc-native-containment-witness: the containment witness's invisible App refusal (2026-11-24)
+
+- [ ] Capture a bounded, redacted App stderr (or otherwise name the first post-seed refusal) in the
+      Linux v2 witness harness, then root-cause the two containment sets' stop (2026-11-24, goal
+      `rf-acc-native-burndown`; evidence `docs/evidence/rf-acc-native-burndown-2026-11-24.md`
+      §3.13.1 and §3.15, runs `45388258526` and `45402706492`): `codex_containment` and
+      `claude_containment` reach their named witness and stop at
+      `daemon/e2e/production_linux_v2_native_witness_test.go:101`/`:109` (`wait for requested
+      production owner-witness barrier: owner-witness command did not reach its requested durable
+      stage`) ~30 s after the App seeded its claim (one surviving RunJournal, no stage marker), and
+      the App's own refusal is unobservable: the harness opens `/dev/null` as the App child's
+      stderr (`daemon/e2e/production_linux_v2_owner_cli_test.go:52-66`) and the App writes its
+      response only on structured outcomes (`daemon/internal/app/linux_owner_witness_linux.go:613-630`);
+      the in-fixture early-phase probe cannot name it (its second App run returns at
+      `validateLinuxV2NativeWitnessExistingJournal`, `:2625-2633`). The conductor opens a follow-up
+      goal for the bounded, redacted App stderr capture plus the root cause.
+      `synthetic_goal_cleanup`'s stop belongs to the same goal: its test-built
+      `execution.LinuxV2Invocation` sets no `Callbacks.CheckNativeAdmission`, so the App refuses the
+      test's own launch (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:499`,
+      `daemon/internal/execution/linux_owner_v2_linux.go:339`).
+
+      **Closed (2026-11-24, goal `rf-acc-native-containment-witness`, branch
+      `refactor/rf-acc-native-containment-witness`, base `477e4c62`; moved from `docs/TODO.md`'s
+      `## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)`):** both
+      halves landed. The harness keeps a bounded A-owned `owner-witness.stderr` beside the response
+      file as the witness command's stderr and reports the reaped exit status plus the last ≤4 KiB /
+      ≤40 lines, every known credential value replaced and any surviving value refused
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go`, `production_linux_v2_native_witness_test.go`
+      incl. `TestLinuxV2OwnerWitnessStderrCaptureRedactsAndBounds`); the fixture's unprovisioned-gate
+      and Change-1 dumps and both probe pipelines route through the secret filter (P3-1…P3-3), and
+      the exporter refuses an input root carrying `owner-witness.stderr`
+      (`scripts/ci/export-linux-v2-redacted-evidence.py`, test row `test-linux-v2-evidence.py`).
+      `synthetic_goal_cleanup`'s callbacks now carry the production-shaped
+      `CheckNativeAdmission` (`production_linux_v2_cleanup_witness_test.go:1078-1081`), so the set
+      is past its admission refusal. The capture named the first post-seed refusal in runs
+      `45452357027`/`45455325059`/`45458181149` — a missing fixture precondition (the fixed-B HOME
+      outside `/opt/symmetry-owner-test`, fixed in the owned script) and then a product-vs-harness
+      clone-admission contradiction; the root-cause half stayed open and moved to `docs/TODO.md`
+      under `## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)` as the
+      clone-admission item. Evidence record
+      `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §2/§3/§4/§5/§7.

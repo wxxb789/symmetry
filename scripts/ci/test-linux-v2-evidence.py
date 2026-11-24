@@ -1597,6 +1597,19 @@ class ExporterTest(unittest.TestCase):
                 self.assertEqual({entry["file"] for entry in manifest["files"]}, set(pin["exported"]))
                 for name in pin["exported"]:
                     self.assertTrue((output / name).is_file())
+                self.assertNotIn("owner-witness.stderr", {path.name for path in output.iterdir()})
+
+    def test_manual_containment_refuses_the_owner_witness_stderr_capture(self) -> None:
+        source = self.private_dir("stderr-capture-source")
+        receipts = self.private_dir("stderr-capture-receipts")
+        output = self.private_dir("stderr-capture-output")
+        self.populate_containment(source, "codex")
+        self.write_log(source / "owner-witness.stderr", [b"the refused owner witness printed a diagnostic"])
+        result = self.run_containment_gate("codex", source, receipts, output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("owner-witness.stderr", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual(list(output.iterdir()), [])
 
     def test_manual_containment_digest_mismatch_refuses_publication(self) -> None:
         pin = CONTAINMENT_PINS["codex"]

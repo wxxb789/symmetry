@@ -455,8 +455,9 @@ A_GID=52000
 B_UID=52001
 B_GID=52001
 A_HOME="/home/$A_USER"
-B_HOME="/home/$B_USER"
 OWNER_TEST_ROOT=/opt/symmetry-owner-test
+# The installed witness refuses a fixed-B native HOME outside its isolated owner witness root.
+B_HOME="$OWNER_TEST_ROOT/fixed-b-home"
 SYNTHETIC_GOAL_CLEANUP_ROOT=$OWNER_TEST_ROOT/synthetic-goal-cleanup
 SYNTHETIC_GOAL_CLEANUP_SOURCE=$SYNTHETIC_GOAL_CLEANUP_ROOT/source
 SYNTHETIC_GOAL_CLEANUP_SEEDS=$SYNTHETIC_GOAL_CLEANUP_ROOT/seeds
@@ -608,6 +609,8 @@ for a_cache_directory in "$rootfs$A_HOME/.cache" "$rootfs$A_HOME/.cache/go-build
     fail "A XDG cache directory must be A-owned mode 0700: $a_cache_directory"
 done
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$B_HOME")" == "$B_UID:$B_GID:700" ]] || fail 'B passwd HOME must remain B-owned mode 0700'
+b_passwd_home=$(sudo awk -F: -v user="$B_USER" '$1 == user {print $6}' "$rootfs/etc/passwd")
+[[ "$b_passwd_home" == "$B_HOME" ]] || fail 'B passwd HOME must be the isolated owner witness root home'
 b_native_credential_directories=(
   "$B_HOME/.pi" "$B_HOME/.pi/agent" "$B_HOME/.config" "$B_HOME/.config/opencode" \
   "$B_HOME/.pi/agent/sessions" \
@@ -1553,7 +1556,7 @@ if ! python3 "$repo/scripts/ci/assert-go-test-json.py" \
   printf 'Unprovisioned production witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' \
     "$unprovisioned_status" >&2
   # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
-  grep --invert-match --extended-regexp '^\{' "$unprovisioned_events" | head -n 5 >&2 || true
+  grep --invert-match --extended-regexp '^\{' "$unprovisioned_events" | head -n 5 | print_filtered_output_lines || true
   print_witness_output_lines "$unprovisioned_events" TestProductionLinuxV2UnprovisionedHostRefusal
   exit 1
 fi
@@ -1613,17 +1616,21 @@ else
   daemon_service_start_status=$?
 fi
 if (( daemon_service_start_status != 0 )); then
+  daemon_failure_log="$fixture_root/daemon-service-failure.log"
   machine_run /usr/bin/systemctl show --no-pager \
     --property=Result,ExecMainStatus,ExecMainCode,ActiveState,SubState,ControlGroup,NRestarts,After,BindsTo,ExecStartPre,ExecStart \
-    symmetry-daemon.service >&2 || true
+    symmetry-daemon.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   # systemd materializes the inverse of a unit's ordering edge on the other unit, so the
   # owner's effective edges name the source of any owner/daemon relation the preflight rejects.
   machine_run /usr/bin/systemctl show --no-pager \
     --property=Before,After,BindsTo,Requires,Requisite,Wants,PartOf,Conflicts \
-    symmetry-owner.service >&2 || true
+    symmetry-owner.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   machine_run /usr/bin/journalctl --no-pager --output=cat -n 80 \
     --grep='-verify-linux-owner-install:|load config:|run daemon:|probe runtime harness:|build runtime registration:|register daemon session:|registration did not return|enroll machine:|load machine identity:|Failed at step|Main process exited|Failed to start|Start request repeated' \
-    -u symmetry-daemon.service >&2 || true
+    -u symmetry-daemon.service >"$daemon_failure_log" 2>&1 || true
+  print_filtered_output_lines <"$daemon_failure_log"
   fail "installed daemon.service could not pass ExecStartPre/start (status=$daemon_service_start_status)"
 fi
 sleep 6
@@ -1661,6 +1668,7 @@ print_witness_failure_context() {
   local output_directory=$1
   shift
   local name document
+  local probe_log="$fixture_root/witness-config-probe.log"
   if [[ -n "$output_directory" ]]; then
     for name in "$@"; do
       document="$rootfs$output_directory/${name//\//_}.json"
@@ -1692,14 +1700,15 @@ print_witness_failure_context() {
     guest_config=${guest_config#"$rootfs"}
     printf 'witness config owner preflight %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
-      -verify-linux-owner-install -config "$guest_config" 2>&1 | print_filtered_output_lines || true
+      -verify-linux-owner-install -config "$guest_config" >"$probe_log" 2>&1 || true
+    print_filtered_output_lines <"$probe_log"
     # The witness gate runs before any mutation and before the request is read, so a missing
     # request path names the config refusal without touching the barrier or StateDir.
     printf 'witness config native gate %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/bin/env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 \
       /usr/libexec/symmetry/symmetry-daemon -linux-v2-native-owner-witness \
-      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" 2>&1 |
-      print_filtered_output_lines || true
+      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" >"$probe_log" 2>&1 || true
+    print_filtered_output_lines <"$probe_log"
   done
 }
 
