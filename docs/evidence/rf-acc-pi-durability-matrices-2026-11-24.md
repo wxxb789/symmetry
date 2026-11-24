@@ -18,27 +18,27 @@ runner's temp directory, `<STATE_DIR>` = the fixture-provided Linux v2 StateDir.
 
 | File | sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `143d78ea6b29e1cf8b76a16f0929634c11c932e396ab64120125dd36bf22961e` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `d1bca15691216c6ed703348c8d9d08736d35a26c4f4f674f364d2a9fea771ec1` |
 | `scripts/ci/linux-v2-native-tools.sh` | `185f4ff085f3a3a47e4f46d4727ded89fd78b14c0ba6c9ea822e413c42b5f1d2` |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `18001a824062f94e470fae3655b00cbb85dc866048148a57ce8afb437f8d06fa` |
 | `scripts/ci/write-linux-v2-owner-request.py` | `47cb012ba516dcf1f85fdd65b709d620ddbf77b7a4b398c4dfcbfeda831c03a9` |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `6fd8be109e4c4382186cef17f2c7dd9eb67a89c4890cd6cba6f4aa565d4372b7` |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `a21a22d97f09d4afec2fee7cc6b035684c78479ecb3f37dc33d5822e82794d25` |
-| `scripts/ci/test-linux-v2-evidence.py` | `afb9b7c2a4660645e2d1f6c24082d1c9c4d17f69641189f7007115e3c63bdcb9` |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `bddf80d702e7ef033104b338bb2d18c01b0fed981ff10acbda256837ff4a2f8e` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `5b3bf2f3db0ba6352f1dca79a2bc845a20e88f56748b0636ac3657537cfd6d62` |
-| `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `25d5ee972acf2e11994751526ed3dab8308d3488fe380bc29221bd35b04f96f5` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `d246887f8c9fae2f1a68eaee9bc8e38b6a5d72bd3ce537d0451d5493243ffecd` |
+| `scripts/ci/test-linux-v2-evidence.py` | `1efb4850e5f49a2521b2dc125959a9887cab2d83b96e92f2b556de7d9bf730d2` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `412e67a46fd03b047d1012761801feeaefdcecea7d5908d31998066635617170` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `f71556913ff515843cb8555b66baa6811af862df06de2e7d8104181a75b89c51` |
+| `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `f11a77ad67a0eef7f14d52cece1592456fae71e548de2b435af2efa88b7492f1` |
 | this record | no self-referential hash |
 
-Finalization binding (2026-11-25): the ten values above are also the finalization sha256 equality
-table — the goal worktree's source files are byte-identical to the scratch head `f2682b71` of run
-`45489336388` (the last scratch run). The only source delta between the run-9/10 heads and the final
-bytes is the §2.17 parked-gate hunk (`0003f62d..ab48f317` touches only
-`TestProductionLinuxV2UnresolvedJournalBlocksFreshRun`); `aa58f43b..0003f62d` changed only the
-scratch workflow's case-set list.
+Finalization binding (2026-11-25, amended by the apply stage): the ten values above are the final
+tree's sha256 table; §9 lists the six files the apply stage changed with their pre-apply
+counterparts. Run `45489336388` (the last scratch run, §3 row 13) executed on the pre-apply bytes,
+so its behavioral binding remains exact and is still the last run-backed evidence — every apply
+delta is a simplification whose behavior-neutrality is evidenced by the §8 apply-stage probes, and
+the stage rules forbid a push, so no scratch run was re-dispatched.
 
-The five rows above the unchanged ones are the admission campaign: the diff against the round-3
-record's head `f1f80fb6` is exactly `scripts/ci/linux-v2-native-acceptance.sh` (+51),
+The admission campaign (2026-11-25) changed exactly, against the round-3 record's head
+`f1f80fb6`: `scripts/ci/linux-v2-native-acceptance.sh` (+51),
 `scripts/ci/provision-linux-v2-control-claims.exs` (+231),
 `scripts/ci/register-linux-v2-claim-machine.py` (+32),
 `scripts/ci/write-linux-v2-owner-request.py` (+29) and
@@ -88,7 +88,8 @@ from `9d113eb6`'s copy and matching them verbatim in the final file; §6).
 6. `daemon/e2e/**`: the eight retargeted runners, the stage/ack/negative mappers, the
    `linuxV2AssertStaleRequestVariant` harness argument, the unresolved-journal kind checks and the
    helper-exit live-B command/executable check are pi; the helper-exit wrapper and the released-B
-   observation are part of the same retarget. A shared helper binds `native_binary`,
+   observation are part of the same retarget. One shared writer (`linuxV2WriteDurabilityWitness`,
+   called once by each of the nine durability-witness runners) binds `native_binary`,
    `native_binary_sha256` and `native_version_line` into every provider-free pi durability witness
    (the daemon's recovery path publishes no digest), and the exporter checks them against the
    CI-side pin.
@@ -99,19 +100,21 @@ from `9d113eb6`'s copy and matching them verbatim in the final file; §6).
    `fixture.runtime_kind == "pi"` vehicle field because that test never launches the harness. The
    manifest carries the same `native_binary` block as the containment kinds, without
    `manifest["containment"]`.
-8. `scripts/ci/test-linux-v2-evidence.py`: pi fixture plus four cases (pinned-binary happy path,
-   binding/digest/tree-digest refusals, non-retargeted case-set refusal, cleanup vehicle binding).
+8. `scripts/ci/test-linux-v2-evidence.py`: pi fixture plus five cases (pinned-binary happy path,
+   binding/digest/tree-digest refusals, non-retargeted case-set refusal, cleanup vehicle binding,
+   the `shared` required-witness refusal).
 9. `scripts/ci/linux-v2-native-acceptance.sh` (found by round-3 run `45460144698`, plan §3.7): the
    fixed-B account's provisioned HOME moves inside the isolated owner witness root
-   (`B_HOME="$OWNER_TEST_ROOT/fixed-b-home"`, `:468`), because the App refuses any passwd HOME
+   (`B_HOME="$OWNER_TEST_ROOT/fixed-b-home"`, `:493`), because the App refuses any passwd HOME
    outside `/opt/symmetry-owner-test` (`linux_owner_witness_linux.go:2902-2905`). `machine_run_as`
-   derives `HOME` per account (`:955-961`). The fixed-B XDG cache, `.pi/agent`, the Pi session
+   derives `HOME` per account (`:975-991`). The fixed-B XDG cache, `.pi/agent`, the Pi session
    directory and the A `--x` ACLs all resolve through `$B_HOME`, so one assignment moves them.
-10. `daemon/e2e/production_linux_v2_owner_cli_test.go:53,275-282` + the fixture's failure context
-    (`:1684-1689`): the witness command's stderr goes to a private 0600 `owner-witness-stderr.log`
-    beside the witness documents instead of `/dev/null`, and the fixture prints a bounded tail when
-    a leg fails. This is the instrument that named both refusals above.
-11. `daemon/e2e/production_linux_v2_owner_cli_test.go:3813`: the migration denial's wait message no
+10. `daemon/e2e/production_linux_v2_owner_cli_test.go:53,277-282` + the acceptance script's failure
+    context (`linux-v2-native-acceptance.sh:1705-1717`, printing at `:1716`): the witness command's
+    stderr goes to a private 0600 `owner-witness-stderr.log` beside the witness documents instead
+    of `/dev/null`, and the acceptance script prints a bounded tail when a leg fails. This is the
+    instrument that named both refusals above.
+11. `daemon/e2e/production_linux_v2_owner_cli_test.go:3783`: the migration denial's wait message no
     longer says "OpenCode native_release boundary" for a case that is now pi (`wait for exact
     native_release boundary`), matching the neighbouring harness-neutral waits. Message only.
 
@@ -138,7 +141,7 @@ from `9d113eb6`'s copy and matching them verbatim in the final file; §6).
     Subject (`resource_id`/`commit`/`tree_digest`), `provider_scope` present and null — and the
     legacy repository comparison moved to the non-durability branch. The writer refuses a
     legacy-shaped ClaimResponse before any witness starts.
-15. `daemon/e2e/production_linux_v2_native_witness_test.go:1565-1573`: the old assertion that every
+15. `daemon/e2e/production_linux_v2_native_witness_test.go:1564-1572`: the old assertion that every
     claim's Work input is a real non-Goal Control task is inverted for pi durability cases — they
     must carry the Control admission with a valid `subject` equal to `request.Subject` and a null
     `provider_scope`; every other case keeps the non-Goal assertion and the no-provider-access
@@ -150,7 +153,7 @@ from `9d113eb6`'s copy and matching them verbatim in the final file; §6).
     diagnostics that named that wall: `print_witness_stderr_tail` truncates to 400 bytes and
     redacts instead of dropping long lines, plus the RunJournal progress projection, the stage
     markers, the A-owned Git metadata modes and the owner-service journal.
-17. `daemon/e2e/production_linux_v2_native_witness_test.go:437-451,524-528`: the unresolved-journal
+17. `daemon/e2e/production_linux_v2_native_witness_test.go:436-450,523-527`: the unresolved-journal
     guard no longer requires the **parked gate** to be live after the setup's owner SIGKILL. The
     gate's `wait_for_release` polls the owner pidfd and exits with `ESRCH` as soon as the owner dies
     (`daemon/native/linux-gate/c-gate/gate.c:731-757`), and the un-released helper aborts it on
@@ -180,7 +183,7 @@ mutant rows below revisit.
 | 8 | `45479093531` | same three sets (run 7's bytes + the stall diagnostics) | `5bb2e546` | all three exit 1, and the new truncate-instead-of-drop tail names the wall: `build explicit App-owned Linux v2 witness invocation: revalidate Linux owner before native invocation: verify A-owned Git metadata tree /opt/symmetry-owner-test/production/source/.git: Git metadata entry …/.git/logs/refs/heads/symmetry is accessible to B: effective permissions for UID 52001 GID 52001 are 05, require 0 and forbid 07`. The RunJournal projection shows `has_clone_intent` and `has_seed_receipt` set, so the clone reserve admits the goal-backed claim and the seed runs; the A-owned refs it creates inherit the fixture's `umask 022`, which the same binary's revalidation refuses. |
 | 9 | `45481221551` | same three sets (run 8's bytes + `UMask=0077` for the bundle witnesses) | `aa58f43b` | all three exit 1; zero `clone intent does not match` and zero Git-metadata lines — the wall is cleared and each set now reaches its own boundary, stopping on the later checks of §4: `stage_replay_create_started` reaches the hold and its journal boundary validates, then fails the recovery exit contract; `migration` never reaches its marker (the App's own release step aborts it, stderr in §4); `stale_journal_run_key` fails a pre-fresh-request precondition (the pinned native process is already exited). |
 | 10 | `45484692731` | `stage_replay_leaf_bound`, `stage_replay_launcher_bound`, `ack_loss_launcher_bound`, `stale_leaf`, `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject` | `0003f62d` | all seven exit 1, and every row confirms a predicted class: the three `unresolved`-expected sets stop on the recovery exit contract (`:178` twice, the ack runner's `:217` once, all `unresolved production recovery exit = <nil>, want deliberate nonzero process exit`); `stale_leaf` reaches its boundary — a **durable stop receipt on the pi vehicle with dummy credentials** (the failed turn stops the containment, the marker and `linuxV2ValidateStageJournalBoundary` both pass) — and its recovery leg then refuses with `stage replay unresolved outcome lacks retained journal/owner uncertainty` and writes no response (`:630`); the three variants stop at the recovery refusal of §4c (`:269`). |
-| 11 | `45485437534` | the four stale-journal sets (run 9's bytes + §2.17's parked-gate fix) | `ab48f317` | all four exit 1, and the fix is visible: no leg stops at the old liveness message any more. The new first failing checks are `stale_journal_run_key` → `:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`, and the three `TestProductionLinuxV2StaleOwnerRequestDenials` variants → `:269` `read stage-replay recovery response: decode redacted production owner-witness response`. Every set's App stderr is the same refusal — `recover existing owner witness RunJournal without launch` — over a journal that still shows `has_clone_intent`/`has_seed_receipt`/`recovery_required` (§4c). |
+| 11 | `45485437534` | the four stale-journal sets (run 9's bytes + §2.17's parked-gate fix) | `ab48f317` | all four exit 1, and the fix is visible: no leg stops at the old liveness message any more. The new first failing checks are `stale_journal_run_key` → `:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`, and the three `TestProductionLinuxV2StaleOwnerRequestDenials` variants → `:269` `read stage-replay recovery response: decode redacted production owner-witness response`. Every set's App stderr is the same refusal — `recover existing owner witness RunJournal without launch` — over a journal that still shows `has_clone_intent`/`has_seed_receipt`/`recovery_required` (§4c). |
 | 12 | `45488371274` | `stale_journal_run_key` (F3 mutant: a mismatched marker gate identity injected before the guard) | `6763a2df` | exit 1 at 0.00 s with the guard refusing — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; run 11's unmutated bytes got past the same guard to the pidfd pin (§5 row 6). No manifest. |
 | 13 | `45489336388` | all twelve retargeted sets, literal, on the final goal-tree bytes | `f2682b71` | twelve exit-1 sets, every row reproducing runs 9/10/11 (§4e); ten manifests carrying the pinned pi `native_binary` block (`sha256:6a2ac1c5…`, `1.5.2`, subject commit `f2682b71`; artifact `linux-v2-native-evidence-45489336388-1`), the same two export refusals (`shared`, `synthetic_goal_cleanup`), and witness documents with `harness: "pi"` / `installed_owner_verified: true`. Job 16m42s. |
 
@@ -252,7 +255,7 @@ Run 11 (post-fix) rows — all four sets, first failing checks only, with the sa
 
 | Set | Exit | Boundary reached | First failing check |
 | --- | --- | --- | --- |
-| `stale_journal_run_key` | 1 | the setup hold + SIGKILL, the post-kill anchor/helper liveness check, the marker/journal identity binding | `:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials` (the same pidfds passed the wrapper's liveness check moments earlier) |
+| `stale_journal_run_key` | 1 | the setup hold + SIGKILL, the post-kill anchor/helper liveness check, the marker/journal identity binding | `:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials` (the same pidfds passed the wrapper's liveness check moments earlier) |
 | `stale_journal_run_key_legacy`, `stale_journal_fence`, `stale_journal_subject` | 1 | the setup hold + SIGKILL and the post-kill liveness check | `:269` `read stage-replay recovery response: decode redacted production owner-witness response` — the recovery leg refused and wrote no response, so the denial legs never ran |
 
 Run 10 (pre-fix siblings) rows, same per-set evidence shape (witness document with `harness: "pi"` and
@@ -302,11 +305,11 @@ recovery leg of a `handoff_committed` setup refuses with `recover existing owner
 without launch` (`linux_owner_witness_linux.go:531-534`) and writes **no** response — the refusal
 replaces the recovery error, so the failing sub-step is unobservable for the same reason as the
 release above — and `stale_journal_run_key` fails its fresh-request precondition one guard earlier
-(`:532` `stage owner does not have exact A credentials`) although the wrapper's own post-SIGKILL
+(`:531` `stage owner does not have exact A credentials`) although the wrapper's own post-SIGKILL
 liveness check on the *same* anchor/helper pidfds had passed moments before. Neither symptom is
 reachable from an owned file; both are pre-existing (these legs never ran this far before the
 retarget). The pin guard reads `/proc/<pid>` credentials and requires **A's** effective UID/GID
-(`owner_cli_test.go:1676-1684`), so its failure means the anchor/helper process was already gone
+(`owner_cli_test.go:1686-1694`), so its failure means the anchor/helper process was already gone
 milliseconds after the SIGKILL — consistent with the helper's designed owner-loss fail-safe
 (`markOwnerLost` → `stopOwned` → exit, `helper_v2_recovery.go:191-236`) resolving the containment
 that the test wants to keep unresolved: the App's refusal branch is reached only when
@@ -354,11 +357,11 @@ three follow-up goals named in `docs/TODO.md`.
 | `stage_replay_launcher_bound` | expected stop proven (`launcher_bound` hold) → F1-exit | `45489336388` | same `:178` line (1.84 s) |
 | `ack_loss_launcher_bound` | expected stop proven (ack-loss `launcher_bound` boundary) → F1-exit | `45489336388` | `production_linux_v2_native_witness_test.go:217: unresolved production recovery exit = <nil>, want deliberate nonzero process exit` (1.84 s) |
 | `migration` | F2-release (the App's own release aborts before its `native_release` marker) | `45489336388` | `-linux-v2-native-owner-witness: start native owner witness transport: resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown)` (31.02 s) |
-| `stale_journal_run_key` | expected stop proven (setup hold, SIGKILL, marker/journal identity binding) → F4-semantics | `45489336388` | `production_linux_v2_native_witness_test.go:532: A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` (0.00 s); run 11 hit the credential variant of the same class |
+| `stale_journal_run_key` | expected stop proven (setup hold, SIGKILL, marker/journal identity binding) → F4-semantics | `45489336388` | `production_linux_v2_native_witness_test.go:531: A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` (0.00 s); run 11 hit the credential variant of the same class |
 | `stale_journal_run_key_legacy` | F4-semantics (the recovery refuses; the fresh-request denial legs never run) | `45489336388` | `production_linux_v2_native_witness_test.go:269: read stage-replay recovery response: decode redacted production owner-witness response`; App stderr `recover existing owner witness RunJournal without launch` |
 | `stale_journal_fence` | F4-semantics | `45489336388` | same `:269` line |
 | `stale_journal_subject` | F4-semantics | `45489336388` | same `:269` line |
-| `stale_leaf` | expected stop proven at the pi turn: the `stop_receipt_durable` hold passes with a durable stop receipt on the pi vehicle (the failed dummy-credential turn stops the containment fail-closed) → F2-release in its recovery | `45489336388` | `production_linux_v2_native_witness_test.go:628: read stale-leaf recovery response: decode redacted production owner-witness response`; App stderr `stage replay unresolved outcome lacks retained journal/owner uncertainty` |
+| `stale_leaf` | expected stop proven at the pi turn: the `stop_receipt_durable` hold passes with a durable stop receipt on the pi vehicle (the failed dummy-credential turn stops the containment fail-closed) → F2-release in its recovery | `45489336388` | `production_linux_v2_native_witness_test.go:627: read stale-leaf recovery response: decode redacted production owner-witness response`; App stderr `stage replay unresolved outcome lacks retained journal/owner uncertainty` |
 | `synthetic_goal_cleanup` | out of scope (containment-witness); pre-existing stop | `45489336388` | `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the real Linux v2 launcher/anchor/helper: start "/bin/sh": Linux v2 native release requires an App admission check`; export refused (`pi durability witness is unavailable: synthetic-goal-cleanup.json`) |
 | `shared` | out of scope (containment-witness); the pre-existing owner-leg stop fires before any pi witness | `45489336388` | `clone_cleanup_linux_test.go:259: A cleanup caller exited without the requested parent-death signal` + `clone_integration_linux_test.go:240` + `launcher_integration_linux_test.go:439`; export refused (`ack-loss-replay-checkout_ready.json`) |
 
@@ -375,7 +378,7 @@ all-12 replay; each "before" column points at the same set's row in `45461719002
 | 3 | `@cases` entry `stage_replay_stale_leaf` reverted to `opencode-native`/`:opencode` (`provision-linux-v2-control-claims.exs:75`) | `45461719002`, `stale_leaf`: manifest with the pinned pi block | `45464759248`, `stale_leaf`: `per-harness daemon profile is absent`; no witness document, no manifest |
 | 4 | exporter's pi durability binding drops the `native_binary_sha256` comparison (`export-linux-v2-redacted-evidence.py:1486-1490`) | `python3 scripts/ci/test-linux-v2-evidence.py -k pi_durability` → `Ran 2 tests … OK` | same command → `FAILED (failures=2)`, `AssertionError: 0 == 0` in `test_manual_pi_durability_digest_or_binding_mismatch_refuses_publication` (mutation `witness digest`); file restored and re-run green |
 | 5 | frozen bytes | `git diff 9d113eb6 -- <frozen paths>` empty; six base regions + three frozen OpenCode invocations verbatim | the same checks after every edit: still empty/verbatim (§6) |
-| 6 | F3: a mismatched marker gate identity injected before the unresolved-journal guard (`marker.Owners.Gate.Identity = "mutant-mismatched-gate-identity"`, scratch commit `6763a2df`) | run `45485437534`, `stale_journal_run_key`: the guard passes and the leg proceeds to the pidfd pin (`:532` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`) | run `45488371274`: the guard fails at 0.00 s — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; no manifest. The injected line was removed before run `45489336388` (the §1 equality table). Design source for the relaxed liveness: `gate.c:731-757` (`wait_for_release` polls the owner pidfd and exits `ESRCH`) and `helper_v2_recovery.go:223-225` (`prepared.Abort()` on owner loss); the gate identity itself stays bound by the marker/RunJournal comparison above the liveness pins. |
+| 6 | F3: a mismatched marker gate identity injected before the unresolved-journal guard (`marker.Owners.Gate.Identity = "mutant-mismatched-gate-identity"`, scratch commit `6763a2df`) | run `45485437534`, `stale_journal_run_key`: the guard passes and the leg proceeds to the pidfd pin (`:531` `pin exact live A anchor/helper PIDFD before fresh request: stage owner does not have exact A credentials`) | run `45488371274`: the guard fails at 0.00 s — `production_linux_v2_native_witness_test.go:533: setup RunJournal does not bind the exact live anchor/helper/gate identities`; no manifest. The injected line was removed before run `45489336388` (the §1 equality table). Design source for the relaxed liveness: `gate.c:731-757` (`wait_for_release` polls the owner pidfd and exits `ESRCH`) and `helper_v2_recovery.go:223-225` (`prepared.Abort()` on owner loss); the gate identity itself stays bound by the marker/RunJournal comparison above the liveness pins. |
 
 ## 6. Gates (local, final bytes)
 
@@ -387,8 +390,8 @@ values.
 | Gate (working directory) | Command | Exit | Result |
 | --- | --- | --- | --- |
 | fixture syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | ok |
-| shellcheck delta | `shellcheck -S warning -f gcc` (0.9.0) on `477e4c62` copies vs the final files | 0/0 | delta 0 on all five touched scripts: `linux-v2-native-acceptance.sh` 16 findings, per-code multiset identical (8×SC2154, 2×SC2276, SC1078, SC2024, SC2043, SC2174, SC2288, SC2289); `provision-linux-v2-control-claims.exs` 22/22; `write-linux-v2-owner-request.py` and `register-linux-v2-claim-machine.py` 1/1 each; `linux-v2-native-tools.sh` 0/0 |
-| exporter unit tests | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL Ubuntu-24.04) | 0 | `Ran 46 tests … OK` |
+| shellcheck delta | `shellcheck -S warning -f gcc` (0.9.0) on `477e4c62` copies vs the final files | 0/0 | delta 0 on all five touched scripts: `linux-v2-native-acceptance.sh` 16 findings, per-code multiset identical (8×SC2154, 2×SC2276, SC1078, SC2024, SC2043, SC2174, SC2288, SC2289); `provision-linux-v2-control-claims.exs` 22/22; `write-linux-v2-owner-request.py` and `register-linux-v2-claim-machine.py` 1/1 each; `linux-v2-native-tools.sh` 0/0. Apply-stage re-check (2026-11-25): same 16 findings; normalized multiset sha256 `317d06145fc0cae101356765787e3ace40bcf3902b52b7b1c2ac0ca394d20853` identical at base, pre-apply and post-apply |
+| exporter unit tests | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL Ubuntu-24.04) | 0 | `Ran 47 tests … OK` (apply-stage re-run on the final bytes; 46 before the `shared` case) |
 | fixture unit tests | `python3 scripts/ci/test-linux-v2-{control-receipt,go-events,host-prerequisite-probe,source-subject}.py` (WSL) | 0 | `OK` |
 | python lint/format | `python -m ruff check` / `ruff format --check` | — | not run on the finalization bytes: ruff is not installed in either WSL distro or on Windows. Recorded green on the same bytes in the previous session (`All checks passed!`; `4 files already formatted`); the contract's gate list does not name it. |
 | gofmt | `gofmt -l .` in `daemon/` (WSL, go1.27.0) | 0 | no files listed |
@@ -448,7 +451,7 @@ values.
   (`sha256:6a2ac1c5…`, `archive_sha256 sha256:811c6f2c…`; run 13 artifact
   `linux-v2-native-evidence-45489336388-1`, run 9's was `linux-v2-native-evidence-45481221551-1`),
   and the exporter's binding is covered by
-  `test-linux-v2-evidence.py` (46 tests) and mutant row 4. The legs' *outcomes* remain bounded by the
+  `test-linux-v2-evidence.py` (47 tests) and mutant row 4. The legs' *outcomes* remain bounded by the
   three classes above; `synthetic_goal_cleanup` and `shared` publish no manifest on this head and
   their export fails closed.
 - **Credentialed rows are absent by design and additionally blocked**: every scratch run uses the
@@ -506,3 +509,218 @@ Frozen-region checker: `Q:/.tools/.temp/frozen_regions.py` against the base copy
 `Q:/.tools/.temp/base-fixture.sh` (= `9d113eb6:scripts/ci/linux-v2-native-acceptance.sh`) and the
 final bytes; the six line regions plus the three frozen OpenCode invocations, `MISSING= 0`
 (§6).
+
+### 8b. Apply-stage probes (2026-11-25, verbatim)
+
+Probe P1 (`sha256 b307ddab88afab8930a76cf01df04e205a768023c058951d8340b8d726b1a75c`) — exporter
+membership: loads the pre-apply exporter (`sha256 a21a22d9…`, §9) and the post-apply one, compares
+the new `PI_DURABILITY_REQUIRED.get(case_set, MANUAL_CASE_SET_FILES[case_set])` against the
+pre-apply `PI_DURABILITY_WITNESSES` for all 12 case sets, and re-asserts the `shared`
+strict-subset invariant. Ran as `python3 <source>` in the worktree.
+
+```python
+import importlib.util, json, pathlib, sys
+
+def load(path, name):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+old = load(r"Q:/.tools/.temp/tmp.itGjSQzWG2/pre-apply-exporter.py", "old_exporter")
+new = load(r"Q:/repos/wt-acc-pi-matrices/symmetry/scripts/ci/export-linux-v2-redacted-evidence.py", "new_exporter")
+
+def new_expected(case_set):
+    return new.PI_DURABILITY_REQUIRED.get(case_set, new.MANUAL_CASE_SET_FILES[case_set])
+
+mismatches = []
+for case_set, required in old.PI_DURABILITY_WITNESSES.items():
+    if new_expected(case_set) != required:
+        mismatches.append(case_set)
+keysets_equal = set(old.PI_DURABILITY_WITNESSES) == set(new.PI_DURABILITY_CASE_SETS)
+shared_subset = new.PI_DURABILITY_REQUIRED["shared"] < new.MANUAL_CASE_SET_FILES["shared"]
+shared_counts = (len(new.PI_DURABILITY_REQUIRED["shared"]), len(new.MANUAL_CASE_SET_FILES["shared"]))
+cleanup = new.CLEANUP_VEHICLE_WITNESS == "synthetic-goal-cleanup.json"
+print(json.dumps({
+    "case_set_keys_equal": keysets_equal,
+    "expected_set_mismatches": mismatches,
+    "shared_strict_subset": shared_subset,
+    "shared_required_of_allowlist": shared_counts,
+    "cleanup_constant": cleanup,
+}, sort_keys=True))
+print("PROBE_RESULT:", "IDENTICAL" if (keysets_equal and not mismatches and shared_subset and cleanup) else "MISMATCH")
+```
+
+Result: `{"case_set_keys_equal": true, "cleanup_constant": true, "expected_set_mismatches": [], "shared_required_of_allowlist": [30, 35], "shared_strict_subset": true}` → `PROBE_RESULT: IDENTICAL`.
+
+Probe P2 (`sha256 7fffecdfbeeb0810e6e998d0d22bd375231079bcae113c7afebb04c758abf5d4`) — F4
+equivalence: extracts the two pre-apply line-filter python bodies from the pre-apply script
+(`sha256 143d78ea…`, §9) and the post-apply `redact_evidence_lines` body, both LF-canonicalized;
+feeds an identical 120-line corpus (`sha256 a1a0d0a34aad459a2c387a66c979496cef6b5071ab739730688298fa1de1fdbd`;
+secrets, CRLF, 400/401/500-byte lines, an empty line, a final line without newline) to both.
+
+```python
+import pathlib, re, subprocess, sys, hashlib
+
+repo = pathlib.Path(r"Q:/repos/wt-acc-pi-matrices/symmetry")
+probe = pathlib.Path(r"Q:/.tools/.temp/tmp.itGjSQzWG2")
+
+def extract(path_bytes, start_marker):
+    text = path_bytes.decode("utf-8").replace("\r\n", "\n")
+    start = text.index(start_marker)
+    return re.search(r"python3 -c '(.*?)'", text[start:], re.S).group(1)
+
+pre = (probe / "pre-apply-acceptance.sh").read_bytes()
+work = (repo / "scripts/ci/linux-v2-native-acceptance.sh").read_bytes()
+old_drop = extract(pre, "print_filtered_output_lines() {")
+old_trunc = extract(pre, "print_witness_stderr_tail() {")
+new_all = extract(work, "redact_evidence_lines() {")
+
+for name, body in (("old_drop_lf.py", old_drop), ("old_trunc_lf.py", old_trunc), ("new_redact_lf.py", new_all)):
+    (probe / name).write_bytes(body.encode())
+    print(name, "sha256:", hashlib.sha256(body.encode()).hexdigest())
+
+secrets = probe / "secrets.bin"
+secrets.write_bytes(b"SECRETVALUE\0OTHER-SECRET\0\0")
+corpus = []
+for i in range(120):
+    k = (1, 399, 400, 401, 500)[i % 5]
+    body = f"line-{i:03d}-".encode() + b"x" * k
+    if i % 7 == 3:
+        body += b"SECRETVALUE"
+    if i % 11 == 5:
+        body += b"OTHER-SECRET"
+    ending = b"" if i == 119 else (b"\r\n" if i % 3 == 1 else b"\n")
+    corpus.append(body + ending)
+corpus.append(b"")
+corpus.append(b"tail-no-newline")
+data = b"".join(corpus)
+(probe / "corpus.bin").write_bytes(data)
+print("corpus sha256:", hashlib.sha256(data).hexdigest())
+
+def run(path):
+    return subprocess.run([sys.executable, str(path), str(secrets)], input=data, capture_output=True)
+
+def run_new(mode, bound, keep):
+    return subprocess.run([sys.executable, str(probe / "new_redact_lf.py"), mode, str(bound), str(keep), str(secrets)],
+                          input=data, capture_output=True)
+
+failures = 0
+for name, old, new in (
+    ("drop 400 40", run(probe / "old_drop_lf.py"), run_new("drop", 400, 40)),
+    ("truncate 400 0", run(probe / "old_trunc_lf.py"), run_new("truncate", 400, 0)),
+):
+    same = (old.stdout == new.stdout, old.returncode == new.returncode, old.stderr == new.stderr)
+    print(f"{name}: stdout_equal={same[0]} rc_equal={same[1]}({old.returncode}/{new.returncode}) stderr_equal={same[2]} bytes={len(old.stdout)}/{len(new.stdout)}")
+    failures += (not all(same))
+print("PROBE_RESULT:", "IDENTICAL" if failures == 0 else f"{failures} MISMATCH")
+```
+
+Extracted bodies (LF-canonical; a reader re-derives them from the two sha256-pinned scripts):
+pre-apply drop filter `sha256 cc72ded0611ce4bdf4275bcb1472b943d29059f76c8d1fc45493c0310380f70a`:
+
+```python
+import pathlib, sys
+
+secrets_path, = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+for line in sys.stdin.buffer:
+    if len(line.rstrip(b"\r\n")) > 400 or any(secret in line for secret in secrets):
+        continue
+    lines.append(line)
+for line in lines[-40:]:
+    sys.stdout.buffer.write(line)
+```
+
+pre-apply truncate filter `sha256 49409d2fc7ec43ede230a58b8f5d75738c8a5d7d7fd911c9950716ac1335e526`:
+
+```python
+import pathlib, sys
+
+secrets_path, = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+for line in sys.stdin.buffer:
+    for secret in secrets:
+        line = line.replace(secret, b"<redacted>")
+    sys.stdout.buffer.write(line[:400].rstrip(b"\r\n") + b"\n")
+```
+
+post-apply stage `sha256 5213d37e9208e667f91bc6b1249393870f242d7202696e1c53226d1cde08bdda` (the body
+embedded in `redact_evidence_lines`):
+
+```python
+import pathlib, sys
+
+mode, bound, keep, secrets_path = sys.argv[1:5]
+bound = int(bound)
+keep = int(keep)
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+for line in sys.stdin.buffer:
+    if mode == "drop":
+        if len(line.rstrip(b"\r\n")) > bound or any(secret in line for secret in secrets):
+            continue
+        lines.append(line)
+    else:
+        for secret in secrets:
+            line = line.replace(secret, b"<redacted>")
+        sys.stdout.buffer.write(line[:bound].rstrip(b"\r\n") + b"\n")
+if mode == "drop":
+    for line in lines[-keep:]:
+        sys.stdout.buffer.write(line)
+```
+
+Result on both rows: `stdout_equal=True rc_equal=True(0/0) stderr_equal=True`, bytes `204/204` and
+`38830/38830`; `PROBE_RESULT: IDENTICAL`.
+
+## 9. Simplification apply (2026-11-25)
+
+The simplify review (report-only) raised seven tidy-up findings plus two record/rule-vs-code items;
+the apply stage accepted all nine and rejected none. Six files changed; the columns are the
+pre-apply sha256 — the bytes run `45489336388` executed on — and the post-apply sha256 now in §1.
+
+| File | pre-apply sha256 | post-apply sha256 |
+| --- | --- | --- |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `143d78ea6b29e1cf8b76a16f0929634c11c932e396ab64120125dd36bf22961e` | `d1bca15691216c6ed703348c8d9d08736d35a26c4f4f674f364d2a9fea771ec1` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `a21a22d97f09d4afec2fee7cc6b035684c78479ecb3f37dc33d5822e82794d25` | `d246887f8c9fae2f1a68eaee9bc8e38b6a5d72bd3ce537d0451d5493243ffecd` |
+| `scripts/ci/test-linux-v2-evidence.py` | `afb9b7c2a4660645e2d1f6c24082d1c9c4d17f69641189f7007115e3c63bdcb9` | `1efb4850e5f49a2521b2dc125959a9887cab2d83b96e92f2b556de7d9bf730d2` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `bddf80d702e7ef033104b338bb2d18c01b0fed981ff10acbda256837ff4a2f8e` | `412e67a46fd03b047d1012761801feeaefdcecea7d5908d31998066635617170` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `5b3bf2f3db0ba6352f1dca79a2bc845a20e88f56748b0636ac3657537cfd6d62` | `f71556913ff515843cb8555b66baa6811af862df06de2e7d8104181a75b89c51` |
+| `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `25d5ee972acf2e11994751526ed3dab8308d3488fe380bc29221bd35b04f96f5` | `f11a77ad67a0eef7f14d52cece1592456fae71e548de2b435af2efa88b7492f1` |
+
+Applied: F1 exporter table dedup (`PI_DURABILITY_WITNESSES` + `PI_VEHICLE_ONLY_WITNESSES` →
+`PI_DURABILITY_CASE_SETS` + a `shared`-only `PI_DURABILITY_REQUIRED` + one `CLEANUP_VEHICLE_WITNESS`
+constant; membership unchanged, subset guard kept, probe P1). F2 one `linuxV2WriteDurabilityWitness`
+replacing nine bind+write defers (eight matrix/negative runners in
+`production_linux_v2_owner_cli_test.go`, one in the helper-exit wrapper — the plan §3.2
+declared-and-accepted scope addition already inside the increment, so no new file enters the PR).
+F3 `linuxV2NativeWitnessOutputDirectory` shared by the output-path and diagnostic-path helpers.
+F4 one `redact_evidence_lines` pipeline stage for both line filters (probe P2). F5 `machine_run_as`
+fail-closed `case` over the two fixture accounts. F6 "is not a supported native kind" message +
+pinned assertion. F7 the `shared` required-witness gate case (suite 46 → 47 tests). D1 two-line
+parked-gate comment (both prior facts kept). D2 the diagnostic-path comment and §2.10 now name the
+acceptance script as the printer.
+
+"Every X" censuses: the writer has one definition and nine call sites (`linuxV2WriteDurabilityWitness`:
+9 lines in `production_linux_v2_owner_cli_test.go` incl. the definition, 1 call in the helper-exit
+wrapper); `linuxV2BindDurabilityNativeBinary` has no remaining direct call site outside the writer;
+`linuxV2NativeWitnessOutputPath(t, fixture)` has 9 call sites and
+`linuxV2OwnerWitnessDiagnosticPath(t, fixture)` one, both resolving through the new directory
+helper; `redact_evidence_lines` has 2 call sites and one definition; `machine_run_as` has 40 call
+sites (34 × `"$A_USER"`, 6 × `"$B_USER"`) and no other account form, so the new `fail` arm is
+unreachable on the current fixture.
+
+No new scratch run was dispatched (push is forbidden in this stage): run `45489336388`'s binding to
+its own bytes stands, the apply deltas are the §6-re-run local gates plus probes P1/P2, and the
+package-level behavior differs only where a finding changed a guard (F5's rejection arm) or a gate
+case set (F6/F7).

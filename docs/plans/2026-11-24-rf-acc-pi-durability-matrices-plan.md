@@ -171,7 +171,7 @@ with `fixed-B native HOME is outside the isolated owner witness root`
 (`daemon/internal/app/linux_owner_witness_linux.go:2902-2905`, checking `linuxV2FixedNativeHome`'s
 passwd HOME against `linuxV2NativeOwnerWitnessRoot = /opt/symmetry-owner-test`,
 `:47`/`:1166-1175`). The fixture provisioned B with `--home-dir /home/symmetry-b`
-(`linux-v2-native-acceptance.sh:578`), so **no** owner-witness leg of any kind had ever reached a
+(`linux-v2-native-acceptance.sh:603`), so **no** owner-witness leg of any kind had ever reached a
 stage on this fixture. The refusal is the daemon's isolation contract and the fixture is the
 non-conforming side, so the fix is fixture-side (owned): `B_HOME="$OWNER_TEST_ROOT/fixed-b-home"`,
 with `machine_run_as` deriving `HOME` per account instead of the literal `/home/$user`. Every other
@@ -185,12 +185,12 @@ exists as root:root 0755 before `useradd` (`:557`), which is what B's traversal 
 `startLinuxV2OwnerWitnessCommandWithRequestPath` sent the App's stderr to `/dev/null`
 (`production_linux_v2_owner_cli_test.go:52-66` — the burndown recorded that gap as why its
 containment refusal stayed unnamed). The runner now opens a private 0600 `owner-witness-stderr.log`
-next to the witness document (`linuxV2OwnerWitnessDiagnosticPath`, `:275-282`) and the fixture
-prints a bounded tail of it when a leg fails (`linux-v2-native-acceptance.sh:1684-1689`). It is what
+next to the witness document (`linuxV2OwnerWitnessDiagnosticPath`, `:277-282`) and the fixture
+prints a bounded tail of it when a leg fails (`linux-v2-native-acceptance.sh:1705-1717`). It is what
 converted round 2's 30-second barrier timeout into the named refusal above. The file stays inside
 the A-owned witness output directory beside the witness documents, carries no secret, and is never
 published: the exporter reads only its allowlisted sources (no directory enumeration) and refuses
-any unexpected file in its own output directory (`export-linux-v2-redacted-evidence.py:1723-1725`).
+any unexpected file in its own output directory (`export-linux-v2-redacted-evidence.py:1726-1728`).
 
 ### 3.9 The clone reserve needs a goal-admission work input the fixture cannot produce (DECISION_NEEDED)
 
@@ -207,7 +207,7 @@ Round 3 (`45460144698`) named the wall behind every owner-witness leg, and it is
   (`provision-linux-v2-control-claims.exs:431-436`), whose task input carries project/repository
   metadata and no subject (`control/lib/symmetry_control/workspaces.ex:660-690`), and the request
   writer preserves that claim verbatim (`write-linux-v2-owner-request.py:235-250`).
-- The e2e *requires* that legacy shape: `production_linux_v2_native_witness_test.go:1565` refuses a
+- The e2e *requires* that legacy shape: `production_linux_v2_native_witness_test.go:1564` refuses a
   request whose `Claim.Work.Input` parses as an admission ("must be a real non-Goal Control task").
 - The daemon's own witness tests require the opposite: `stageReplayWitnessRequest`
   (`linux_owner_witness_linux_test.go:713-726`) rewrites `Claim.Work.Input` to

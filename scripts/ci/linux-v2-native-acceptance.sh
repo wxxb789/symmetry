@@ -199,25 +199,40 @@ for text in lines[-10:]:
 PY
 }
 
-# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
-# as the witness event lines; each caller names the block the lines belong to.
-print_filtered_output_lines() {
+# One redaction stage for both line filters: `drop` skips over-bound and secret-bearing lines and
+# keeps the newest; `truncate` rewrites secrets and clips, so a stalled witness's only cause survives.
+redact_evidence_lines() {
+  local mode=$1 bound=$2 keep=$3
   python3 -c '
 import pathlib, sys
 
-secrets_path, = sys.argv[1:]
+mode, bound, keep, secrets_path = sys.argv[1:5]
+bound = int(bound)
+keep = int(keep)
 try:
     secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
 except OSError:
     secrets = []
 lines = []
 for line in sys.stdin.buffer:
-    if len(line.rstrip(b"\r\n")) > 400 or any(secret in line for secret in secrets):
-        continue
-    lines.append(line)
-for line in lines[-40:]:
-    sys.stdout.buffer.write(line)
-' "$evidence_secret_values_file" >&2 || true
+    if mode == "drop":
+        if len(line.rstrip(b"\r\n")) > bound or any(secret in line for secret in secrets):
+            continue
+        lines.append(line)
+    else:
+        for secret in secrets:
+            line = line.replace(secret, b"<redacted>")
+        sys.stdout.buffer.write(line[:bound].rstrip(b"\r\n") + b"\n")
+if mode == "drop":
+    for line in lines[-keep:]:
+        sys.stdout.buffer.write(line)
+' "$mode" "$bound" "$keep" "$evidence_secret_values_file"
+}
+
+# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
+# as the witness event lines; each caller names the block the lines belong to.
+print_filtered_output_lines() {
+  redact_evidence_lines drop 400 40 "$evidence_secret_values_file" >&2 || true
 }
 
 # A stalled witness prints nothing, and its one error line can exceed the shared
@@ -227,19 +242,7 @@ print_witness_stderr_tail() {
   sudo test -s "$path" || return 0
   printf 'owner-witness command stderr (bounded last 20 lines):\n' >&2
   sudo tail --lines=20 -- "$path" |
-    python3 -c '
-import pathlib, sys
-
-secrets_path, = sys.argv[1:]
-try:
-    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
-except OSError:
-    secrets = []
-for line in sys.stdin.buffer:
-    for secret in secrets:
-        line = line.replace(secret, b"<redacted>")
-    sys.stdout.buffer.write(line[:400].rstrip(b"\r\n") + b"\n")
-' "$evidence_secret_values_file" >&2 || true
+    redact_evidence_lines truncate 400 0 "$evidence_secret_values_file" >&2 || true
 }
 
 export_native_evidence() {
@@ -975,8 +978,12 @@ machine_run_as() {
   shift 2
   machine_run_count=$((machine_run_count + 1))
   local unit="${machine}-step-${machine_run_count}"
-  local user_home=$A_HOME
-  [[ "$user" == "$B_USER" ]] && user_home=$B_HOME
+  local user_home
+  case "$user" in
+    "$A_USER") user_home=$A_HOME ;;
+    "$B_USER") user_home=$B_HOME ;;
+    *) fail "machine_run_as supports only the fixture A and B accounts, not '$user'" ;;
+  esac
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
     --setenv="HOME=$user_home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \

@@ -328,9 +328,23 @@ CONTAINMENT_KINDS = {
     "codex": ("codex_containment", "codex-native-containment.json"),
     "claude_code": ("claude_containment", "claude-native-containment.json"),
 }
-# The retargeted durability sets publish pi witnesses; `synthetic-goal-cleanup.json` runs a git
-# worker through the launcher and records the vehicle as fixture.runtime_kind, not a harness turn.
-PI_DURABILITY_WITNESSES = {
+# Every retargeted durability set's pi witnesses are its whole allowlist except `shared`; the
+# cleanup case records the vehicle (fixture.runtime_kind) because no harness turn ever launches.
+PI_DURABILITY_CASE_SETS = (
+    "shared",
+    "stage_replay_create_started",
+    "stage_replay_leaf_bound",
+    "stage_replay_launcher_bound",
+    "ack_loss_launcher_bound",
+    "stale_leaf",
+    "migration",
+    "stale_journal_run_key",
+    "stale_journal_run_key_legacy",
+    "stale_journal_fence",
+    "stale_journal_subject",
+    "synthetic_goal_cleanup",
+)
+PI_DURABILITY_REQUIRED = {
     "shared": {
         "pi-native-provider-action.json",
         "pi-helper-sigkill-detached-child.json",
@@ -345,19 +359,8 @@ PI_DURABILITY_WITNESSES = {
         *(f"stage-crash-replay-{stage}.json" for stage in SAFE_STAGE_HOLDS),
         *(f"ack-loss-replay-{stage}.json" for stage in SAFE_ACK_LOSS_STAGES),
     },
-    "stage_replay_create_started": {"stage-crash-replay-create_started.json"},
-    "stage_replay_leaf_bound": {"stage-crash-replay-leaf_bound.json"},
-    "stage_replay_launcher_bound": {"stage-crash-replay-launcher_bound.json"},
-    "ack_loss_launcher_bound": {"ack-loss-replay-launcher_bound.json"},
-    "stale_leaf": {"stale-leaf-identity.json"},
-    "migration": {"migration-denial.json"},
-    "stale_journal_run_key": {"unresolved-journal-guard.json"},
-    "stale_journal_run_key_legacy": {"stale-run-key-denial.json"},
-    "stale_journal_fence": {"stale-fence-denial.json"},
-    "stale_journal_subject": {"stale-subject-denial.json"},
-    "synthetic_goal_cleanup": {"synthetic-goal-cleanup.json"},
 }
-PI_VEHICLE_ONLY_WITNESSES = {"synthetic-goal-cleanup.json"}
+CLEANUP_VEHICLE_WITNESS = "synthetic-goal-cleanup.json"
 FORBIDDEN_KEYS = (
     "lease_token",
     "machine_token",
@@ -1469,7 +1472,7 @@ def validate_pi_durability_witnesses(
     version_line: str,
     source_tree_digest: str,
 ) -> None:
-    expected = PI_DURABILITY_WITNESSES[case_set]
+    expected = PI_DURABILITY_REQUIRED.get(case_set, MANUAL_CASE_SET_FILES[case_set])
     unallowlisted = expected - MANUAL_CASE_SET_FILES[case_set]
     if unallowlisted:
         fail(f"pi durability witness list is not allowlisted for {case_set}: {sorted(unallowlisted)}")
@@ -1477,7 +1480,7 @@ def validate_pi_durability_witnesses(
         document = documents.get(target)
         if document is None:
             fail(f"pi durability witness is unavailable: {target}")
-        if target in PI_VEHICLE_ONLY_WITNESSES:
+        if target == CLEANUP_VEHICLE_WITNESS:
             fixture = document.get("fixture")
             if not isinstance(fixture, dict) or fixture.get("runtime_kind") != "pi":
                 fail(f"{target} does not record the pi vehicle runtime_kind")
@@ -1526,10 +1529,10 @@ def main() -> int:
             "--native-archive-sha256 and --native-version-line together"
         )
     if native_kind is not None and native_kind not in CONTAINMENT_KINDS and native_kind != "pi":
-        fail(f"--native-kind {native_kind} is not a containment-capable native kind")
+        fail(f"--native-kind {native_kind} is not a supported native kind")
     if native_kind in CONTAINMENT_KINDS and arguments.case_set != CONTAINMENT_KINDS[native_kind][0]:
         fail(f"--native-kind {native_kind} requires --case-set {CONTAINMENT_KINDS[native_kind][0]}")
-    if native_kind == "pi" and arguments.case_set not in PI_DURABILITY_WITNESSES:
+    if native_kind == "pi" and arguments.case_set not in PI_DURABILITY_CASE_SETS:
         fail(f"--native-kind pi requires a retargeted durability case set, not {arguments.case_set}")
     if native_kind is not None and arguments.mode != "manual":
         fail("native containment export is available only in manual mode")

@@ -146,15 +146,7 @@ func runProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister(
 		},
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
-			t.Errorf("bind the staged provider-free pi executable: %v", err)
-		}
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted helper release-window witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "helper release-window")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("helper release-window witness requires the active A systemd owner anchor: %v", err)
 	}

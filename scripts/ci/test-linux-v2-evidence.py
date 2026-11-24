@@ -1855,6 +1855,15 @@ class ExporterTest(unittest.TestCase):
         self.assertIn("retargeted durability case set", result.stderr)
         self.assertEqual(list(output.iterdir()), [])
 
+    def test_manual_pi_durability_shared_requires_every_pi_witness(self) -> None:
+        source = self.private_dir("pi-shared-source")
+        receipts = self.private_dir("pi-shared-receipts")
+        output = self.private_dir("pi-shared-output")
+        result = self.run_pi_durability_gate(source, receipts, output, case_set="shared")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pi durability witness is unavailable: ack-loss-replay-checkout_ready.json", result.stderr)
+        self.assertEqual(list(output.iterdir()), [])
+
     def test_manual_pi_cleanup_witness_binds_the_vehicle_runtime_kind(self) -> None:
         for index, runtime_kind in enumerate(("pi", "opencode")):
             with self.subTest(runtime_kind=runtime_kind):
@@ -1895,7 +1904,7 @@ class ExporterTest(unittest.TestCase):
         cases = (
             ("codex_containment", ("--native-kind", "codex"), "requires --native-kind"),
             ("claude_containment", complete, "requires --case-set codex_containment"),
-            ("claude_containment", ("--native-kind", "opencode", *complete[2:]), "not a containment-capable"),
+            ("claude_containment", ("--native-kind", "opencode", *complete[2:]), "not a supported native kind"),
             ("codex_containment", complete, "requires --source-tree-digest"),
             (
                 "codex_containment",

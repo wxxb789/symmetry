@@ -442,8 +442,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 					processPIDFDs = append(processPIDFDs, fd)
 				}
 				// A parked gate exits on owner loss by design (gate.c wait_for_release polls the owner
-				// pidfd), so only the anchor/helper must survive the crash; the gate's exact identity
-				// stays bound by the marker and RunJournal comparison above.
+				// pidfd), so only the anchor/helper must survive; the marker/RunJournal comparison still binds the gate.
 				for _, fd := range processPIDFDs {
 					if err := linuxV2RequireLivePIDFD(int(fd.Fd())); err != nil {
 						t.Fatalf("A anchor/helper was not live before fresh request: %v", err)
