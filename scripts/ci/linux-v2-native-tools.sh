@@ -15,8 +15,10 @@ linux_v2_fetch_pi() {
   local destination=$1
   local pi_url='https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-x64.tar.gz'
   local pi_archive="$destination/pi-linux-x64.tar.gz"
-  local pi_archive_sha='811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5'
-  local pi_executable_sha='6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57'
+  # Callers that publish pi evidence need the pins and the version line outside this function.
+  pi_archive_sha='811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5'
+  pi_executable_sha='6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57'
+  pi_version_line='1.5.2'
   pi_unpack="$destination/pi-release"
   pi_executable="$pi_unpack/pi/pi"
   curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
@@ -26,7 +28,7 @@ linux_v2_fetch_pi() {
   tar --extract --file "$pi_archive" --directory "$pi_unpack"
   test -x "$pi_executable"
   test "$(sha256sum "$pi_executable" | cut -d' ' -f1)" = "$pi_executable_sha"
-  test "$(timeout 30s "$pi_executable" --version)" = '1.5.2'
+  test "$(timeout 30s "$pi_executable" --version)" = "$pi_version_line"
 }
 
 linux_v2_fetch_native_tools() {

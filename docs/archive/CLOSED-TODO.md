@@ -4926,3 +4926,27 @@ decision as open while this entry and the goal record carry the closure.
       `run_unexpected_cgroup_procs_fd_witness`) and proven in the guest: run `45398550682` prints
       `verified TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD: run=1 pass=1 skip=0`,
       re-confirmed on the final bytes in run `45402706492`. Evidence record §3.14/§3.15.
+## rf-acc-pi-durability-matrices: the twelve OpenCode-vehicle F2 rows (2026-11-24)
+
+- [ ] Keep the twelve OpenCode-vehicle case sets as F2-excluded rows until `rf-acc-pi-durability-matrices`
+      retargets the durability matrices to pi under the D3 `harness.md` amendment (2026-11-24, owner
+      rulings A1/C1 in `decision-native-opencode-2026-11-24.md`): on the final bytes the App's own
+      witness gate refuses every OpenCode-family config — `owner witness config native harness
+      version differs from the tested release` observed 210 times in run `45402706492` — because the
+      fixture's frozen `opencode: "1.18.32"` pin differs from `opencode.TestedVersion = "2.3.0"`
+      (`daemon/internal/harness/opencode/adapter.go:28`). The pin, the opencode render tokens and
+      the frozen lines stay untouched by decision; the evidence record's per-set table records each
+      excluded row (§3.15).
+      **Closed (2026-11-24, branch `refactor/rf-acc-pi-durability-matrices`, base `477e4c62`)** (plan
+      `docs/plans/2026-11-24-rf-acc-pi-durability-matrices-plan.md`, evidence record
+      `docs/evidence/rf-acc-pi-durability-matrices-2026-11-24.md`): the twelve durability case sets
+      now request, claim and run on the pi durability vehicle — provider-free pi resource, generic
+      `pi-durability` runtime, `pi` requests/claims, pi stage/ack/negative/cleanup configs and e2e
+      harness literals, and a pi `native_binary` binding in the exporter — so no durability row
+      stays F2-excluded for the OpenCode pin. The rows are not green, and the reasons moved with the
+      work: the F1 clone-reserve wall was closed by the Goal-admitted fixture (ruling of 2026-11-25;
+      plan §3.10), and what bounds the rows now is three unowned product classes carried as named
+      follow-up goals (`rf-acc-witness-unresolved-exit`, `rf-acc-release-recovery-diagnostics`,
+      `rf-acc-owner-loss-semantics`) — plus the frozen `shared` OpenCode leg and the credential-gated
+      pi turns. The residual moved back to `docs/TODO.md` under
+      `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`.

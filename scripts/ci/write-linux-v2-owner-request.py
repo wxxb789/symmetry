@@ -14,13 +14,23 @@ CASES = {
     "helper_sigkill_detached_child": ("pi", "pi-native", "native_turn_started"),
     "daemon_sigkill_helper_survives_detached_child": ("pi", "pi-native", "native_turn_started"),
     "wsl2_denial": ("opencode", "opencode-native", "none"),
-    "stage_replay": ("opencode", "opencode-native", None),
+    "stage_replay": ("pi", "pi-durability", None),
     "codex_containment": ("codex", "codex-native", "native_release"),
     "claude_containment": ("claude_code", "claude-native", "native_release"),
     "stage_replay_native_release_codex": ("codex", "codex-native", "native_release"),
     "stage_replay_native_release_claude": ("claude_code", "claude-native", "native_release"),
+    "stage_replay_unprovisioned_refusal": ("opencode", "opencode-native", "native_release"),
 }
-STAGE_REPLAY_NATIVE_RELEASE_CASES = {"stage_replay_native_release_codex", "stage_replay_native_release_claude"}
+STAGE_REPLAY_NATIVE_RELEASE_CASES = {
+    "stage_replay_native_release_codex",
+    "stage_replay_native_release_claude",
+    "stage_replay_unprovisioned_refusal",
+}
+PROVIDER_ACCESS_CASES = {
+    "pi_provider_action",
+    "helper_sigkill_detached_child",
+    "daemon_sigkill_helper_survives_detached_child",
+}
 STAGE_REPLAY_HOLDS = {
     "reservation_durable",
     "create_started",
@@ -173,19 +183,41 @@ def main() -> int:
         work.get("agent_profile") == profile_name and work.get("workspace") == "native",
         "ClaimResponse Work binding differs from the daemon config",
     )
-    expected_capabilities = {"provider_access": True} if harness == "pi" else {}
+    provider_case = case in PROVIDER_ACCESS_CASES
+    expected_capabilities = {"provider_access": True} if provider_case else {}
     require(
         work.get("required_capabilities", {}) == expected_capabilities,
         "ClaimResponse Work required capabilities differ from the exact generic harness fixture",
     )
     work_input = work.get("input")
     require(isinstance(work_input, dict), "Control ClaimResponse Work input is invalid")
-    require(
-        work_input.get("repository_resource_id") == run["repository_resource_id"],
-        "ClaimResponse Work repository differs from the requested Subject",
-    )
+    if profile_name == "pi-durability":
+        # The retargeted durability Work is a Control-composed goal admission whose
+        # Subject is the exact fence the App's clone reserve parses (linux_clone_journal.go:864).
+        require(
+            work_input.get("schema_version") == "symmetry.admission.v1",
+            "durability ClaimResponse Work input is not a goal admission",
+        )
+        require(
+            work_input.get("subject")
+            == {
+                "resource_id": run["repository_resource_id"],
+                "commit": run["commit"],
+                "tree_digest": run["tree_digest"],
+            },
+            "durability ClaimResponse admission Subject differs from the requested Subject",
+        )
+        require(
+            "provider_scope" in work_input and work_input["provider_scope"] is None,
+            "durability ClaimResponse admission carries a provider scope",
+        )
+    else:
+        require(
+            work_input.get("repository_resource_id") == run["repository_resource_id"],
+            "ClaimResponse Work repository differs from the requested Subject",
+        )
 
-    if harness == "pi":
+    if provider_case:
         access = claim.get("provider_access")
         require(isinstance(access, dict), "Pi ClaimResponse must carry authentic Control provider access")
         require(access.get("path") == "/api/v1/provider-actions", "Pi ClaimResponse provider path is invalid")
@@ -202,7 +234,7 @@ def main() -> int:
         ):
             raise SystemExit("Pi ClaimResponse has no real GitHub resource.sync grant for the exact Subject")
     else:
-        require("provider_access" not in claim, "non-Pi ClaimResponse must omit provider_access")
+        require("provider_access" not in claim, "provider-free ClaimResponse must omit provider_access")
 
     directory = pathlib.Path(barrier_dir)
     require(

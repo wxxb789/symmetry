@@ -328,6 +328,36 @@ CONTAINMENT_KINDS = {
     "codex": ("codex_containment", "codex-native-containment.json"),
     "claude_code": ("claude_containment", "claude-native-containment.json"),
 }
+# The retargeted durability sets publish pi witnesses; `synthetic-goal-cleanup.json` runs a git
+# worker through the launcher and records the vehicle as fixture.runtime_kind, not a harness turn.
+PI_DURABILITY_WITNESSES = {
+    "shared": {
+        "pi-native-provider-action.json",
+        "pi-helper-sigkill-detached-child.json",
+        "pi-daemon-sigkill-helper-survives.json",
+        "receipt-persistence-failure.json",
+        "alternate-mount-refusal.json",
+        "literal-pid-reuse.json",
+        "helper-stop-response-loss.json",
+        "helper-ack-response-loss.json",
+        "helper-launcher-response-loss.json",
+        "helper-exit-after-release-before-register.json",
+        *(f"stage-crash-replay-{stage}.json" for stage in SAFE_STAGE_HOLDS),
+        *(f"ack-loss-replay-{stage}.json" for stage in SAFE_ACK_LOSS_STAGES),
+    },
+    "stage_replay_create_started": {"stage-crash-replay-create_started.json"},
+    "stage_replay_leaf_bound": {"stage-crash-replay-leaf_bound.json"},
+    "stage_replay_launcher_bound": {"stage-crash-replay-launcher_bound.json"},
+    "ack_loss_launcher_bound": {"ack-loss-replay-launcher_bound.json"},
+    "stale_leaf": {"stale-leaf-identity.json"},
+    "migration": {"migration-denial.json"},
+    "stale_journal_run_key": {"unresolved-journal-guard.json"},
+    "stale_journal_run_key_legacy": {"stale-run-key-denial.json"},
+    "stale_journal_fence": {"stale-fence-denial.json"},
+    "stale_journal_subject": {"stale-subject-denial.json"},
+    "synthetic_goal_cleanup": {"synthetic-goal-cleanup.json"},
+}
+PI_VEHICLE_ONLY_WITNESSES = {"synthetic-goal-cleanup.json"}
 FORBIDDEN_KEYS = (
     "lease_token",
     "machine_token",
@@ -1431,6 +1461,39 @@ def atomic_write(directory: pathlib.Path, name: str, contents: bytes, uid: int, 
             os.unlink(temporary_name)
 
 
+def validate_pi_durability_witnesses(
+    case_set: str,
+    documents: dict,
+    binary: str,
+    binary_sha256: str,
+    version_line: str,
+    source_tree_digest: str,
+) -> None:
+    expected = PI_DURABILITY_WITNESSES[case_set]
+    unallowlisted = expected - MANUAL_CASE_SET_FILES[case_set]
+    if unallowlisted:
+        fail(f"pi durability witness list is not allowlisted for {case_set}: {sorted(unallowlisted)}")
+    for target in sorted(expected):
+        document = documents.get(target)
+        if document is None:
+            fail(f"pi durability witness is unavailable: {target}")
+        if target in PI_VEHICLE_ONLY_WITNESSES:
+            fixture = document.get("fixture")
+            if not isinstance(fixture, dict) or fixture.get("runtime_kind") != "pi":
+                fail(f"{target} does not record the pi vehicle runtime_kind")
+            continue
+        subject = document.get("subject")
+        if (
+            document.get("harness") != "pi"
+            or document.get("native_binary") != binary
+            or document.get("native_binary_sha256") != binary_sha256
+            or document.get("native_version_line") != version_line
+        ):
+            fail(f"{target} pi durability witness does not bind the staged pi executable")
+        if not isinstance(subject, dict) or subject.get("tree_digest") != source_tree_digest:
+            fail(f"{target} pi durability witness does not bind --source-tree-digest")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("manual", "compose", "legacy"))
@@ -1462,10 +1525,12 @@ def main() -> int:
             "native containment export requires --native-kind, --native-binary, --native-binary-sha256, "
             "--native-archive-sha256 and --native-version-line together"
         )
-    if native_kind is not None and native_kind not in CONTAINMENT_KINDS:
+    if native_kind is not None and native_kind not in CONTAINMENT_KINDS and native_kind != "pi":
         fail(f"--native-kind {native_kind} is not a containment-capable native kind")
-    if native_kind is not None and arguments.case_set != CONTAINMENT_KINDS[native_kind][0]:
+    if native_kind in CONTAINMENT_KINDS and arguments.case_set != CONTAINMENT_KINDS[native_kind][0]:
         fail(f"--native-kind {native_kind} requires --case-set {CONTAINMENT_KINDS[native_kind][0]}")
+    if native_kind == "pi" and arguments.case_set not in PI_DURABILITY_WITNESSES:
+        fail(f"--native-kind pi requires a retargeted durability case set, not {arguments.case_set}")
     if native_kind is not None and arguments.mode != "manual":
         fail("native containment export is available only in manual mode")
     if arguments.source_tree_digest is not None and not re.fullmatch(
@@ -1583,7 +1648,7 @@ def main() -> int:
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
-    if native_kind is not None:
+    if native_kind in CONTAINMENT_KINDS:
         document = published_documents.get(CONTAINMENT_KINDS[native_kind][1])
         if document is None:
             fail("containment witness is unavailable")
@@ -1609,6 +1674,15 @@ def main() -> int:
             or replay_document.get("native_version_line") != native_version_line
         ):
             fail("containment replay witness does not bind the pinned kind and version line")
+    elif native_kind == "pi":
+        validate_pi_durability_witnesses(
+            arguments.case_set,
+            published_documents,
+            native_binary,
+            native_binary_sha256,
+            native_version_line,
+            arguments.source_tree_digest,
+        )
 
     # A failed witness run is the one case whose daemon-side stall the uploaded
     # evidence must explain, so the restarted daemon's log tails are published
@@ -1685,8 +1759,9 @@ def main() -> int:
             "archive_sha256": native_archive_sha256,
             "version": native_version_line,
         }
-        manifest["containment"] = {"native_open_reached": document["containment"]["native_open_reached"]}
         manifest["source_tree_digest"] = arguments.source_tree_digest
+    if native_kind in CONTAINMENT_KINDS:
+        manifest["containment"] = {"native_open_reached": document["containment"]["native_open_reached"]}
     if arguments.mode == "legacy":
         manifest["complete"] = not incomplete
         manifest["incomplete_evidence_files"] = incomplete_files

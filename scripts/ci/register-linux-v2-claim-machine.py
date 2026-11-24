@@ -101,6 +101,41 @@ def main() -> int:
             "capabilities": {"structured_input": True},
         },
         {
+            "runtime_key": "owner-witness-control-pi-durability-generic",
+            "name": "Isolated generic Control provider-free Pi durability claim fixture; goal-assigned",
+            "capacity": 64,
+            "agent_profile": "pi-durability",
+            "workspace": "native",
+            "repository_resource_id": fixture["pi_durability_repository_resource_id"],
+            # Goal assignment admits only native-harness runtimes with adapter operations
+            # (assignment.ex:332,:519-530), so this claim fixture carries the Pi metadata.
+            "harness_kind": "pi",
+            "harness_version": "1.5.2",
+            "adapter_version": "symmetry-daemon:ci-linux-v2",
+            "adapter_protocol_version": 1,
+            "capabilities": {
+                "structured_input": True,
+                "adapter": {
+                    "kind": "pi",
+                    "native_version": "1.5.2",
+                    "implementation_version": "symmetry-daemon:ci-linux-v2",
+                    "protocol_version": 1,
+                    "operations": {
+                        "start": True,
+                        "events": True,
+                        "cancel": True,
+                        "resume": False,
+                        "handoff": False,
+                        "guidance": "unsupported",
+                        "pause": "unsupported",
+                        "approval_response": False,
+                        "usage": "unknown",
+                        "hard_cost_limit": False,
+                    },
+                },
+            },
+        },
+        {
             "runtime_key": "owner-witness-control-codex-generic",
             "name": "Isolated generic Control codex-claim fixture; not a native runtime",
             "capacity": 64,
@@ -139,7 +174,7 @@ def main() -> int:
             or not isinstance(runtime.get("runtime_epoch"), int)
             or runtime["runtime_epoch"] <= 0
         ):
-            raise SystemExit("Control did not register the four generic claim fixture runtimes")
+            raise SystemExit("Control did not register the generic claim fixture runtimes")
         result["runtimes"][runtime_key] = {
             "runtime_id": runtime["runtime_id"],
             "runtime_epoch": runtime["runtime_epoch"],

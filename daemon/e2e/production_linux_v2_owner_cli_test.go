@@ -20,6 +20,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
@@ -49,7 +50,7 @@ func startLinuxV2OwnerWitnessCommandWithRequestPath(
 	if err != nil {
 		t.Fatalf("open private owner-witness response file: %v", err)
 	}
-	stderr, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	stderr, err := os.OpenFile(linuxV2OwnerWitnessDiagnosticPath(t, fixture), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		_ = stdout.Close()
 		t.Fatalf("open owner-witness diagnostic sink: %v", err)
@@ -267,6 +268,33 @@ func linuxV2NativeWitnessOutputPath(t *testing.T, fixture linuxV2NativeFixture) 
 		return filepath.Join(output, name+".json")
 	}
 	return filepath.Join(fixture.artifactDir, "witness.json")
+}
+
+// The witness command's stderr names any refusal before the first durable stage, and nothing else
+// preserves it; the fixture prints this bounded private log when the leg fails.
+func linuxV2OwnerWitnessDiagnosticPath(t *testing.T, fixture linuxV2NativeFixture) string {
+	t.Helper()
+	directory := strings.TrimSpace(os.Getenv(linuxV2NativeWitnessOutputEnvironment))
+	if directory == "" {
+		directory = fixture.artifactDir
+	}
+	return filepath.Join(directory, "owner-witness-stderr.log")
+}
+
+// The daemon's same-RunKey recovery path publishes no executable digest, so a provider-free pi
+// durability witness binds the staged binary itself; the exporter pins that digest.
+func linuxV2BindDurabilityNativeBinary(witness *linuxV2NativeWitness, fixture linuxV2NativeFixture) error {
+	if fixture.value.Runtime.HarnessKind != "pi" || fixture.request.Claim.ProviderAccess != nil {
+		return nil
+	}
+	digest, err := harness.HashExecutableFile(context.Background(), fixture.profile.Command)
+	if err != nil {
+		return err
+	}
+	witness.NativeBinary = fixture.profile.Command
+	witness.NativeBinarySHA256 = digest
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(fixture.value.Runtime.HarnessKind)
+	return nil
 }
 
 func waitLinuxV2OwnerWitnessStage(request linuxV2OwnerWitnessRequest, timeout time.Duration) error {
@@ -1681,7 +1709,7 @@ func linuxV2VerifyStageReplayCheckout(fixture linuxV2NativeFixture, receipt auth
 func runProductionLinuxV2StageCrashReplay(t *testing.T, stage string) (linuxV2NativeFixture, string) {
 	t.Helper()
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: stage, markerDirectory: "stage-replay-" + stage,
 	}
@@ -1705,6 +1733,9 @@ func runProductionLinuxV2StageCrashReplayCase(
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted stage-replay witness: %v", err)
 		}
@@ -2252,7 +2283,7 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 		t.Fatalf("literal PID-reuse request/config paths do not bind the exact fixture beneath %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "leaf_removed", markerDirectory: "literal-pid-reuse",
 	}
@@ -2267,6 +2298,9 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted literal PID-reuse witness: %v", err)
 		}
@@ -3313,7 +3347,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 		t.Fatalf("ACK-loss fixture config/request paths do not bind the exact case under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: stage, markerDirectory: "ack-loss-" + stage, ackLossReplay: true,
 	}
@@ -3328,6 +3362,9 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted ACK-loss replay witness: %v", err)
 		}
@@ -3487,7 +3524,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		t.Fatalf("helper response-loss paths do not bind the exact fixture beneath %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: responseLoss.hold, markerDirectory: responseLoss.markerDirectory,
 		helperResponseDrop: responseLoss.operation,
@@ -3506,6 +3543,9 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted helper response-loss witness: %v", err)
 		}
@@ -3739,7 +3779,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 		t.Fatalf("migration request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "native_release", markerDirectory: "migration",
 	}
@@ -3754,6 +3794,9 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted migration-denial witness: %v", err)
 		}
@@ -3767,7 +3810,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 	witness.InstalledOwnerVerified = true
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
-		t.Fatalf("wait for exact OpenCode native_release boundary: %v", err)
+		t.Fatalf("wait for exact native_release boundary: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "native_release")
 	if err != nil {
@@ -3904,7 +3947,7 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 		t.Fatalf("stale-leaf request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "stop_receipt_durable", markerDirectory: "stale-leaf",
 	}
@@ -3919,6 +3962,9 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted stale-leaf witness: %v", err)
 		}
@@ -4062,7 +4108,7 @@ func linuxV2VerifyStageReplayEmptyLeaf(path string) error {
 func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot string) {
 	t.Helper()
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "native_release", markerDirectory: "receipt-persist-failure",
 	}
@@ -4077,6 +4123,9 @@ func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot st
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted receipt-persistence witness: %v", err)
 		}
@@ -4208,7 +4257,7 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 		t.Fatalf("alternate-mount request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "reservation_durable", markerDirectory: "alternate-mount",
 	}
@@ -4245,6 +4294,9 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted alternate-mount refusal evidence: %v", err)
 		}

@@ -262,7 +262,7 @@ func TestProductionLinuxV2StaleOwnerRequestDenials(t *testing.T) {
 			t.Setenv(linuxV2OpenCodeConfigEnvironment, configPath)
 			t.Setenv(linuxV2StageReplayRequestEnvironment, setupRequestPath)
 			setupCase := linuxV2NativeWitnessCase{
-				harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+				harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 				requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 				barrierStage: "handoff_committed", markerDirectory: "negative-" + caseName + "-setup",
 			}
@@ -278,7 +278,7 @@ func TestProductionLinuxV2StaleOwnerRequestDenials(t *testing.T) {
 			if err := json.Unmarshal(contents, &staleRequest); err != nil {
 				t.Fatalf("decode stale request fixture: %v", err)
 			}
-			if err := linuxV2AssertStaleRequestVariant(caseName, fixture.request, staleRequest); err != nil {
+			if err := linuxV2AssertStaleRequestVariant(caseName, setupCase.harness, fixture.request, staleRequest); err != nil {
 				t.Fatalf("stale request fixture does not contain the intended mismatch: %v", err)
 			}
 			if err := linuxV2ValidateNegativeBarrier(staleRequest, fixture.owner); err != nil {
@@ -365,7 +365,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 	t.Setenv(linuxV2OpenCodeConfigEnvironment, setupConfigPath)
 	t.Setenv(linuxV2StageReplayRequestEnvironment, setupRequestPath)
 	setupCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "handoff_committed", markerDirectory: "negative-stale_journal_run_key-setup",
 		afterStageProcessKilled: func(t *testing.T, fixture linuxV2NativeFixture, binary string) {
@@ -380,23 +380,23 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 				if err != nil {
 					t.Fatalf("load root-controlled unresolved-guard config: %v", err)
 				}
-				if freshValue.StateDir != fixture.stateDir || freshValue.Runtime.HarnessKind != "opencode" ||
+				if freshValue.StateDir != fixture.stateDir || freshValue.Runtime.HarnessKind != "pi" ||
 					freshValue.Runtime.HarnessVersion != fixture.value.Runtime.HarnessVersion ||
 					freshValue.Runtime.AdapterVersion != fixture.value.Runtime.AdapterVersion ||
 					freshValue.Runtime.RepositoryResourceID != fixture.value.Runtime.RepositoryResourceID ||
 					freshValue.Runtime.Workspace != fixture.value.Runtime.Workspace ||
 					freshValue.Runtime.AgentProfile != fixture.value.Runtime.AgentProfile {
-					t.Fatal("fresh-run config does not preserve the exact installed OpenCode runtime and shared StateDir")
+					t.Fatal("fresh-run config does not preserve the exact installed native runtime and shared StateDir")
 				}
 				freshCase := linuxV2NativeWitnessCase{
-					harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+					harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 					requestEnvironment: linuxV2UnresolvedJournalGuardFreshRequestEnvironment,
 					requestCase:        "stage_replay", barrierStage: "handoff_committed",
 					markerDirectory: "negative-stale_journal_run_key-setup",
 				}
 				freshRequest, err := linuxV2ReadOwnerWitnessRequest(freshRequestPath, freshCase, freshValue, fixture.owner)
 				if err != nil {
-					t.Fatalf("fresh request is not an authentic, non-replay OpenCode claim: %v", err)
+					t.Fatalf("fresh request is not an authentic, non-replay native claim: %v", err)
 				}
 				if freshRequest.RunKey == fixture.request.RunKey || freshRequest.Claim.TaskID == fixture.request.Claim.TaskID ||
 					freshRequest.Claim.ClaimID == fixture.request.Claim.ClaimID ||
@@ -441,14 +441,12 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 					}
 					processPIDFDs = append(processPIDFDs, fd)
 				}
-				gatePIDFD, err := linuxV2OpenExactPIDFD(marker.Owners.Gate.PID, marker.Owners.Gate.Identity)
-				if err != nil {
-					t.Fatalf("pin exact live gate PIDFD before fresh request: %v", err)
-				}
-				processPIDFDs = append(processPIDFDs, gatePIDFD)
+				// A parked gate exits on owner loss by design (gate.c wait_for_release polls the owner
+				// pidfd), so only the anchor/helper must survive the crash; the gate's exact identity
+				// stays bound by the marker and RunJournal comparison above.
 				for _, fd := range processPIDFDs {
 					if err := linuxV2RequireLivePIDFD(int(fd.Fd())); err != nil {
-						t.Fatalf("A anchor/helper or exact gate was not live before fresh request: %v", err)
+						t.Fatalf("A anchor/helper was not live before fresh request: %v", err)
 					}
 				}
 				journalsBefore, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
@@ -525,7 +523,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 				}
 				for _, fd := range processPIDFDs {
 					if err := linuxV2RequireLivePIDFD(int(fd.Fd())); err != nil {
-						t.Fatalf("fresh request changed or lost the exact A anchor/helper or gate process: %v", err)
+						t.Fatalf("fresh request changed or lost the exact A anchor/helper process: %v", err)
 					}
 				}
 			})
@@ -540,13 +538,13 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 	}
 }
 
-func linuxV2AssertStaleRequestVariant(caseName string, setup, stale linuxV2OwnerWitnessRequest) error {
+func linuxV2AssertStaleRequestVariant(caseName, harnessKind string, setup, stale linuxV2OwnerWitnessRequest) error {
 	if setup.Version != 1 || stale.Version != 1 || setup.ReplayRequired || !stale.ReplayRequired ||
 		setup.Case != "stage_replay" || stale.Case != setup.Case ||
-		setup.Harness != "opencode" || stale.Harness != setup.Harness || setup.Subject.ResourceID != stale.Subject.ResourceID ||
+		setup.Harness != harnessKind || stale.Harness != setup.Harness || setup.Subject.ResourceID != stale.Subject.ResourceID ||
 		setup.Claim.ProviderAccess != nil || stale.Claim.ProviderAccess != nil || setup.Claim.Work.RequiredCapabilities != nil && len(setup.Claim.Work.RequiredCapabilities) != 0 ||
 		len(stale.Claim.Work.RequiredCapabilities) != 0 || stale.Claim.LeaseRemainingMS <= 0 || !stale.Claim.LeaseExpiresAt.After(time.Now()) {
-		return errors.New("stale request changed the authenticated OpenCode fixture contract")
+		return fmt.Errorf("stale request changed the authenticated %s fixture contract", harnessKind)
 	}
 	switch caseName {
 	case "stale_journal_run_key":
@@ -1562,7 +1560,13 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 		request.Claim.HarnessSessionID != nil || request.Claim.HarnessBindingID != nil {
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness request does not bind the exact live claim, configured runtime, and Subject")
 	}
-	if _, present, err := protocol.ParseAdmissionInput(request.Claim.Work.Input); err != nil || present {
+	admission, admitted, err := protocol.ParseAdmissionInput(request.Claim.Work.Input)
+	if testCase.harness == "pi" && !testCase.providerActionRequired {
+		if err != nil || !admitted || admission.Subject.Validate() != nil ||
+			admission.Subject != request.Subject || admission.ProviderScope != nil {
+			return linuxV2OwnerWitnessRequest{}, errors.New("pi durability owner-witness claim must carry the Control admission for the exact Subject")
+		}
+	} else if err != nil || admitted {
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness claim must be a real non-Goal Control task")
 	}
 	if testCase.providerActionRequired {

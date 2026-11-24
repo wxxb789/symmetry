@@ -1,5 +1,7 @@
 defmodule LinuxV2ControlClaimFixture do
   alias SymmetryControl.{Integrations, Orchestration, Repo, Workspaces}
+  alias SymmetryControl.Goals
+  alias SymmetryControl.Goals.GoalDecision
   alias SymmetryControl.Integrations.ProviderActionIntent
   alias SymmetryControl.Orchestration.{Run, Runtime, Task}
   import Ecto.Query
@@ -34,65 +36,66 @@ defmodule LinuxV2ControlClaimFixture do
   ]
   @expected_fixture_runs 48
   @fixture_database_prefix "symmetry_linux_v2"
+  @fixture_actor "operator:linux-v2-fixture"
 
   @cases [
-    {"pi_provider_action", "pi-native", :pi,
+    {"pi_provider_action", "pi-native", :pi, :pi_provider,
      "Use the real symmetry_resource_sync tool for the configured GitHub repository, then create and commit one small file. Do not publish."},
-    {"opencode_native_health", "opencode-native", :opencode,
+    {"opencode_native_health", "opencode-native", :opencode, :opencode,
      "Use the real native OpenCode profile to create and commit one small file in the B-owned clone. Do not publish."},
-    {"helper_sigkill_detached_child", "pi-native", :pi,
+    {"helper_sigkill_detached_child", "pi-native", :pi, :pi_provider,
      "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child helper crash witness. Do not publish."},
-    {"daemon_sigkill_helper_survives_detached_child", "pi-native", :pi,
+    {"daemon_sigkill_helper_survives_detached_child", "pi-native", :pi, :pi_provider,
      "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child daemon crash witness. Do not publish."},
-    {"codex_containment", "codex-native", :codex,
+    {"codex_containment", "codex-native", :codex, :opencode,
      "Use the real codex runtime for the Linux v2 containment boundary witness. Do not publish."},
-    {"claude_containment", "claude-native", :claude_code,
+    {"claude_containment", "claude-native", :claude_code, :opencode,
      "Use the real Claude Code runtime for the Linux v2 containment boundary witness. Do not publish."}
   ] ++
     Enum.map(@stage_replay_holds, fn hold ->
-      {"stage_replay_#{hold}", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 stage replay witness at #{hold}. Do not publish."}
+      {"stage_replay_#{hold}", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 stage replay witness at #{hold}. Do not publish."}
     end) ++
     Enum.map(@ack_loss_stages, fn stage ->
-      {"stage_replay_ack_loss_#{stage}", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 lost-ACK replay witness at #{stage}. Do not publish."}
+      {"stage_replay_ack_loss_#{stage}", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 lost-ACK replay witness at #{stage}. Do not publish."}
     end) ++
     [
-      {"stage_replay_stale_journal_run_key_setup", "opencode-native", :opencode,
-       "Use the real OpenCode runtime to seed a completed Linux v2 journal for stale RunKey denial. Do not publish."},
-      {"stage_replay_stale_journal_run_key_request", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the second fresh Claim in stale RunKey denial. Do not publish."},
-      {"stage_replay_stale_journal_run_key_legacy_setup", "opencode-native", :opencode,
-       "Use the real OpenCode runtime to seed the preserved original stale RunKey denial witness. Do not publish."},
-      {"stage_replay_stale_journal_run_key_legacy_request", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the preserved original stale RunKey denial Claim. Do not publish."},
-      {"stage_replay_stale_journal_fence_setup", "opencode-native", :opencode,
-       "Use the real OpenCode runtime to seed a completed Linux v2 journal for stale fence denial. Do not publish."},
-      {"stage_replay_stale_journal_subject_setup", "opencode-native", :opencode,
-       "Use the real OpenCode runtime to seed a completed Linux v2 journal for stale Subject denial. Do not publish."},
-      {"stage_replay_receipt_persist_failure", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 receipt persistence failure witness. Do not publish."},
-      {"stage_replay_stale_leaf", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 stale cgroup-leaf identity witness. Do not publish."},
-      {"stage_replay_alternate_mount", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 alternate cgroup-mount refusal witness. Do not publish."},
-      {"stage_replay_migration", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 migration denial witness. Do not publish."},
-      {"stage_replay_literal_pid_reuse", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the exact Linux v2 literal PID-reuse witness. Do not publish."},
-      {"stage_replay_helper_exit_after_release_before_native_register", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the installed helper-exit-after-RELEASE-before-native-register witness. Do not publish."},
-      {"stage_replay_helper_stop_response_loss", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 helper stop-response-loss replay witness. Do not publish."},
-      {"stage_replay_helper_ack_stop_receipt_response_loss", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 helper stop-receipt-response-loss replay witness. Do not publish."},
-      {"stage_replay_helper_launcher_response_loss", "opencode-native", :opencode,
-       "Use the real OpenCode runtime for the Linux v2 helper launcher-response-loss replay witness. Do not publish."},
-      {"stage_replay_unprovisioned_refusal", "opencode-native", :opencode,
+      {"stage_replay_stale_journal_run_key_setup", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime to seed a completed Linux v2 journal for stale RunKey denial. Do not publish."},
+      {"stage_replay_stale_journal_run_key_request", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the second fresh Claim in stale RunKey denial. Do not publish."},
+      {"stage_replay_stale_journal_run_key_legacy_setup", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime to seed the preserved original stale RunKey denial witness. Do not publish."},
+      {"stage_replay_stale_journal_run_key_legacy_request", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the preserved original stale RunKey denial Claim. Do not publish."},
+      {"stage_replay_stale_journal_fence_setup", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime to seed a completed Linux v2 journal for stale fence denial. Do not publish."},
+      {"stage_replay_stale_journal_subject_setup", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime to seed a completed Linux v2 journal for stale Subject denial. Do not publish."},
+      {"stage_replay_receipt_persist_failure", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 receipt persistence failure witness. Do not publish."},
+      {"stage_replay_stale_leaf", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 stale cgroup-leaf identity witness. Do not publish."},
+      {"stage_replay_alternate_mount", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 alternate cgroup-mount refusal witness. Do not publish."},
+      {"stage_replay_migration", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 migration denial witness. Do not publish."},
+      {"stage_replay_literal_pid_reuse", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the exact Linux v2 literal PID-reuse witness. Do not publish."},
+      {"stage_replay_helper_exit_after_release_before_native_register", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the installed helper-exit-after-RELEASE-before-native-register witness. Do not publish."},
+      {"stage_replay_helper_stop_response_loss", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 helper stop-response-loss replay witness. Do not publish."},
+      {"stage_replay_helper_ack_stop_receipt_response_loss", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 helper stop-receipt-response-loss replay witness. Do not publish."},
+      {"stage_replay_helper_launcher_response_loss", "pi-durability", :pi, :pi_durability,
+       "Use the real Pi runtime for the Linux v2 helper launcher-response-loss replay witness. Do not publish."},
+      {"stage_replay_unprovisioned_refusal", "opencode-native", :opencode, :opencode,
        "Use the real OpenCode runtime for the unprovisioned Linux owner refusal witness. Do not publish."},
-      {"stage_replay_native_release_codex", "codex-native", :codex,
+      {"stage_replay_native_release_codex", "codex-native", :codex, :opencode,
        "Use the real codex runtime for the Linux v2 native-release crash-replay witness. Do not publish."},
-      {"stage_replay_native_release_claude", "claude-native", :claude_code,
+      {"stage_replay_native_release_claude", "claude-native", :claude_code, :opencode,
        "Use the real Claude Code runtime for the Linux v2 native-release crash-replay witness. Do not publish."}
     ]
 
@@ -139,9 +142,24 @@ defmodule LinuxV2ControlClaimFixture do
         name: "Linux v2 OpenCode witness repository #{suffix}"
       })
 
+    {:ok, pi_durability_repository} =
+      Workspaces.create_resource(project.id, %{
+        kind: "repository",
+        name: "Linux v2 Pi durability witness repository #{suffix}"
+      })
+
+    {legacy_cases, goal_cases} =
+      Enum.split_with(@cases, fn {_name, _profile, _harness, repository_role, _description} ->
+        repository_role != :pi_durability
+      end)
+
     work_items =
-      Map.new(@cases, fn {case_name, profile, harness, description} ->
-        repository_id = if harness == :pi, do: pi_repository.id, else: opencode_repository.id
+      Map.new(legacy_cases, fn {case_name, profile, _harness, repository_role, description} ->
+        repository_id =
+          case repository_role do
+            :pi_provider -> pi_repository.id
+            :opencode -> opencode_repository.id
+          end
 
         {:ok, item} =
           Workspaces.create_work_item(project.id, %{
@@ -163,8 +181,22 @@ defmodule LinuxV2ControlClaimFixture do
          }}
       end)
 
-    unless map_size(work_items) == @expected_fixture_runs do
-      raise "owner-witness fixture Run count changed: expected #{@expected_fixture_runs}, got #{map_size(work_items)}"
+    # The retargeted durability cases get their WorkItem through Control's own Goal
+    # admission (schedule/5); their WorkItem must stay goal-owned for the clone fence.
+    goal_case_specs =
+      Map.new(goal_cases, fn {case_name, profile, _harness, _repository_role, description} ->
+        {case_name,
+         %{
+           "repository_resource_id" => pi_durability_repository.id,
+           "agent_profile" => profile,
+           "description" => description
+         }}
+      end)
+
+    fixture_runs = map_size(work_items) + map_size(goal_case_specs)
+
+    if fixture_runs != @expected_fixture_runs do
+      raise "owner-witness fixture Run count changed: expected #{@expected_fixture_runs}, got #{fixture_runs}"
     end
 
     write_private_json!(output_path, %{
@@ -173,8 +205,10 @@ defmodule LinuxV2ControlClaimFixture do
       "repository_ref" => repository_ref,
       "subject" => %{"commit" => commit, "tree_digest" => tree_digest},
       "pi_repository_resource_id" => pi_repository.id,
+      "pi_durability_repository_resource_id" => pi_durability_repository.id,
       "opencode_repository_resource_id" => opencode_repository.id,
-      "work_items" => work_items
+      "work_items" => work_items,
+      "goal_cases" => goal_case_specs
     })
   end
 
@@ -182,29 +216,43 @@ defmodule LinuxV2ControlClaimFixture do
     require_ephemeral_ci!()
     start_repo!()
     fixture = read_json!(fixture_path)
-    unless map_size(fixture["work_items"]) == @expected_fixture_runs do
+    fixture_runs = map_size(fixture["work_items"]) + map_size(fixture["goal_cases"])
+
+    if fixture_runs != @expected_fixture_runs do
       raise "owner-witness fixture Run count changed before assignment: expected #{@expected_fixture_runs}"
     end
-    {^case_name, profile, harness, _description} =
+    {^case_name, profile, harness, repository_role, description} =
       Enum.find(@cases, &(elem(&1, 0) == case_name)) || raise "unknown owner-witness case"
     request_case =
       cond do
-        case_name in ["stage_replay_native_release_codex", "stage_replay_native_release_claude"] -> case_name
+        case_name in [
+          "stage_replay_native_release_codex",
+          "stage_replay_native_release_claude",
+          "stage_replay_unprovisioned_refusal"
+        ] -> case_name
         String.starts_with?(case_name, "stage_replay_") -> "stage_replay"
         true -> case_name
       end
 
-    item = Map.fetch!(fixture["work_items"], case_name)
-    task_id = launch_one_shot_work_item!(item["work_item_id"], case_name)
+    {item, task_id} =
+      case Map.fetch(fixture["goal_cases"], case_name) do
+        {:ok, goal_case} ->
+          provision_goal_admission!(fixture, case_name, profile, description, goal_case)
+
+        :error ->
+          item = Map.fetch!(fixture["work_items"], case_name)
+          {item, launch_one_shot_work_item!(item["work_item_id"], case_name)}
+      end
+
     run = await_assigned_run!(task_id, 30_000)
     runtime = Repo.get!(Runtime, run.runtime_id)
     provider_access? = Map.get(runtime.capabilities || %{}, "provider_access", false)
 
-    unless runtime.agent_profile == profile and runtime.workspace == "native" and
-             runtime.repository_resource_id == item["repository_resource_id"] and
-             not Map.has_key?(runtime.capabilities || %{}, "adapter") and
-             provider_access? == (harness == :pi) do
-      raise "generic Control claim runtime did not match the exact non-native Work profile/resource"
+    if !(runtime.agent_profile == profile and runtime.workspace == "native" and
+           runtime.repository_resource_id == item["repository_resource_id"] and
+           provider_access? == (repository_role == :pi_provider) and
+           runtime_adapter_binding?(runtime, repository_role)) do
+      raise "generic Control claim runtime did not match the exact Work profile/resource"
     end
 
     write_private_json!(output_path, %{
@@ -387,6 +435,161 @@ defmodule LinuxV2ControlClaimFixture do
     Base.encode16(:crypto.hash(:sha256, value), case: :lower)
   end
 
+  # The clone reserve parses the Claim's Work input as a goal admission
+  # (linux_clone_journal.go:864-877), so Control composes it through this command path.
+  defp provision_goal_admission!(fixture, case_name, profile, description, goal_case) do
+    subject = %{
+      "resource_id" => goal_case["repository_resource_id"],
+      "commit" => fixture["subject"]["commit"],
+      "tree_digest" => fixture["subject"]["tree_digest"]
+    }
+
+    acceptance = %{
+      "schema_version" => "symmetry.acceptance.v1",
+      "description" => "A scoped operator acceptance is required.",
+      "predicates" => [%{"id" => "operator", "kind" => "operator_acceptance"}]
+    }
+
+    attrs = %{
+      schema_version: "symmetry.goal_create.v1",
+      mutation_id: Ecto.UUID.generate(),
+      title: "Linux v2 #{case_name} owner witness",
+      initial_revision: %{
+        objective: description,
+        non_goals: ["No autonomous publication"],
+        acceptance_contract: acceptance,
+        authority_policy: %{
+          "operator_required_for_scope_change" => true,
+          "operator_required_for_completion" => true,
+          "publication_allowed" => false,
+          "allowed_actions" => []
+        },
+        execution_policy: %{
+          "automatic_execution" => false,
+          "max_parallel_tasks" => 2,
+          "max_task_admissions" => 2,
+          "max_run_attempts_per_task" => 2,
+          "budget_limit_microusd" => nil,
+          "per_run_cost_limit_microusd" => nil,
+          "budget_mode" => "soft",
+          "hard_cost_limit_required" => false,
+          "allowed_runtime_ids" => [],
+          "allowed_model_profiles" => [],
+          "final_acceptance" => "operator",
+          "allowed_actions" => [],
+          "allowed_resource_ids" => []
+        },
+        context_manifest: %{
+          "byte_budget" => 32_768,
+          "required_source_kinds" => ["repository"],
+          "include_advisory_recall" => false
+        },
+        reason: "Isolated Linux v2 owner-witness admission"
+      }
+    }
+
+    created =
+      case Goals.create_goal(fixture["project_id"], attrs, @fixture_actor, rollout_enabled: true) do
+        {:ok, receipt, :created} -> receipt
+        other -> raise "owner-witness Goal creation was refused: #{inspect(other)}"
+      end
+
+    goal_id = created.goal_id
+
+    proposal = %{
+      schema_version: "symmetry.plan.v1",
+      proposal_id: Ecto.UUID.generate(),
+      goal_id: goal_id,
+      expected_revision: 1,
+      items: [
+        %{
+          key: "witness",
+          title: "Linux v2 #{case_name} owner witness",
+          description: description,
+          required: true,
+          integration: true,
+          repository_resource_id: subject["resource_id"],
+          acceptance: acceptance,
+          depends_on_keys: [],
+          model_profile: profile,
+          change_target: nil,
+          baseline: %{kind: "subject", subject: subject}
+        }
+      ]
+    }
+
+    decision_receipt =
+      goal_command!(goal_id, "request_decision", %{
+        kind: "plan",
+        work_item_id: nil,
+        subject_hash: nil,
+        proposal: proposal
+      })
+
+    decision_id = get_in(decision_receipt, [:response, "decision", "id"]) || raise "plan decision is absent"
+    decision = Repo.get!(GoalDecision, decision_id)
+
+    goal_command!(goal_id, "resolve_decision", %{
+      decision_id: decision_id,
+      expected_decision_version: decision.lock_version,
+      option_id: "accept"
+    })
+
+    goal_command!(goal_id, "accept_plan", %{
+      proposal: proposal,
+      proposal_hash: "sha256:" <> Base.encode16(SymmetryControl.RequestHash.canonical(proposal), case: :lower),
+      decision_id: decision_id
+    })
+
+    goal_command!(goal_id, "activate", %{approved_revision: 1})
+
+    {:ok, goal} = Goals.fetch_goal(goal_id)
+    item_id = goal.work_items |> List.first() |> Map.fetch!(:id)
+
+    # purpose=implement with no allowed provider action keeps provider_scope null
+    # (admission.ex:1304-1307), the provider-free shape the owner witness validates.
+    admitted =
+      goal_command!(goal_id, "admit_task", %{
+        work_item_id: item_id,
+        purpose: "implement",
+        model_profile: profile,
+        session_mode: "fresh",
+        requested_session_id: nil,
+        validation_of_task_id: nil
+      })
+
+    {%{
+       "work_item_id" => item_id,
+       "repository_resource_id" => subject["resource_id"],
+       "agent_profile" => profile
+     }, admitted.response["task"]["id"]}
+  end
+
+  defp goal_command!(goal_id, kind, payload) do
+    {:ok, goal} = Goals.fetch_goal(goal_id)
+
+    command = %{
+      schema_version: "symmetry.goal_command.v1",
+      mutation_id: Ecto.UUID.generate(),
+      expected_version: goal.version,
+      expected_revision: goal.current_revision,
+      kind: kind,
+      payload: payload
+    }
+
+    case Goals.command(goal_id, command, @fixture_actor, rollout_enabled: true) do
+      {:ok, receipt, :created} -> receipt
+      other -> raise "owner-witness goal command #{kind} was refused: #{inspect(other)}"
+    end
+  end
+
+  # Goal assignment requires a native-harness runtime with adapter operations
+  # (assignment.ex:332,:519-530); the legacy claim runtimes stay adapter-free.
+  defp runtime_adapter_binding?(runtime, :pi_durability),
+    do: get_in(runtime.capabilities || %{}, ["adapter", "kind"]) == "pi"
+
+  defp runtime_adapter_binding?(runtime, _repository_role), do: not Map.has_key?(runtime.capabilities || %{}, "adapter")
+
   defp start_repo! do
     {:ok, _started} = Application.ensure_all_started(:ecto_sql)
 
@@ -394,6 +597,22 @@ defmodule LinuxV2ControlClaimFixture do
       {:ok, _pid} -> :ok
       {:error, {:already_started, _pid}} -> :ok
       {:error, reason} -> raise "could not start isolated Control fixture repository: #{inspect(reason)}"
+    end
+
+    # Goal commands persist wakeup jobs, so Oban must be running; queues stay
+    # off because the fixture never executes jobs itself.
+    {:ok, _oban_started} = Application.ensure_all_started(:oban)
+
+    oban =
+      :symmetry_control
+      |> Application.fetch_env!(Oban)
+      |> Keyword.put(:queues, false)
+      |> Keyword.delete(:plugins)
+
+    case Oban.start_link(oban) do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+      {:error, reason} -> raise "could not start isolated Control fixture Oban: #{inspect(reason)}"
     end
   end
 

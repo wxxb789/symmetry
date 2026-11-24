@@ -107,7 +107,7 @@ func TestProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister(t *testing.
 	t.Setenv(linuxV2OpenCodeConfigEnvironment, configPath)
 	t.Setenv(linuxV2StageReplayRequestEnvironment, requestPath)
 	runProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister(t, caseRoot, linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "checkout_ready", markerDirectory: linuxV2HelperExitAfterReleaseMarkerDir,
 		helperAction: linuxV2HelperExitAfterReleaseAction,
@@ -125,7 +125,7 @@ func runProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister(
 		strings.TrimSpace(os.Getenv(linuxV2OpenCodeConfigEnvironment)) != filepath.Join(caseRoot, "config.json") ||
 		strings.TrimSpace(os.Getenv(linuxV2StageReplayRequestEnvironment)) != filepath.Join(caseRoot, "request.json") ||
 		testCase.helperAction != linuxV2HelperExitAfterReleaseAction || testCase.barrierStage != "checkout_ready" {
-		t.Fatalf("helper exit fixture does not bind the exact OpenCode checkout-ready Run beneath %s", caseRoot)
+		t.Fatalf("helper exit fixture does not bind the exact Pi checkout-ready Run beneath %s", caseRoot)
 	}
 	fixture := newLinuxV2NativeFixture(t, testCase)
 	if err := linuxV2ValidateOwnerHelperWitnessSelector(fixture); err != nil {
@@ -148,6 +148,9 @@ func runProductionLinuxV2HelperExitAfterReleaseBeforeNativeRegister(
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
 	leaseToken := fixture.request.Claim.LeaseToken
 	defer func() {
+		if err := linuxV2BindDurabilityNativeBinary(&witness, fixture); err != nil {
+			t.Errorf("bind the staged provider-free pi executable: %v", err)
+		}
 		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
 			t.Errorf("write redacted helper release-window witness: %v", err)
 		}
@@ -488,12 +491,12 @@ func linuxV2ObserveReleasedBHelperExit(
 		return linuxV2HelperExitAfterReleaseSnapshot{}, errors.New("live helper-exit Run does not retain the exact B-owned Store checkout inode")
 	}
 	commandLine, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", gate.PID))
-	if err != nil || !linuxV2NativeCommandMatches("opencode", commandLine) {
-		return linuxV2HelperExitAfterReleaseSnapshot{}, errors.Join(errors.New("released B process is not the exact native OpenCode serve command"), err)
+	if err != nil || !linuxV2NativeCommandMatches(fixture.value.Runtime.HarnessKind, commandLine) {
+		return linuxV2HelperExitAfterReleaseSnapshot{}, errors.Join(errors.New("released B process is not the exact native harness command"), err)
 	}
 	executable, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", gate.PID))
 	if err != nil || filepath.Clean(executable) != fixture.profile.Command {
-		return linuxV2HelperExitAfterReleaseSnapshot{}, errors.Join(errors.New("released B process executable differs from the pinned OpenCode CLI"), err)
+		return linuxV2HelperExitAfterReleaseSnapshot{}, errors.Join(errors.New("released B process executable differs from the pinned native CLI"), err)
 	}
 	snapshot := linuxV2HelperExitAfterReleaseSnapshot{
 		Action: linuxV2HelperExitAfterReleaseAction, RunID: fixture.request.RunKey.RunID,
