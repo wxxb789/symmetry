@@ -208,7 +208,7 @@ func TestTerminateStopsDescendantProcessOnWindows(t *testing.T) {
 
 func TestRootExitDoesNotLeaveADescendantHoldingStdoutOnWindows(t *testing.T) {
 	sink := &recordingSink{notify: make(chan struct{}, 1)}
-	process := startHelper(t, sink, "root-exits-child-holding-stdout")
+	process := startHelperInvocation(t, sink, descendantHoldingStdoutInvocation(t))
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 		defer cancel()

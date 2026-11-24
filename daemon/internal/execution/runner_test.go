@@ -44,7 +44,8 @@ func TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB(t *testing.T) {
 	t.Parallel()
 
 	sink := &recordingSink{}
-	process := startHelper(t, sink, "streams", "196731")
+	invocation := helperInvocation("streams", "196731")
+	process := startHelperInvocation(t, sink, invocation)
 	result := waitForResult(t, process)
 
 	if result.ExitCode != 0 {
@@ -53,10 +54,80 @@ func TestStartDrainsStdoutAndStderrBeyondSixtyFourKiB(t *testing.T) {
 	if got := len(sink.output(Stdout)); got != 196731 {
 		t.Fatalf("stdout length = %d, want 196731", got)
 	}
-	if got := len(sink.output(Stderr)); got != 196731 {
+	if got := len(drainCoverageRuntimeDiagnostics(t, invocation, sink.output(Stderr))); got != 196731 {
 		t.Fatalf("stderr length = %d, want 196731", got)
 	}
 	sink.requireStrictSequence(t)
+}
+
+func TestCoverageRuntimeDiagnosticStripBoundary(t *testing.T) {
+	t.Parallel()
+
+	payload := strings.Repeat("e", 196731)
+	documented := []string{
+		"error: coverage meta-data emit failed: rename <merge-dir>\\tmp.covmeta.5bde9a34b0182dd9672696b24ef5f92c: Access is denied.",
+		"error: coverage counter data emit failed: writing <merge-dir>\\covcounters.5bde9a34b0182dd9672696b24ef5f92c: Access is denied.",
+		"warning: GOCOVERDIR not set, no coverage data emitted",
+	}
+
+	testCases := []struct {
+		name         string
+		stream       string
+		wantStripped int
+		wantIntact   bool
+	}{
+		{"payload alone is untouched", payload, 0, true},
+		{"payload plus a documented line with one newline", payload + documented[0] + "\n", 1, true},
+		{"payload plus a documented line with two newlines", payload + documented[0] + "\n\n", 1, true},
+		{"payload plus a carriage-return-terminated documented line strips", payload + documented[0] + "\r\n", 1, true},
+		{"payload plus a documented counter line", payload + documented[1] + "\n", 1, true},
+		{"payload plus the documented warning line", payload + documented[2] + "\n", 1, true},
+		{"payload plus two documented lines", payload + documented[0] + "\n" + documented[2] + "\n\n", 2, true},
+		{"payload plus a foreign error line still fails", payload + "error: surprising helper failure\n", 0, false},
+		{"payload plus a documented line then a foreign line still fails", payload + documented[0] + "\n" + "error: surprising helper failure\n", 0, false},
+		{"payload plus a documented line without a terminator still fails", payload + documented[0], 0, false},
+		{"payload plus a newline then a documented line still fails", payload + "\n" + documented[0] + "\n", 1, false},
+		{"payload plus a mid-line-prefixed documented block still fails", payload + "x" + documented[0] + "\n", 1, false},
+		{"a shortened payload plus a documented line still fails", payload[:len(payload)-1] + documented[0] + "\n", 1, false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stripped, diagnostics := stripCoverageRuntimeDiagnostics(testCase.stream)
+			if len(diagnostics) != testCase.wantStripped {
+				t.Fatalf("stripped lines = %d, want %d: %q", len(diagnostics), testCase.wantStripped, diagnostics)
+			}
+			if intact := stripped == payload; intact != testCase.wantIntact {
+				t.Fatalf("stripped stream is the payload = %t, want %t; length = %d, want %d", intact, testCase.wantIntact, len(stripped), len(payload))
+			}
+		})
+	}
+}
+
+func TestCoverageRuntimeDiagnosticStripRequiresForwardedCoverageDirectory(t *testing.T) {
+	t.Parallel()
+
+	payload := strings.Repeat("e", 196731)
+	stream := payload + "error: coverage meta-data emit failed: Access is denied.\n"
+
+	testCases := []struct {
+		name        string
+		environment []string
+		wantDrained bool
+	}{
+		{"helper environment without GOCOVERDIR keeps the line", []string{"GO_WANT_HELPER_PROCESS=1"}, false},
+		{"helper environment with an empty GOCOVERDIR keeps the line", []string{"GO_WANT_HELPER_PROCESS=1", "GOCOVERDIR="}, false},
+		{"helper environment with GOCOVERDIR set drains the line", []string{"GO_WANT_HELPER_PROCESS=1", "GOCOVERDIR=<merge-dir>"}, true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			invocation := Invocation{Env: testCase.environment}
+			if drained := drainCoverageRuntimeDiagnostics(t, invocation, stream) == payload; drained != testCase.wantDrained {
+				t.Fatalf("drained = %t, want %t", drained, testCase.wantDrained)
+			}
+		})
+	}
 }
 
 func TestSlowSinkAppliesBoundedBackpressureWithoutDeadlockingPipes(t *testing.T) {
@@ -503,7 +574,12 @@ func TestStartDoesNotInheritTheDaemonEnvironment(t *testing.T) {
 
 func startHelper(t *testing.T, sink Sink, mode string, arguments ...string) *Process {
 	t.Helper()
-	process, err := NewRunner().Start(context.Background(), helperInvocation(mode, arguments...), sink)
+	return startHelperInvocation(t, sink, helperInvocation(mode, arguments...))
+}
+
+func startHelperInvocation(t *testing.T, sink Sink, invocation Invocation) *Process {
+	t.Helper()
+	process, err := NewRunner().Start(context.Background(), invocation, sink)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -516,6 +592,13 @@ func helperInvocation(mode string, arguments ...string) Invocation {
 		Args:    append([]string{"-test.run=^TestHelperProcess$", "--", mode}, arguments...),
 		Env:     append(minimalEnvironment(), "GO_WANT_HELPER_PROCESS=1"),
 	}
+}
+
+func descendantHoldingStdoutInvocation(t *testing.T) Invocation {
+	t.Helper()
+	invocation := helperInvocation("root-exits-child-holding-stdout")
+	invocation.Env = append(invocation.Env, "GO_RUNNER_DESCENDANT_MARKER="+filepath.Join(t.TempDir(), "descendant-stdout-written"))
+	return invocation
 }
 
 func completeHandoffInvocation(invocation Invocation) Invocation {
@@ -536,6 +619,75 @@ func minimalEnvironment() []string {
 		}
 	}
 	return values
+}
+
+// Coverage runtime exit-hook write failures (covmeta/covcounters) and the GOCOVERDIR-unset
+// warning; nothing else may be stripped.
+var coverageRuntimeDiagnosticPrefixes = [...]string{
+	"error: coverage meta-data emit failed: ",
+	"error: coverage counter data emit failed: ",
+	"warning: GOCOVERDIR not set, no coverage data emitted",
+}
+
+func drainCoverageRuntimeDiagnostics(t *testing.T, invocation Invocation, output string) string {
+	t.Helper()
+	if !helperForwardsCoverageDirectory(invocation) {
+		return output
+	}
+	drained, diagnostics := stripCoverageRuntimeDiagnostics(output)
+	for _, diagnostic := range diagnostics {
+		t.Logf("stripped coverage runtime diagnostic (%d bytes): %s", len(diagnostic), diagnostic)
+	}
+	return drained
+}
+
+func helperForwardsCoverageDirectory(invocation Invocation) bool {
+	for _, entry := range invocation.Env {
+		if key, value, found := strings.Cut(entry, "="); found && key == "GOCOVERDIR" {
+			return value != ""
+		}
+	}
+	return false
+}
+
+// The runtime's detail can carry its own newline and the format adds one more, so a
+// stripped block is a documented line plus the newline terminators that follow it.
+func stripCoverageRuntimeDiagnostics(output string) (string, []string) {
+	var stripped []string
+	remaining := output
+	for strings.HasSuffix(remaining, "\n") {
+		index := -1
+		for _, prefix := range coverageRuntimeDiagnosticPrefixes {
+			if found := strings.LastIndex(remaining, prefix); found > index {
+				index = found
+			}
+		}
+		if index < 0 {
+			break
+		}
+		if !onlyCoverageRuntimeDiagnosticLines(remaining[index:]) {
+			return output, nil
+		}
+		stripped = append(stripped, strings.Split(strings.TrimRight(remaining[index:], "\n"), "\n")...)
+		remaining = remaining[:index]
+	}
+	return remaining, stripped
+}
+
+func onlyCoverageRuntimeDiagnosticLines(block string) bool {
+	for _, line := range strings.Split(strings.TrimRight(block, "\n"), "\n") {
+		matched := false
+		for _, prefix := range coverageRuntimeDiagnosticPrefixes {
+			if strings.HasPrefix(line, prefix) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func newInputPipeProcess(t *testing.T) (*os.File, *Process) {
@@ -766,8 +918,13 @@ func TestHelperProcess(t *testing.T) {
 		waitForever()
 	case "tree-child":
 		_, _ = fmt.Fprintf(os.Stdout, "child:%d", os.Getpid())
+		signalDescendantStdoutWritten()
 		waitForever()
 	case "root-exits-child-holding-stdout":
+		marker := descendantStdoutMarker()
+		if marker == "" {
+			os.Exit(2)
+		}
 		child := exec.Command(os.Args[0], "-test.run=^TestHelperProcess$", "--", "tree-child")
 		child.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
 		child.Stdout = os.Stdout
@@ -776,7 +933,9 @@ func TestHelperProcess(t *testing.T) {
 			fmt.Fprint(os.Stderr, err)
 			os.Exit(5)
 		}
-		time.Sleep(100 * time.Millisecond)
+		// The root's exit tears the containment tree down, so wait for the
+		// grandchild's marker: a fixed sleep raced its stdout write under load.
+		waitForDescendantMarker(marker)
 	case "wait":
 		waitForever()
 	default:
@@ -815,5 +974,36 @@ func writeRepeated(writer io.Writer, value byte, count int) {
 func waitForever() {
 	for {
 		time.Sleep(time.Hour)
+	}
+}
+
+func descendantStdoutMarker() string {
+	return os.Getenv("GO_RUNNER_DESCENDANT_MARKER")
+}
+
+// The marker must follow the grandchild's stdout write, or the root's exit
+// could still tear the tree down before the write lands in the pipe.
+func signalDescendantStdoutWritten() {
+	marker := descendantStdoutMarker()
+	if marker == "" {
+		return
+	}
+	if err := os.WriteFile(marker, []byte("stdout-written"), 0o600); err != nil {
+		fmt.Fprint(os.Stderr, err)
+		os.Exit(6)
+	}
+}
+
+func waitForDescendantMarker(marker string) {
+	deadline := time.Now().Add(testHangGuard)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "descendant marker %q was not created within %s", marker, testHangGuard)
+			os.Exit(6)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
