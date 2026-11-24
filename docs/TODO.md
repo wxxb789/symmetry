@@ -1453,9 +1453,10 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       them clean.
 
 - [ ] `.github/workflows/ci.yml`: shellcheck-enabled `actionlint` still does not terminate on the
-      Windows development host (reproduced while running this sweep's gate), and Credo still prints
-      the same numbered list for files skipped over `parse_timeout` and for unparsable files, so the
-      strict baseline can deflate even with the `credo_strict_unparsed_files` guard printing.
+      Windows development host (reproduced while running this sweep's gate). The Credo half of the
+      item — that a source file skipped over `parse_timeout` or unparsable could deflate the strict
+      baseline with only a guard printing — closed at rf-w6-10 and moved to
+      `docs/archive/CLOSED-TODO.md`.
 
 - [ ] `daemon/cmd/symmetry-fake-agent/autonomous.go`: on a carrier whose `Close` cannot unblock a
       parked read (the inherited stdio pipe), the reader goroutine is not joined before the run
@@ -1743,6 +1744,16 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       public specs and again in `control/lib/symmetry_control/orchestration/task_reads.ex:333-338`
       (typedoc at `:328`) for the moved specs. A drifted copy would mis-document the retry
       projection without failing a test.
+
+## Credo strict ratchet: count-0 blocking (rf-w6-10, 2026-11-23)
+
+- [ ] `.github/workflows/ci.yml` / `control/.credo.exs`: the Credo gate blocks against the committed
+      ratchet (`scripts/ci/credo-strict-baseline.json`: 564 issues over 225 files at `95d1df45`),
+      not at count 0: the 2026-11-21 reconcile replaced the zero target because zero is not reachable
+      inside W6. The residual burn-down is the remaining 326 refactoring / 160 readability / 73
+      design / 5 warning findings, after the alias-class share Styler delivered (rf-w6-11) and the
+      web-tree clean-up (#147). Every decrease is recorded in the same change as the fix; a check is
+      never disabled and no `credo:disable` is added.
 
 ## Claude Goal-session attach carries the internal harness-kind spelling (rf-a3 observation, 2026-11-23)
 
