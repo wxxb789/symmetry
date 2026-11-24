@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Builds the one shared disposable Ubuntu guest rootfs per job; each case set clones it.
 set -Eeuo pipefail
 umask 077
 

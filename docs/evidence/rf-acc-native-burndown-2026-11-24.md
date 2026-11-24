@@ -20,19 +20,23 @@ Placeholders: `<A_HOME>`/`<B_HOME>` = the fixture A/B user homes, `<A_HOME>/ci-s
 
 | File | sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `ab44c6148972c742943f2bc03c51ae0a70d5e71e370f7779e2ca0fbb28264b72` |
-| `scripts/ci/linux-v2-native-rootfs-base.sh` | `d4f91792b7954acb9b592b4599790d99cc37dfadc13fc21c921c5f05691b7ccc` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `f939935272b8788d313534b38ba2eda618ea1f4ebd86699ab377d125fcf779b0` |
+| `scripts/ci/linux-v2-native-rootfs-base.sh` | `1df361903a9a6c286fb51f0fdf066b879ebffc76b73bff5bd9f2e239326d22cf` |
 | `scripts/ci/write-linux-v2-owner-request.py` | `17c36b13e25cf50813d4dd74155a69684a0094dedd9b7ba49cffb67ce1eb7b46` |
-| `scripts/ci/provision-linux-v2-control-claims.exs` | `76ad9dfb89d4bc95ad26440f7d59c5c0f36f5d456307cfa8a1d46d3697645fa7` |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `c6fd8e60bd822d3eb127cd3e4956b331710b763f6acd3c5980af1f6c2a632b32` |
 | `.github/workflows/linux-native-v2-acceptance.yml` | `c0d18435e86758e00cef0b176248eed696e70ec397c883b9b7b46c17740dc890` |
 | `daemon/internal/linuxpreflight/systemd_linux.go` | `37045972b7c6aba631045e5a9a348a9f51a0eae0351eef15b6908bdb4724ea92` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `465293fa3ac3b0c385fabd38f6b385da986f86a7305d7958e9b335a2c7d9f1fd` |
 | this record | no self-referential hash |
 
-Fix-stage refresh (2026-11-24, §10): the acceptance-script row above is the fix-stage bytes; the
-final all-14 run `45402706492` bound the pre-fix bytes (`05d81032…`, §3.15/§9), and only
-§10.1-§10.3's diagnostic-path regions differ. The preflight row above is the merged head's value
-(§9).
+Stage refresh (2026-11-24, §10.6/§10.7): `45402706492` was the implement stage's last all-14 run
+(`05d81032…`, §3.15/§9). The fix stage then changed only diagnostic regions of the acceptance
+script (§10.1-§10.3); the round-1 audit fix (§10.7) changed the acceptance script (dead probe
+deleted, filtered diagnostics), the retirement script (fixture-database guard) and the rootfs-base
+header, and the round's own new code was iterated in runs `45424315178`, `45426731841` and
+`45431551609` (two defects caught and fixed, §10.7). The binding literal all-14 run is
+`45431551609` on head `7072891f`, whose tree carries exactly the three rows above (§3.16). The
+preflight row above is the merged head's value (§9).
 
 The cap-ruling heads progress as `9fadfda2` (round 7: round-6 bytes plus the scoped
 `safe.directory` guard, §3.7.6), `26ba0065` (round 8: the ACK-loss fix and the first failure
@@ -42,8 +46,9 @@ the pi share directory mode, the A-view tool fences and the containment early-ph
 table's hashes), `daeaedda` (round 11: the explicit tool-tree modes A's own fences pin, §3.11),
 `99277aed` (round 12: the fixed-B XDG cache and Pi session directory, §3.12.1, run 12's hash),
 `d4fdb149` (round 13: the fifth leg's pin re-point, §3.14) and `8339f991` (round 13b: the
-parent-death fixture name width, §3.15 — the head of the final all-14 run `45402706492`; §10
-replaced this table's script row with the fix-stage bytes).
+parent-death fixture name width, §3.15 — the implement stage's last all-14 run), then `20488450`,
+`9838c9c1` and `7072891f` (round 1: the retirement-guard and filtered-printer iterations, §10.7;
+the binding all-14 run's head).
 Verified with `git cat-file blob <head>:<path>` against the worktree at each push;
 each commit's tree is the push-time worktree (PR head plus this stage's files) with the two
 throwaway files below, deleted with the branch: `.github/workflows/scratch-native-burndown.yml`,
@@ -86,11 +91,18 @@ workflow files byte-identically and `daemon/**` at base bytes.
    `chroot <base> test -x /usr/bin/readelf`, and the fixture re-runs that fence on every clone. With
    the variable unset the fixture builds its own rootfs through the same helper, so local runs keep
    working. Every per-set provisioning step, fence and teardown proof is unchanged.
+4. Round-1 review fixes (§10.7): the Control fixture's runtime retirement refuses any database that
+   is not the job's own loopback fixture database (§6.2); the dead `probe_witness_app_refusal` is
+   deleted and the remaining daemon/App-stderr diagnostics print only through the same
+   secret-values filter and 400-byte cap as the witness-output printer; the record's repeated
+   per-set tables are deduplicated (§3.3/§3.5/§3.6).
 
 Not touched: `scripts/ci/linux-v2-native-tools.sh` (0 diff lines: the OpenCode staging URL, archive
 hash, version assertion), the kind pin map's `"opencode": "1.18.32"`, the frozen opencode render
-tokens, all of `daemon/**` and `control/**`, and the real workflow's `environment`, `secrets.*`,
-`vars.*`, triggers and permissions (the workflow diff adds one step).
+tokens, all of `control/**`, all of `daemon/**` except the F1 change in
+`daemon/internal/linuxpreflight/{systemd_linux.go,preflight_linux_test.go}` (§6.1), and the real
+workflow's `environment`, `secrets.*`, `vars.*`, triggers and permissions (the workflow diff adds
+one step).
 
 ## 3. Scratch runs
 
@@ -198,22 +210,13 @@ that reading stays derived from the code paths plus the logged task profile (§5
 Job 7 m 04 s; base-build step 30 s (first attempt); case-set step 321 s for all 14 sets (~23 s per
 set); one base build and 14 clones; no debootstrap inside any case set.
 
+The 14 rows are §3.3's table with one delta, row 3 (`shared`); rows 1-2 and 4-14 keep §3.3's
+class-C line (the named daemon-start check, with the owner `Before=… symmetry-daemon.service` line
+in the dump).
+
 | # | Case set | Last step reached | Exit | First failing line / check |
 | --- | --- | --- | --- | --- |
-| 1 | `codex_containment` | installed daemon smoke: direct preflight green, `systemctl start` failed | 1 | class C line |
-| 2 | `claude_containment` | same | 1 | class C line |
 | 3 | `shared` | Control claim provisioning, `schedule stage_replay_unprovisioned_refusal`: run assigned, then the fixture's runtime guard | 1 | `** (RuntimeError) generic Control claim runtime did not match the exact non-native Work profile/resource` (`provision-linux-v2-control-claims.exs:205`) — class E, §5.3 |
-| 4 | `synthetic_goal_cleanup` | installed daemon smoke | 1 | class C line |
-| 5 | `stage_replay_create_started` | same | 1 | class C line |
-| 6 | `stage_replay_leaf_bound` | same | 1 | class C line |
-| 7 | `stage_replay_launcher_bound` | same | 1 | class C line |
-| 8 | `ack_loss_launcher_bound` | same | 1 | class C line |
-| 9 | `stale_leaf` | same | 1 | class C line |
-| 10 | `migration` | same | 1 | class C line |
-| 11 | `stale_journal_run_key` | same | 1 | class C line |
-| 12 | `stale_journal_run_key_legacy` | same | 1 | class C line |
-| 13 | `stale_journal_fence` | same | 1 | class C line |
-| 14 | `stale_journal_subject` | same | 1 | class C line |
 
 Class D is gone: `shared` passed the provisioning that failed in round 3 (its task launched, a Run
 was assigned, `max_run_attempts` untouched) and died one step later at the runtime guard. Class A
@@ -227,22 +230,12 @@ Job 8 m 50 s; base-build step 36 s on the first attempt (the mirror window recov
 395 s for all 14 sets (~28 s per set). Log counts: 13 class-C lines, 13 `Before=…
 symmetry-daemon.service` owner lines, 1 class-E line, and zero class-A, class-B or class-D lines.
 
+The 14 rows are §3.3's table with one delta, row 3 (`shared`); rows 1-2 and 4-14 keep §3.3's
+class-C line.
+
 | # | Case set | Last step reached | Exit | First failing line / check |
 | --- | --- | --- | --- | --- |
-| 1 | `codex_containment` | installed daemon smoke: direct preflight green, `systemctl start` failed | 1 | class C line |
-| 2 | `claude_containment` | same | 1 | class C line |
 | 3 | `shared` | Control claim provisioning: run assigned, then the fixture's runtime guard | 1 | `generic Control claim runtime did not match the exact non-native Work profile/resource` (class E) |
-| 4 | `synthetic_goal_cleanup` | installed daemon smoke | 1 | class C line |
-| 5 | `stage_replay_create_started` | same | 1 | class C line |
-| 6 | `stage_replay_leaf_bound` | same | 1 | class C line |
-| 7 | `stage_replay_launcher_bound` | same | 1 | class C line |
-| 8 | `ack_loss_launcher_bound` | same | 1 | class C line |
-| 9 | `stale_leaf` | same | 1 | class C line |
-| 10 | `migration` | same | 1 | class C line |
-| 11 | `stale_journal_run_key` | same | 1 | class C line |
-| 12 | `stale_journal_run_key_legacy` | same | 1 | class C line |
-| 13 | `stale_journal_fence` | same | 1 | class C line |
-| 14 | `stale_journal_subject` | same | 1 | class C line |
 
 This is the contract's final all-14 run, on the final bytes; it is the last scratch run of the
 stage. It reproduces run A's shape exactly, so class E is deterministic in the all-14 shape, not a
@@ -762,7 +755,8 @@ diagnostics branch (`:1512-1569`) never fired — the F1 live proof. The App's n
 `owner witness config native harness version differs from the tested release` 210 times, the
 F2-excluded cause of the ten OpenCode-vehicle rows. Head `99277aed`'s tree equals this tree's bytes
 for all eight modified tracked files and `linux-v2-native-rootfs-base.sh` (blob hashes compared one
-by one), so the table below is the final script bytes.
+by one), so the table below describes head `99277aed`'s bytes; §3.16 re-binds the acceptance to the
+later fixed tree.
 
 | # | Case set | Last step reached | Exit | First failing line / check |
 | --- | --- | --- | --- | --- |
@@ -807,7 +801,7 @@ that observes the first post-seed refusal: run the App once on a fresh StateDir 
 journal moved aside), or capture the witness's own stderr instead of `/dev/null`
 (`daemon/e2e/production_linux_v2_owner_cli_test.go:52-56`), then one more scratch run (5 of the
 ruling's 6 used). No fixture change is made here: the tree must stay at head `99277aed`'s bytes for
-this table to describe the final script bytes.
+this table to describe that tree.
 
 ### 3.14 Round 13 — the fifth leg's pin re-pointed; the `shared` set reaches its owner leg (`45398550682`, head `d4fdb149`)
 
@@ -890,7 +884,76 @@ B, C, D or E, and no row ends at a silent daemon start failure: rows 1-2 end ins
 witness with the App's refusal unnamed (follow-up), rows 5-14 end at the App's own witness gate
 (F2-excluded OpenCode configs), row 4 ends at its test's own launcher assertion (follow-up), and
 row 3 reaches its set's owner leg with three named product-test stops (follow-up). This is the
-last scratch run of the stage, on the final script bytes (`05d81032…`, blob `19ed563b…`).
+implement stage's last all-14 run, on head `8339f991`'s bytes (`05d81032…`, blob `19ed563b…`); the
+fix stage then changed three diagnostic-path regions (§10.1-§10.3) and §3.16 re-binds the acceptance
+clause to the fixed tree.
+
+### 3.16 Round 1 — the literal all-14 run on the fixed bytes (`45431551609`, head `7072891f`)
+
+Conductor ruling (2026-11-24, PR #277 round 1): one fresh literal all-14 scratch run on the exact
+fixed bytes, at most 2 runs. Two of this round's dispatches were invalidated by defects in the
+round's own new code, each caught by its run and fixed in scope: `45424315178` (`require_fixture_local_database!`
+read `Repo.config()[:url]`, which Ecto pops into `:hostname`/`:database`, so it refused the
+fixture's own database) and `45426731841` (`print_filtered_output_lines` read its python program
+from the same stdin the pipeline fed, so every probe's output vanished). The third dispatch,
+`45431551609`, is the binding run; the 2-run cap overrun is recorded here under the conductor's
+explicit approval, since the alternative was an unbound or defective tree. The scratch branch is
+deleted from the remote after this run, and the deletion is proven with `git ls-remote` (§7); the
+local branch is retained unreferenced for a follow-up scratch loop.
+
+Literal run: the pushed tree is the PR worktree's bytes for every tracked file plus the two
+scratch-only files (`.github/workflows/scratch-native-burndown.yml`, `scripts/ci/scratch-gh-shim`);
+the acceptance script is `f9399352…`, the retirement script `c6fd8e60…`, the rootfs-base helper
+`1df36190…` (§1), each verified with `git cat-file blob 7072891f:<path>` against the worktree. The
+run log's first line selects `refs/heads/scratch/rf-acc-native-burndown at
+7072891f6f29a5d057a0359372214657e91e2f85`. The shim stays in the loop for the same reason §8
+records: the dummy `gho_` token cannot pass the real `gh auth login`
+(`linux-v2-native-acceptance.sh:347`), and without the shim every set would stop at the credential
+step, hiding every witness row; the shim answers only `gh auth login` and never reaches the PR
+branch.
+
+Run shape (job `linux-native-v2-acceptance`, `15:59:23Z`–`16:23:38Z`, 24 m 15 s; base-build step
+31 s on the first attempt, `16:00:49`–`16:01:20`; case-set step 22 m 16 s; all 14 sets exit 1):
+one base build and 14 `Cloning the shared disposable guest rootfs base` lines; `retired N`
+lines `0` once and `5` thirteen times (F2 live); `through Before` 0 and the Change-1 diagnostics
+branch 0 firings (F1 live); `debootstrap` 0; `inspect B credential directory` 60 (the restored
+per-config probes); `generic Control claim runtime` 0; `dubious ownership` 0; `build cache` 0;
+`owner witness config native harness version differs from the tested release` 210 (the F2-excluded
+OpenCode gate); six `verified …: run=1 pass=1 skip=0` lines. The deleted probe's lines are gone as
+intended (`existing owner witness clone intent` 0, `witness app early-phase probe` 0). The per-set
+event gates (`bad=…` lines) are byte-identical to run `45402706492`'s, so every row below names the
+same stop as the implement stage's final run, and none is a new stop.
+
+The six verified legs are `TestProductionLinuxV2UnprovisionedHostRefusal`,
+`TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction`,
+`TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest`,
+`TestInstalledLinuxOwnerCleanupRejectsBCallerScratch`, `TestCloneCleanupRejectsCrossMountEntry` and
+`TestInstalledLinuxOwnerRejectsUnexpectedCgroupProcsFD`, each `run=1 pass=1 skip=0` (all in
+`shared`).
+
+| # | Case set | Last step reached | Exit | First failing line / check |
+| --- | --- | --- | --- | --- |
+| 1 | `codex_containment` | named witness invoked; the App seeds its claim and stops before any stage | 1 | `production_linux_v2_native_witness_test.go:101: wait for requested production owner-witness barrier: owner-witness command did not reach its requested durable stage` (30.75 s); the post-seed App refusal stays unnamed, follow-up in `docs/TODO.md` |
+| 2 | `claude_containment` | same | 1 | same at `:109` (30.76 s) |
+| 3 | `shared` | legs 1-5 and `TestInstalledLinuxOwnerCloneCleanupScratch` pass; the owner leg's three other tests fail | 1 | `clone_cleanup_linux_test.go:259: A cleanup caller exited without the requested parent-death signal`; `clone_integration_linux_test.go:240: one-use B clone RELEASE and durable checkout ACK/native exec: Linux owner launch outcome is unknown; retain the pinned leaf and do not retry: await guarded native exec result: receive same-PID B bootstrap attempt: clone status frame magic or version is invalid` with its cleanup line `:113: stop only descendants in the explicitly named clone scratch leaf: open exact scratch leaf cgroup.kill: bad file descriptor`; `launcher_integration_linux_test.go:439: one-use fixed-B RELEASE and same-PID exec: native exec failed after RELEASE: errno=1`; follow-ups in `docs/TODO.md` |
+| 4 | `synthetic_goal_cleanup` | `TestProductionLinuxV2CloneCleanupAuthenticatedScratch` runs; the test's own real-launcher invocation | 1 | `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the real Linux v2 launcher/anchor/helper: start "/bin/sh": Linux v2 native release requires an App admission check` (1.98 s); follow-up in `docs/TODO.md` |
+| 5 | `stage_replay_create_started` | `TestProductionLinuxV2StageCrashReplayMatrix/create_started` invoked; no durable stage | 1 | `production_linux_v2_native_witness_test.go:178: wait for exact durable stage create_started: owner-witness command did not reach its requested durable stage` (31.42 s); the App's witness gate (F2-excluded OpenCode config) |
+| 6 | `stage_replay_leaf_bound` | same, `leaf_bound` | 1 | same at `:178`, `leaf_bound` (31.37 s) |
+| 7 | `stage_replay_launcher_bound` | same, `launcher_bound` | 1 | same at `:178`, `launcher_bound` (31.41 s) |
+| 8 | `ack_loss_launcher_bound` | `TestProductionLinuxV2AckLossReplayMatrix/launcher_bound`: the fixture request is accepted, no ACK boundary | 1 | `production_linux_v2_native_witness_test.go:217: wait for exact launcher_bound ACK boundary: owner-witness command did not reach its requested durable stage` (31.36 s); same cause |
+| 9 | `stale_leaf` | `TestProductionLinuxV2StaleLeafIdentityRetainsJournal`; no durable stop receipt | 1 | `production_linux_v2_native_witness_test.go:630: wait for exact durable stop receipt: owner-witness command did not reach its requested durable stage` (31.35 s); same cause |
+| 10 | `migration` | `TestProductionLinuxV2MigrationDenialRetainsJournal`; no OpenCode native_release boundary | 1 | `production_linux_v2_native_witness_test.go:616: wait for exact OpenCode native_release boundary: owner-witness command did not reach its requested durable stage` (31.37 s); same cause |
+| 11 | `stale_journal_run_key` | `TestProductionLinuxV2UnresolvedJournalBlocksFreshRun`; no durable stage | 1 | `production_linux_v2_native_witness_test.go:534: wait for exact durable stage handoff_committed: owner-witness command did not reach its requested durable stage` (31.36 s); same cause |
+| 12 | `stale_journal_run_key_legacy` | `TestProductionLinuxV2StaleOwnerRequestDenials/stale_journal_run_key`; no durable stage | 1 | `production_linux_v2_native_witness_test.go:269: wait for exact durable stage handoff_committed: owner-witness command did not reach its requested durable stage` (31.33 s); same cause |
+| 13 | `stale_journal_fence` | `TestProductionLinuxV2StaleOwnerRequestDenials/stale_journal_fence`; no durable stage | 1 | same at `:269` (31.36 s); same cause |
+| 14 | `stale_journal_subject` | `TestProductionLinuxV2StaleOwnerRequestDenials/stale_journal_subject`; no durable stage | 1 | same at `:269` (31.36 s); same cause |
+
+No row ends at class A, B, C, D or E, and no row ends at a silent daemon start failure: rows 1-2
+end inside their named witness with the App's refusal unnamed (follow-up), rows 5-14 end at the
+App's own witness gate (F2-excluded OpenCode configs), row 4 ends at its test's own launcher
+assertion (follow-up), and row 3 reaches its set's owner leg with three named product-test stops
+(follow-up). The OpenCode pin gate stays untouched and is the expected remaining stop for the
+OpenCode-vehicle rows until `rf-acc-pi-durability-matrices`.
 
 ## 4. Gates (local, final tree)
 
@@ -958,6 +1021,14 @@ Fix-stage update (2026-11-24, §10.6): the review's STD-01…STD-03 changed the 
 §1's script row is refreshed and §10.6 re-runs the script gates at that tree (`bash -n` 0;
 `shellcheck` 16 findings, delta 0; `actionlint` 0). The rows above describe the implement stage's
 trees.
+
+Round-1 update (2026-11-24, §10.7): re-run at the final tree. `bash -n` on the three linux-v2
+scripts: 0 (WSL Ubuntu-24.04, bash 5.2.21). `shellcheck --severity=warning
+scripts/ci/linux-v2-native-acceptance.sh`: exit 1 with the same 16 findings (3 error, 13 warning)
+and a code histogram identical to the same command on `origin/main`'s copy, delta 0; both helpers:
+0 findings. `actionlint .github/workflows/linux-native-v2-acceptance.yml`: 0 (no workflow change
+this round). `git diff --check`: clean. The `jscpd` changed-file gate, the record cleanliness gate
+and the filtered printer's probe rows are in §10.7.
 
 ## 5. Reached failure classes behind the smoke
 
@@ -1116,7 +1187,7 @@ Clause tests (`daemon/internal/linuxpreflight/preflight_linux_test.go`), run wit
 
 | Clause | Test | Before the fix | Observed now |
 | --- | --- | --- | --- |
-| accept: effective owner `Before=symmetry-daemon.service` | `:870-876` | FAIL: `effective owner unit depends on or orders against symmetry-daemon.service through Before` | PASS |
+| accept: effective owner `Before=symmetry-daemon.service` | `:870-875` | FAIL: `effective owner unit depends on or orders against symmetry-daemon.service through Before` | PASS |
 | refuse: each remaining key listing the daemon | `:877-889` (7 `owner/<key>` rows) | PASS | PASS |
 | refuse: declared `Before=symmetry-daemon.service` in the owner fragment | `:525-527` | PASS | PASS |
 | refuse: declared `before` in an owner drop-in | `:539-541` | PASS | PASS |
@@ -1126,14 +1197,14 @@ The accept clause failing on the pre-fix source, with the production message:
 
 ```
 --- FAIL: TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands (0.00s)
-    preflight_linux_test.go:876: systemd's inverse owner ordering edge to the daemon was rejected: effective owner unit depends on or orders against symmetry-daemon.service through Before
+    preflight_linux_test.go:875: systemd's inverse owner ordering edge to the daemon was rejected: effective owner unit depends on or orders against symmetry-daemon.service through Before
 ```
 
 Mutant rows:
 
 | Mutant | Expected | Observed |
 | --- | --- | --- |
-| re-add `Before` to the refusal list (revert F1) | accept clause reddens | `preflight_linux_test.go:876: systemd's inverse owner ordering edge … through Before` |
+| re-add `Before` to the refusal list (revert F1) | accept clause reddens | `preflight_linux_test.go:875: systemd's inverse owner ordering edge … through Before` |
 | drop `After` from the refusal list | `owner/After` row reddens | `--- FAIL: TestLinuxSystemdEffectivePropertiesRequireLiveOwnerAndExactCommands/owner/After … effective owner After edge to the daemon was accepted: <nil>` |
 | restore the F1 list | package green | `ok github.com/wxxb789/symmetry/daemon/internal/linuxpreflight 0.090s` |
 
@@ -1253,6 +1324,16 @@ the F-ruling rounds `c7053e2a`, `926e26e7`, `d2375e8f`, the cap-ruling rounds `9
 `git ls-remote origin scratch/rf-acc-native-burndown` prints nothing (exit 0). The local branch
 `scratch/rf-acc-native-burndown` is retained so a follow-up scratch loop can re-push the same bytes;
 the two throwaway files stay untracked in the working tree and never reach the PR branch.
+
+Round 1 (2026-11-24, §10.7) recreated that remote branch from the then-current PR tree plus the same
+two throwaway files; heads `20488450`, `9838c9c1` and `7072891f`, the last being run
+`45431551609`'s head and the branch's final state (§3.16). Deleted again from the remote after the
+binding run: `git push origin --delete scratch/rf-acc-native-burndown` printed
+`- [deleted] scratch/rf-acc-native-burndown` (exit 0), `git fetch --prune origin` removed the
+remote-tracking ref, and `git ls-remote origin scratch/rf-acc-native-burndown` prints nothing
+(exit 0). The local branch is retained, now unreferenced at `7072891f`, so a follow-up scratch loop
+can re-push the same bytes; the two throwaway files are tracked only there and never reach the PR
+branch.
 
 ## 8. Residual risks and known limits
 
@@ -1398,6 +1479,38 @@ the two throwaway files stay untracked in the working tree and never reach the P
   run; the workflow's `SYMMETRY_HEARTBEAT_INTERVAL_MS: "3600000"` (same file, `:44`) keeps the
   window near one hour. If it ever fires: re-sweep at `schedule` time.
 
+- Owner `Before` residual (F1; round-1 security hardening, §10.7): the daemon preflight accepts an
+  effective owner `Before=symmetry-daemon.service` (§6.1), so the owner's effective `Before` set is
+  no longer inspected at all. It is ordering-only — it pulls no unit into the transaction and grants
+  no authority — but a root-installed third-party unit that declares
+  `After=symmetry-owner.service` adds an entry to that set with no refusal. Declared fragment and
+  drop-in `Before=` edges to the daemon stay refused (`systemd_linux.go:498`, `:773-784`). Filed in
+  `docs/TODO.md` for the D3 `harness.md` amendment to state explicitly.
+
+- Same-set sub-case runtimes (Sol P3-3; round-1, recorded, no change): the F2 sweep is one-shot per
+  case set inside `prepare` (`provision-linux-v2-control-claims.exs:101` → `:425-436`), and a single
+  case set registers several sub-case runtimes that stay online. A set whose sub-cases share
+  profile/workspace but not repository resource could therefore re-trip class E with no teardown
+  failure — a stronger variant of the STD-06 residual above. Not observed: `generic Control claim
+  runtime` appears 0 times in the two all-14 run logs (§3.13/§3.15). If it ever fires, sweep at
+  `schedule` time as well as `prepare`.
+
+- Retirement database guard and the diagnostic surface (round-1; §10.7): the retirement refuses any
+  Control database that is not the job's own loopback fixture database (hostname
+  `127.0.0.1`/`localhost`/`::1` and a `symmetry_linux_v2*` name, fail closed; the mutant row is
+  below). The first dispatch of the guard (`45424315178`, §10.7) exposed that `Repo.config/0` has
+  already popped `:url` into `:hostname`/`:database`; the guard reads those keys, and the second
+  dispatch carries the fix. The dead `probe_witness_app_refusal` is deleted, and the remaining
+  daemon/App-stderr diagnostics print only through the same secret-values filter and 400-byte cap
+  as `print_witness_output_lines`, so no diagnostic path echoes guest output unfiltered.
+
+- Round-1 run update (2026-11-24, run `45431551609`, §3.16; supersedes the earlier round-1 bullets'
+  run references where they conflict): classes A, B, C, D and E stay gone on the fixed bytes
+  (`f9399352…`): one base build (31 s, first attempt) plus 14 clones, 14 `retired` lines
+  (`0` ×1, `5` ×13), 210 version-gate observations, 60 owner-preflight probe reports, zero Change-1
+  firings, and per-set event gates byte-identical to run `45402706492`'s. Every credential-dependent
+  step remains unproven: the scratch doubles reach no provider turn or GitHub provider action.
+
 ## 9. Apply stage (2026-11-24, after the simplify review of `9d113eb6..4c305861`)
 
 Applied from the accepted simplify set (no commit: the stage's rules forbid one; the deletions and
@@ -1538,3 +1651,79 @@ comment is documentation, and the jq selector changes only the printed witness d
 binding is byte-exact by contract, so closing it needs one fresh literal all-14 scratch run on the
 fixed bytes, or an explicit conductor amendment. This stage cannot dispatch one (no commit, no
 push; the scratch branch is deleted); it is recorded as the stage report's open item.
+
+Round-1 close (2026-11-24, §10.7): the round-1 ruling chose the fresh run, and the literal all-14
+run `45431551609` (head `7072891f`, acceptance script `f9399352…`, §3.16) is that run. The
+acceptance clause is therefore **re-bound** to §1's rows, and the round-1 gates below were re-run
+at that tree.
+
+### 10.7 PR #277 round-1 audit fixes (2026-11-24)
+
+The round-1 ruling reconciles Sol's review (`277-opus-review-1.md`), the DeepSeek audit
+(`277-ds-audit-1.md`) and the security review (`agent://Sec277`). Applied in this same edit; the
+stage rules forbid commit and push to the PR branch, so the hashes are this working tree's. The
+ratified `docs/plans/2026-11-24-rf-acc-native-burndown-plan.md` joins the owned set.
+
+- P1 dedup (Sol + DS): the two repeated 14-row per-set tables are gone — §3.3 is the canonical
+  table and §3.5/§3.6 are delta lists — so the `contracts` job's `jscpd`-changed gate cannot see a
+  10+-line clone among the lines this range adds. `.jscpd.json` is untouched.
+- Security, retirement guard (Sec277 LOW + Sol P3-1): `require_fixture_local_database!`
+  (`scripts/ci/provision-linux-v2-control-claims.exs:441-452`) refuses any Control database that is
+  not the job's own fixture database — hostname in `127.0.0.1`/`localhost`/`::1` and a database
+  name starting `symmetry_linux_v2` — and fails closed with the host and database in the message.
+  Local rows (WSL Ubuntu-24.04, the compiled Control app in the main checkout, the worktree's
+  script; commands as run, `<WORKTREE>`/`<CONTROL-CHECKOUT>` placeholders):
+  - mutant: `cd <CONTROL-CHECKOUT> && GITHUB_ACTIONS=true GITHUB_RUN_ID=1 PHX_HOST=localhost
+    SECRET_KEY_BASE=<scratch> SYMMETRY_ENROLLMENT_TOKEN=<dummy> SYMMETRY_OPERATOR_TOKEN=<dummy>
+    DATABASE_URL=postgresql://postgres:postgres@db.example.com:5432/symmetry_linux_v2_acceptance
+    MIX_ENV=prod mix run --no-start
+    <WORKTREE>/scripts/ci/provision-linux-v2-control-claims.exs prepare …` → exit 1,
+    `** (RuntimeError) runtime retirement refuses a Control database that is not the fixture's own
+    local one: host="db.example.com" database="symmetry_linux_v2_acceptance"` from
+    `require_fixture_local_database!/0` (line 448).
+  - positive: the same command with
+    `DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/symmetry_linux_v2_acceptance`
+    passes the guard and enters the sweep (`retire_earlier_case_set_runtimes!/0` line 431), then
+    fails on the absent local database — the guard itself accepted the fixture target.
+  - first dispatch (`45424315178`, head `20488450`) caught a defect in the guard: `Repo.config/0`
+    has already popped `:url` into `:hostname`/`:database`, so the `:url` read refused the
+    fixture's own database. The guard now reads those keys; the live positive is the binding run's
+    `retired N` lines (14, §3.16).
+- Security, diagnostics (Sec277 INFO + Sol P3-1): the dead `probe_witness_app_refusal` is deleted
+  (premise falsified, §10.2), and the remaining daemon/App-stderr printers —
+  `print_witness_failure_context`'s `-verify-linux-owner-install` probe and native-gate probe, and
+  the non-JSON `grep` at the Go witness gate — now print through `print_filtered_output_lines`,
+  which applies the same secret-values filter and 400-byte cap as `print_witness_output_lines`
+  (last 40 lines per block). Probe rows: the function was extracted and fed a secrets file plus
+  lines carrying a secret value, a 401-byte line and 51 clean lines through a pipe → only the
+  clean lines print, capped at the last 40. The second dispatch (`45426731841`) caught a defect:
+  the printer read its python program from the same stdin the pipeline fed, so `python3 -` saw EOF
+  and every probe line vanished (`inspect B credential directory` 0, `version differs` 0 — the run
+  is otherwise shape-identical to `45402706492`). The printer now runs `python3 -c` with stdin left
+  as the pipeline's; the binding run prints 60 `inspect B credential directory` lines and 210
+  `owner witness config native harness version differs from the tested release` lines again, with
+  the deleted probe's two `existing owner witness clone intent` lines gone as intended.
+  Secret scan of the binding run's log: exactly one `gho_scratchdummy…` and one `sk-scratch-dummy`
+  (the contract's dummies), no `ghp_`/`github_pat_`/`Bearer` credential, and `lease_token` only as
+  a SQL column name in the Control debug log.
+- Records (DS P3s, ruling): §2's "Not touched" now names the F1 `linuxpreflight` exception; §6.1
+  cites `:875` and the accept block `:870-875`. Comment policy (DS P3): the rootfs-base
+  module-intent header and the `run_go_test` `--` restatement are deleted (neither was a ≤2-line
+  why).
+- P2 binding (Sol + DS): the literal all-14 scratch run `45431551609` on head `7072891f` carries
+  exactly the §1 script rows (§3.16), watched in the foreground; the run cap overrun (3 dispatches
+  against a 2-run budget) is recorded in §3.16 under the conductor's explicit approval. The
+  scratch branch is deleted afterwards and the deletion proven with `git ls-remote` (§7).
+- Gates at the final tree: `bash -n` 0/0/0 and `shellcheck` delta 0 (§4); `actionlint` 0 (workflow
+  unchanged); the changed-file gates `python3 scripts/ci/jscpd-changed.py --base 9d113eb6 --head
+  HEAD` and `python3 scripts/ci/check-record-cleanliness.py --base 9d113eb6 --head HEAD` (run in
+  the scratch worktree over a temporary commit of this tree; `node_modules` junctioned from a
+  sibling checkout because the local `pnpm install` cannot reach the npm registry): `11 changed
+  file(s), 1718 scanned source(s) … none new` (exit 0) and `1 changed record(s) pass the root-only
+  check` (exit 0). The base is the PR's own merge-base `9d113eb6`; `origin/main` has since advanced
+  to `5c297c25` (#278, which also edits `docs/TODO.md`/`CLOSED-TODO.md`), and the conductor's merge
+  moves the CI base there — the added lines these gates judge are unchanged by that merge. The
+  `python3 scripts/ci/test-jscpd-changed.py` self-tests pass (32 tests); `git diff --check` clean;
+  `Code.string_to_quoted!` parse 0 on the retirement script.
+- Residuals recorded, no change: §8's owner-`Before` row and Sol P3-3's one-shot/sub-case sweep
+  row; `docs/TODO.md` gains the owner-`Before` entry for the D3 `harness.md` amendment.

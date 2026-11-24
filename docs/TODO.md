@@ -1872,3 +1872,13 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       (`daemon/internal/harness/opencode/adapter.go:28`). The pin, the opencode render tokens and
       the frozen lines stay untouched by decision; the evidence record's per-set table records each
       excluded row (§3.15).
+
+- [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
+      round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
+      effective owner `Before` (systemd's reverse of the daemon's own required
+      `After=symmetry-owner.service`), so the owner's effective `Before` set is no longer inspected
+      at all. It is ordering-only — it pulls no unit into the transaction — but a root-installed
+      third-party unit that declares `After=symmetry-owner.service` adds an entry to that set with
+      no refusal. Declared fragment/drop-in `Before=` edges to the daemon stay refused
+      (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
+      residual explicitly.

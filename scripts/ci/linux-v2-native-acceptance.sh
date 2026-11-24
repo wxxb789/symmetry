@@ -199,6 +199,27 @@ for text in lines[-10:]:
 PY
 }
 
+# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
+# as the witness event lines; each caller names the block the lines belong to.
+print_filtered_output_lines() {
+  python3 -c '
+import pathlib, sys
+
+secrets_path, = sys.argv[1:]
+try:
+    secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
+except OSError:
+    secrets = []
+lines = []
+for line in sys.stdin.buffer:
+    if len(line.rstrip(b"\r\n")) > 400 or any(secret in line for secret in secrets):
+        continue
+    lines.append(line)
+for line in lines[-40:]:
+    sys.stdout.buffer.write(line)
+' "$evidence_secret_values_file" >&2 || true
+}
+
 export_native_evidence() {
   local original_status=$1
   local witness_home=${A_HOME:-/home/symmetry-a}
@@ -1634,21 +1655,6 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
-# The probe's App run stops at the existing-journal check on the witness run's seeded journal, so
-# the first post-seed refusal stays unnamed; a run that gets past it stops at the barrier timeout.
-probe_witness_app_refusal() {
-  local guest_config=$1
-  local guest_request=$2
-  [[ -n "$guest_config" && -n "$guest_request" ]] || return 0
-  sudo test -f "$rootfs$guest_config" && sudo test -f "$rootfs$guest_request" || return 0
-  printf 'witness app early-phase probe %s:\n' "$guest_config" >&2
-  machine_run_as "$A_USER" "$A_USER" /usr/bin/env \
-    SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 \
-    "SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_HOOK_MARKER_ROOT=$NATIVE_HOOK_MARKER_ROOT" \
-    /usr/bin/timeout 90 /usr/libexec/symmetry/symmetry-daemon -linux-v2-native-owner-witness \
-    -config "$guest_config" -request "$guest_request" >&2 || true
-}
-
 # The owner-witness command's stderr is discarded by its own harness, so a failed witness
 # is named from the fixture state it leaves: its document, journals, markers, and configs.
 print_witness_failure_context() {
@@ -1686,22 +1692,15 @@ print_witness_failure_context() {
     guest_config=${guest_config#"$rootfs"}
     printf 'witness config owner preflight %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
-      -verify-linux-owner-install -config "$guest_config" >&2 || true
+      -verify-linux-owner-install -config "$guest_config" 2>&1 | print_filtered_output_lines || true
     # The witness gate runs before any mutation and before the request is read, so a missing
     # request path names the config refusal without touching the barrier or StateDir.
     printf 'witness config native gate %s:\n' "$guest_config" >&2
     machine_run_as "$A_USER" "$A_USER" /usr/bin/env SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_WITNESS=1 \
       /usr/libexec/symmetry/symmetry-daemon -linux-v2-native-owner-witness \
-      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" >&2 || true
+      -config "$guest_config" -request "$OWNER_TEST_ROOT/missing-witness-gate-probe.json" 2>&1 |
+      print_filtered_output_lines || true
   done
-  case "$fixture_case_set" in
-  codex_containment)
-    probe_witness_app_refusal "$OWNER_CONFIG_ROOT/codex-containment.json" "$OWNER_REQUEST_ROOT/codex_containment.json"
-    ;;
-  claude_containment)
-    probe_witness_app_refusal "$OWNER_CONFIG_ROOT/claude-containment.json" "$OWNER_REQUEST_ROOT/claude_containment.json"
-    ;;
-  esac
 }
 
 # inside A's mode-0700 HOME; B cannot inspect A's checkout or test environment.
@@ -1714,7 +1713,6 @@ run_go_test() {
   local request_path=$6
   local output_directory=$7
   shift 7
-  # Callers pass their expected Go test-event names after a `--` separator.
   [[ "${1:-}" == -- ]] || fail 'each exact Go witness invocation requires -- before its named test events'
   shift
   local -a expected_tests=("$@")
@@ -1885,7 +1883,7 @@ run_go_test() {
   if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file" "${expected_tests[@]}"; then
     printf 'Required native Go witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' "$status" >&2
     # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
-    grep --invert-match --extended-regexp '^\{' "$event_file" | head -n 5 >&2 || true
+    grep --invert-match --extended-regexp '^\{' "$event_file" | head -n 5 | print_filtered_output_lines || true
     print_witness_output_lines "$event_file" "${expected_tests[@]}"
     print_witness_failure_context "$output_directory" "${expected_tests[@]}"
     return 1
