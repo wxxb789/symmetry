@@ -519,7 +519,7 @@ export const DefinitionAdapterOperationsGraph = S.suspend(() => withObjectProper
 
 export const DefinitionAdapterGraph = S.suspend(() => withObjectPropertyBounds(strictObject(S.Struct({
   "implementation_version": DefinitionShortIdentifierGraph,
-  "kind": DefinitionShortIdentifierGraph,
+  "kind": S.Literal("generic", "codex", "claude_code", "pi", "omp", "omo", "opencode"),
   "native_version": DefinitionShortIdentifierGraph,
   "operations": DefinitionAdapterOperationsGraph,
   "protocol_version": DefinitionPositiveIntegerGraph

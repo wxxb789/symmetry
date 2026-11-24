@@ -274,7 +274,7 @@ func (tx *goalAdmissionTx) validateConfiguredHarness() error {
 	if configuredKind != tx.daemon.harnessCapabilities.Kind {
 		return fmt.Errorf("configured Goal runtime harness %q does not match capability kind %q", configuredKind, tx.daemon.harnessCapabilities.Kind)
 	}
-	if !nativeGoalHarnessKind(configuredKind) {
+	if !configuredKind.NativeGoal() {
 		return fmt.Errorf("Goal admission harness %q is not a native staged adapter", configuredKind)
 	}
 	tx.configuredKind = configuredKind

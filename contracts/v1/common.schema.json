@@ -945,7 +945,7 @@
       "additionalProperties": false,
       "required": ["kind", "native_version", "implementation_version", "protocol_version", "operations"],
       "properties": {
-        "kind": {"$ref": "#/definitions/ShortIdentifier"},
+        "kind": {"enum": ["generic", "codex", "claude_code", "pi", "omp", "omo", "opencode"]},
         "native_version": {"$ref": "#/definitions/ShortIdentifier"},
         "implementation_version": {"$ref": "#/definitions/ShortIdentifier"},
         "protocol_version": {"$ref": "#/definitions/PositiveInteger"},

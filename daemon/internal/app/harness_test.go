@@ -747,8 +747,10 @@ func TestAdmissionLaunchRequiresFreshSingleTurnAndVerifiedOperations(t *testing.
 		t.Fatalf("cancel-capability admission error = %v, want cancel capability rejection", err)
 	}
 	admission.SessionMode = protocol.SessionModeResume
-	if err := admissionLaunchFailure(admission, capabilities, nil); err == nil || !strings.Contains(err.Error(), string(protocol.TaskResultReasonResumeRejected)) {
-		t.Fatalf("resume admission error = %v, want typed resume rejection", err)
+	if err := admissionLaunchFailure(admission, capabilities, nil); err == nil {
+		t.Fatal("resume admission without a verified resume capability was accepted")
+	} else if reason, ok := taskResultFailureReason(err); !ok || reason != protocol.TaskResultReasonResumeRejected {
+		t.Fatalf("resume admission error = %v, want the typed resume rejection", err)
 	}
 	admission.SessionMode = protocol.SessionModeHandoff
 	if err := admissionLaunchFailure(admission, capabilities, nil); err == nil || !strings.Contains(err.Error(), string(protocol.TaskResultReasonHandoffUnsupported)) {
@@ -4416,7 +4418,7 @@ func TestGoalAdmissionRejectsProviderAccessBeforeNativeLaunch(t *testing.T) {
 	}
 }
 
-func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
+func TestAdmissionLaunchProviderAccessFollowsTheCapabilityProjection(t *testing.T) {
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatal(err)
@@ -4433,9 +4435,16 @@ func TestAdmissionLaunchAllowsOnlyVerifiedPiProviderAccess(t *testing.T) {
 		t.Fatalf("verified Pi provider access was rejected: %v", err)
 	}
 	for _, kind := range []harness.Kind{harness.KindCodex, harness.KindOMP, harness.KindOmO} {
-		capabilities.Kind = kind
-		if err := admissionLaunchFailure(admission, capabilities, access); err == nil {
-			t.Fatalf("%s provider access was accepted without a broker bridge", kind)
+		projection := testVerifiedNativeCapabilities(kind)
+		if err := admissionLaunchFailure(admission, projection, access); err == nil {
+			t.Fatalf("%s provider access was accepted without an advertised broker bridge", kind)
+		}
+		// The verified projection's own claim is the only provider-access gate, so the
+		// same projection with the advertised bridge passes for every kind.
+		advertised := projection
+		advertised.ProviderAccess = true
+		if err := admissionLaunchFailure(admission, advertised, access); err != nil {
+			t.Fatalf("%s advertised provider access was rejected: %v", kind, err)
 		}
 	}
 }

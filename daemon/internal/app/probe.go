@@ -46,7 +46,7 @@ func (daemon *daemon) ensureHarnessProbe(ctx context.Context) error {
 		return fmt.Errorf("probe %s adapter capability projection: %w", runtime.HarnessKind, err)
 	}
 	unverified := probeErrorContainsOnly(probeErr, harness.ErrNativeUnverified)
-	unavailable := probeErrorContainsOnly(probeErr, harness.ErrHarnessUnavailable) && unavailableRuntimeKind(runtime.HarnessKind)
+	unavailable := probeErrorContainsOnly(probeErr, harness.ErrHarnessUnavailable) && kind.UnavailableProbe()
 	if probeErr != nil && !unverified && !unavailable {
 		return fmt.Errorf("probe %s adapter: %w", runtime.HarnessKind, probeErr)
 	}
@@ -120,44 +120,7 @@ func normalizeRuntimeForProbe(runtime config.Runtime) (config.Runtime, error) {
 }
 
 func configuredHarnessKind(value string) (harness.Kind, error) {
-	switch value {
-	case config.RuntimeHarnessGeneric:
-		return harness.KindGeneric, nil
-	case config.RuntimeHarnessCodex:
-		return harness.KindCodex, nil
-	case config.RuntimeHarnessClaudeCode:
-		return harness.KindClaude, nil
-	case config.RuntimeHarnessPi:
-		return harness.KindPi, nil
-	case config.RuntimeHarnessOMP:
-		return harness.KindOMP, nil
-	case config.RuntimeHarnessOmO:
-		return harness.KindOmO, nil
-	case config.RuntimeHarnessOpenCode:
-		return harness.KindOpenCode, nil
-	default:
-		return "", fmt.Errorf("runtime.harness_kind %q is unsupported", value)
-	}
-}
-
-func unavailableRuntimeKind(value string) bool {
-	switch value {
-	case config.RuntimeHarnessClaudeCode, config.RuntimeHarnessPi, config.RuntimeHarnessOMP, config.RuntimeHarnessOmO, config.RuntimeHarnessOpenCode:
-		return true
-	default:
-		return false
-	}
-}
-
-// Identifies adapter families whose launch contract is staged (process identity, then native
-// session handle, then native turn); the generic adapter deliberately remains outside.
-func nativeGoalHarnessKind(kind harness.Kind) bool {
-	switch kind {
-	case harness.KindCodex, harness.KindClaude, harness.KindPi, harness.KindOMP, harness.KindOmO, harness.KindOpenCode:
-		return true
-	default:
-		return false
-	}
+	return harness.ParseKind(value)
 }
 
 type runtimeRegistrationMetadata struct {
