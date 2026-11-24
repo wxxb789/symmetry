@@ -563,15 +563,7 @@ def check_coverage_floors_are_blocking(workflow_text: str, vitest_text: str) -> 
         )
 
 
-def check_the_control_coverage_floor_is_blocking(workflow_text: str, mix_text: str) -> None:
-    blocks = job_blocks(workflow_text)
-    for name in BLOCKING_COVERAGE_JOBS:
-        require(name in blocks, f"the workflow has no coverage job {name!r}")
-        require(
-            not any(line.startswith("    continue-on-error:") for line in blocks[name]),
-            f"coverage job {name} must drop its job-level `continue-on-error`: its floor is blocking, "
-            "so a coverage count below the mix.exs threshold has to fail the job",
-        )
+def check_the_control_coverage_threshold(mix_text: str) -> None:
     threshold = COVERAGE_THRESHOLD.search(mix_text)
     require(
         threshold is not None,
@@ -1055,7 +1047,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
     def test_the_coverage_jobs_follow_the_heavy_matrix_across_every_fixture(self) -> None:
         check_coverage_plane_routing(self.model, self.outputs)
         check_coverage_floors_are_blocking(self.workflow_text, self.vitest_text)
-        check_the_control_coverage_floor_is_blocking(self.workflow_text, self.mix_text)
+        check_the_control_coverage_threshold(self.mix_text)
         check_coverage_artifacts(self.workflow_text)
 
     # -- mutations: the assertions must fail when a routing is changed --------
@@ -1119,9 +1111,7 @@ class ChangedPathClassifierTests(unittest.TestCase):
 
     def test_mutation_restoring_a_coverage_jobs_advisory_flag_breaks_the_blocking_check(self) -> None:
         advisory_line = "    continue-on-error: true\n"
-        self.assertIn(
-            COVERAGE_DAEMON_HEADER, self.workflow_text, "the mutation's anchor is the coverage job's header"
-        )
+        self.assertIn(COVERAGE_DAEMON_HEADER, self.workflow_text, "the mutation's anchor is the coverage job's header")
         self.assertNotIn(
             COVERAGE_DAEMON_HEADER + advisory_line,
             self.workflow_text,
@@ -1167,19 +1157,19 @@ class ChangedPathClassifierTests(unittest.TestCase):
         mutated = self.workflow_text.replace(COVERAGE_CONTROL_HEADER, COVERAGE_CONTROL_HEADER + advisory_line)
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
-            check_the_control_coverage_floor_is_blocking(mutated, self.mix_text)
+            check_coverage_floors_are_blocking(mutated, self.vitest_text)
 
     def test_mutation_zeroing_the_control_coverage_threshold_breaks_the_blocking_check(self) -> None:
         mutated = COVERAGE_THRESHOLD.sub("test_coverage: [summary: [threshold: 0]]", self.mix_text)
         self.assertNotEqual(mutated, self.mix_text, "the mutation must edit control/mix.exs")
         with self.assertRaises(AssertionError):
-            check_the_control_coverage_floor_is_blocking(self.workflow_text, mutated)
+            check_the_control_coverage_threshold(mutated)
 
     def test_mutation_dropping_the_control_coverage_threshold_breaks_the_blocking_check(self) -> None:
         mutated = COVERAGE_THRESHOLD.sub("", self.mix_text)
         self.assertNotEqual(mutated, self.mix_text, "the mutation must edit control/mix.exs")
         with self.assertRaises(AssertionError):
-            check_the_control_coverage_floor_is_blocking(self.workflow_text, mutated)
+            check_the_control_coverage_threshold(mutated)
 
     def test_mutation_dropping_a_coverage_uploads_always_flag_breaks_the_artifact_check(self) -> None:
         upload = COVERAGE_UPLOADS["coverage-daemon"]

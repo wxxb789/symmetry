@@ -266,21 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         ((package, test, elapsed) for (package, test), elapsed in tests.items() if elapsed > MAX_TEST_SECONDS),
         key=lambda item: (-item[2], item[0], item[1]),
     )
-    adopted = [
-        (package, test, elapsed, ADOPTED_TEST_CEILINGS[(package, test)])
-        for package, test, elapsed in over_cap
-        if (package, test) in ADOPTED_TEST_CEILINGS
-    ]
-
-    ratio = p95 / P95_BASELINE_SECONDS
-    print(
-        f"go_test_durations: tests={len(tests)} skipped={skipped} packages={len(packages)} "
-        f"p95={p95:.3f}s baseline={P95_BASELINE_SECONDS:.3f}s ratio={ratio:.2f}x limit={limit:.3f}s "
-        f"over_{MAX_TEST_SECONDS:.0f}s={len(over_cap)} adopted={len(adopted)} failed={len(failed)} "
-        f"package_fail={len(failed_packages)}"
-    )
 
     verdict = 0
+    adopted = 0
     for package, test, elapsed in over_cap:
         ceiling = ADOPTED_TEST_CEILINGS.get((package, test))
         if ceiling is None:
@@ -294,11 +282,19 @@ def main(argv: list[str] | None = None) -> int:
                 f"over its committed ceiling {ceiling:.0f}s",
             )
             verdict = 1
-    for package, test, elapsed, ceiling in adopted:
-        print(
-            f"go_test_durations: adopted: {package} {test} took {elapsed:.2f}s "
-            f"within its committed ceiling {ceiling:.0f}s",
-        )
+        else:
+            print(
+                f"go_test_durations: adopted: {package} {test} took {elapsed:.2f}s "
+                f"within its committed ceiling {ceiling:.0f}s",
+            )
+            adopted += 1
+    ratio = p95 / P95_BASELINE_SECONDS
+    print(
+        f"go_test_durations: tests={len(tests)} skipped={skipped} packages={len(packages)} "
+        f"p95={p95:.3f}s baseline={P95_BASELINE_SECONDS:.3f}s ratio={ratio:.2f}x limit={limit:.3f}s "
+        f"over_{MAX_TEST_SECONDS:.0f}s={len(over_cap)} adopted={adopted} failed={len(failed)} "
+        f"package_fail={len(failed_packages)}"
+    )
     if p95 > limit:
         print(
             f"go_test_durations: FAIL: the per-test p95 {p95:.3f}s exceeds the "

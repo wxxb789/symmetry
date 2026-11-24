@@ -27,14 +27,14 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | file | numstat (add/del) | change |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | 22 / 9 | the three flips, the Go floor step, the jscpd step, the two new suite wire-ups |
-| `scripts/ci/go-test-durations.py` | 89 / 20 | adoption roster with measured ceilings, ceiling verdict, partial-run detection |
-| `scripts/ci/test-go-test-durations.py` | new 251 lines | the duration gate's suite (16 tests) |
+| `scripts/ci/go-test-durations.py` | 90 / 25 | adoption roster with measured ceilings, ceiling verdict, partial-run detection |
+| `scripts/ci/test-go-test-durations.py` | new 252 lines | the duration gate's suite (16 tests) |
 | `scripts/ci/assert-go-coverage-floor.py` | new 125 lines | the fail-closed floor parser and verdict |
 | `scripts/ci/go-coverage-baseline.json` | new 15 lines | the four measured runs and the 54.664 floor |
 | `scripts/ci/go-coverage-capture-fixture.txt` | new 19 lines | a verbatim `go tool cover -func` capture |
 | `scripts/ci/test-assert-go-coverage-floor.py` | new 163 lines | the floor gate's suite (17 tests) |
-| `scripts/ci/test-ci-changed-path-classifier.py` | 70 / 14 | the blocking check, the Go-floor and vitest pins, four new mutations |
-| `scripts/ci/test-ci-structure-extraction.py` | 55 / 2 | allowlists, the duration-gate pin, three mutations |
+| `scripts/ci/test-ci-changed-path-classifier.py` | 72 / 26 | the blocking check, the Go-floor and vitest pins, four new mutations |
+| `scripts/ci/test-ci-structure-extraction.py` | 61 / 11 | allowlists, the duration-gate pin, three mutations |
 | `frontend/vitest.config.ts` | 7 / 0 | the coverage thresholds |
 | `daemon/internal/notification/client_test.go` | 19 / 5 | the conversion (§6.1) |
 | `control/test/…/portal_goal_attention_test.exs` | 20 / 5 | the conversion (§6.2) |
@@ -44,9 +44,9 @@ Shape references: the rf-w4-13 plan (conversions, census, mutants), the rf-w6-10
 | `frontend/src/features/connections/connections.test.tsx` | 2 / 2 | two converted waits (§6.3) |
 | `frontend/src/features/goals/goal-attention.test.tsx` | 1 / 1 | one converted wait (§6.3) |
 | `frontend/src/features/work/assignment.test.tsx` | 1 / 1 | the `openAssignmentEditor` wait (§6.3) |
-| `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 18 / 9, 24 / 0 | the closed partial-run entry and the adopted-rows debt |
-| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 279 lines | the plan |
-| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 337 lines | this record |
+| `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | 19 / 10, 24 / 0 | the closed partial-run entry and the adopted-rows debt |
+| `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md` | new 280 lines | the plan |
+| `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md` | new 340 lines | this record |
 
 No production file change: the only production edits were temporary mutants, each restored and
 verified (§7).
@@ -61,9 +61,9 @@ row is `ceil(measured max × 1.2)` over the ten recorded runs:
 | --- | --- | ---: | ---: | ---: |
 | `internal/app` | `TestOutputBackpressureRecoversWithOneTruncationMarker` | 167.20 | 201 | 10 / 10 |
 | `internal/app` | `TestRawOutputBudgetDropsWithoutFailingSemanticEvents` | 124.96 | 150 | 10 / 10 |
-| `internal/state` | `TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation` | 34.58 | 42 | 8 / 10 |
-| `internal/state` | `TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded` | 32.91 | 40 | 5 / 10 |
-| `internal/state` | `TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch` | 33.88 | 41 | 9 / 10 |
+| `internal/state` | `TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation` | 34.58 | 42 | 7 / 10 |
+| `internal/state` | `TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded` | 32.91 | 40 | 4 / 10 |
+| `internal/state` | `TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch` | 33.88 | 41 | 8 / 10 |
 
 Ten green `main` runs (2026-11-22/23), per-run p95 and over-cap rows:
 
@@ -80,7 +80,7 @@ Ten green `main` runs (2026-11-22/23), per-run p95 and over-cap rows:
 | 45186872699 | 6079 | 0.16 | app 124.62/94.06 |
 | 45200375602 | 6086 | 0.21 | app 163.79/124.77; state 34.42/32.91/30.24 |
 
-p95 min 0.16 / max 0.25 / mean 0.222 against the committed 0.26 baseline and the 0.312 limit: the
+p95 min 0.16 / max 0.25 / mean 0.218 against the committed 0.26 baseline and the 0.312 limit: the
 variance stays inside the band (max observed ratio 0.96× of the baseline, 0.80× of the limit), so no
 widening was needed and the gate flips with the measured data (O26). The step's `continue-on-error`
 is gone; the step and the race run both fail the job.
@@ -140,7 +140,8 @@ The same four runs' `frontend-coverage` artifacts (`lcov.info` totals):
 | 45200375602 | 94.5529 % | 91.1290 % | 84.1205 % |
 
 Thresholds (min − 1.00 point, floored to two decimals): lines **93.55**, functions **90.12**,
-branches **83.12**; `statements` stays unset because the committed lcov reporter does not carry it.
+branches **83.12**; `statements` stays unset because the four baseline runs were measured from
+`lcov.info` totals, which carry lines/functions/branches only.
 The job drops `continue-on-error` and `frontend/vitest.config.ts` carries the thresholds; the
 classifier suite pins them at or above these numbers.
 
@@ -158,7 +159,7 @@ with the 22 changed/new paths committed on top of `f731e04e`, `--repo <clone> --
 --head HEAD`): its first run **refused** the change for a 14-line / 275-token clone — the ten-run
 duration table verbatim in both the plan and this record (`docs/evidence/…md [70-83] duplicates
 docs/plans/…-plan.md [171-184]`) — which is the step's own planted red on real content; the table
-was deduplicated (the plan points at §5.1 here) and the range re-run green: `jscpd-changed: 22
+was deduplicated (the plan points at this record's §3) and the range re-run green: `jscpd-changed: 22
 changed file(s), 1708 scanned source(s), 1266 clone(s) in the corpus, 0 tolerated among the added
 lines, none new` (exit 0).
 
@@ -250,13 +251,15 @@ job that reddens on the PR; every job runs as the runner's non-root user, so no 
 | M8 | `.github/workflows/ci.yml`: `continue-on-error: true` restored on the durations step | the structure suite (and its advisory-set equality) | `legacy-route-audit` | 3 failures; flag removed, suite green (33 tests) |
 | M9 | `frontend/src/features/goals/goal-attention.test.tsx:243`: budget `5_000` → `1` | the converted `goal-attention` row | `contracts` (frontend test step) | `Tests 1 failed | 29 passed (30)`, exit 1 (§6.3) |
 | M10 | the branch's own first emulated range (a real table duplicated between two docs) | the changed-file jscpd gate | `contracts` | refused: `1 new clone(s) among the lines this range adds` (14 lines, 275 tokens); after deduplication the range is green (§5) |
+| M11 | `scripts/ci/go-test-durations.py`: the adopted classification loses its `elapsed <= ceiling` guard (the pre-fix shape) | the duration suite's over-ceiling row (`test_a_rostered_test_over_its_ceiling_fails_with_the_ceiling_named`) | `legacy-route-audit` | red (`AssertionError: 0 != 1`; the row also prints the contradictory `within its committed ceiling` line with `adopted=1`); restored byte-identical (sha256 `932c984b…`) |
 
 ## 8. Re-measured census and dispositions
 
-The full table lives in the plan §4. Summary by class at `f731e04e`: **72 Go `time.Sleep(` test
-sites in 22 files** (`grep -rn time.Sleep( daemon --include=*_test.go` → 72; `grep -rl` → 22),
-11 ExUnit `Process.sleep(` sites in 4 files, the twelve vitest `{ timeout: }` sites
-(W5-04's) plus the re-measured implicit-default rows. Converts: the notification settle (§6.1), the
+The full table lives in the plan §4. Summary by class at `f731e04e`: **73 Go `time.Sleep(` test
+sites in 23 files** (`git grep -c 'time.Sleep(' f731e04e -- daemon` → 73; 72 sites in 22 files after
+this slice's conversion), 11 ExUnit `Process.sleep(` sites in 4 files, the twelve vitest `{ timeout: }`
+sites inside W5-04's files (untouched; ten more live outside this slice's set), and the re-measured
+implicit-default rows. Converts: the notification settle (§6.1), the
 attention pair (§6.2), the frontend rows (§6.3). Everything else is recorded as an
 already-bounded-poll site, a subprocess-helper lifetime, a real-process/durability witness or a
 not-owned row (W4-13's harness leftovers, the live-tagged smokes, `internal/app`'s helpers).
@@ -302,7 +305,7 @@ All foreground, each bounded with `timeout`; Windows and WSL suites never ran co
 ## 10. D2 report-only rows
 
 - Test-LOC delta: `daemon/internal/notification/client_test.go` +19/−5,
-  `control/test/…/portal_goal_attention_test.exs` +17/−5, the frontend rows (§6.3). The plan's
+  `control/test/…/portal_goal_attention_test.exs` +20/−5, the frontend rows (§6.3). The plan's
   −150 estimate is a plan figure, not a gate.
 - Race-suite wall times (CI, main, sampled from the same ten runs): the race step spans 348 s
   (45186872699), 350 s (45154249296) and 450 s (45200375602) on the ubuntu runner. The slice's own

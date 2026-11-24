@@ -596,24 +596,36 @@ def check_caller_advisory_step(workflow_text: str) -> None:
     require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
 
 
-def check_credo_gate_step(workflow_text: str) -> None:
-    normalized = find_step(job_blocks(workflow_text)["control"], CREDO_GATE_STEP)
+def check_blocking_gate_step(
+    workflow_text: str, job: str, step_name: str, invocation: str, *, condition: str | None = None
+) -> list[str]:
+    normalized = find_step(job_blocks(workflow_text)[job], step_name)
     scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
     require(
         "continue-on-error" not in scalars,
-        "the Credo gate step must not carry a step-level continue-on-error: its verdict has to fail the job",
+        f"the {step_name!r} step must not carry a step-level continue-on-error: its verdict has to fail the job",
     )
+    if condition is not None:
+        require(
+            scalars.get("if") == condition,
+            f"the {step_name!r} step must keep its reachability `{condition}`; found {scalars.get('if')!r}",
+        )
     body = run_body_at(normalized, WORKFLOW_INDENT[1])
-    require(body is not None, "the Credo gate step must keep a `run: |` body")
+    require(body is not None, f"the {step_name!r} step must keep a `run: |` body")
     commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
+    require(
+        bool(commands) and commands[-1] == invocation,
+        f"the {step_name!r} step's body must end in {invocation!r}; "
+        f"found {commands[-1] if commands else '<an empty body>'!r}",
+    )
+    return commands
+
+
+def check_credo_gate_step(workflow_text: str) -> None:
+    commands = check_blocking_gate_step(workflow_text, "control", CREDO_GATE_STEP, CREDO_GATE_INVOCATION)
     require(
         CREDO_STRICT_INVOCATION in commands,
         f"the Credo gate step must run {CREDO_STRICT_INVOCATION!r}; found {commands!r}",
-    )
-    require(
-        bool(commands) and commands[-1] == CREDO_GATE_INVOCATION,
-        f"the Credo gate step's body must end in {CREDO_GATE_INVOCATION!r}; "
-        f"found {commands[-1] if commands else '<an empty body>'!r}",
     )
     require(
         not any(re.search(r"\bexit\s+0\b", line) for line in commands),
@@ -622,23 +634,8 @@ def check_credo_gate_step(workflow_text: str) -> None:
 
 
 def check_duration_gate_step(workflow_text: str) -> None:
-    normalized = find_step(job_blocks(workflow_text)["daemon"], DURATION_GATE_STEP)
-    scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
-    require(
-        "continue-on-error" not in scalars,
-        "the duration gate step must not carry a step-level continue-on-error: its verdict has to fail the job",
-    )
-    require(
-        scalars.get("if") == DURATION_GATE_CONDITION,
-        f"the duration gate step must keep its reachability `{DURATION_GATE_CONDITION}`; found {scalars.get('if')!r}",
-    )
-    body = run_body_at(normalized, WORKFLOW_INDENT[1])
-    require(body is not None, "the duration gate step must keep a `run: |` body")
-    commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
-    require(
-        bool(commands) and commands[-1] == DURATION_GATE_INVOCATION,
-        f"the duration gate step's body must end in {DURATION_GATE_INVOCATION!r}; "
-        f"found {commands[-1] if commands else '<an empty body>'!r}",
+    check_blocking_gate_step(
+        workflow_text, "daemon", DURATION_GATE_STEP, DURATION_GATE_INVOCATION, condition=DURATION_GATE_CONDITION
     )
 
 

@@ -41,9 +41,9 @@ byte-identical and verified by blob hash against `f731e04e`.
 
 The step's verdict is the summarizer's exit status; flipping the step blocking is only green if the
 race stream passes. Re-measured at this head over ten green main runs (per-run table: evidence
-record §5.1), the stream
-carries five structural rows over the 30 s cap **in every run**: two `internal/app` throughput rows
-(93.6–167.2 s) and three `internal/state` journal rows straddling the cap (30.2–34.6 s). The two
+record §3), the stream carries five structural rows over the 30 s cap: the two `internal/app` rows
+(93.6–167.2 s) are over cap in every run and the three `internal/state` journal rows (30.2–34.6 s)
+straddle it in four to eight of the ten runs. The two
 app rows do real work proportional to the 5 MiB fixture (no timer, no sleeping goroutine; W4-13
 recorded them "record only; file outside the owned set"), so they are not convertible inside this
 slice's owned set, and no run of the stream can be green with the cap at 30 s
@@ -104,11 +104,11 @@ the job.
 ### D4. vitest floor: the coverage thresholds at the same arithmetic
 
 `coverage-frontend` drops `continue-on-error`; `frontend/vitest.config.ts` gains
-`coverage.thresholds` for the three metrics the committed `lcov` reporter exposes, at
+`coverage.thresholds` for the three metrics the committed `lcov` baseline carries, at
 `min(four measured runs) − 1.00 point`, floored to two decimals:
-lines **93.55**, functions **90.12**, branches **83.12**. `statements` stays unset: the lcov
-reporter does not carry it, and adding a reporter would change the report shape the classifier
-suite pins. The thresholds are pinned in the classifier suite at ≥ the committed floors.
+lines **93.55**, functions **90.12**, branches **83.12**. `statements` stays unset: the four
+baseline runs were measured from `lcov.info` totals, which carry lines/functions/branches only.
+The thresholds are pinned in the classifier suite at ≥ the committed floors.
 
 ### D5. W6-11's jscpd step: inserted verbatim, wiring question resolved without a classifier edit
 
@@ -136,10 +136,11 @@ runs inside W6-11's step; the duration suite's fixtures are synthetic streams, s
 
 ## 4. Re-measured census and dispositions at `f731e04e`
 
-Go `time.Sleep(` in test files: **22 files / 72 sites** (`grep -rc time.Sleep( daemon
---include=*_test.go`, exit 0; W4-13's part-1 subset already converted; the production sites stay
-untouched by rule). ExUnit `Process.sleep(`: 11 sites / 4 files. vitest: the twelve explicit
-`{ timeout: }` sites are all W5-04's; the remainder is re-measured below.
+Go `time.Sleep(` in test files: **23 files / 73 sites at `f731e04e`** (`git grep -c 'time.Sleep(' f731e04e
+-- daemon` → 73; 72 sites / 22 files after this slice's conversion; W4-13's part-1 subset already converted;
+the production sites stay untouched by rule). ExUnit `Process.sleep(`: 11 sites / 4 files. vitest: the twelve
+explicit `{ timeout: }` sites inside W5-04's files are untouched (ten more live in `goal-settle.test.tsx`
+and `tool-cache-config.test.ts`, outside this slice's set); the remainder is re-measured below.
 
 | # | site | cause / bound | disposition |
 | --- | --- | --- | --- |
@@ -170,9 +171,9 @@ untouched by rule). ExUnit `Process.sleep(`: 11 sites / 4 files. vitest: the twe
 
 ### 5.1 Duration stream (ten green `main` runs, `f731e04e` window, 2026-11-22/23)
 
-p95: min 0.16, max 0.25, mean 0.222 over the ten runs; committed baseline 0.26; limit 0.312 (1.2×);
+p95: min 0.16, max 0.25, mean 0.218 over the ten runs; committed baseline 0.26; limit 0.312 (1.2×);
 max observed ratio 0.96×. The per-run table with every over-cap value and the tests-per-run counts
-lives in the evidence record §5.1. The committed baseline's provenance (run 44892215975, the first
+lives in the evidence record §3. The committed baseline's provenance (run 44892215975, the first
 run whose daemon job wrote the stream through the gate) is unchanged.
 
 ### 5.2 Go coverage (four green `main` runs, `daemon-coverage` artifacts)

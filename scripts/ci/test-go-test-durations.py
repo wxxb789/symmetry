@@ -151,6 +151,8 @@ class DurationGateTests(unittest.TestCase):
         self.assertIn(
             f"FAIL: {APP_PACKAGE} {BACKPRESSURE} took 201.50s, over its committed ceiling 201s", result.stdout
         )
+        self.assertIn("adopted=0", result.stdout)
+        self.assertNotIn("within its committed ceiling", result.stdout)
 
     def test_every_rostered_name_is_measured_and_the_ceiling_exceeds_the_measured_max(self):
         self.assertEqual(set(GATE.ADOPTED_TEST_CEILINGS), ROSTER)
@@ -168,7 +170,6 @@ class DurationGateTests(unittest.TestCase):
         self.assertEqual(GATE.P95_BASELINE_SECONDS, 0.26)
         measured_p95 = [run[0] for run in MEASURED_RUNS.values()]
         self.assertLessEqual(max(measured_p95), GATE.P95_BASELINE_SECONDS)
-        self.assertLessEqual(max(measured_p95), GATE.P95_BASELINE_SECONDS * GATE.P95_LIMIT_FACTOR)
 
     def test_every_measured_run_replays_green_through_the_gate(self):
         for run, (_p95, rows) in MEASURED_RUNS.items():
