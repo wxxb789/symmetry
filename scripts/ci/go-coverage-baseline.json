@@ -1,0 +1,15 @@
+{
+  "revision": "f731e04e",
+  "recorded": "2026-11-24",
+  "metric": "statement",
+  "tool": "go tool cover -func=coverage.out over the coverage-daemon job's profile",
+  "method": "floor = min(recorded run totals) - 1.00 percentage point; the runs are the daemon-coverage artifacts of green main runs",
+  "runs": [
+    {"run": "45120528766", "hit": 32790, "total": 58907, "percent": 55.664},
+    {"run": "45154249296", "hit": 32961, "total": 59003, "percent": 55.8633},
+    {"run": "45186872699", "hit": 32988, "total": 59032, "percent": 55.8816},
+    {"run": "45200375602", "hit": 33027, "total": 59077, "percent": 55.905}
+  ],
+  "baseline_percent": 55.664,
+  "floor_percent": 54.664
+}

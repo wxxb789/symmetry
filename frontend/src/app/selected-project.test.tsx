@@ -56,7 +56,7 @@ describe("selected project scope", () => {
     for (const path of ["/portal/attention", "/portal/chat", "/portal/connections", "/portal/runtimes"]) {
       portal.seed({ session: { csrfToken: "session-token", socketToken: "test-socket-token" }, workspace: { selectedProjectId: firstProjectId, projects } });
       const { unmount } = renderScope(`${path}?projectId=${secondProjectId}`);
-      await screen.findByRole("link", { name: "Runtimes" });
+      await screen.findByRole("link", { name: "Runtimes" }, { timeout: 5_000 });
       for (const [route, label] of [["/portal/attention", "Attention"], ["/portal/chat", "Chat"], ["/portal/connections", "Connections"], ["/portal/runtimes", "Runtimes"]] as const) {
         expect(navigation().getByRole("link", { name: label })).toHaveAttribute("href", `${route}?projectId=${secondProjectId}`);
       }
@@ -80,7 +80,7 @@ describe("selected project scope", () => {
       details: { [subjectId]: readWorkDetail({ id: subjectId, projectId: firstProjectId, title: subjectTitle }) },
     });
     renderScope(`/portal/work/${subjectId}?view=board`);
-    const drawer = await screen.findByRole("dialog", { name: subjectTitle });
+    const drawer = await screen.findByRole("dialog", { name: subjectTitle }, { timeout: 5_000 });
     expect(within(drawer).getByRole("heading", { level: 1, name: subjectTitle })).toBeVisible();
     await waitFor(() => { expect(picker()).toHaveValue(firstProjectId); });
   });

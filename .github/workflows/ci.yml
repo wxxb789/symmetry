@@ -114,6 +114,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: pnpm/action-setup@v6
         with:
           version: 12.17.0
@@ -141,6 +144,12 @@ jobs:
       - uses: ./.github/actions/contracts-build
         with:
           build-control-release: "true"
+      - name: Refuse code clones this change adds to the files it touches
+        env:
+          JSCPD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          python3 scripts/ci/test-jscpd-changed.py
+          python3 scripts/ci/jscpd-changed.py --base "$JSCPD_BASE" --head HEAD
 
   control:
     needs: [changes, contracts]
@@ -567,7 +576,7 @@ jobs:
             browser/playwright-report
             /tmp/symmetry-playwright-results
 
-  # The Control floor is blocking (rf-w6-10); the Go and vitest jobs stay advisory until rf-w6-12.
+  # All three coverage floors are blocking (rf-w6-10 flipped Control, rf-w6-12 the Go and vitest jobs).
   # Separate runners keep the instrumentation off the race step's budget and Control's `mix test`.
   coverage-control:
     needs: [changes, contracts]
@@ -624,7 +633,6 @@ jobs:
   coverage-daemon:
     needs: changes
     if: needs.changes.outputs.run-heavy == 'true'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:
@@ -644,11 +652,16 @@ jobs:
         run: bash scripts/ci/prepare-private-namespace-tests.sh
       # `-timeout` doubles the per-package budget: coverage instrumentation slows every package, and the race step
       # keeps its `600s`. No env here: `go test` sets `GOCOVERDIR` for the exact-output cases (run 44887419717).
-      - name: Run the Go suite with a coverage profile (advisory)
+      - name: Run the Go suite with a coverage profile
         shell: bash
         run: |
           python3 ../scripts/ci/stdio-only-caller-boundary.py \
             "$(command -v go)" test -count=1 -timeout 1200s -coverprofile=coverage.out ./...
+      # `go tool cover -func` owns the arithmetic the committed floor compares against.
+      - name: Enforce the committed Go coverage floor
+        run: |
+          "$(command -v go)" tool cover -func=coverage.out > "$RUNNER_TEMP/daemon-coverage-func.txt"
+          python3 ../scripts/ci/assert-go-coverage-floor.py --summary "$RUNNER_TEMP/daemon-coverage-func.txt"
       - name: Upload the Go coverage profile
         if: always()
         uses: actions/upload-artifact@v7
@@ -661,7 +674,6 @@ jobs:
   coverage-frontend:
     needs: changes
     if: needs.changes.outputs.run-heavy == 'true'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -674,8 +686,8 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # No coverage threshold is configured in `frontend/vitest.config.ts`, so this step's status is the suite's own.
-      - name: Run the frontend suite with a coverage report (advisory)
+      # The thresholds live in `frontend/vitest.config.ts`; a report below any of them makes vitest exit non-zero.
+      - name: Run the frontend suite with a coverage report
         run: pnpm --filter @symmetry/frontend exec vitest run --coverage
       - name: Upload the frontend coverage report
         if: always()
@@ -1090,11 +1102,10 @@ jobs:
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
               TestOpenCodeV2VerifierRejectsReleasedPeer \
             -- "$(command -v go)" test -race -count=1 -timeout 600s -json ./...
-      # Advisory: the summarizer's exit status is the verdict, and `if: always()` keeps the table beside
-      # a red race run - when the attribution is needed - instead of erroring when the run was skipped.
+      # Blocking: the summarizer's exit status is the verdict (cap, adopted ceilings, p95), and
+      # `if: always()` keeps the table beside a red race run instead of erroring when it was skipped.
       - name: Summarize Go test durations
         if: always() && steps.daemon_race_tests.outcome != 'skipped'
-        continue-on-error: true
         run: |
           python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"
       - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
@@ -1212,6 +1223,8 @@ jobs:
       - run: python3 scripts/ci/test-ci-changed-path-classifier.py
       - run: python3 scripts/ci/test-ci-structure-extraction.py
       - run: python3 scripts/ci/test-assert-credo-strict-baseline.py
+      - run: python3 scripts/ci/test-go-test-durations.py
+      - run: python3 scripts/ci/test-assert-go-coverage-floor.py
 
       # Runs here because the manual matrix lives in `browser/README.md`: a README-only pull request
       # would never reach a `run-heavy`-gated step; unlike the lint metrics below, this step is blocking.

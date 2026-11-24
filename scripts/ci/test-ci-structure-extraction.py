@@ -196,7 +196,6 @@ ADVISORY_STEPS = frozenset(
         ("control", "Measure Hex advisories (advisory)"),
         ("daemon", "Measure golangci-lint findings (GOOS=linux, advisory)"),
         ("daemon", "Measure govulncheck findings (advisory)"),
-        ("daemon", "Summarize Go test durations"),
         ("legacy-route-audit", "Measure ruff findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure shellcheck findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure actionlint findings for the workflows (advisory)"),
@@ -204,10 +203,28 @@ ADVISORY_STEPS = frozenset(
         ("contracts", "Measure production dependency advisories (advisory)"),
     }
 )
-ADVISORY_JOBS = frozenset({"coverage-daemon", "coverage-frontend"})
+ADVISORY_JOBS: frozenset[str] = frozenset()
 CREDO_GATE_STEP = "Enforce the committed Credo strict baseline"
 CREDO_GATE_INVOCATION = 'python3 ../scripts/ci/assert-credo-strict-baseline.py --log "$credo_log"'
 CREDO_STRICT_INVOCATION = 'mix credo --strict 2>&1 | tee "$credo_log"'
+DURATION_GATE_STEP = "Summarize Go test durations"
+DURATION_GATE_CONDITION = "always() && steps.daemon_race_tests.outcome != 'skipped'"
+DURATION_GATE_INVOCATION = 'python3 ../scripts/ci/go-test-durations.py "$RUNNER_TEMP/daemon-go-race.json"'
+JSCPD_GATE_STEP = "Refuse code clones this change adds to the files it touches"
+JSCPD_SUITE_INVOCATION = "python3 scripts/ci/test-jscpd-changed.py"
+JSCPD_GATE_INVOCATION = 'python3 scripts/ci/jscpd-changed.py --base "$JSCPD_BASE" --head HEAD'
+# The job is the workflow's only unconditional gate runner, so a dropped `- run:` line would
+# disarm its suite silently; no other pin or assertion reads this job's step list.
+LEGACY_ROUTE_AUDIT_INVOCATIONS = (
+    "scripts/audit-no-legacy-routes.sh",
+    "python3 scripts/ci/test-no-legacy-routes-audit.py",
+    "python3 scripts/ci/test-ci-changed-path-classifier.py",
+    "python3 scripts/ci/test-ci-structure-extraction.py",
+    "python3 scripts/ci/test-assert-credo-strict-baseline.py",
+    "python3 scripts/ci/test-go-test-durations.py",
+    "python3 scripts/ci/test-assert-go-coverage-floor.py",
+    "python3 scripts/ci/assert-browser-suite-coverage.py",
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -594,28 +611,67 @@ def check_caller_advisory_step(workflow_text: str) -> None:
     require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
 
 
-def check_credo_gate_step(workflow_text: str) -> None:
-    normalized = find_step(job_blocks(workflow_text)["control"], CREDO_GATE_STEP)
+def check_blocking_gate_step(
+    workflow_text: str, job: str, step_name: str, invocation: str, *, condition: str | None = None
+) -> list[str]:
+    normalized = find_step(job_blocks(workflow_text)[job], step_name)
     scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
     require(
         "continue-on-error" not in scalars,
-        "the Credo gate step must not carry a step-level continue-on-error: its verdict has to fail the job",
+        f"the {step_name!r} step must not carry a step-level continue-on-error: its verdict has to fail the job",
     )
+    if condition is not None:
+        require(
+            scalars.get("if") == condition,
+            f"the {step_name!r} step must keep its reachability `{condition}`; found {scalars.get('if')!r}",
+        )
     body = run_body_at(normalized, WORKFLOW_INDENT[1])
-    require(body is not None, "the Credo gate step must keep a `run: |` body")
+    require(body is not None, f"the {step_name!r} step must keep a `run: |` body")
     commands = [line for line in body if line.strip() and not line.lstrip().startswith("#")]
+    require(
+        bool(commands) and commands[-1] == invocation,
+        f"the {step_name!r} step's body must end in {invocation!r}; "
+        f"found {commands[-1] if commands else '<an empty body>'!r}",
+    )
+    return commands
+
+
+def check_credo_gate_step(workflow_text: str) -> None:
+    commands = check_blocking_gate_step(workflow_text, "control", CREDO_GATE_STEP, CREDO_GATE_INVOCATION)
     require(
         CREDO_STRICT_INVOCATION in commands,
         f"the Credo gate step must run {CREDO_STRICT_INVOCATION!r}; found {commands!r}",
     )
     require(
-        bool(commands) and commands[-1] == CREDO_GATE_INVOCATION,
-        f"the Credo gate step's body must end in {CREDO_GATE_INVOCATION!r}; "
-        f"found {commands[-1] if commands else '<an empty body>'!r}",
-    )
-    require(
         not any(re.search(r"\bexit\s+0\b", line) for line in commands),
         "the Credo gate step must not keep an `exit 0` skip path: every run has to reach the gate program",
+    )
+
+
+def check_duration_gate_step(workflow_text: str) -> None:
+    check_blocking_gate_step(
+        workflow_text, "daemon", DURATION_GATE_STEP, DURATION_GATE_INVOCATION, condition=DURATION_GATE_CONDITION
+    )
+
+
+def check_jscpd_gate_step(workflow_text: str) -> None:
+    commands = check_blocking_gate_step(workflow_text, "contracts", JSCPD_GATE_STEP, JSCPD_GATE_INVOCATION)
+    require(
+        JSCPD_SUITE_INVOCATION in commands,
+        f"the jscpd gate step must also run {JSCPD_SUITE_INVOCATION!r}; found {commands!r}",
+    )
+
+
+def check_legacy_route_audit_invocations(workflow_text: str) -> None:
+    invocations = []
+    for step_lines in split_steps(job_blocks(workflow_text)["legacy-route-audit"], WORKFLOW_INDENT[0]):
+        scalars = scalars_at(normalized_step(step_lines, *WORKFLOW_INDENT), WORKFLOW_INDENT[1])
+        invocation = scalars.get("run")
+        if invocation not in (None, "|"):
+            invocations.append(invocation)
+    require(
+        tuple(invocations) == LEGACY_ROUTE_AUDIT_INVOCATIONS,
+        f"the legacy-route-audit step invocations changed: {tuple(invocations)!r}",
     )
 
 
@@ -670,6 +726,17 @@ class FoldedGateCompletenessTests(unittest.TestCase):
 class CredoGateStepTests(unittest.TestCase):
     def test_the_credo_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
         check_credo_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_duration_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
+        check_duration_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_jscpd_gate_step_is_not_advisory_and_ends_in_the_gate_program(self) -> None:
+        check_jscpd_gate_step(WORKFLOW.read_text(encoding="utf-8"))
+
+
+class LegacyRouteAuditStepTests(unittest.TestCase):
+    def test_the_gate_suite_steps_stay_wired_and_ordered(self) -> None:
+        check_legacy_route_audit_invocations(WORKFLOW.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -883,6 +950,82 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_credo_gate_step(mutated)
+
+    def test_mutation_restoring_the_duration_gate_steps_advisory_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {DURATION_GATE_STEP}\n",
+            f"      - name: {DURATION_GATE_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
+
+    def test_mutation_narrowing_the_duration_gate_steps_reachability_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"        if: {DURATION_GATE_CONDITION}\n",
+            "        if: success()\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
+
+    def test_mutation_replacing_the_duration_gate_invocation_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {DURATION_GATE_INVOCATION}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_duration_gate_step(mutated)
+
+    def test_mutation_dropping_the_jscpd_gate_step_reddens_the_step_pin(self) -> None:
+        step = (
+            f"      - name: {JSCPD_GATE_STEP}\n"
+            "        env:\n"
+            "          JSCPD_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}\n"
+            "        run: |\n"
+            f"          {JSCPD_SUITE_INVOCATION}\n"
+            f"          {JSCPD_GATE_INVOCATION}\n"
+        )
+        self.assertIn(step, self.workflow_text, "the mutation's anchor must be the jscpd gate step")
+        mutated = self.workflow_text.replace(step, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
+
+    def test_mutation_replacing_the_jscpd_gate_invocation_with_exit_zero_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {JSCPD_GATE_INVOCATION}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
+
+    def test_mutation_restoring_the_jscpd_steps_advisory_flag_reddens_the_step_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {JSCPD_GATE_STEP}\n",
+            f"      - name: {JSCPD_GATE_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_jscpd_gate_step(mutated)
+
+    def test_mutation_deleting_the_duration_gate_suite_step_reddens_the_audit_pin(self) -> None:
+        deleted = "      - run: python3 scripts/ci/test-go-test-durations.py\n"
+        self.assertIn(deleted, self.workflow_text, "the mutation's anchor must be the duration suite step")
+        mutated = self.workflow_text.replace(deleted, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_legacy_route_audit_invocations(mutated)
+
+    def test_mutation_deleting_the_go_floor_suite_step_reddens_the_audit_pin(self) -> None:
+        deleted = "      - run: python3 scripts/ci/test-assert-go-coverage-floor.py\n"
+        self.assertIn(deleted, self.workflow_text, "the mutation's anchor must be the Go floor suite step")
+        mutated = self.workflow_text.replace(deleted, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_legacy_route_audit_invocations(mutated)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):

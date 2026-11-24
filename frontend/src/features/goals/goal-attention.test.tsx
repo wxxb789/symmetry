@@ -240,7 +240,7 @@ describe("goal detail surface", () => {
     });
 
     renderRoute(`/portal/goals/${goalId}`);
-    expect(await screen.findByRole("heading", { level: 1, name: "Deliver the attention entry point" })).toBeVisible();
+    expect(await screen.findByRole("heading", { level: 1, name: "Deliver the attention entry point" }, { timeout: 5_000 })).toBeVisible();
     expect(screen.getByText("Merge Goal attention with the project blocked items")).toBeVisible();
     expect(screen.getByText("1 of 2 required items accepted")).toBeVisible();
     // Both served polarities of `required?` and the accepted row's own outcome

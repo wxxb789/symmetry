@@ -1006,15 +1006,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
 
 ## Deferred review findings (PR #205)
 
-- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
-      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
-      `(partial)` label on a timeout-truncated package once any test in that package failed.
-      `scripts/ci/go-test-durations.py:213` computes
-      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
-      so a package that has a failed test counts as fully explained even when its stream is cut
-      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
-      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
-      must fix the partial-run detection first.
 - [ ] The merged W2-01 plan (`docs/plans/2026-11-21-rf-w2-01-ci-test-observability-plan.md:363`)
       misstates the run: it records the checks as run "with the pinned ruff 0.17.6", which
       `pyproject.toml:6` `required-version = "==0.17.5"` makes impossible (the config refuses any
@@ -1529,7 +1520,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `TestLinuxOwnerAnchorWireExclusiveFieldsRefusedBeforeStoppingAnswer` and
       `TestLinuxOwnerAnchorWireCodecRejectsMalformedFrames` (`daemon/internal/platform/anchor_wire_shape_test.go`,
       `//go:build linux && amd64`; package `daemon/internal/platform`): failed once in the hosted
-      `coverage-daemon` job (advisory, `continue-on-error: true`; `go test -count=1 -timeout 1200s
+      `coverage-daemon` job (advisory at the time, `continue-on-error: true`; `go test -count=1 -timeout 1200s
       -coverprofile=coverage.out ./...` through `scripts/ci/stdio-only-caller-boundary.py`), run
       `44973284689` attempt 1, on PR #223 head `ca173870` — whose own change is records-only
       (`docs/evidence/comment-policy-sweep-2026-11-22.md` and its plan) over a PR whose code hunks are
@@ -1787,3 +1778,21 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       answer only). Align the gate with the projection answer or record it as the deliberate
       retained-resume owner allowlist; do not delete the kind list silently. Owner area:
       daemon app.
+
+## Duration ratchet: the adopted over-cap rows (rf-w6-12, 2026-11-24)
+
+- [ ] Burn down the five rows the duration gate adopts instead of failing
+      (`scripts/ci/go-test-durations.py` `ADOPTED_TEST_CEILINGS`, committed by the rf-w6-12 branch):
+      `internal/app`'s `TestOutputBackpressureRecoversWithOneTruncationMarker` (167.20 s measured
+      max on the race runner) and `TestRawOutputBudgetDropsWithoutFailingSemanticEvents` (124.96 s),
+      plus `internal/state`'s
+      `TestProviderActionCompletionRejectsOverLimitWorstCaseUnknownWithoutMutation` (34.58 s),
+      `TestProviderActionCapacityFailsBeforeDispatchWhenJournalByteBudgetIsExceeded` (32.91 s) and
+      `TestProviderActionCapacityReservesWorstCaseFailureCodeBeforeDispatch` (33.88 s). The two
+      `internal/app` rows do journal throughput work proportional to their 5 MiB fixture under
+      `-race` (no timer in the body; the ten-run measurements live in
+      `docs/evidence/rf-w6-12-wall-clock-ratchets-2026-11-24.md`), so a smaller fixture at the same
+      semantics or a production-side batching fix is the honest route; the three `internal/state`
+      rows straddle the 30 s cap and are the first candidates. Owner area: `internal/app` and
+      `internal/state` performance. Until then each row is ratcheted at 1.2x its measured max, and
+      any test the roster does not name stays under the 30 s cap.

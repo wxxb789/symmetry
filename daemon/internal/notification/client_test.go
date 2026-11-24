@@ -254,7 +254,6 @@ func TestRunReconnectsWhenHeartbeatReplyIsMissing(t *testing.T) {
 
 func TestRunIgnoresStaleChannelCloseFrames(t *testing.T) {
 	var attempts atomic.Int32
-	staleFramesSent := make(chan struct{})
 	releaseCurrentClose := make(chan struct{})
 	reconnected := make(chan struct{})
 	server := newChannelServer(t, func(ctx context.Context, conn *websocket.Conn, _ *http.Request) {
@@ -264,7 +263,7 @@ func TestRunIgnoresStaleChannelCloseFrames(t *testing.T) {
 		if attempt == 1 {
 			writeChannelFrame(t, ctx, conn, channelFrame{JoinRef: "stale", Topic: join.Topic, Event: "phx_error", Payload: json.RawMessage(`{}`)})
 			writeChannelFrame(t, ctx, conn, channelFrame{JoinRef: "stale", Topic: join.Topic, Event: "phx_close", Payload: json.RawMessage(`{}`)})
-			close(staleFramesSent)
+			writeChannelFrame(t, ctx, conn, channelFrame{JoinRef: join.JoinRef, Topic: join.Topic, Event: "work_available", Payload: json.RawMessage(`{"runtime_id":"runtime-1"}`)})
 			select {
 			case <-releaseCurrentClose:
 			case <-ctx.Done():
@@ -280,9 +279,24 @@ func TestRunIgnoresStaleChannelCloseFrames(t *testing.T) {
 
 	client := newTestClient(t, server.URL, testOptions{heartbeatInterval: time.Hour, reconnectInitial: 5 * time.Millisecond, reconnectMaximum: 10 * time.Millisecond})
 	ctx, cancel := context.WithCancel(context.Background())
-	done := runClient(client, ctx, make(chan Hint, 4))
-	<-staleFramesSent
-	time.Sleep(20 * time.Millisecond)
+	hints := make(chan Hint, 4)
+	done := runClient(client, ctx, hints)
+	guard := time.After(testHangGuard)
+workAvailable:
+	for {
+		select {
+		case hint := <-hints:
+			if hint.Type != "work_available" {
+				continue
+			}
+			if hint.RuntimeID != "runtime-1" {
+				t.Fatalf("work_available hint RuntimeID = %q, want runtime-1", hint.RuntimeID)
+			}
+			break workAvailable
+		case <-guard:
+			t.Fatal("client did not deliver a work_available hint after the stale frames")
+		}
+	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("connections after stale frames = %d, want 1", got)
 	}

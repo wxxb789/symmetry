@@ -30,6 +30,9 @@ The closed Credo deflation half of the `.github/workflows/ci.yml` actionlint ite
 `## Comment-policy sweep: debt the deleted comments recorded (2026-11-22)` section below was moved
 on 2026-11-23 from branch `refactor/rf-w6-10-elixir-lint-coverage-flips`.
 
+The closed STD-A09 partial-run detection appended to the `## Deferred review findings (PR #205)`
+section below was moved on 2026-11-24 from branch `refactor/rf-w6-12-wall-clock-ratchets`.
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -4816,3 +4819,24 @@ decision as open while this entry and the goal record carry the closure.
       the literal pin table now exercises the shared functions (drift against app/config is
       impossible because none of them keeps a private set; drift against the schema and the Elixir
       list is covered by the assertions named in the entry above).
+
+## Deferred review findings (PR #205)
+
+- [ ] STD-A09 from the Opus review of PR #205 (2026-11-21, branch
+      `refactor/rf-w4-14-browser-fixtures`): the merged #188 test-observability code loses the
+      `(partial)` label on a timeout-truncated package once any test in that package failed.
+      `scripts/ci/go-test-durations.py:213` computes
+      `unexplained = [package for package in failed_packages if not any(key[0] == package for key in failed)]`,
+      so a package that has a failed test counts as fully explained even when its stream is cut
+      off by a timeout before the remaining tests ran. The step is `continue-on-error` today, so
+      there is no gate impact, but the W2-01/W6-12 follow-up that flips the thresholds to blocking
+      must fix the partial-run detection first.
+
+      **Closed (2026-11-24, branch `refactor/rf-w6-12-wall-clock-ratchets`, plan
+      `docs/plans/2026-11-24-rf-w6-12-wall-clock-ratchets-plan.md`):** the summarizer now counts a
+      test whose `run` event has no terminal `pass`/`fail`/`skip` event and refuses the stream
+      (exit 2) with the unfinished tests named — a package that carries a named failed test *and*
+      a cut-off stream is no longer read as explained. The flip the entry guarded landed in the
+      same change: the duration step is blocking, and
+      `scripts/ci/test-go-test-durations.py` pins the refusal on the exact stream shape
+      (one failed test, one unfinished test, a package-level failure).
