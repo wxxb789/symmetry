@@ -40,6 +40,10 @@ The descendant-window item appended under `## Descendant window under host load
 The closed `admission_deadline` attach-ack flake moved from `docs/TODO.md` was appended to the
 archived closures below on 2026-11-24 from branch `refactor/rf-flake-omo-attach-ack-deadline`.
 
+The closed `TestAutonomousReturnReleasesItsInputReader` observation appended to the
+`## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)`
+section below was moved on 2026-11-25 from branch `refactor/rf-flake-autonomous-return-reader`.
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -5013,3 +5017,63 @@ decision as open while this entry and the goal record carry the closure.
       under `## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)` as the
       clone-admission item. Evidence record
       `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §2/§3/§4/§5/§7.
+
+## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)
+
+- [ ] `TestAutonomousReturnReleasesItsInputReader` (`daemon/cmd/symmetry-fake-agent/autonomous_test.go`;
+      package `daemon/cmd/symmetry-fake-agent`): failed once in the hosted `daemon` job's race step
+      (`go test -race -count=1 -timeout 600s -json ./...` through `scripts/ci/stdio-only-caller-boundary.py`),
+      run `44976804508`, on PR #225 head `d45dc45f` — a Control-only code change
+      (`control/lib/symmetry_control_web/protocol.ex` plus its reason-coverage test and two docs records;
+      `git diff --name-only origin/main...d45dc45f`), so the daemon tree is untouched by that PR. Observed
+      failure text: the test's own `t.Fatalf("reader goroutine is still alive when runAutonomous returned")`
+      with the goroutine dump it printed — `goroutine 22 [runnable]` in `runAutonomous.func1` (the reader
+      closure in `autonomous.go`, reported at the function's tail, with no `readLine` or select frame),
+      `created by ... runAutonomous in goroutine 50`. Reproduction
+      attempts and outcomes: the same test passed on the PR's previous and next heads (CI reruns), and no
+      other occurrence is recorded in the repository; added 2026-11-22 — Linux (WSL, go1.27.0) `go test
+      -race -count=20 -timeout 600s -v -run '^TestAutonomousReturnReleasesItsInputReader$'
+      ./cmd/symmetry-fake-agent/` → 20/20 `--- PASS`, exit 0. Cause unknown. Most probable mechanism
+      (inference, re-derived from this run's own `-json` record): the input is a closable `io.Pipe` whose
+      `Close` does unblock the parked `readLine`, so the reader's exit is reachable; the record's
+      `"Elapsed":0.01` (`--- FAIL: ... (0.01s)`) is below `runAutonomous`'s `readerJoinTimeout = 50 ms` at
+      that head, so the join's `time.After(readerJoinTimeout)` arm cannot have fired — the run returned
+      through `<-readerDone`, so the reader had already run its deferred `close(readerDone)` and was in its
+      exit epilogue when the scan ran, and `bytes.Contains(stacks, "runAutonomous.func1")` reads that
+      exiting goroutine as a live leak. Next diagnostic step: repeat the `-race -count=N` run under CPU
+      contention, and on a reproduction capture whether the reader's `close(readerDone)` had already run
+      when the scan executed (the goleak oracle in the same file is the existing alternative oracle) rather
+      than touching the assertion or the bound, which the sibling
+      `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` pins (`--- PASS: ... (0.05s)` in the same
+      run). Proximity, not duplication: the comment-policy-sweep entry above for
+      `daemon/cmd/symmetry-fake-agent/autonomous.go` records the *unblockable* carrier, whose reader is
+      never joined — a different property, not this test's failure.
+
+      Update (2026-11-25, branch `refactor/rf-flake-autonomous-return-reader`): two further reds of the
+      same test and assertion in the hosted `daemon` job's race step, each the only failing test of its
+      run (`failed=1 package_fail=1`, and no `found unexpected goroutines:` line in either log) — run
+      `45510612412` head `01c0d4cf` (`--- FAIL: TestAutonomousReturnReleasesItsInputReader (0.00s)`,
+      `goroutine 47 [runnable]` in `runAutonomous.func1` at `autonomous.go:111 +0x213`) and run
+      `45430210878` head `5c297c25` (`(0.04s)`, `goroutine 46 [runnable]`, same frame and offset). Cause
+      named from the two dumps and a disassembly of a race-built test binary at the base (go1.27.4, the
+      CI flags class): both runs returned well under `readerJoinTimeout = 50 ms`, so the join returned
+      through `<-readerDone` (the reader had run its deferred `close(readerDone)`), and `+0x213` is the
+      `CALL runtime.racefuncexit(SB)` immediately after the `CALL runtime.deferreturn(SB)` that runs the
+      reader's `close(inputs)`/`close(readerDone)` defers — the assertion read a released reader inside
+      its death transition; instantaneous presence is not a leak.
+
+      **Closed (2026-11-25, branch `refactor/rf-flake-autonomous-return-reader`, plan
+      `docs/plans/2026-11-25-rf-flake-autonomous-return-reader-plan.md`):** the in-test scan now dumps
+      all stacks after the return and re-dumps every 1 ms until the reader frame vanishes or the named
+      `readerExitSettle = 1 s` bound passes; only persistence past the bound reds, and the failure detail
+      carries `runElapsed` (a sub-`readerJoinTimeout` return self-classifies as a released reader). The
+      pins: a ~50 ms post-release reader tail reds the old check 5/5 (with `runElapsed` 5.07 ms) and
+      passes the new check 50/50; a product dropping the input `Close()` reds the new check 3/3 on the
+      settle deadline (parked `io.PipeReader.Read` frame in the dump, and goleak reports it too) with the
+      old check also 3/3; a reader whose error branch never exits reds the new check 3/3 (spinning
+      `runtime.Gosched` frame, and goleak too) with the old check also 3/3; removing the join's
+      `time.After` arm still reds the sibling bound test at its 30 s guard. Loaded repeat
+      5 red/20000 before → 0 red/20000 after, and the WSL `-race` oracle
+      exits 0. Product files untouched (`autonomous.go` blob `d82b5991…`), no assertion removed, no
+      bound raised, no skip. Evidence: `docs/evidence/rf-flake-autonomous-return-reader-2026-11-25.md`.
+      CI `daemon`/`daemon-windows` on the PR head: pending (conductor-owned).

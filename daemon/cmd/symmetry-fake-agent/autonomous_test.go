@@ -266,6 +266,10 @@ func (recorder *leakCheckRecorder) runCleanups() {
 	}
 }
 
+// A released reader goroutine is a dying one, so its presence in a stack dump is
+// not a leak; only persistence past the settle bound is.
+const readerExitSettle = time.Second
+
 func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	verifyNoLeakedGoroutines(t)
 	// The run writes progress.md and result.json into the working directory, so
@@ -290,6 +294,7 @@ func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 		Goal:  "goal",
 		Input: json.RawMessage(`{"steps":1,"step_ms":0,"decision_at":1}`),
 	}
+	runStart := time.Now()
 	runDone := make(chan error, 1)
 	go func() { runDone <- runAutonomous(bufio.NewReader(input), input, writerHook, envelope) }()
 
@@ -301,11 +306,19 @@ func TestAutonomousReturnReleasesItsInputReader(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("runAutonomous did not return after the decision was answered")
 	}
+	runElapsed := time.Since(runStart)
 
+	settleDeadline := time.Now().Add(readerExitSettle)
 	stacks := make([]byte, 1<<20)
-	stacks = stacks[:runtime.Stack(stacks, true)]
-	if bytes.Contains(stacks, []byte("runAutonomous.func1")) {
-		t.Fatalf("reader goroutine is still alive when runAutonomous returned:\n%s", stacks)
+	for {
+		size := runtime.Stack(stacks, true)
+		if !bytes.Contains(stacks[:size], []byte("runAutonomous.func1")) {
+			break
+		}
+		if !time.Now().Before(settleDeadline) {
+			t.Fatalf("reader goroutine is still alive %v after runAutonomous returned (runElapsed %v):\n%s", readerExitSettle, runElapsed, stacks[:size])
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if _, err := writer.Write([]byte("late\n")); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("write after return = %v, want io.ErrClosedPipe: the input was not closed", err)
