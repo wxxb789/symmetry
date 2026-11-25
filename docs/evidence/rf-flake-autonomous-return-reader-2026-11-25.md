@@ -12,7 +12,8 @@ pins/mutants rows with restored hashes) and the rf-flake-stdout-drain-64kib pair
 The product file is untouched at base: `daemon/cmd/symmetry-fake-agent/autonomous.go` sha256
 `d041a4cb4cb02aa4f5d7dbb1b8c5b61e9ad1971b326a8659938571f053439773`, git blob
 `d82b59919541c7fdf460f0b0485f5dd32c90828a`. `<worktree>` is the goal worktree, `<scratch>` the
-disposable scratch root outside it; no absolute host paths are recorded.
+disposable scratch root outside it; `<HOST-PATH>` and `<TMP>` render the host checkout and temp
+roots in the verbatim content below; no absolute host paths are recorded.
 
 ## 1. Method and toolchain
 
@@ -55,7 +56,7 @@ Run `45510612412`, head `01c0d4cf` (workflow run created 2026-11-24T23:31:02Z, f
     autonomous_test.go:308: reader goroutine is still alive when runAutonomous returned:
         goroutine 46 [running]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestAutonomousReturnReleasesItsInputReader(0xc00017c488)
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
         testing.tRunner(0xc00017c488, 0x11e9a50)
 	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         created by testing.(*T).Run in goroutine 1
@@ -73,15 +74,15 @@ Run `45510612412`, head `01c0d4cf` (workflow run created 2026-11-24T23:31:02Z, f
         testing.(*M).Run(0xc0001f4320)
 	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestMain(0xc0001f4320)
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
         main.main()
 	_testmain.go:110 +0x172
 
         goroutine 47 [runnable]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous.func1()
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
         created by github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous in goroutine 50
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
 --- FAIL: TestAutonomousReturnReleasesItsInputReader (0.00s)
 ```
 
@@ -92,7 +93,7 @@ Run `45430210878`, head `5c297c25`, verbatim (same shape, `goroutine 46 [runnabl
     autonomous_test.go:308: reader goroutine is still alive when runAutonomous returned:
         goroutine 44 [running]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestAutonomousReturnReleasesItsInputReader(0xc00028e008)
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
         testing.tRunner(0xc00028e008, 0x11e9a50)
 	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         created by testing.(*T).Run in goroutine 1
@@ -110,15 +111,15 @@ Run `45430210878`, head `5c297c25`, verbatim (same shape, `goroutine 46 [runnabl
         testing.(*M).Run(0xc0002d40a0)
 	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestMain(0xc0002d40a0)
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
         main.main()
 	_testmain.go:110 +0x172
 
         goroutine 46 [runnable]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous.func1()
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
         created by github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous in goroutine 45
-	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
+	<HOST-PATH>/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
 --- FAIL: TestAutonomousReturnReleasesItsInputReader (0.04s)
 ```
 
@@ -134,7 +135,7 @@ package), i.e. the goroutine was gone by cleanup time.
 ### 3.1 Disassembly witness (`+0x213`)
 
 Built in WSL from the base tree (`<scratch>/witness`, `git archive HEAD daemon`) with the CI's
-compiler and flags class: `GOTOOLCHAIN=go1.27.4 go test -race -c -o /tmp/fake-agent-witness.test
+compiler and flags class: `GOTOOLCHAIN=go1.27.4 go test -race -c -o <TMP>/fake-agent-witness.test
 ./cmd/symmetry-fake-agent/` (`go version` → `go1.27.4 linux/amd64`), then `go tool objdump -s
 'runAutonomous\.func1'` (133 instructions). Verbatim around the offset both CI dumps print:
 
