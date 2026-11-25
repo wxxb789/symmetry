@@ -1913,6 +1913,11 @@ func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Cont
 
 func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspace string, environment []string) {
 	t.Helper()
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion)
+}
+
+func nativeOpenCodeRepositoryTaskCheckVersionLine(t *testing.T, executable, workspace string, environment []string, want string) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "--version")
@@ -1922,8 +1927,8 @@ func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspac
 	if err != nil {
 		t.Fatalf("run native OpenCode version check: %v", err)
 	}
-	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
-		t.Fatalf("historical native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
+	if strings.TrimSpace(string(output)) != want {
+		t.Fatalf("native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), want)
 	}
 }
 

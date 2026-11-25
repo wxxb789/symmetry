@@ -26,9 +26,10 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 	if os.Getenv(nativeSyntheticToolEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL=1 to run the native legacy refusal test")
 	}
+	expectedVersionLine := "opencode v" + TestedVersion
 	executable := strings.TrimSpace(os.Getenv(nativeSyntheticToolExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, historicalNativeTestVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, expectedVersionLine)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -48,7 +49,7 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 	}
 	environment := nativeOpenCodeRepositoryTaskEnvironment(t, root, gateway.URL+"/v1")
 	nativeOpenCodeRepositoryTaskCheckEnvironment(t, environment, gateway.URL+"/v1")
-	nativeOpenCodeRepositoryTaskCheckVersion(t, executable, workspace, environment)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, expectedVersionLine)
 
 	adapter := NewAdapter(executable)
 	productionAPI := adapter.newAPI

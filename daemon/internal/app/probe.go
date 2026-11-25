@@ -16,6 +16,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness/codex"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omo"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/omp"
+	"github.com/wxxb789/symmetry/daemon/internal/harness/opencode"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
@@ -103,6 +104,7 @@ func newHarnessRegistry(profile config.AgentProfile) *harness.Registry {
 	_ = registry.Register(harness.KindPi, pi.NewAdapter(profile.Command))
 	_ = registry.Register(harness.KindOMP, omp.NewAdapter(profile.Command))
 	_ = registry.Register(harness.KindOmO, omo.NewAdapter(profile.Command))
+	_ = registry.Register(harness.KindOpenCode, opencode.NewAdapter(profile.Command))
 	return registry
 }
 

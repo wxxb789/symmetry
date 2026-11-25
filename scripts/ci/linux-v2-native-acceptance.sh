@@ -1131,7 +1131,7 @@ def config(kind, profile, model, resource_id, provider_access=None):
             "harness_kind": kind,
             "harness_version": {
                 "pi": "1.5.2",
-                "opencode": "1.18.32",
+                "opencode": "2.4.1",
                 "codex": "0.168.0",
                 "claude_code": "2.1.323",
             }[kind],

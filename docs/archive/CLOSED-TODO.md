@@ -5256,3 +5256,42 @@ follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under 
       swap row and the equal-PID row verbatim. (b) the table gains the handoff, authority,
       release-proof and pre-gate rows (`production_linux_v2_owner_identity_test.go`, phase table).
       (c) the equal-PID, different-identity row isolates the identity term.
+
+## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
+
+- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
+      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
+      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
+      case stay green), so every surface this slice consolidated elsewhere still has an
+      `opencode` copy: process forwarding with its own guards
+      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
+      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
+      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
+      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
+      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
+      capability work, not this increment, and must keep those CI oracles green.
+
+      **Closed (2026-11-26, branch `refactor/rf-opencode-phase1`, goal `rf-opencode-phase1`; Q6=F2
+      promotion):** the frozen duplicates are consolidated onto the shared harness helpers
+      (`harness.IsNilInterface`, `harness.ProcessForwarder`, `harness.DeliverEvent`) exactly as
+      `pi`/`codex`/`omp`/`omo` already were; the six CI assertions and the release-acceptance case
+      stay green.
+
+## Daemon harness: native OpenCode tests run without the in-process containment install (W6-04)
+
+- [ ] The env-gated native OpenCode tests — `internal/harness/opencode/adapter_native_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_SMOKE=1`), `adapter_native_work_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_{SYNTHETIC_TOOL,ADMISSION_REPLAY,RESUME_CAPTURE,REPOSITORY_TASK}=1`)
+      and `adapter_native_terminal_candidate_test.go`
+      (`SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE=1`) — launch real processes in-process, so with
+      their gates set they reach the shipped containment route a generated test main cannot
+      dispatch. rf-w6-03 (the Go-test-binary fork removal) installed
+      `execution.UseInProcessContainmentSupervisorForTesting` in every other launching test binary
+      but left `opencode/**` frozen (W6-04 owns it), so this package has no
+      `inprocess_containment_test.go`; add the per-package install with the next `opencode/**`
+      change. Owner: W6-04.
+
+      **Closed (2026-11-26, branch `refactor/rf-opencode-phase1`, goal `rf-opencode-phase1`):**
+      `daemon/internal/harness/opencode/inprocess_containment_test.go` installs
+      `execution.UseInProcessContainmentSupervisorForTesting` for the package on the `pi` shape and
+      restores it after `m.Run`.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -25,23 +26,115 @@ const testHangGuard = 30 * time.Second
 
 func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 	adapter := NewAdapterWithRunner("opencode", fixtureCommandRunner{responses: map[string][]byte{
-		"--version":    []byte("opencode v2.3.0\n"),
+		"--version":    []byte("opencode v" + TestedVersion + "\n"),
 		"serve --help": []byte("opencode serve\n--hostname  hostname to listen on\n--port  port to listen on\n"),
 	}})
 	capabilities, err := adapter.Probe(context.Background())
-	if !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
-	}
 	if err := capabilities.Validate(); err != nil {
 		t.Fatalf("capabilities invalid: %v", err)
 	}
-	if TestedVersion != "2.3.0" || !capabilities.VersionKnown || capabilities.NativeVersion != "2.3.0" || !capabilities.TransportVerified || capabilities.ImplementationVersion != "" || capabilities.Verified ||
+	if TestedVersion != "2.4.1" || !capabilities.VersionKnown || capabilities.NativeVersion != TestedVersion || !capabilities.TransportVerified || capabilities.ImplementationVersion != "" || capabilities.Verified ||
 		capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
 		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("capabilities = %+v, want known but completely unverified projection", capabilities)
 	}
-	if !strings.Contains(capabilities.Unsupported[string(harness.CapabilityStart)], "terminal") || !strings.Contains(capabilities.Unsupported[string(harness.CapabilityResume)], "recovery") {
-		t.Fatalf("unsupported reasons = %#v, want native terminal and recovery evidence requirements", capabilities.Unsupported)
+	// A runner without the hasher contract never promotes: off Windows the platform gate
+	// refuses first with the compose rows' sentinel, on Windows the blob binding refuses.
+	if runtime.GOOS != "windows" {
+		if !errors.Is(err, harness.ErrHarnessUnavailable) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodePlatformRefusalReason {
+			t.Fatalf("Probe() error = %v, start reason = %q, want the Linux platform refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+		}
+		return
+	}
+	if !errors.Is(err, harness.ErrNativeUnverified) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodeBlobRefusalReason {
+		t.Fatalf("Probe() error = %v, start reason = %q, want the exact-blob refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+	}
+}
+
+func TestProbePromotesOnlyTheExactTestedBlobOnWindows(t *testing.T) {
+	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
+		fixtureCommandRunner: fixtureCommandRunner{responses: map[string][]byte{
+			"--version":    []byte("opencode v" + TestedVersion + "\n"),
+			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+		}},
+		digest: TestedExecutableHash,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if runtime.GOOS == "linux" {
+		if !errors.Is(err, harness.ErrHarnessUnavailable) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodePlatformRefusalReason {
+			t.Fatalf("Probe() error = %v, start reason = %q, want the Linux platform refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+		}
+		if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
+			t.Fatalf("capabilities = %+v, want no promoted operation on Linux", capabilities)
+		}
+		return
+	}
+	if runtime.GOOS != "windows" {
+		t.Skipf("promotion is deterministic only on windows; the fail-closed branch is asserted on linux")
+	}
+	if err != nil {
+		t.Fatalf("Probe() error = %v, want the promoted projection", err)
+	}
+	if capabilities.NativeVersion != TestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified ||
+		!capabilities.Verified || !capabilities.Start || !capabilities.Events || !capabilities.Cancel ||
+		capabilities.ImplementationVersion != openCodeImplementationVersion || capabilities.ProtocolVersion != 1 {
+		t.Fatalf("capabilities = %+v, want start/events/cancel bound to the exact blob", capabilities)
+	}
+	if capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
+		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
+		t.Fatalf("capabilities = %+v, want every fenced operation still unsupported", capabilities)
+	}
+	for _, capability := range []harness.Capability{harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel} {
+		if reason := capabilities.Unsupported[string(capability)]; reason != "" {
+			t.Fatalf("promoted projection still lists %s unsupported: %q", capability, reason)
+		}
+	}
+}
+
+func TestProbeRejectsWrongBlobDigest(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the blob gate is only reachable where the platform gate admits")
+	}
+	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
+		fixtureCommandRunner: fixtureCommandRunner{responses: map[string][]byte{
+			"--version":    []byte("opencode v" + TestedVersion + "\n"),
+			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+		}},
+		digest: testedLinuxExecutableHash,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
+	}
+	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
+		t.Fatalf("capabilities = %+v, want a fail-closed projection for a foreign blob", capabilities)
+	}
+	if capabilities.Unsupported[string(harness.CapabilityStart)] != openCodeBlobRefusalReason {
+		t.Fatalf("start reason = %q, want the exact-blob binding reason", capabilities.Unsupported[string(harness.CapabilityStart)])
+	}
+}
+
+// The pinned 2.4.1 bytes print the bare readiness line; the prefixed 1.18.x spelling stays
+// accepted for the frozen fixtures. Both forms must bind the loopback port.
+func TestReadinessAcceptsBothRecordedListeningLines(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		line string
+		want int
+	}{
+		{name: "2.4.1 bare line", line: "server listening on http://127.0.0.1:46345\n", want: 46345},
+		{name: "historical prefixed line", line: "opencode server listening on http://127.0.0.1:43123\n", want: 43123},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newNativeSession(context.Background(), func() {}, context.Background(), func() {}, &recordingSink{}, t.TempDir(), nil, "opencode", "secret", nil, time.Millisecond, time.Second)
+			session.observeReadiness([]byte(test.line))
+			session.mu.Lock()
+			port, readinessErr := session.listeningPort, session.readinessErr
+			session.mu.Unlock()
+			if readinessErr != nil || port != test.want {
+				t.Fatalf("readiness = port %d, err %v, want port %d", port, readinessErr, test.want)
+			}
+		})
 	}
 }
 
@@ -55,8 +148,8 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 		{name: "V1 version", version: "1.18.29", want: harness.ErrUnsupportedVersion},
 		{name: "historical V1 pin", version: "1.18.32", want: harness.ErrUnsupportedVersion},
 		{name: "superseded V2 pin", version: "opencode v2.2.7", want: harness.ErrUnsupportedVersion},
-		{name: "version in diagnostic", version: "failed to run opencode v2.3.0", want: harness.ErrUnsupportedVersion},
-		{name: "prerelease version", version: "opencode v2.3.0-preview", want: harness.ErrUnsupportedVersion},
+		{name: "version in diagnostic", version: "failed to run opencode v2.4.1", want: harness.ErrUnsupportedVersion},
+		{name: "prerelease version", version: "opencode v2.4.1-preview", want: harness.ErrUnsupportedVersion},
 		{name: "bad help", version: TestedVersion, help: "opencode serve --port", want: harness.ErrNativeUnverified},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,8 +158,13 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 				"serve --help": []byte(test.help),
 			}})
 			capabilities, err := adapter.Probe(context.Background())
-			if !errors.Is(err, test.want) {
-				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			want := test.want
+			if runtime.GOOS != "windows" && errors.Is(want, harness.ErrUnsupportedVersion) {
+				// Off Windows the platform refusal keeps today's tolerated ErrHarnessUnavailable class.
+				want = harness.ErrHarnessUnavailable
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("Probe() error = %v, want %v", err, want)
 			}
 			if err := capabilities.Validate(); err != nil {
 				t.Fatalf("capabilities invalid: %v", err)
@@ -156,7 +254,8 @@ func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t 
 	if !persisted || pid != 123 || identity != "created:123" {
 		t.Fatalf("ProcessDetails() = %d, %q; persisted=%v", pid, identity, persisted)
 	}
-	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"}
+	// 2.4.1 rejects the retired --pure flag (live-checked against the pinned ELF).
+	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "0"}
 	if strings.Join(invocation.Args, "|") != strings.Join(wantArgs, "|") || invocation.Program != "opencode-test" || invocation.Dir != request.Workspace {
 		t.Fatalf("invocation = %+v, want owned explicit serve", invocation)
 	}
@@ -822,6 +921,17 @@ func (runner fixtureCommandRunner) Run(_ context.Context, _ string, args ...stri
 	return runner.responses[strings.Join(args, " ")], nil
 }
 
+// digestCommandRunner adds the harness.ExecutableHasher seam so a promotion gate
+// stays deterministic without hashing whatever this host resolves.
+type digestCommandRunner struct {
+	fixtureCommandRunner
+	digest string
+}
+
+func (runner digestCommandRunner) ExecutableDigest(context.Context, string) (string, error) {
+	return runner.digest, nil
+}
+
 type errorCommandRunner struct {
 	responses map[string][]byte
 	errors    map[string]error
@@ -1222,7 +1332,7 @@ func (sink *recordingSink) hasCode(code string) bool {
 func newTestAdapter(start processStarter, fake api) *Adapter {
 	readyStart := func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 		process, err := start(ctx, invocation, sink)
-		if isNilNativeProcess(process) {
+		if harness.IsNilInterface(process) {
 			return nil, err
 		}
 		if err != nil {

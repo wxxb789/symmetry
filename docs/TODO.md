@@ -1059,18 +1059,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
       safe for journaled action IDs.
 
-- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
-      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
-      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
-      case stay green), so every surface this slice consolidated elsewhere still has an
-      `opencode` copy: process forwarding with its own guards
-      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
-      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
-      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
-      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
-      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
-      capability work, not this increment, and must keep those CI oracles green.
-
 ## pi provider-bridge close-retry timing flake under host load (PR #155 review)
 
 - [ ] Revalidate the pre-existing host-load flake in
@@ -1380,20 +1368,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       (`daemon/internal/platform/supervisor_linux_witness.go`) behind
       `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
       conventions coexist. Owner: unassigned.
-
-## Daemon harness: native OpenCode tests run without the in-process containment install (W6-04)
-
-- [ ] The env-gated native OpenCode tests — `internal/harness/opencode/adapter_native_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_SMOKE=1`), `adapter_native_work_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_{SYNTHETIC_TOOL,ADMISSION_REPLAY,RESUME_CAPTURE,REPOSITORY_TASK}=1`)
-      and `adapter_native_terminal_candidate_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE=1`) — launch real processes in-process, so with
-      their gates set they reach the shipped containment route a generated test main cannot
-      dispatch. rf-w6-03 (the Go-test-binary fork removal) installed
-      `execution.UseInProcessContainmentSupervisorForTesting` in every other launching test binary
-      but left `opencode/**` frozen (W6-04 owns it), so this package has no
-      `inprocess_containment_test.go`; add the per-package install with the next `opencode/**`
-      change. Owner: W6-04.
 
 ## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
 
@@ -1908,12 +1882,14 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       complete). The scratch runs' dummy credentials stop exactly at the pi turn; ruling Q3(a)
       accepts those turns, one small turn per such leg.
 
-- [ ] The frozen `shared` OpenCode legs stay F2-excluded after the retarget (2026-11-24, same goal;
-      ruling Q1(a)): `opencode_native_health` keeps its bytes, its allowlist entry and its position
-      (now after every pi leg, so the pi witness files are published before it aborts the set), and
-      the OpenCode peer-negative leg after it is not reached. A non-zero `shared` exit caused only
-      by that row is expected; no report may read it as pi evidence. Its disposition belongs to the
-      D3 `harness.md` amendment (Q1(b)/Q1(c) readings are not implemented here).
+- [ ] The `shared` OpenCode legs' disposition after the Q6=F2 promotion (2026-11-25, goal
+      `rf-opencode-phase1`; 0010 W6-04 P4 row/bullet): the legs stay F2-excluded and non-evidence,
+      and their exclusion is re-anchored with the conductor's D3 amendment
+      (`refactor/d3-amendment-draft.md` §1 P7, whose "while frozen under D1/W6-04" clause the
+      promotion makes stale). `opencode_native_health` keeps its bytes, its allowlist entry and
+      its position; a non-zero `shared` exit caused only by that row is expected, and no report
+      may read it as V2 promotion evidence. Linux admission stays fail-closed until one dispatched
+      `linux-native-v2-acceptance` `opencode_native_health` run is green.
 
 - [ ] rf-acc-witness-unresolved-exit: the App exits 0 on the `unresolved` stage-replay recovery while
       its own e2e requires a deliberate non-zero exit (2026-11-25, goal `rf-acc-pi-durability-matrices`;

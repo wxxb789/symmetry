@@ -51,7 +51,7 @@ const (
 	truthPiStartReason       = "pi version probe failed"
 	truthOMPStartReason      = "OMP executable/version/protocol has not been verified"
 	truthOmOStartReason      = "OmO executable is unavailable"
-	truthOpenCodeStartReason = "OpenCode V2 2.3.0 is unsupported: require exact-binary Windows and native Linux terminal and retained-session recovery evidence before enabling native sessions; V1 is not supported"
+	truthOpenCodeStartReason = "opencode version probe failed"
 
 	truthGenericResumeReason = "generic process runner has no retained native session"
 
@@ -63,7 +63,11 @@ const (
 
 	truthOmOPromotedProviderReason = "native relay inference was observed; Symmetry provider broker access is not verified"
 	truthOmOUnpinnedReason         = "operation is not independently verified for the pinned OmO read/write profile"
-	truthOpenCodeProbeReason       = "OpenCode V2 2.3.0 native terminal and recovery behavior lacks exact-binary Windows and native Linux evidence; version and serve help do not establish native support"
+
+	truthOpenCodePlatformRejectReason   = "OpenCode V2 2.4.1 is promoted on Windows only: Linux admission stays fail-closed until the dispatched linux-native-v2-acceptance opencode_native_health row is green under the Linux v2 owner; V1 is not supported"
+	truthOpenCodeBlobRejectReason       = "opencode native support is bound to the exact tested executable blob; the resolved executable SHA-256 is unverified or does not match"
+	truthOpenCodePromotedProviderReason = "OpenCode provider broker bridge is not verified"
+	truthOpenCodePromotedResumeReason   = "OpenCode native resume is not verified"
 )
 
 var truthTableWires = []struct {
@@ -193,7 +197,7 @@ func truthTableProductionProjection(t *testing.T, kind harness.Kind) harness.Cap
 		probed, _ := omo.NewAdapter(truthAbsentCommand).Probe(context.Background())
 		capabilities = probed
 	case harness.KindOpenCode:
-		probed, _ := harness.NewOpenCodeAdapter().Probe(context.Background())
+		probed, _ := opencode.NewAdapterWithRunner(truthAbsentCommand, truthTableAbsentRunner{}).Probe(context.Background())
 		capabilities = probed
 	default:
 		t.Fatalf("no production projection for kind %q", kind)
@@ -430,23 +434,59 @@ func TestAdapterPolicyTruthTablePromotedOmO(t *testing.T) {
 	truthTableCheck(t, "promoted omo provider_access advertised", truthTableCall(t, protocol.SessionModeFresh, advertisedProvider, &protocol.ProviderAccess{}), truthAllowedOutcome())
 }
 
-// The OpenCode prototype seam never promotes, so this pins its fail-closed projection and the
-// production answer for the kind comes from the registered unavailable adapter in the table.
-func TestAdapterPolicyTruthTableProbeSeamOpenCode(t *testing.T) {
+// OpenCode promotes only the exact tested Windows blob; the seam pins both the
+// promoted projections and the platform refusal the Linux rows carry.
+func TestAdapterPolicyTruthTablePromotedOpenCode(t *testing.T) {
 	adapter := opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
 		responses: map[string][]byte{
 			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
 			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
 		},
+		digest: opencode.TestedExecutableHash,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	wantPromoted := runtime.GOOS == "windows"
+	if wantPromoted {
+		if err != nil {
+			t.Fatalf("promoted opencode probe error = %v", err)
+		}
+		if !capabilities.Verified || !capabilities.Start || !capabilities.Events || !capabilities.Cancel || capabilities.Resume {
+			t.Fatalf("opencode projection = %+v, want start/events/cancel only", capabilities)
+		}
+		truthTableCheck(t, "promoted opencode provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}),
+			truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityProviderAccess, truthOpenCodePromotedProviderReason))
+		truthTableCheck(t, "promoted opencode resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil),
+			truthResumeRefusedOutcome(harness.KindOpenCode, truthOpenCodePromotedResumeReason))
+		return
+	}
+	if runtime.GOOS != "linux" {
+		t.Skipf("opencode promotion is deterministic only on windows; the fail-closed branch is asserted on linux")
+	}
+	if !errors.Is(err, harness.ErrHarnessUnavailable) {
+		t.Fatalf("fail-closed opencode probe error = %v, want ErrHarnessUnavailable", err)
+	}
+	startFailure := truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityStart, truthOpenCodePlatformRejectReason)
+	truthTableCheck(t, "fail-closed opencode provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}), startFailure)
+	truthTableCheck(t, "fail-closed opencode resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), startFailure)
+}
+
+// A foreign blob on the promoting platform must stay fail-closed under the blob binding.
+func TestAdapterPolicyTruthTableOpenCodeRejectsForeignBlob(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the blob gate is only reachable where the platform gate admits")
+	}
+	adapter := opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
+		responses: map[string][]byte{
+			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
+			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+		},
+		digest: "sha256:" + strings.Repeat("0", 64),
 	})
 	capabilities, err := adapter.Probe(context.Background())
 	if !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("opencode probe error = %v, want ErrNativeUnverified", err)
+		t.Fatalf("foreign-blob opencode probe error = %v, want ErrNativeUnverified", err)
 	}
-	if capabilities.Kind != harness.KindOpenCode || capabilities.Verified {
-		t.Fatalf("opencode projection kind=%q verified=%t, want an unverified opencode projection", capabilities.Kind, capabilities.Verified)
-	}
-	startRefusal := truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityStart, truthOpenCodeProbeReason)
-	truthTableCheck(t, "probe-seam opencode provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}), startRefusal)
-	truthTableCheck(t, "probe-seam opencode resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), startRefusal)
+	startFailure := truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityStart, truthOpenCodeBlobRejectReason)
+	truthTableCheck(t, "foreign-blob opencode provider_access", truthTableCall(t, protocol.SessionModeFresh, capabilities, &protocol.ProviderAccess{}), startFailure)
+	truthTableCheck(t, "foreign-blob opencode resume", truthTableCall(t, protocol.SessionModeResume, capabilities, nil), startFailure)
 }

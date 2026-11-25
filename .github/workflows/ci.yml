@@ -1131,19 +1131,19 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          release_url='https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-linux-x64-baseline.tar.gz'
-          archive="$RUNNER_TEMP/opencode-linux-x64-baseline.tar.gz"
-          release_dir="$RUNNER_TEMP/opencode-1.18.32"
+          release_url='https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-x64.tar.gz'
+          archive="$RUNNER_TEMP/opencode-linux-x64.tar.gz"
+          release_dir="$RUNNER_TEMP/opencode-2.4.1"
           executable="$release_dir/opencode"
           provenance="$RUNNER_TEMP/opencode-native-synthetic-provenance.txt"
-          archive_sha256='763af386ef88a8cab18df00fcf055690e5a55e31a7088beabe02307142a6adce'
+          archive_sha256='9ddd18e3faf64eaeccf6a0fcbc96a5c7a14520ae5fd5b61e5be51d894f478b47'
 
           rm -rf "$release_dir"
           mkdir -p "$release_dir"
           {
             printf 'source_revision=%s\n' "$GITHUB_SHA"
             printf 'release_url=%s\n' "$release_url"
-            printf 'version_expected=1.18.32\n'
+            printf 'version_expected=opencode v2.4.1\n'
             printf 'archive_sha256_expected=%s\n' "$archive_sha256"
             printf 'provider_credentials=none\n'
             printf 'upstream_scope=synthetic numeric loopback only\n'
@@ -1156,8 +1156,9 @@ jobs:
           printf '%s  %s\n' "$archive_sha256" "$archive" | sha256sum --check --strict
           tar --extract --file "$archive" --directory "$release_dir"
           test -x "$executable"
+          test "$(sha256sum "$executable" | cut -d' ' -f1)" = 'ec93043f18f8a6b4d8e71ec9260e292ba6f91b66b142782135d40f0b58b0c152'
           actual_version=$(timeout 30s "$executable" --version)
-          test "$actual_version" = '1.18.32'
+          test "$actual_version" = 'opencode v2.4.1'
           {
             printf 'archive_sha256_actual=%s\n' "$(sha256sum "$archive" | awk '{print $1}')"
             printf 'version_actual=%s\n' "$actual_version"
@@ -1169,7 +1170,7 @@ jobs:
         working-directory: daemon
         env:
           SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL: "1"
-          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-1.18.32/opencode
+          SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE: ${{ runner.temp }}/opencode-2.4.1/opencode
         run: |
           set -Eeuo pipefail
           python3 ../scripts/ci/go-test-json-gate.py \

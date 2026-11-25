@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -24,14 +23,28 @@ import (
 )
 
 const (
-	DefaultExecutable       = "opencode"
-	TestedVersion           = "2.3.0"
+	DefaultExecutable = "opencode"
+	TestedVersion     = "2.4.1"
+
+	// TestedExecutableHash is the SHA-256 of the exact OpenCode 2.4.1 Windows PE this build
+	// promotes; a same-version blob elsewhere must never promote an operation.
+	TestedExecutableHash = "sha256:f3da11bf51ace25b86f52e20368d415451d200d6b48101d9f4e5d721b1d2020e"
+
+	// testedLinuxExecutableHash is the recorded SHA-256 of the exact OpenCode 2.4.1 Linux ELF;
+	// evidence-only, and Linux admission stays fail-closed until the dispatched owner row is green.
+	testedLinuxExecutableHash = "sha256:ec93043f18f8a6b4d8e71ec9260e292ba6f91b66b142782135d40f0b58b0c152"
+
+	// openCodeImplementationVersion is the promoted transport identity a runtime selects through adapter_version.
+	openCodeImplementationVersion = "opencode-http-v2"
+
 	defaultHealthRetryDelay = 50 * time.Millisecond
 	defaultTerminationGrace = 5 * time.Second
-	probeTimeout            = time.Second
-	probeOutputLimitBytes   = 64 << 10
-	streamReadChunkSize     = 32 * 1024
-	maxReadinessLineBytes   = 4096
+	// The pinned client answers --version and serve --help in ~0.2 s; five seconds keeps the
+	// probe bounded without turning host contention into a daemon-startup failure (pi's bound).
+	probeTimeout          = 5 * time.Second
+	probeOutputLimitBytes = 64 << 10
+	streamReadChunkSize   = 32 * 1024
+	maxReadinessLineBytes = 4096
 )
 
 var (
@@ -39,8 +52,10 @@ var (
 	errTurnUnverified     = fmt.Errorf("%w: OpenCode terminal event semantics are unverified", harness.ErrNativeUnverified)
 	errNilNativeProcess   = errors.New("opencode native process starter returned a nil process")
 	versionPattern        = regexp.MustCompile(`^(?:opencode v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
-	unsupportedOperations = "OpenCode V2 2.3.0 native terminal and recovery behavior lacks exact-binary Windows and native Linux evidence; version and serve help do not establish native support"
-	listeningLinePattern  = regexp.MustCompile(`^opencode server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
+	unsupportedOperations = "OpenCode V2 2.4.1 native terminal and recovery behavior lacks the exact-binary promotion evidence; version and serve help do not establish native support"
+	// 1.18.x printed a prefixed readiness line; 2.4.1 prints the bare form recorded in every
+	// testdata/opencode/2.4.1 receipt, so both spellings are accepted.
+	listeningLinePattern = regexp.MustCompile(`^(?:opencode )?server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
 )
 
 // CommandRunner is the injection boundary for deterministic executable probes.
@@ -55,6 +70,11 @@ func (osCommandRunner) Run(ctx context.Context, executable string, args ...strin
 		Program: executable,
 		Args:    args,
 	}, probeOutputLimitBytes, execution.RunBoundedCommand)
+}
+
+// ExecutableDigest implements harness.ExecutableHasher for the production probe path.
+func (osCommandRunner) ExecutableDigest(ctx context.Context, executable string) (string, error) {
+	return harness.HashExecutableFile(ctx, executable)
 }
 
 // nativeProcess retains only the shared execution.Runner behavior this adapter
@@ -194,8 +214,8 @@ type Adapter struct {
 	terminationWait time.Duration
 }
 
-// NewAdapter creates the private OpenCode transport prototype. Production uses
-// harness.NewOpenCodeAdapter until exact-binary lifecycle evidence is complete.
+// NewAdapter creates the OpenCode native transport the composition root registers.
+// The capability projection promotes it only for the exact tested Windows blob.
 func NewAdapter(executables ...string) *Adapter {
 	executable := DefaultExecutable
 	if len(executables) > 0 && strings.TrimSpace(executables[0]) != "" {
@@ -226,8 +246,8 @@ func newAdapter(executable string, runner CommandRunner, start processStarter, a
 	}
 }
 
-// Probe records version and serve-help transport evidence but always returns
-// ErrNativeUnverified. Neither evidence proves native sessions or terminals.
+// Probe records version, serve-help and exact-blob transport evidence, then
+// projects only the operations the Windows 2.4.1 evidence binds to this blob.
 func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error) {
 	if adapter == nil {
 		return harness.Capabilities{}, errors.New("opencode adapter is nil")
@@ -248,7 +268,9 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return harness.Capabilities{}, err
+			// Keep the seeded projection so a canceled probe reports its own cause instead of
+			// the caller seeing an empty capability map.
+			return capabilities, err
 		}
 		capabilities.Unsupported[string(harness.CapabilityStart)] = "opencode version probe failed"
 		return capabilities, fmt.Errorf("%w: opencode --version: %v", harness.ErrHarnessUnavailable, err)
@@ -257,17 +279,17 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	capabilities.NativeVersion = version
 	capabilities.VersionKnown = version != ""
 	if version == "" {
-		return capabilities, fmt.Errorf("%w: unable to parse OpenCode version from %q", harness.ErrUnsupportedVersion, strings.TrimSpace(string(versionOutput)))
+		return openCodeVersionRefusal(runtime.GOOS, capabilities, fmt.Errorf("%w: unable to parse OpenCode version from %q", harness.ErrUnsupportedVersion, strings.TrimSpace(string(versionOutput))))
 	}
 	if version != TestedVersion {
-		return capabilities, fmt.Errorf("%w: OpenCode %s is not in the tested version set", harness.ErrUnsupportedVersion, version)
+		return openCodeVersionRefusal(runtime.GOOS, capabilities, fmt.Errorf("%w: OpenCode %s is not in the tested version set", harness.ErrUnsupportedVersion, version))
 	}
 	helpOutput, err := harness.RunBoundedProbe(ctx, probeTimeout, func(probeContext context.Context) ([]byte, error) {
 		return runner.Run(probeContext, adapter.executable, "serve", "--help")
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return harness.Capabilities{}, err
+			return capabilities, err
 		}
 		return capabilities, fmt.Errorf("%w: OpenCode serve help probe failed: %v", harness.ErrNativeUnverified, err)
 	}
@@ -275,7 +297,86 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 		return capabilities, fmt.Errorf("%w: OpenCode serve help does not advertise required loopback options", harness.ErrNativeUnverified)
 	}
 	capabilities.TransportVerified = true
-	return capabilities, harness.ErrNativeUnverified
+	if err := ctx.Err(); err != nil {
+		return harness.Capabilities{}, err
+	}
+	digest, hashKnown := openCodeExecutableDigest(ctx, adapter.executable, runner)
+	if err := ctx.Err(); err != nil {
+		return harness.Capabilities{}, err
+	}
+	return openCodeCapabilitiesForPlatform(runtime.GOOS, capabilities, hashKnown && digest == TestedExecutableHash)
+}
+
+// openCodePlatformRefusalReason is the fail-closed Linux projection reason; it stays the
+// same reason class harness.NewOpenCodeAdapter reports so the compose rows see one refusal.
+const openCodePlatformRefusalReason = "OpenCode V2 2.4.1 is promoted on Windows only: Linux admission stays fail-closed until the dispatched linux-native-v2-acceptance opencode_native_health row is green under the Linux v2 owner; V1 is not supported"
+
+// openCodeBlobRefusalReason names the exact-blob binding that a version line alone cannot satisfy.
+const openCodeBlobRefusalReason = "opencode native support is bound to the exact tested executable blob; the resolved executable SHA-256 is unverified or does not match"
+
+// openCodeExecutableDigest returns the SHA-256 of the exact executable bytes, or false when the
+// bytes cannot be verified; a hasher-less fixture runner stays unverifiable, never host-hashed.
+func openCodeExecutableDigest(ctx context.Context, executable string, runner CommandRunner) (string, bool) {
+	hasher, ok := runner.(harness.ExecutableHasher)
+	if !ok {
+		return "", false
+	}
+	return harness.ResolveExecutableDigest(ctx, executable, hasher)
+}
+
+// openCodeVersionRefusal keeps the Linux refusal class the unavailable adapter already
+// produced; only Windows keeps the ErrUnsupportedVersion daemon-startup contract.
+func openCodeVersionRefusal(platform string, capabilities harness.Capabilities, versionErr error) (harness.Capabilities, error) {
+	if platform == "windows" {
+		return capabilities, versionErr
+	}
+	return rejectOpenCode(capabilities, openCodePlatformRefusalReason, harness.ErrHarnessUnavailable)
+}
+
+// openCodeCapabilitiesForPlatform promotes start/events/cancel only for the exact tested Windows
+// blob; Linux keeps the compose rows' ErrHarnessUnavailable and a foreign blob ErrNativeUnverified.
+func openCodeCapabilitiesForPlatform(platform string, capabilities harness.Capabilities, executableHashMatched bool) (harness.Capabilities, error) {
+	if platform != "windows" {
+		return rejectOpenCode(capabilities, openCodePlatformRefusalReason, harness.ErrHarnessUnavailable)
+	}
+	if !executableHashMatched {
+		return rejectOpenCode(capabilities, openCodeBlobRefusalReason, harness.ErrNativeUnverified)
+	}
+	capabilities.Verified = true
+	capabilities.ImplementationVersion = openCodeImplementationVersion
+	capabilities.ProtocolVersion = 1
+	capabilities.Start = true
+	capabilities.Events = true
+	capabilities.Cancel = true
+	for _, capability := range []harness.Capability{harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel} {
+		delete(capabilities.Unsupported, string(capability))
+	}
+	capabilities.Unsupported[string(harness.CapabilityHandoff)] = "OpenCode native handoff is not verified"
+	capabilities.Unsupported[string(harness.CapabilityGuidance)] = "OpenCode native steer application is not verified as guidance"
+	capabilities.Unsupported[string(harness.CapabilityPause)] = "OpenCode interruption is cancellation, not safe pause"
+	capabilities.Unsupported[string(harness.CapabilityApprovalResponse)] = "OpenCode permission prompts have no verified response path"
+	capabilities.Unsupported[string(harness.CapabilityProviderAccess)] = "OpenCode provider broker bridge is not verified"
+	capabilities.Unsupported[string(harness.CapabilityResume)] = "OpenCode native resume is not verified"
+	capabilities.Unsupported[string(harness.CapabilityUsage)] = "OpenCode native usage counters are not reconciled against provider billing"
+	capabilities.Unsupported[string(harness.CapabilityHardCostLimit)] = "OpenCode provider-enforced hard cost limit is not verified"
+	if err := capabilities.Validate(); err != nil {
+		return harness.Capabilities{}, fmt.Errorf("opencode capability contract: %w", err)
+	}
+	return capabilities, nil
+}
+
+// rejectOpenCode fails the four staged operations closed under one reason and validates the
+// projection, so no caller observes a partially promoted or malformed capability map.
+func rejectOpenCode(capabilities harness.Capabilities, reason string, sentinel error) (harness.Capabilities, error) {
+	for _, capability := range []harness.Capability{
+		harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel, harness.CapabilityResume,
+	} {
+		capabilities.Unsupported[string(capability)] = reason
+	}
+	if err := capabilities.Validate(); err != nil {
+		return harness.Capabilities{}, fmt.Errorf("opencode capability contract: %w", err)
+	}
+	return capabilities, fmt.Errorf("%w: %s", sentinel, reason)
 }
 
 func parseVersion(output string) string {
@@ -342,7 +443,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	session := newNativeSession(sessionContext, cancel, eventContext, cancelEvents, sink, request.Workspace, adapter.newAPI, username, password, adapter.newPeerVerifier, adapter.healthRetryWait, adapter.terminationWait)
 	invocation := execution.Invocation{
 		Program:                            adapter.executable,
-		Args:                               []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"},
+		Args:                               []string{"serve", "--hostname", "127.0.0.1", "--port", "0"},
 		Dir:                                request.Workspace,
 		Env:                                appendCredentialEnvironment(request.Invocation.Env, username, password),
 		InitialLeaseDeadline:               request.Invocation.InitialLeaseDeadline,
@@ -362,7 +463,7 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 		LinuxV2:                            request.Invocation.LinuxV2,
 	}
 	process, err := adapter.startProcess(sessionContext, invocation, execution.SinkFunc(session.handleProcessOutput))
-	if isNilNativeProcess(process) {
+	if harness.IsNilInterface(process) {
 		cancelEvents()
 		cancel()
 		if err != nil {
@@ -397,19 +498,6 @@ func appendCredentialEnvironment(environment []string, username, password string
 	return append(result, "OPENCODE_SERVER_USERNAME="+username, "OPENCODE_SERVER_PASSWORD="+password)
 }
 
-func isNilNativeProcess(process nativeProcess) bool {
-	if process == nil {
-		return true
-	}
-	value := reflectValue(process)
-	return value
-}
-
-func reflectValue(process nativeProcess) bool {
-	value := reflect.ValueOf(process)
-	return value.Kind() == reflect.Ptr && value.IsNil()
-}
-
 type openAttempt struct {
 	done   chan struct{}
 	handle harness.NativeSessionHandle
@@ -417,11 +505,6 @@ type openAttempt struct {
 }
 
 type interruptAttempt struct {
-	done chan struct{}
-	err  error
-}
-
-type closeAttempt struct {
 	done chan struct{}
 	err  error
 }
@@ -465,6 +548,7 @@ type nativeSession struct {
 
 	mu              sync.Mutex
 	process         nativeProcess
+	forwarder       harness.ProcessForwarder[nativeProcess]
 	peerOwner       *linuxV2PeerOwner
 	readinessBuffer []byte
 	listeningPort   int
@@ -495,13 +579,11 @@ type nativeSession struct {
 	interruptMu        sync.Mutex
 	interruptAttempt   *interruptAttempt
 	interruptSucceeded bool
-	closeMu            sync.Mutex
-	closeAttempt       *closeAttempt
-	closeSucceeded     bool
+	closeGate          harness.CloseGate
 }
 
 func newNativeSession(ctx context.Context, cancel context.CancelFunc, eventContext context.Context, cancelEvents context.CancelFunc, sink harness.EventSink, workspace string, newAPI apiFactory, username, password string, peerVerifier peerVerifierFactory, healthRetryWait, terminationWait time.Duration) *nativeSession {
-	return &nativeSession{
+	session := &nativeSession{
 		context:         ctx,
 		cancel:          cancel,
 		eventContext:    eventContext,
@@ -517,19 +599,15 @@ func newNativeSession(ctx context.Context, cancel context.CancelFunc, eventConte
 		readinessDone:   make(chan struct{}),
 		processDone:     make(chan struct{}),
 	}
+	session.forwarder = harness.NewProcessForwarder(&session.mu, &session.process)
+	return session
 }
 
 func (session *nativeSession) ProcessDetails() (int, string) {
 	if session == nil {
 		return 0, ""
 	}
-	session.mu.Lock()
-	process := session.process
-	session.mu.Unlock()
-	if process == nil {
-		return 0, ""
-	}
-	return process.ProcessDetails()
+	return session.forwarder.Details()
 }
 
 // LinuxV2LiveOwnerStatus forwards the exact native process's bounded,
@@ -539,46 +617,21 @@ func (session *nativeSession) LinuxV2LiveOwnerStatus(ctx context.Context) (execu
 	if session == nil || ctx == nil {
 		return execution.LinuxV2LiveOwnerStatus{}, errors.New("OpenCode Linux v2 live-owner status requires session and context")
 	}
-	session.mu.Lock()
-	process := session.process
-	session.mu.Unlock()
-	if isNilNativeProcess(process) {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	provider, ok := process.(interface {
-		LinuxV2LiveOwnerStatus(context.Context) (execution.LinuxV2LiveOwnerStatus, error)
-	})
-	if !ok {
-		return execution.LinuxV2LiveOwnerStatus{}, errors.ErrUnsupported
-	}
-	return provider.LinuxV2LiveOwnerStatus(ctx)
+	return session.forwarder.LiveOwnerStatus(ctx)
 }
 
 func (session *nativeSession) LeaseRenewalAvailable() bool {
 	if session == nil {
 		return false
 	}
-	session.mu.Lock()
-	process := session.process
-	session.mu.Unlock()
-	renewer, ok := process.(interface{ LeaseRenewalAvailable() bool })
-	return ok && renewer.LeaseRenewalAvailable()
+	return session.forwarder.LeaseRenewalAvailable()
 }
 
 func (session *nativeSession) RenewLease(deadline time.Duration, sequence uint64) error {
 	if session == nil {
 		return errors.ErrUnsupported
 	}
-	session.mu.Lock()
-	process := session.process
-	session.mu.Unlock()
-	renewer, ok := process.(interface {
-		RenewLease(time.Duration, uint64) error
-	})
-	if !ok {
-		return errors.ErrUnsupported
-	}
-	return renewer.RenewLease(deadline, sequence)
+	return session.forwarder.RenewLease(deadline, sequence)
 }
 
 // Open establishes authenticated readiness and persists the server-returned
@@ -958,22 +1011,21 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	if ctx == nil {
 		return harness.TaskResult{}, errors.New("opencode wait context must not be nil")
 	}
-	select {
-	case <-session.processDone:
-		session.mu.Lock()
-		result := harness.TaskResult{
-			Kind:         harness.ResultUnknown,
-			Summary:      "OpenCode process ended without a verified native terminal result",
-			Process:      session.processResult,
-			Usage:        harness.Usage{State: harness.UsageUnknown},
-			EventCount:   session.eventCount,
-			LastSequence: session.lastSequence,
-		}
-		session.mu.Unlock()
-		return result, nil
-	case <-ctx.Done():
-		return harness.TaskResult{Kind: harness.ResultCancelled, Summary: "OpenCode wait cancelled"}, ctx.Err()
-	}
+	return harness.WaitResult(ctx, session.processDone, session.currentResult, harness.TaskResult{Kind: harness.ResultCancelled, Summary: "OpenCode wait cancelled"})
+}
+
+// currentResult reads the settled process outcome under the session lock.
+func (session *nativeSession) currentResult() (harness.TaskResult, error) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return harness.TaskResult{
+		Kind:         harness.ResultUnknown,
+		Summary:      "OpenCode process ended without a verified native terminal result",
+		Process:      session.processResult,
+		Usage:        harness.Usage{State: harness.UsageUnknown},
+		EventCount:   session.eventCount,
+		LastSequence: session.lastSequence,
+	}, nil
 }
 
 // Control exposes only cancellation delivery. It is deliberately independent
@@ -1037,8 +1089,8 @@ func (session *nativeSession) interrupt(ctx context.Context, handle string) erro
 	return err
 }
 
-// Close serializes native interruption and process-tree cleanup. Failed close
-// attempts remain retryable; successful close is idempotent.
+// Close serializes native interruption and process-tree cleanup through the shared
+// CloseGate; failed attempts remain retryable and a successful close is permanent.
 func (session *nativeSession) Close(ctx context.Context) error {
 	if session == nil {
 		return nil
@@ -1046,35 +1098,7 @@ func (session *nativeSession) Close(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("opencode close context must not be nil")
 	}
-	session.closeMu.Lock()
-	if session.closeSucceeded {
-		session.closeMu.Unlock()
-		return nil
-	}
-	if attempt := session.closeAttempt; attempt != nil {
-		session.closeMu.Unlock()
-		select {
-		case <-attempt.done:
-			return attempt.err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
-	attempt := &closeAttempt{done: make(chan struct{})}
-	session.closeAttempt = attempt
-	session.closeMu.Unlock()
-	err := session.closeOnce(ctx)
-	session.closeMu.Lock()
-	attempt.err = err
-	if err == nil {
-		session.closeSucceeded = true
-	}
-	if session.closeAttempt == attempt {
-		session.closeAttempt = nil
-	}
-	close(attempt.done)
-	session.closeMu.Unlock()
-	return err
+	return session.closeGate.Run(ctx, session.closeOnce)
 }
 
 func (session *nativeSession) closeOnce(ctx context.Context) error {
@@ -1329,10 +1353,7 @@ func (session *nativeSession) emit(ctx context.Context, event harness.Event) err
 	}
 	session.emitMu.Lock()
 	defer session.emitMu.Unlock()
-	if event.At.IsZero() {
-		event.At = time.Now().UTC()
-	}
-	if err := session.sink.Handle(ctx, event); err != nil {
+	if err := harness.DeliverEvent(ctx, session.sink, event); err != nil {
 		session.mu.Lock()
 		if session.sinkErr == nil {
 			session.sinkErr = err
