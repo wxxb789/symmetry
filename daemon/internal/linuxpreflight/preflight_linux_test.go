@@ -4,9 +4,12 @@ package linuxpreflight
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1076,6 +1079,309 @@ func testLinuxV1DrainReceipt(value authority.Supervisor) authority.StopReceipt {
 
 func configForLinuxPreflight(stateDir string) config.Config {
 	return config.Config{StateDir: stateDir}
+}
+
+func TestLinuxAppArmorUsernsDecisionRows(t *testing.T) {
+	validFile := linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true}
+	loadedValid := linuxAppArmorUsernsFacts{
+		restriction: "1", policyInterface: "read",
+		profileFilePresent: true, profileFileValid: true,
+		loaded: true, loadedMode: "unconfined",
+		loadedPolicyHash: strings.Repeat("a", 64), compiledHashes: []string{strings.Repeat("a", 64)},
+	}
+	for _, test := range []struct {
+		name   string
+		facts  linuxAppArmorUsernsFacts
+		expect string
+	}{
+		{name: "restriction-absent-nothing-installed", facts: linuxAppArmorUsernsFacts{restriction: "absent", policyInterface: "absent"}, expect: LinuxAppArmorUsernsNotNeeded},
+		{name: "restriction-zero-nothing-installed", facts: linuxAppArmorUsernsFacts{restriction: "0", policyInterface: "read"}, expect: LinuxAppArmorUsernsNotNeeded},
+		{name: "restriction-zero-with-absent-interface", facts: linuxAppArmorUsernsFacts{restriction: "0", policyInterface: "absent"}, expect: LinuxAppArmorUsernsNotNeeded},
+		{name: "restriction-zero-with-installed-file", facts: linuxAppArmorUsernsFacts{restriction: "0", policyInterface: "read", profileFilePresent: true}, expect: LinuxAppArmorUsernsUnexpected},
+		{name: "restriction-zero-with-loaded-profile", facts: linuxAppArmorUsernsFacts{restriction: "0", policyInterface: "read", loaded: true}, expect: LinuxAppArmorUsernsUnexpected},
+		{name: "restriction-zero-with-unreadable-interface", facts: linuxAppArmorUsernsFacts{restriction: "0", policyInterface: "unreadable"}, expect: LinuxAppArmorUsernsStateUnreadable},
+		{name: "restriction-unreadable", facts: linuxAppArmorUsernsFacts{restriction: "unreadable"}, expect: LinuxAppArmorUsernsStateUnreadable},
+		{name: "restriction-invalid", facts: linuxAppArmorUsernsFacts{restriction: "invalid"}, expect: LinuxAppArmorUsernsSysctlInvalid},
+		{name: "restriction-one-with-absent-interface", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "absent"}, expect: LinuxAppArmorUsernsStateUnreadable},
+		{name: "restriction-one-with-absent-file", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read"}, expect: LinuxAppArmorUsernsAbsent},
+		{name: "restriction-one-with-untrusted-file", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: false}, expect: LinuxAppArmorUsernsFileMismatch},
+		{name: "restriction-one-without-load", facts: validFile, expect: LinuxAppArmorUsernsNotLoaded},
+		{name: "restriction-one-with-foreign-mode", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedMode: "enforce"}, expect: LinuxAppArmorUsernsLoadedMismatch},
+		{name: "restriction-one-with-duplicate-name", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedDuplicate: true, loadedMode: "unconfined"}, expect: LinuxAppArmorUsernsLoadedMismatch},
+		{name: "restriction-one-without-parser", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedMode: "unconfined", compiledUnavailable: "missing"}, expect: LinuxAppArmorUsernsParserAbsent},
+		{name: "restriction-one-with-failed-parser", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedMode: "unconfined", compiledUnavailable: "failed"}, expect: LinuxAppArmorUsernsParserFailed},
+		{name: "restriction-one-with-unreadable-hash", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedMode: "unconfined"}, expect: LinuxAppArmorUsernsStateUnreadable},
+		{name: "restriction-one-with-malformed-hash", facts: linuxAppArmorUsernsFacts{restriction: "1", policyInterface: "read", profileFilePresent: true, profileFileValid: true, loaded: true, loadedMode: "unconfined", loadedPolicyHash: "not-a-hash"}, expect: LinuxAppArmorUsernsStateUnreadable},
+		{name: "restriction-one-with-compression-disabled-whole", facts: loadedValid, expect: LinuxAppArmorUsernsPerProgram},
+		{name: "restriction-one-with-uncompressed-payload", facts: func() linuxAppArmorUsernsFacts {
+			facts := loadedValid
+			facts.compiledHashes = []string{strings.Repeat("b", 64), facts.loadedPolicyHash}
+			return facts
+		}(), expect: LinuxAppArmorUsernsPerProgram},
+		{name: "restriction-one-with-different-policy", facts: func() linuxAppArmorUsernsFacts {
+			facts := loadedValid
+			facts.compiledHashes = []string{strings.Repeat("b", 64), strings.Repeat("c", 64)}
+			return facts
+		}(), expect: LinuxAppArmorUsernsLoadedMismatch},
+	} {
+		decision, err := decideLinuxAppArmorUserns(test.facts)
+		if decision != test.expect {
+			t.Errorf("%s: decision = %q, want %q (err = %v)", test.name, decision, test.expect, err)
+			continue
+		}
+		if test.expect == LinuxAppArmorUsernsNotNeeded || test.expect == LinuxAppArmorUsernsPerProgram {
+			if err != nil {
+				t.Errorf("%s: acceptance carried an error: %v", test.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "apparmor_userns="+test.expect+":") {
+			t.Errorf("%s: refusal error = %v, want the %s decision line", test.name, err, test.expect)
+		}
+	}
+}
+
+// The installed preflight must compile exactly the bytes scripts/install-linux-owner.sh
+// publishes: the text path is the single source and its attachments stay exact and minimal.
+func TestLinuxAppArmorProfileTextMatchesTheInstaller(t *testing.T) {
+	output, err := exec.Command("sh", filepath.Join("..", "..", "..", "scripts", "install-linux-owner.sh"), "-print-userns-profile").Output()
+	if err != nil {
+		t.Fatalf("run the installer's userns profile emit mode: %v", err)
+	}
+	text := string(output)
+	if text != linuxAppArmorProfileText() {
+		t.Fatalf("installer profile text differs from the preflight text:\n%q\n%q", text, linuxAppArmorProfileText())
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) != 6 || lines[5] != "" {
+		t.Fatalf("profile text must be exactly five lines: %q", text)
+	}
+	if lines[0] != "abi <abi/4.0>," || lines[1] != "include <tunables/global>" {
+		t.Fatalf("profile boilerplate differs from the documented per-program pattern: %q", text)
+	}
+	if lines[2] != "profile "+linuxAppArmorProfileName+" "+linuxAppArmorGateAttachment+" flags=(unconfined) {" {
+		t.Fatalf("profile stanza must attach one exact installed path: %q", lines[2])
+	}
+	if lines[3] != "  userns," || lines[4] != "}" {
+		t.Fatalf("profile body must be exactly the userns rule: %q", text)
+	}
+	for _, forbidden := range []string{"*", "?", "[", "]", "capability", "signal", "network", "mount", "ptrace", "dbus", "complain", "mediate", "kill", "hat"} {
+		if strings.Contains(lines[2], forbidden) {
+			t.Fatalf("profile stanza carries a non-exact attachment or an extra flag: %q", lines[2])
+		}
+	}
+	if strings.Count(text, "profile ") != 1 {
+		t.Fatalf("profile text must carry exactly one profile stanza: %q", text)
+	}
+}
+
+func TestLinuxAppArmorLoadedProfileScan(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, linuxAppArmorProfileName+".7")
+	if err := os.Mkdir(directory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(value), 0o444); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile("name", linuxAppArmorProfileName+"\n")
+	writeFile("mode", "unconfined\n")
+	writeFile("raw_sha256", strings.Repeat("c", 64)+"\n")
+	other := filepath.Join(root, "other.1")
+	if err := os.Mkdir(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "name"), []byte("other\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "stray-file"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	loaded, matched, duplicate, err := parseLinuxAppArmorLoadedProfiles(root)
+	if err != nil || !matched || duplicate {
+		t.Fatalf("scan of a valid single profile: loaded = %+v, matched = %t, duplicate = %t, err = %v", loaded, matched, duplicate, err)
+	}
+	if loaded.mode != "unconfined" || loaded.policyHash != strings.Repeat("c", 64) {
+		t.Fatalf("scan must read the exact profile state: %+v", loaded)
+	}
+	if err := os.Mkdir(filepath.Join(root, linuxAppArmorProfileName+".8"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, linuxAppArmorProfileName+".8", "name"), []byte(linuxAppArmorProfileName+"\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, duplicate, err := parseLinuxAppArmorLoadedProfiles(root); err != nil || !duplicate {
+		t.Fatalf("duplicate occurrences of the fixed name must be reported: duplicate = %t, err = %v", duplicate, err)
+	}
+}
+
+// The host-state readers must keep the closed decision vocabulary on real file state: the
+// sysctl reader, the profile-file verifier and the compression-disabled compile.
+func TestLinuxAppArmorHostStateRows(t *testing.T) {
+	previousSysctl, previousPath, previousDir := linuxAppArmorSysctlPath, linuxAppArmorInstallPath, linuxAppArmorPolicyPath
+	t.Cleanup(func() {
+		linuxAppArmorSysctlPath, linuxAppArmorInstallPath, linuxAppArmorPolicyPath = previousSysctl, previousPath, previousDir
+	})
+	directory := t.TempDir()
+	linuxAppArmorSysctlPath = filepath.Join(directory, "restrict_unprivileged_userns")
+	if got := readLinuxAppArmorUsernsRestriction(); got != "absent" {
+		t.Errorf("absent sysctl = %q, want absent", got)
+	}
+	for value, want := range map[string]string{"1\n": "1", "0\n": "0", "2\n": "invalid", "": "invalid"} {
+		if err := os.WriteFile(linuxAppArmorSysctlPath, []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := readLinuxAppArmorUsernsRestriction(); got != want {
+			t.Errorf("sysctl %q = %q, want %q", value, got, want)
+		}
+	}
+	if err := os.Remove(linuxAppArmorSysctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(linuxAppArmorSysctlPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLinuxAppArmorUsernsRestriction(); got != "unreadable" {
+		t.Errorf("directory sysctl = %q, want unreadable", got)
+	}
+	if err := os.Remove(linuxAppArmorSysctlPath); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(directory, "restrict-target")
+	if err := os.WriteFile(target, []byte("1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, linuxAppArmorSysctlPath); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLinuxAppArmorUsernsRestriction(); got != "unreadable" {
+		t.Errorf("symlinked sysctl = %q, want unreadable (the installer refuses it too)", got)
+	}
+	if err := os.Remove(linuxAppArmorSysctlPath); err != nil {
+		t.Fatal(err)
+	}
+
+	linuxAppArmorPolicyPath = directory
+	linuxAppArmorInstallPath = filepath.Join(directory, linuxAppArmorProfileName)
+	minor := ACLSubject{UID: 4242, GID: 4242}
+	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); present || valid {
+		t.Errorf("absent profile file: present = %t, valid = %t", present, valid)
+	}
+	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(linuxAppArmorInstallPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
+		t.Errorf("group/world-writable profile file: present = %t, valid = %t", present, valid)
+	}
+	if err := os.Chmod(linuxAppArmorInstallPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlink := filepath.Join(directory, "symlinked-userns-profile")
+	if err := os.Symlink(linuxAppArmorInstallPath, symlink); err != nil {
+		t.Fatal(err)
+	}
+	linuxAppArmorInstallPath = symlink
+	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
+		t.Errorf("symlinked profile file: present = %t, valid = %t", present, valid)
+	}
+	// Content and directory checks need a root-owned path, so the production positive rows are
+	// the runner's own install and verify; the unprivileged test user only reaches the
+	// metadata refusals above.
+	linuxAppArmorInstallPath = filepath.Join(directory, "foreign-userns-profile")
+	if err := os.WriteFile(linuxAppArmorInstallPath, []byte("profile other /bin/true flags=(unconfined) {\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if os.Geteuid() == 0 {
+		if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
+			t.Errorf("foreign profile text as root: present = %t, valid = %t", present, valid)
+		}
+		if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || !valid {
+			t.Errorf("exact profile text as root: present = %t, valid = %t", present, valid)
+		}
+	}
+
+	linuxAppArmorInstallPath = filepath.Join(directory, "staged-userns-profile")
+	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hashes, unavailable := compileLinuxAppArmorProfile(minor, minor)
+	if unavailable != "" || len(hashes) == 0 {
+		t.Skipf("no usable apparmor_parser on this host: unavailable = %q", unavailable)
+	}
+	for _, hash := range hashes {
+		if len(hash) != linuxAppArmorPolicyHashHexLength || !isLowerHex(hash) {
+			t.Errorf("compiled digest %q is not a lowercase sha256", hash)
+		}
+	}
+}
+
+// The compile order is the readback's core: compression is disabled first, and only a parser
+// that rejects -c0 (the parser < 5 shape) gets the plain compilation.
+func TestLinuxAppArmorCompileRows(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("the parser identity and directory checks require root")
+	}
+	previousPaths, previousInstall := linuxAppArmorParserPaths, linuxAppArmorInstallPath
+	t.Cleanup(func() { linuxAppArmorParserPaths, linuxAppArmorInstallPath = previousPaths, previousInstall })
+	directory := t.TempDir()
+	calls := filepath.Join(directory, "parser-calls.log")
+	linuxAppArmorInstallPath = filepath.Join(directory, "profile")
+	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stub := filepath.Join(directory, "apparmor_parser")
+	stubText := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$APPARMOR_STUB_CALLS\"\ncase \" $* \" in\n  *\" -c0 \"*) [ \"$APPARMOR_STUB_MODE\" = reject-c0 ] && exit 0 ;;\nesac\nprintf 'stub-policy-bytes\\n'\n"
+	if err := os.WriteFile(stub, []byte(stubText), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linuxAppArmorParserPaths = []string{stub}
+	t.Setenv("APPARMOR_STUB_CALLS", calls)
+	minor := ACLSubject{UID: 4242, GID: 4242}
+	expected := sha256.Sum256([]byte("stub-policy-bytes\n"))
+	readCalls := func() []string {
+		t.Helper()
+		logged, err := os.ReadFile(calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSpace(string(logged)), "\n")
+	}
+
+	t.Setenv("APPARMOR_STUB_MODE", "reject-c0")
+	hashes, unavailable := compileLinuxAppArmorProfile(minor, minor)
+	if unavailable != "" || len(hashes) == 0 {
+		t.Fatalf("a rejecting -c0 parser must still compile: unavailable = %q, hashes = %v", unavailable, hashes)
+	}
+	if hashes[0] != hex.EncodeToString(expected[:]) {
+		t.Errorf("whole-output digest = %q, want the stub's bytes", hashes[0])
+	}
+	lines := readCalls()
+	if len(lines) != 2 {
+		t.Fatalf("a rejected -c0 attempt must be followed by exactly one plain compile: %v", lines)
+	}
+	if !strings.Contains(lines[0], "-c0") || strings.Contains(lines[1], "-c0") {
+		t.Errorf("compile order must be -c0 then plain: %v", lines)
+	}
+
+	if err := os.Remove(calls); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("APPARMOR_STUB_MODE", "accept-c0")
+	if hashes, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "" || len(hashes) == 0 {
+		t.Fatalf("an accepting -c0 parser must compile: unavailable = %q, hashes = %v", unavailable, hashes)
+	}
+	if lines = readCalls(); len(lines) != 1 || !strings.Contains(lines[0], "-c0") {
+		t.Errorf("an accepting -c0 parser must be compiled exactly once with -c0: %v", lines)
+	}
 }
 
 func claimedStoreAt(t *testing.T, directory string) (*state.Store, state.RunKey) {

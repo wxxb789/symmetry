@@ -959,10 +959,13 @@ GOMODCACHE=$(go env GOMODCACHE)
 
 # The detached transient service has no interactive stdin; keep console output without forwarding EOF as a guest shutdown.
 guest_unit_attempted=1
+# The guest root must be able to load the policy interface the installed preflight verifies; the
+# container manager's default capability and bounding sets omit CAP_MAC_ADMIN and deny the load,
+# and no other capability is added because the load is the only operation that needs one.
 sudo systemd-run --system --quiet --unit="$machine" \
   --property=Delegate=yes --property=KillMode=mixed --property=TimeoutStopSec=90s \
   /usr/bin/systemd-nspawn --quiet --settings=no --private-users=off --machine="$machine" \
-  --directory="$rootfs" --boot --keep-unit --register=yes --console=read-only \
+  --directory="$rootfs" --boot --keep-unit --register=yes --console=read-only --capability=CAP_MAC_ADMIN \
   --bind-ro="$repo:$A_HOME/ci-source" \
   --bind-ro="$GOROOT:$A_HOME/.ci-go" \
   --bind-ro="$GOMODCACHE:$A_HOME/.ci-gomod"
@@ -1638,6 +1641,14 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-owner.servi
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-owner.service.in"
 sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.service.in" \
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-daemon.service.in"
+
+# The installer loads its policy through the guest's kernel security filesystem and reads the
+# loaded state back from it; an already present mount must not be remounted, because that mount
+# syscall fails with EBUSY and would abort the fixture.
+if [ "$(machine_run /usr/bin/findmnt --noheadings --output TARGET --target /sys/kernel/security)" != "/sys/kernel/security" ]; then
+  machine_run /usr/bin/mount -t securityfs securityfs /sys/kernel/security ||
+    fail 'mount the guest kernel security filesystem for the installed userns exception'
+fi
 
 printf 'Installing production owner artifacts inside the disposable systemd guest.\n'
 installer_log="$fixture_root/install-linux-owner.log"

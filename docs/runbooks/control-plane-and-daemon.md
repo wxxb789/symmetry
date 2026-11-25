@@ -261,6 +261,27 @@ installer probe `-print-state-dir` and the owner commands
 without one. The example above keeps the explicit installed-owner form. Only
 `state_dir` has a default; workspace `root` and `seed_root` stay explicit.
 
+### Installed Linux owner host and the unprivileged-userns restriction
+
+On a Linux host whose `kernel.apparmor_restrict_unprivileged_userns` is `1`,
+`scripts/install-linux-owner.sh` additionally installs, loads and verifies the
+per-program AppArmor exception `/etc/apparmor.d/symmetry-linux-owner-userns`
+(root:root 0644, the only rule `userns,`, attached to the exact installed gate
+path `/usr/libexec/symmetry/symmetry-linux-gate`). It never writes the sysctl,
+and it fails closed: a profile it cannot load and verify against the kernel's
+recorded policy hash is not published, and a host that already carries the
+profile or the loaded policy while the restriction is absent or `0` is refused.
+A re-run whose staged text differs from the published file stops and asks for
+removal first. `install-linux-owner.sh -print-userns-profile` prints the exact
+profile text (the installer is the single source; the daemon preflight embeds
+the same five lines), and `install-linux-owner.sh -remove-userns-profile`
+unloads it by name, proves it is gone and removes the file. Removal is the
+rollback: while the restriction stays `1`, the daemon's
+`-verify-linux-owner-install` ExecStartPre then refuses to start, and that
+refusal is the intended fail-closed state rather than a defect. The procedure
+does not prove anything about hosts whose sysctl is `0` (nothing is installed
+there) and does not relax or set the sysctl on any host.
+
 The daemon takes its configuration path from `-config`, with no default, and its
 first start needs `SYMMETRY_ENROLLMENT_TOKEN` in the daemon process's own
 environment, not only in the control plane's.

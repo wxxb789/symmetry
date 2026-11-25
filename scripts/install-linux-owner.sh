@@ -42,6 +42,24 @@ symmetry-owner.service first and then symmetry-daemon.service; the daemon's real
 
 The setuid wrapper is installed root:A_GID mode 04750; A_GID must be a dedicated
 service group and B must not be a member. The daemon/helper remain unprivileged.
+
+On hosts where kernel.apparmor_restrict_unprivileged_userns is 1 the installer also installs,
+loads and verifies the per-program AppArmor userns exception for the exact installed gate path
+/usr/libexec/symmetry/symmetry-linux-gate: /etc/apparmor.d/symmetry-linux-owner-userns, root:root
+0644, the only rule userns, flags=(unconfined) — the global restriction is never written. It
+fails closed: a profile that cannot be loaded and verified is not published, a host that
+carries the profile while the restriction is absent or 0 is refused, and a re-run whose staged
+text differs from the published file stops for -remove-userns-profile. Verification compares the
+compilation of the exact staged bytes with compression disabled against the kernel's recorded
+policy hash, whole or from byte 9 (apparmor_parser < 5 writes the whole output uncompressed and
+is accepted there); the kernel hashes the decompressed policy, so a compressed compile never
+matches.
+
+Bounded AppArmor modes outside a full install:
+  install-linux-owner.sh -print-userns-profile    print the exact profile text to stdout
+  install-linux-owner.sh -remove-userns-profile   unload and remove the installed profile
+Removal leaves such a host refused by the daemon's -verify-linux-owner-install while the
+restriction is active; that refusal is the intended fail-closed state.
 EOF
   exit 2
 }
@@ -49,6 +67,26 @@ EOF
 fail() {
   printf 'install-linux-owner: %s\n' "$1" >&2
   exit 1
+}
+
+report() {
+  printf 'install-linux-owner: %s\n' "$1" >&2
+}
+
+# Single source of the AppArmor userns exception text: the installer, the acceptance fixture and
+# the installed preflight all derive from these two facts.
+USERSNS_PROFILE_NAME=symmetry-linux-owner-userns
+USERSNS_PROFILE_FILE=/etc/apparmor.d/symmetry-linux-owner-userns
+USERSNS_ATTACH=/usr/libexec/symmetry/symmetry-linux-gate
+USERSNS_SYSCTL=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+USERSNS_PROFILES_ROOT=/sys/kernel/security/apparmor/policy/profiles
+
+print_userns_profile() {
+  printf 'abi <abi/4.0>,\n'
+  printf 'include <tunables/global>\n'
+  printf 'profile %s %s flags=(unconfined) {\n' "$USERSNS_PROFILE_NAME" "$USERSNS_ATTACH"
+  printf '  userns,\n'
+  printf '}\n'
 }
 
 check_root_directory() {
@@ -82,6 +120,11 @@ check_old_unit_inactive_disabled() {
 
 sha256_file() {
   line=$(/usr/bin/sha256sum "$1") || fail "cannot hash $1"
+  printf '%s\n' "${line%% *}"
+}
+
+sha256_stream() {
+  line=$(/usr/bin/sha256sum) || fail 'cannot hash the standard input'
   printf '%s\n' "${line%% *}"
 }
 
@@ -442,6 +485,217 @@ run_legacy_drain() {
   release_drain_daemon
 }
 
+# --- AppArmor userns exception ---------------------------------------------------------------
+
+# Read-only: prints absent, 0 or 1; any other content fails closed.
+read_userns_restriction() {
+  if [ -e "$USERSNS_SYSCTL" ] || [ -L "$USERSNS_SYSCTL" ]; then
+    [ -f "$USERSNS_SYSCTL" ] && [ ! -L "$USERSNS_SYSCTL" ] || fail 'the AppArmor unprivileged user-namespace sysctl is not a regular file'
+    value=$(/usr/bin/head -n 1 "$USERSNS_SYSCTL") || fail 'cannot read the AppArmor unprivileged user-namespace sysctl'
+    case "$value" in
+      0|1) ;;
+      *) fail 'the AppArmor unprivileged user-namespace sysctl is neither 0 nor 1' ;;
+    esac
+    printf '%s\n' "$value"
+    return 0
+  fi
+  printf 'absent\n'
+}
+
+check_root_executable() {
+  file=$1
+  label=$2
+  [ -f "$file" ] && [ -x "$file" ] && [ ! -L "$file" ] || fail "$label must be a regular executable non-symlink file"
+  metadata=$(/usr/bin/stat -c '%u %g %a %h' "$file") || fail "cannot inspect $label"
+  set -- $metadata
+  [ "$#" -eq 4 ] && [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$4" -eq 1 ] || fail "$label must be root:root and singly linked"
+  permissions=$(printf '%d' "0$3") || fail "cannot parse $label permissions"
+  [ $((permissions & 18)) -eq 0 ] || fail "$label is group/world writable"
+}
+
+resolve_apparmor_parser() {
+  parser=$(command -v apparmor_parser 2>/dev/null) || fail 'apparmor_parser is required while the AppArmor unprivileged user-namespace restriction is active'
+  case "$parser" in /*) ;; *) fail 'apparmor_parser did not resolve to an absolute path' ;; esac
+  check_root_directory "${parser%/*}"
+  check_root_executable "$parser" 'apparmor_parser'
+  printf '%s\n' "$parser"
+}
+
+# Prints the loaded profile directory for the exact profile name, or nothing when it is not
+# loaded; enumeration failures and duplicates still fail closed.
+scan_loaded_userns_profile_directory() {
+  profiles_root=$USERSNS_PROFILES_ROOT
+  [ -d "$profiles_root" ] || return 0
+  candidates=$(/usr/bin/find "$profiles_root" -mindepth 1 -maxdepth 1 -type d -print) || fail 'cannot enumerate the loaded AppArmor profiles'
+  found=
+  for candidate in $candidates; do
+    name=$(/usr/bin/head -n 1 "$candidate/name" 2>/dev/null || true)
+    if [ "$name" = "$USERSNS_PROFILE_NAME" ]; then
+      [ -z "$found" ] || fail 'the AppArmor policy interface carries duplicate userns profiles'
+      found=$candidate
+    fi
+  done
+  [ -z "$found" ] || printf '%s\n' "$found"
+}
+
+# The same readback the installed preflight performs, against the exact staged bytes this run
+# loaded: the kernel's recorded policy hash is the compilation of those bytes with compression
+# disabled, whole or from byte 9 (the kernel hashes the decompressed policy; its `attach` file
+# reads <unknown> for DFA attachments on every tested parser, so it carries no path evidence).
+# Returns non-zero with a bounded reason instead of exiting, so the caller can roll back.
+verify_userns_profile_load() {
+  staged=$1
+  directory=$(scan_loaded_userns_profile_directory) || { report 'cannot enumerate the loaded AppArmor profiles'; return 1; }
+  [ -n "$directory" ] || { report 'the installed AppArmor userns profile is not loaded'; return 1; }
+  mode=$(/usr/bin/head -n 1 "$directory/mode" 2>/dev/null || true)
+  [ "$mode" = unconfined ] || { report 'the loaded AppArmor userns profile is not an unconfined userns exception'; return 1; }
+  kernel_hash=$(/usr/bin/head -n 1 "$directory/raw_sha256" 2>/dev/null || true)
+  case "$kernel_hash" in
+    ''|*[!0-9a-f]*) report 'the loaded AppArmor userns profile reports no readable policy hash'; return 1 ;;
+  esac
+  [ "${#kernel_hash}" -eq 64 ] || { report 'the loaded AppArmor userns profile reports a malformed policy hash'; return 1; }
+  TMP_PROFILE_COMPILE=$(/usr/bin/mktemp "$ROOT_STAGE/.linux-owner-userns-compile.XXXXXX") || { report 'create temporary compiled userns profile'; return 1; }
+  if ! "$PARSER" -c0 -Q -S -K -T --skip-bad-cache "$staged" > "$TMP_PROFILE_COMPILE" 2>/dev/null || [ ! -s "$TMP_PROFILE_COMPILE" ]; then
+    if ! "$PARSER" -Q -S -K -T --skip-bad-cache "$staged" > "$TMP_PROFILE_COMPILE" 2>/dev/null || [ ! -s "$TMP_PROFILE_COMPILE" ]; then
+      /usr/bin/rm -f "$TMP_PROFILE_COMPILE"
+      TMP_PROFILE_COMPILE=
+      report 'apparmor_parser could not compile the installed userns profile'
+      return 1
+    fi
+  fi
+  compiled_size=$(/usr/bin/wc -c < "$TMP_PROFILE_COMPILE")
+  compiled_whole=$(sha256_file "$TMP_PROFILE_COMPILE")
+  compiled_payload=
+  [ "$compiled_size" -le 8 ] || compiled_payload=$(/usr/bin/tail -c +9 "$TMP_PROFILE_COMPILE" | sha256_stream)
+  /usr/bin/rm -f "$TMP_PROFILE_COMPILE"
+  TMP_PROFILE_COMPILE=
+  if [ "$kernel_hash" = "$compiled_whole" ]; then return 0; fi
+  if [ -n "$compiled_payload" ] && [ "$kernel_hash" = "$compiled_payload" ]; then return 0; fi
+  report 'the loaded AppArmor userns profile differs from the staged userns profile text'
+  return 1
+}
+
+# apparmor_parser -R takes a definition file, not a bare profile name: the arguments are stat()ed
+# and a name that is not a file is skipped, so the file that declares the profile is passed here.
+unload_userns_profile() {
+  [ -n "${PARSER:-}" ] || return 0
+  for candidate in "${TMP_PROFILE:-}" "$USERSNS_PROFILE_FILE"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      "$PARSER" -R "$candidate" >/dev/null 2>&1 && return 0
+    fi
+  done
+  fallback=$(/usr/bin/mktemp /etc/apparmor.d/.linux-owner-userns-unload.XXXXXX 2>/dev/null) || return 1
+  print_userns_profile > "$fallback"
+  unload_status=0
+  "$PARSER" -R "$fallback" >/dev/null 2>&1 || unload_status=$?
+  /usr/bin/rm -f "$fallback"
+  return "$unload_status"
+}
+
+# Unload what this run loaded and discard its staged text. The published file is written only
+# after this verification, so it is never a half-published artifact. When a matching published
+# file already existed, its text is reloaded so a failed re-run leaves the host as it found it.
+rollback_userns_profile() {
+  unload_userns_profile || true
+  if [ -n "${TMP_PROFILE:-}" ]; then
+    /usr/bin/rm -f "$TMP_PROFILE" 2>/dev/null || true
+  fi
+  if [ -n "${TMP_PROFILE_COMPILE:-}" ]; then
+    /usr/bin/rm -f "$TMP_PROFILE_COMPILE" 2>/dev/null || true
+  fi
+  USERSNS_LOADED_BY_RUN=0
+  if [ "${USERSNS_RESTORE_PUBLISHED:-0}" = 1 ]; then
+    "$PARSER" --replace "$USERSNS_PROFILE_FILE" >/dev/null 2>&1 || report 'the previously published AppArmor userns profile could not be reloaded'
+    return 0
+  fi
+  loaded=$(scan_loaded_userns_profile_directory) || { report 'cannot enumerate the loaded AppArmor profiles after the rollback'; return 0; }
+  [ -z "$loaded" ] || report 'the rolled-back AppArmor userns profile is still loaded'
+}
+
+# Installs, loads and verifies the per-program exception exactly when the host restricts
+# unprivileged user namespaces; never writes the sysctl and refuses a contradictory host.
+install_userns_profile() {
+  restriction=$(read_userns_restriction)
+  if [ "$restriction" != 1 ]; then
+    [ ! -e "$USERSNS_PROFILE_FILE" ] && [ ! -L "$USERSNS_PROFILE_FILE" ] || fail 'the AppArmor userns profile is installed while the unprivileged user-namespace restriction is absent; remove it with -remove-userns-profile'
+    loaded=$(scan_loaded_userns_profile_directory) || fail 'cannot enumerate the loaded AppArmor profiles while the unprivileged user-namespace restriction is absent'
+    [ -z "$loaded" ] || fail 'the AppArmor userns profile is loaded while the unprivileged user-namespace restriction is absent; remove it with -remove-userns-profile'
+    printf 'apparmor_userns=not_needed\n'
+    return 0
+  fi
+  check_root_directory /etc
+  [ -d /etc/apparmor.d ] && [ ! -L /etc/apparmor.d ] || fail 'the AppArmor policy directory /etc/apparmor.d is required while the AppArmor unprivileged user-namespace restriction is active'
+  check_root_directory /etc/apparmor.d
+  PARSER=$(resolve_apparmor_parser)
+  TMP_PROFILE=$(/usr/bin/mktemp /etc/apparmor.d/.linux-owner-userns.XXXXXX) || fail 'create temporary AppArmor userns profile'
+  print_userns_profile > "$TMP_PROFILE"
+  /usr/bin/chown root:root "$TMP_PROFILE"
+  /usr/bin/chmod 0644 "$TMP_PROFILE"
+  # The fixed text is the reference, not the staged file: a writer that could reach the staged
+  # path would otherwise make the publication verify against its own bytes.
+  PROFILE_HASH=$(print_userns_profile | sha256_stream) || fail 'hash the fixed AppArmor userns profile text'
+  [ "$(sha256_file "$TMP_PROFILE")" = "$PROFILE_HASH" ] || fail 'the staged AppArmor userns profile differs from the fixed text'
+  USERSNS_RESTORE_PUBLISHED=0
+  if [ -e "$USERSNS_PROFILE_FILE" ] || [ -L "$USERSNS_PROFILE_FILE" ]; then
+    verify_published_file "$USERSNS_PROFILE_FILE" "$PROFILE_HASH" 0 644 'AppArmor userns profile'
+    USERSNS_RESTORE_PUBLISHED=1
+  fi
+  if ! "$PARSER" --replace "$TMP_PROFILE"; then
+    rollback_userns_profile
+    fail 'apparmor_parser could not load the installed userns profile'
+  fi
+  USERSNS_LOADED_BY_RUN=1
+  if ! verify_userns_profile_load "$TMP_PROFILE"; then
+    rollback_userns_profile
+    fail 'the loaded AppArmor userns profile could not be verified against the staged userns profile text'
+  fi
+  USERSNS_LOADED_BY_RUN=0
+  [ "$(sha256_file "$TMP_PROFILE")" = "$PROFILE_HASH" ] || fail 'the staged AppArmor userns profile changed while it was loaded'
+  publish_or_verify "$TMP_PROFILE" "$USERSNS_PROFILE_FILE" "$PROFILE_HASH" 0 644 'AppArmor userns profile'
+  TMP_PROFILE=
+  printf 'apparmor_userns=per_program\n'
+}
+
+# Removal mode: unload and remove the installed profile, proving it is gone.
+remove_userns_profile() {
+  check_root_directory /etc
+  parser=
+  if command -v apparmor_parser >/dev/null 2>&1; then
+    parser=$(command -v apparmor_parser)
+    check_root_executable "$parser" 'apparmor_parser'
+  fi
+  if [ -n "$parser" ]; then
+    PARSER=$parser
+    unload_userns_profile || true
+  fi
+  if [ -d "$USERSNS_PROFILES_ROOT" ]; then
+    loaded=$(scan_loaded_userns_profile_directory) || fail 'cannot enumerate the loaded AppArmor profiles while removing the AppArmor userns profile'
+    [ -z "$loaded" ] || fail 'the installed AppArmor userns profile is still loaded'
+  fi
+  if [ -e "$USERSNS_PROFILE_FILE" ] || [ -L "$USERSNS_PROFILE_FILE" ]; then
+    [ -f "$USERSNS_PROFILE_FILE" ] && [ ! -L "$USERSNS_PROFILE_FILE" ] || fail 'the installed AppArmor userns profile is not a regular non-symlink file'
+    metadata=$(/usr/bin/stat -c '%u %g %a %h' "$USERSNS_PROFILE_FILE") || fail 'cannot inspect the installed AppArmor userns profile'
+    set -- $metadata
+    [ "$#" -eq 4 ] && [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$3" = 644 ] && [ "$4" -eq 1 ] || fail 'the installed AppArmor userns profile is not root:root mode 0644 and singly linked'
+    /usr/bin/rm -f "$USERSNS_PROFILE_FILE" || fail 'remove the installed AppArmor userns profile'
+  fi
+  printf 'The installed AppArmor userns profile is removed; a host that keeps the unprivileged user-namespace restriction active is now refused by the daemon -verify-linux-owner-install.\n'
+}
+
+case "${1:-}" in
+  -print-userns-profile)
+    [ "$#" -eq 1 ] || usage
+    print_userns_profile
+    exit 0
+    ;;
+  -remove-userns-profile)
+    [ "$#" -eq 1 ] || usage
+    [ "$(/usr/bin/id -u)" -eq 0 ] || fail 'must run as root to remove the AppArmor userns profile'
+    remove_userns_profile
+    exit 0
+    ;;
+esac
+
 [ "$(/usr/bin/id -u)" -eq 0 ] || fail 'must run as root'
 HOST_ARCH=$(/usr/bin/uname -m)
 [ "$HOST_ARCH" = x86_64 ] || fail "unsupported host architecture $HOST_ARCH (supported: Linux amd64 only)"
@@ -477,6 +731,10 @@ TMP_CONFIG=
 TMP_OWNER_UNIT=
 TMP_DAEMON_UNIT=
 TMP_INTENT=
+TMP_PROFILE=
+TMP_PROFILE_COMPILE=
+PARSER=
+USERSNS_LOADED_BY_RUN=0
 
 check_old_unit_state
 case "$A_USER" in [A-Za-z0-9_]*) ;; *) fail 'A_USER must start with a simple account-name character';; esac
@@ -588,9 +846,12 @@ validate_unit_template "$DAEMON_TEMPLATE" daemon
 
 cleanup() {
   for temp_path in "$TMP_WRAPPER" "$TMP_CORE" "$TMP_GATE" "$TMP_BOOTSTRAP" "$TMP_DAEMON" \
-    "$TMP_CONFIG" "$TMP_OWNER_UNIT" "$TMP_DAEMON_UNIT" "$TMP_INTENT"; do
+    "$TMP_CONFIG" "$TMP_OWNER_UNIT" "$TMP_DAEMON_UNIT" "$TMP_INTENT" "$TMP_PROFILE" "$TMP_PROFILE_COMPILE"; do
     [ -z "$temp_path" ] || /usr/bin/rm -f "$temp_path"
   done
+  if [ "${USERSNS_LOADED_BY_RUN:-0}" = 1 ] && [ -n "${PARSER:-}" ]; then
+    unload_userns_profile || true
+  fi
   if [ "${CREATED_DRAIN_DIR:-0}" -eq 1 ]; then
     /usr/bin/rm -f "$TMP_DRAIN_DAEMON"
     /usr/bin/rmdir "$TMP_DRAIN_DIR" 2>/dev/null || true
@@ -665,6 +926,10 @@ if [ "$INSTALL_INTENT_EXISTS" -eq 0 ]; then
   require_absent_install_path "$SYSTEMD_DIR/symmetry-owner.service" 'owner unit'
   require_absent_install_path "$SYSTEMD_DIR/symmetry-daemon.service" 'daemon unit'
 fi
+
+# The host-level AppArmor precondition is settled before the install-intent marker becomes
+# durable: a host that cannot be proven never reaches the point of no return.
+install_userns_profile
 
 if [ "$INSTALL_INTENT_EXISTS" -eq 1 ]; then
   verify_published_file "$INSTALL_MARKER" "$MANIFEST_HASH" 0 600 'root-owned install-intent marker'

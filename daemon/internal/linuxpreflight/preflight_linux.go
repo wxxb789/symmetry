@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -173,7 +174,349 @@ func verifyInstalledLinuxOwnerAssets(owner linuxgate.OwnerConfig, a, b ACLSubjec
 	if err := verifyLinuxMountAllowsSetID("/usr/libexec/symmetry/symmetry-linux-launcher"); err != nil {
 		return err
 	}
+	if err := verifyLinuxOwnerAppArmorUserns(a, b); err != nil {
+		return err
+	}
 	return nil
+}
+
+const (
+	linuxAppArmorUsernsSysctl        = "/proc/sys/kernel/apparmor_restrict_unprivileged_userns"
+	linuxAppArmorPolicyDir           = "/etc/apparmor.d"
+	linuxAppArmorProfilePath         = "/etc/apparmor.d/symmetry-linux-owner-userns"
+	linuxAppArmorProfileName         = "symmetry-linux-owner-userns"
+	linuxAppArmorGateAttachment      = "/usr/libexec/symmetry/symmetry-linux-gate"
+	linuxAppArmorProfilesRoot        = "/sys/kernel/security/apparmor/policy/profiles"
+	linuxAppArmorProfileMaxBytes     = 4 << 10
+	linuxAppArmorCompileMaxBytes     = 4 << 20
+	linuxAppArmorListMaxEntries      = 4096
+	linuxAppArmorPolicyHashHexLength = 64
+)
+
+// Test seams: the fixed production paths, overridable only by this package's tests.
+var (
+	linuxAppArmorSysctlPath  = linuxAppArmorUsernsSysctl
+	linuxAppArmorPolicyPath  = linuxAppArmorPolicyDir
+	linuxAppArmorInstallPath = linuxAppArmorProfilePath
+	linuxAppArmorParserPaths = []string{"/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"}
+)
+
+// Closed decision vocabulary of the AppArmor unprivileged-userns host precondition. The
+// success tokens are recorded on stdout next to LinuxOwnerPreflightRuntimeBoundary; a refusal
+// is the decision line of the returned error and never carries a path, errno or free text.
+const (
+	LinuxAppArmorUsernsNotNeeded       = "not_needed"
+	LinuxAppArmorUsernsPerProgram      = "per_program"
+	LinuxAppArmorUsernsSysctlInvalid   = "sysctl_invalid"
+	LinuxAppArmorUsernsStateUnreadable = "apparmor_state_unreadable"
+	LinuxAppArmorUsernsUnexpected      = "unexpected_profile"
+	LinuxAppArmorUsernsAbsent          = "profile_absent"
+	LinuxAppArmorUsernsFileMismatch    = "profile_file_mismatch"
+	LinuxAppArmorUsernsNotLoaded       = "profile_not_loaded"
+	LinuxAppArmorUsernsLoadedMismatch  = "profile_loaded_mismatch"
+	LinuxAppArmorUsernsParserAbsent    = "parser_absent"
+	LinuxAppArmorUsernsParserFailed    = "parser_failed"
+)
+
+// linuxOwnerAppArmorUsernsDecision is what LinuxOwnerAppArmorUsernsDecision reports for the
+// most recent VerifyLinuxOwnerInstallation call; the CLI prints it beside the boundary line.
+var linuxOwnerAppArmorUsernsDecision = LinuxAppArmorUsernsNotNeeded
+
+func LinuxOwnerAppArmorUsernsDecision() string {
+	return linuxOwnerAppArmorUsernsDecision
+}
+
+// linuxAppArmorProfileText is the installed per-program exception, byte-for-byte the text
+// scripts/install-linux-owner.sh publishes: one exact installed path, one rule, no globs.
+func linuxAppArmorProfileText() string {
+	return "abi <abi/4.0>,\n" +
+		"include <tunables/global>\n" +
+		"profile " + linuxAppArmorProfileName + " " + linuxAppArmorGateAttachment + " flags=(unconfined) {\n" +
+		"  userns,\n" +
+		"}\n"
+}
+
+// linuxAppArmorUsernsFacts is the read-only evidence the decision is made from; every field is
+// observed without writing kernel, policy or host state.
+type linuxAppArmorUsernsFacts struct {
+	// restriction is the validated sysctl value: "absent", "0", "1", "invalid" or "unreadable".
+	restriction string
+	// policyInterface is "absent", "unreadable" or "read" for the loaded-profile interface.
+	policyInterface string
+	// profileFilePresent and profileFileValid are observed on every host, so a profile left
+	// behind without the restriction is refused instead of silently accepted.
+	profileFilePresent bool
+	profileFileValid   bool
+	loaded             bool
+	loadedDuplicate    bool
+	loadedMode         string
+	loadedPolicyHash   string
+	// compiledHashes are the digests of the installed text compiled with compression disabled,
+	// whole and from byte 9; the kernel hashes the decompressed policy, so a compressed
+	// compilation (parser default) never matches and is only a fallback for parser < 5.
+	compiledHashes      []string
+	compiledUnavailable string // "", "missing" or "failed"
+}
+
+func linuxAppArmorRefusal(code, reason string) (string, error) {
+	return code, fmt.Errorf("apparmor_userns=%s: %s", code, reason)
+}
+
+func decideLinuxAppArmorUserns(facts linuxAppArmorUsernsFacts) (string, error) {
+	switch facts.restriction {
+	case "unreadable":
+		return linuxAppArmorRefusal(LinuxAppArmorUsernsStateUnreadable, "the unprivileged user-namespace sysctl is not readable")
+	case "invalid":
+		return linuxAppArmorRefusal(LinuxAppArmorUsernsSysctlInvalid, "the unprivileged user-namespace sysctl is neither 0 nor 1")
+	case "absent", "0":
+		if facts.profileFilePresent || facts.loaded {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsUnexpected, "the userns exception is installed while the unprivileged user-namespace restriction is absent or 0")
+		}
+		if facts.policyInterface == "unreadable" {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsStateUnreadable, "the loaded profile interface is unreadable while no restriction is active")
+		}
+		return LinuxAppArmorUsernsNotNeeded, nil
+	case "1":
+		if facts.policyInterface != "read" {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsStateUnreadable, "the loaded profile interface is not readable while the unprivileged user-namespace restriction is active")
+		}
+		if !facts.profileFilePresent {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsAbsent, "the installed userns exception is absent while the unprivileged user-namespace restriction is active")
+		}
+		if !facts.profileFileValid {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsFileMismatch, "the installed userns exception is not the trusted exact-attachment text")
+		}
+		if !facts.loaded {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsNotLoaded, "the installed userns exception is not loaded")
+		}
+		if facts.loadedDuplicate {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsLoadedMismatch, "the policy interface carries duplicate userns exceptions")
+		}
+		if facts.loadedMode != "unconfined" {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsLoadedMismatch, "the loaded userns exception is not an unconfined userns exception")
+		}
+		switch facts.compiledUnavailable {
+		case "missing":
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsParserAbsent, "apparmor_parser is required to prove the loaded userns exception")
+		case "failed":
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsParserFailed, "apparmor_parser could not compile the installed userns exception")
+		}
+		if facts.loadedPolicyHash == "" {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsStateUnreadable, "the loaded userns exception reports no readable policy hash")
+		}
+		if len(facts.loadedPolicyHash) != linuxAppArmorPolicyHashHexLength || !isLowerHex(facts.loadedPolicyHash) {
+			return linuxAppArmorRefusal(LinuxAppArmorUsernsStateUnreadable, "the loaded userns exception reports a malformed policy hash")
+		}
+		for _, candidate := range facts.compiledHashes {
+			if facts.loadedPolicyHash == candidate {
+				return LinuxAppArmorUsernsPerProgram, nil
+			}
+		}
+		return linuxAppArmorRefusal(LinuxAppArmorUsernsLoadedMismatch, "the loaded userns exception differs from the installed userns exception text")
+	default:
+		return linuxAppArmorRefusal(LinuxAppArmorUsernsSysctlInvalid, "the unprivileged user-namespace sysctl state is not decidable")
+	}
+}
+
+func readLinuxAppArmorUsernsRestriction() string {
+	info, err := os.Lstat(linuxAppArmorSysctlPath)
+	if err == nil && !info.Mode().IsRegular() {
+		// The installer refuses a symlinked or non-regular sysctl; the check must too.
+		return "unreadable"
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return "unreadable"
+	}
+	contents, err := os.ReadFile(linuxAppArmorSysctlPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return "absent"
+	}
+	if err != nil {
+		return "unreadable"
+	}
+	switch value := strings.TrimSpace(string(contents)); value {
+	case "0", "1":
+		return value
+	default:
+		return "invalid"
+	}
+}
+
+// parseLinuxAppArmorLoadedProfiles scans the loaded-profile interface for the fixed name; the
+// directory name is a mangled profile name, so only the name file decides the match.
+func parseLinuxAppArmorLoadedProfiles(root string) (linuxAppArmorLoadedProfile, bool, bool, error) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return linuxAppArmorLoadedProfile{}, false, false, err
+	}
+	if len(entries) > linuxAppArmorListMaxEntries {
+		return linuxAppArmorLoadedProfile{}, false, false, errors.New("the loaded profile interface exceeds its entry bound")
+	}
+	found := linuxAppArmorLoadedProfile{}
+	matched := false
+	duplicate := false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		directory := root + "/" + entry.Name()
+		name, err := readBoundedLinuxFile(directory+"/name", 256)
+		if err != nil || strings.TrimSpace(string(name)) != linuxAppArmorProfileName {
+			continue
+		}
+		if matched {
+			duplicate = true
+			continue
+		}
+		matched = true
+		found.directory = directory
+		if value, err := readBoundedLinuxFile(directory+"/mode", 256); err == nil {
+			found.mode = strings.TrimSpace(string(value))
+		}
+		if value, err := readBoundedLinuxFile(directory+"/raw_sha256", 256); err == nil {
+			found.policyHash = strings.TrimSpace(string(value))
+		}
+	}
+	return found, matched, duplicate, nil
+}
+
+type linuxAppArmorLoadedProfile struct {
+	directory  string
+	mode       string
+	policyHash string
+}
+
+func verifyLinuxOwnerAppArmorProfileFile(a, b ACLSubject) (bool, bool) {
+	info, err := LstatCanonicalPath(linuxAppArmorInstallPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false
+	}
+	if err != nil {
+		return true, false
+	}
+	identity, err := FileIdentity(info)
+	if err != nil || !info.Mode().IsRegular() || identity.UID != 0 || identity.GID != 0 ||
+		info.Mode().Perm() != 0o644 || identity.Links != 1 {
+		return true, false
+	}
+	for _, path := range []string{"/etc", linuxAppArmorPolicyPath} {
+		if !verifyLockedRootDirectory(path, a, b) {
+			return true, false
+		}
+	}
+	if err := VerifyNoUntrustedACLWrite(linuxAppArmorInstallPath, []uint32{0}, nil, false); err != nil {
+		return true, false
+	}
+	if err := VerifyEffectiveAccess(linuxAppArmorInstallPath, a, 4, 2); err != nil {
+		return true, false
+	}
+	if err := VerifyEffectiveAccess(linuxAppArmorInstallPath, b, 0, 2); err != nil {
+		return true, false
+	}
+	contents, err := readBoundedLinuxFile(linuxAppArmorInstallPath, linuxAppArmorProfileMaxBytes)
+	if err != nil || string(contents) != linuxAppArmorProfileText() {
+		return true, false
+	}
+	return true, true
+}
+
+// verifyLockedRootDirectory is the root-owned, non-writable, no-untrusted-ACL-write and
+// no-unprivileged-effective-write requirement shared by the profile file, its directory and
+// the parser directory.
+func verifyLockedRootDirectory(path string, a, b ACLSubject) bool {
+	directory, err := LstatCanonicalPath(path)
+	if err != nil || !directory.IsDir() {
+		return false
+	}
+	identity, err := FileIdentity(directory)
+	if err != nil || identity.UID != 0 || identity.GID != 0 || directory.Mode().Perm()&0o022 != 0 {
+		return false
+	}
+	if err := VerifyNoUntrustedACLWrite(path, []uint32{0}, nil, true); err != nil {
+		return false
+	}
+	if err := VerifyEffectiveAccess(path, a, 0, 2); err != nil {
+		return false
+	}
+	return VerifyEffectiveAccess(path, b, 0, 2) == nil
+}
+
+// verifyLinuxOwnerAppArmorUserns proves, read-only, that the exact installed gate path carries
+// the installed per-program userns exception exactly when the host restricts unprivileged user
+// namespaces; it never writes the sysctl and never loads, replaces or removes policy.
+func verifyLinuxOwnerAppArmorUserns(a, b ACLSubject) error {
+	facts := linuxAppArmorUsernsFacts{restriction: readLinuxAppArmorUsernsRestriction()}
+	if _, err := os.Lstat(linuxAppArmorProfilesRoot); err == nil {
+		facts.policyInterface = "read"
+	} else if errors.Is(err, os.ErrNotExist) {
+		facts.policyInterface = "absent"
+	} else {
+		facts.policyInterface = "unreadable"
+	}
+	facts.profileFilePresent, facts.profileFileValid = verifyLinuxOwnerAppArmorProfileFile(a, b)
+	if facts.policyInterface == "read" {
+		loaded, matched, duplicate, err := parseLinuxAppArmorLoadedProfiles(linuxAppArmorProfilesRoot)
+		if err != nil {
+			facts.policyInterface = "unreadable"
+		}
+		facts.loaded = matched
+		facts.loadedDuplicate = duplicate
+		facts.loadedMode = loaded.mode
+		facts.loadedPolicyHash = loaded.policyHash
+	}
+	if facts.restriction == "1" && facts.profileFileValid && facts.loaded &&
+		!facts.loadedDuplicate && facts.loadedMode == "unconfined" {
+		hashes, unavailable := compileLinuxAppArmorProfile(a, b)
+		facts.compiledHashes = hashes
+		facts.compiledUnavailable = unavailable
+	}
+	decision, err := decideLinuxAppArmorUserns(facts)
+	linuxOwnerAppArmorUsernsDecision = decision
+	return err
+}
+
+// compileLinuxAppArmorProfile runs the same side-effect-free compilation the installer verifies
+// against. apparmor_parser >= 5 compresses -S output (default level 10) and the kernel hashes
+// the decompressed policy, so compression is disabled first; a parser that rejects the option
+// (< 5) writes the policy uncompressed and is accepted through the same whole/byte-9 digests.
+func compileLinuxAppArmorProfile(a, b ACLSubject) ([]string, string) {
+	parser := ""
+	for _, candidate := range linuxAppArmorParserPaths {
+		if _, err := os.Lstat(candidate); err == nil {
+			parser = candidate
+			break
+		}
+	}
+	if parser == "" {
+		return nil, "missing"
+	}
+	info, err := os.Lstat(parser)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		return nil, "missing"
+	}
+	if identity, err := FileIdentity(info); err != nil || identity.UID != 0 {
+		return nil, "missing"
+	}
+	if !verifyLockedRootDirectory(filepath.Dir(parser), a, b) {
+		return nil, "missing"
+	}
+	for _, prefix := range [][]string{{"-c0"}, {}} {
+		arguments := append(append([]string{}, prefix...), "-Q", "-S", "-K", "-T", "--skip-bad-cache", linuxAppArmorInstallPath)
+		command := exec.Command(parser, arguments...)
+		command.Stderr = io.Discard
+		output, err := command.Output()
+		if err != nil || len(output) == 0 || len(output) > linuxAppArmorCompileMaxBytes {
+			continue
+		}
+		whole := sha256.Sum256(output)
+		hashes := []string{hex.EncodeToString(whole[:])}
+		if len(output) > 8 {
+			payload := sha256.Sum256(output[8:])
+			hashes = append(hashes, hex.EncodeToString(payload[:]))
+		}
+		return hashes, ""
+	}
+	return nil, "failed"
 }
 
 func verifyTrustedLinuxConfig(a, b ACLSubject) error {

@@ -24,3 +24,9 @@ func VerifyLegacyLinuxOwnersDrained(config.Config) error {
 func VerifyLinuxOwnerInstallation(config.Config) error {
 	return errors.New("Linux owner installation verification is supported only on Linux amd64")
 }
+
+// The AppArmor unprivileged-userns precondition is a Linux amd64 owner property; verification
+// above always fails here, so the recorded decision is the vocabulary's not-needed token.
+func LinuxOwnerAppArmorUsernsDecision() string {
+	return "not_needed"
+}
