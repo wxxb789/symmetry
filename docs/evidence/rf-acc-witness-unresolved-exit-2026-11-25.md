@@ -23,7 +23,7 @@ Line numbers below are the dispatch head `3b23dead`; the contract cites origin/m
 | `:571` | `:571` | `case "unresolved"` of the `RecoveryState` switch | writer at `:596` converted |
 | `:596` | `:596` | `writeLinuxV2NativeWitnessSummaryAndExit` (shared by every switch outcome) | converted; the helper returns nil for proven outcomes |
 | `:420` | `:420` | fail-closed struct literal `Outcome: "unresolved"` | no writer of its own; its bytes are written only through the three sites above |
-| `:1456` | `:1456` | `Outcome = "unresolved"` in `summarizeResponseLost` | exempt: its only writer (`writeResponseLost`) joins `execution.ErrLinuxV2MutationAckLost` at `:624` before returning |
+| `:1456` | `:1456` | `Outcome = "unresolved"` in `summarizeResponseLost` | exempt: its only writer is `writeResponseLost` (the remaining caller, `journal_store_linux_test.go:85`, returns early without writing a summary), and that writer joins `execution.ErrLinuxV2MutationAckLost` at `:624` before returning |
 | `:676` | `:676` | the fresh positive path's writer | untouched, and unreachable for `unresolved`: the path assigns `completed`/`recovered`/`peer_denied` before it |
 | `containment_unproven` | `:483`, `:541`, `:573` | the three `FailureCategory` assignments | all three feed the three converted writers; the only other matches are the validator's exact-shape checks (`:738-739`) |
 
@@ -71,8 +71,8 @@ race pass and the exact focused/suite commands the contract lists.
 ## 4. Guest proof: scratch loop (`scratch/rf-acc-witness-unresolved-exit`, runs 1-4)
 
 Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml` (push-only, copy of
-`linux-native-v2-acceptance.yml` without the Environment and with the ratified dummy pins; verbatim in
-§7) plus the scratch-only `gh` shim `scripts/ci/scratch-gh-shim` (byte-identical to the ratified
+`linux-native-v2-acceptance.yml` without the Environment and with the ratified dummy pins; its sha256
+pin and deltas are §10e) plus the scratch-only `gh` shim `scripts/ci/scratch-gh-shim` (byte-identical to the ratified
 burndown copy, answers only `gh auth login`). Run order: mutants first, final bytes last (lesson 86).
 
 Every scratch job ran with the §7 dummy pins: no `environment:`, no `secrets.*`, no `vars.*`, and no
@@ -90,15 +90,15 @@ run 4 (`git push origin --delete scratch/rf-acc-witness-unresolved-exit`) and
 | 1 | mutant M1 | `a47a05fc` | `eccc66db…` | `57adce7e…` | `stage_replay_create_started` | `138938170006` (run `45534474018`) | red at the verbatim exit line, §5 |
 | 2 | mutant M2 | `ec11c304` | `3ef92a26…` | `c6b37cc6…` | `stage_replay_leaf_bound`, `stage_replay_launcher_bound`, `ack_loss_launcher_bound` | `138941583215` (run `45535320177`), 11m33s | two sets green (they do not use the mutated sites), `ack_loss_launcher_bound` red at §4c's second wall — §5 M2 row |
 | 3 | final bytes | `a5dfb1b1` | `f3cb9e92…` | `7484da8b…` | all four sets above | `138945998150` (run `45536878631`), 9m10s | three sets green, `ack_loss_launcher_bound` red at the second wall — §4a/§4c |
-| 4 | ruling-E e2e change (final e2e bytes) — §10a | `e150c8e7` | `f3cb9e92…` (reused) | `7484da8b…` (unchanged) | all four sets above | `138959590401` (run `45540942939`), 8m51s | **all four sets exit 0** — §10b |
+| 4 | ruling-E e2e change (ruling-E bytes; pre-R2) — §10a | `e150c8e7` | `f3cb9e92…` (reused) | `7484da8b…` (unchanged) | all four sets above | `138959590401` (run `45540942939`), 8m51s | **all four sets exit 0** — §10b |
 
 Run 3 closed the product increment: the goal worktree's product/test bytes equal the scratch head's
 byte for byte (§6), and its artifact `linux-v2-native-evidence-45536878631-1` binds all four exports
 to `source_commit=a5dfb1b1…` and carries, per set, `manifest.json` plus the allowlisted witness
 document. Run 4 closed the ruling-E increment on the e2e bytes §10a froze and was the scratch
 branch's last code-affecting action; the fix increment (§11) then changed the same function's e2e
-bytes, so the delivered e2e bytes no longer equal run 4's and the single re-bind run on the final
-bytes the ruling authorizes is pending (§11).
+bytes, so the delivered e2e bytes no longer equal run 4's; the single re-bind run on the final
+bytes the ruling authorizes is run `45548810398` (§12).
 
 ### 4a. Per-set rows (acceptance)
 
@@ -177,8 +177,8 @@ head; run 4 (`e150c8e7`) compiled the same product bytes plus
 `daemon/e2e/production_linux_v2_owner_cli_test.go` and
 `daemon/e2e/production_linux_v2_owner_identity_test.go`, whose tested bytes and digests are §10a.
 The delivered product bytes still equal both runs'; the delivered CLI test file no longer equals
-run 4's because the fix increment (§11) changed it — the pending re-bind of the delivered e2e bytes
-is §11.
+run 4's because the fix increment (§11) changed it — the re-bind of the delivered e2e bytes is run
+`45548810398`, all EQ (§12).
 
 | Layer | sha256 |
 | --- | --- |
@@ -200,7 +200,7 @@ Run 3 artifact contents, per set (full sha256):
 | `stage_replay_launcher_bound` | `1e2209c191848cd8f2fb46d202e2e25f2aaa09af8da7acf2f59608fc77baa171` | `stage-crash-replay-launcher_bound.json` `8ef76b55d31390ad00871db44a08eefdfef23aacf847c219bba790600d0e8408` |
 | `ack_loss_launcher_bound` (red at §4c's check) | `75c7a5b0422bc6eb960eccae0786abfd9c9afb589a3e3c364938c250237248a3` | `ack-loss-replay-launcher_bound.json` `aca8ffc049d16ae2cab967da8fbb7dd6b03a4fc6c95f149516991e9910799fa6` |
 
-## 7. Appendix: the scratch pins, the workflow and the shim (verbatim, lesson 76)
+## 7. Appendix: the scratch pins and the shim (verbatim, lesson 76)
 
 Scratch runner, values as they ran in every scratch job (no `environment:`, no `secrets.*`, no
 `vars.*`; every value below is a dummy and reaches no provider):
@@ -214,11 +214,11 @@ SYMMETRY_OPENAI_BASE_URL=https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azu
 GITHUB_EVENT_NAME=workflow_dispatch
 ```
 
-Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml`: a copy of
-`linux-native-v2-acceptance.yml` with the `environment:` block dropped, the dummy pins above in place
-of the secret/variable references, and one extra step that installs the scratch-only `gh` shim ahead
-of the acceptance steps (its `on: push: branches: [scratch/rf-acc-witness-unresolved-exit]` is the only
-trigger). Its per-run sha256:
+Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml`: its sha256 pin and
+its deltas from `linux-native-v2-acceptance.yml` (the `environment:` block dropped, the dummy pins in
+place of the secret/variable references, one extra step installing the scratch-only `gh` shim ahead
+of the acceptance steps, and the four-set list) are §10e; the body is not embedded because the
+changed-file duplication gate refuses that copy of the canonical workflow.
 
 `scripts/ci/scratch-gh-shim` (sha256 `507340af…`, byte-identical to the copy ratified for
 `rf-acc-native-burndown` and reused by the parent goal): answers only `gh auth login --with-token` by
@@ -315,9 +315,21 @@ test file `7ef3983b173f1db2ddeaa5c3b3d32964fc496c9fc44d873ba7fd7d6a358f6115`.
    auditors recorded it as P3). The witness producer emits all five owner keys with no `omitempty`, so
    the branch is unreachable today; if a future producer may omit keys, red it explicitly.
 8. **The table's bound→different case changes PID and identity together**, so pass 1's identity term
-   is not isolated (audit P3). A one-line case with equal PIDs and different identities is the
+   is not isolated (Sol P3). A one-line case with equal PIDs and different identities is the
    recommended addition if the file is touched again; the fix increment (§11) touched it after run 4
-   for the R2 tightening only, and this note stays open.
+   for the R2 tightening only, and this note is deferred to `rf-acc-owner-loss-semantics` (test-only
+   polish after the binding run; §12).
+9. **A consistently swapped owner set passes** (`linuxV2RequireSameOwnerIdentities`; Sec F1, LOW,
+   pre-existing): `linuxV2JournalBindsOwnerSlot` is a presence gate only, so it shows that a slot is
+   bound, not that the response's PID/identity equal the journal's values; a replay that swaps
+   PID/identity between two journal-bound slots on both sides passes. Binding each bound slot's
+   PID/identity to the journal value is deferred to `rf-acc-owner-loss-semantics` (test-only polish
+   after the binding run; §12).
+10. **`linuxV2JournalBindsOwnerSlot`'s later branches are untested** (DS F5): the table test's only
+   journal constructor builds `ContainmentCgroup`, so a mapping mistake in the handoff, authority,
+   cgroup-release-proof or pre-gate-release-proof source would red nothing; rows with
+   `ContainmentAuthority`-backed journals are deferred to `rf-acc-owner-loss-semantics` (the file was
+   frozen for the binding run; §12).
 
 ## 10. Ruling-E increment (2026-11-25): the ACK-loss second wall fixed
 
@@ -348,12 +360,13 @@ is lifted to one local shared by both passes so the two cannot drift. The `:3737
 call site receives the same exemption through the shared function and stays **unexercised** until
 `shared` clears its earlier stops (ruling).
 
-### 10b. The four sets on the final bytes (run 4)
+### 10b. The four sets on the ruling-E bytes (run 4)
 
 Run `45540942939` (acceptance job `138959590401`, 8m51s, conclusion `success`), scratch head
 `e150c8e7`; the job's last line is `All 4 case sets exited 0.` This run was the branch's last
 code-affecting action and the branch was deleted afterwards; the fix increment (§11) later changed
-the same function's e2e bytes, so this run's binding is void for the delivered bytes (§4/§11).
+the same function's e2e bytes, so this run's binding is void for the delivered bytes (§4/§11); run
+`45548810398` is the re-bind (§12).
 `git ls-remote origin scratch/rf-acc-witness-unresolved-exit` prints nothing. Before this run the
 leg's failure lines were: `unresolved production recovery exit = <nil>, want deliberate nonzero
 process exit` (runs `45481221551`/`45484692731`; fixed by §3) and `launcher_bound ACK-loss replay
@@ -421,184 +434,27 @@ and the later fix-increment change that does void run 4's binding for the delive
 ### 10e. Scratch appendix (lesson 76)
 
 Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml` (sha256
-`f3cb9e929780e59583ca23714f27879b5f8046ea87cc292ef43ab2395271d2f4`), the file runs 3 and 4 used,
-embedded verbatim:
+`f3cb9e929780e59583ca23714f27879b5f8046ea87cc292ef43ab2395271d2f4`; the version runs 3 and 4 used, its
+per-run digests are §4's workflow column). It is pinned by sha256 instead of embedded because its body
+is a copy of `.github/workflows/linux-native-v2-acceptance.yml`, and the changed-file duplication gate
+refuses that verbatim duplication inside a record (PR #284 round 1, `contracts`). The deltas from the
+canonical workflow, and nothing else:
 
-```yaml
-# Throwaway hosted-runner probe for goal rf-acc-witness-unresolved-exit: a copy of
-# linux-native-v2-acceptance.yml without the Environment and with dummy credentials.
-# Push-only, lives on scratch/rf-acc-witness-unresolved-exit, deleted with it.
-name: Scratch witness unresolved exit probe
+- `name: Scratch witness unresolved exit probe` plus a three-line throwaway header comment, and `on:`
+  is `push: branches: [scratch/rf-acc-witness-unresolved-exit]` instead of the dispatch trigger with
+  its comment.
+- The `environment:` block (with its security-precondition comment) is dropped: the job runs with no
+  Environment approval and the §7 dummy pins.
+- One extra step, between the prerequisite probe and the prerequisite-evidence upload, installs
+  `scripts/ci/scratch-gh-shim` as `gh` ahead on `PATH`.
+- In the acceptance step: the `secrets.*`/`vars.*` references are replaced by the §7 dummy pins, and
+  `GITHUB_EVENT_NAME=workflow_dispatch` is set on each invocation.
+- `case_sets` is reduced to the four owned sets (`stage_replay_create_started`,
+  `stage_replay_leaf_bound`, `stage_replay_launcher_bound`, `ack_loss_launcher_bound`).
+- The one-line comment above `contracts:` is dropped.
 
-on:
-  push:
-    branches: [scratch/rf-acc-witness-unresolved-exit]
-
-permissions:
-  contents: read
-
-jobs:
-  linux-native-v2-acceptance:
-    needs: contracts
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    services:
-      postgres:
-        image: postgres:18.6-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: symmetry_linux_v2_acceptance
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d symmetry_linux_v2_acceptance"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-    env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/symmetry_linux_v2_acceptance
-      SECRET_KEY_BASE: ci-only-linux-v2-secret-key-base-0123456789012345678901234567890123456789
-      PHX_HOST: localhost
-      PHX_SERVER: "true"
-      PORT: "4000"
-      SYMMETRY_ENROLLMENT_TOKEN: development-enrollment-token
-      SYMMETRY_HEARTBEAT_INTERVAL_MS: "3600000"
-      SYMMETRY_POLL_INTERVAL_MS: "1000"
-      SYMMETRY_LEASE_DURATION_MS: "3600000"
-      SYMMETRY_ASSIGNMENT_DURATION_MS: "300000"
-      SYMMETRY_REAPER_INTERVAL_MS: "500"
-      SYMMETRY_CONTRACTS_DIR: ${{ github.workspace }}/contracts
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-          # The installed Linux owner validates the A-owned Git source as complete history and
-          # refuses a `shallow` entry, so this job needs the full repository, not one commit.
-          fetch-depth: 0
-      - uses: actions/download-artifact@v8
-        with:
-          name: portal-assets
-          path: control/priv/static/portal
-      - name: Generate isolated Control operator token
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          token="ci-linux-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(openssl rand -hex 32)"
-          echo "::add-mask::$token"
-          printf 'SYMMETRY_OPERATOR_TOKEN=%s\n' "$token" >> "$GITHUB_ENV"
-      - uses: actions/setup-go@v7
-        with:
-          go-version: '1.27.4'
-          cache-dependency-path: daemon/go.sum
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: 1.20.4
-          otp-version: 29.0.6
-      - name: Build production Control release
-        working-directory: control
-        run: |
-          set -Eeuo pipefail
-          python3 ../scripts/ci/linux-v2-source-subject.py "$GITHUB_WORKSPACE" "$GITHUB_SHA" >/dev/null
-          MIX_ENV=prod mix deps.get
-          MIX_ENV=prod mix release --overwrite
-      - name: Install disposable Linux fixture tools
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends \
-            acl build-essential curl debootstrap gh jq python3 sudo systemd-container
-      - name: Probe qualification on this native acceptance host
-        shell: bash
-        run: bash scripts/ci/linux-v2-host-prerequisite-probe.sh
-      - name: Install scratch-only gh credential-ingestion shim
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          shim_dir="$RUNNER_TEMP/scratch-gh-shim"
-          mkdir -p "$shim_dir"
-          install -m 0755 scripts/ci/scratch-gh-shim "$shim_dir/gh"
-          printf '%s\n' "$shim_dir" >> "$GITHUB_PATH"
-      - name: Upload narrow host prerequisite evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
-          retention-days: 7
-          path: ${{ runner.temp }}/linux-v2-host-prerequisite-${{ github.run_id }}-${{ github.run_attempt }}.json
-      - name: Build the shared disposable Ubuntu guest rootfs base
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          base="$RUNNER_TEMP/linux-v2-native-rootfs-base-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          bash scripts/ci/linux-v2-native-rootfs-base.sh "$base"
-          printf 'SYMMETRY_LINUX_V2_NATIVE_ROOTFS_BASE=%s\n' "$base" >> "$GITHUB_ENV"
-      - name: Run isolated A/B Linux v2 acceptance case sets
-        shell: bash
-        env:
-          GH_TOKEN: gho_scratchdummy0000000000000000000000000000
-          SYMMETRY_OPENAI_API_KEY: sk-scratch-dummy
-          SYMMETRY_PI_MODEL: deepseek-v4.1-flash-fast
-          SYMMETRY_OPENCODE_MODEL: deepseek-v4.1-flash-fast
-          SYMMETRY_OPENAI_BASE_URL: https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1
-        run: |
-          set -Eeuo pipefail
-          evidence_root="$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          case_sets=(
-            stage_replay_create_started
-            stage_replay_leaf_bound
-            stage_replay_launcher_bound
-            ack_loss_launcher_bound
-          )
-          failed_case_sets=()
-          for case_set in "${case_sets[@]}"; do
-            status=0
-            SYMMETRY_LINUX_V2_NATIVE_CASE_SET="$case_set" \
-            SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR="$evidence_root/$case_set" \
-            GITHUB_EVENT_NAME=workflow_dispatch \
-              bash scripts/ci/linux-v2-native-acceptance.sh || status=$?
-            if (( status == 0 )) && [[ ! -s "$evidence_root/$case_set/manifest.json" ]]; then
-              printf 'Missing sanitized evidence manifest for required case set: %s\n' "$case_set" >&2
-              status=1
-            fi
-            printf 'Case set %s exited %d\n' "$case_set" "$status"
-            (( status == 0 )) || failed_case_sets+=("$case_set")
-          done
-          if (( ${#failed_case_sets[@]} > 0 )); then
-            printf 'Failed case sets: %s\n' "${failed_case_sets[*]}" >&2
-            exit 1
-          fi
-          printf 'All %d case sets exited 0.\n' "${#case_sets[@]}"
-      - name: Clear isolated Control operator token
-        if: always()
-        shell: bash
-        run: printf 'SYMMETRY_OPERATOR_TOKEN=\n' >> "$GITHUB_ENV"
-      - name: Upload allowlisted sanitized Linux v2 evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          if-no-files-found: warn
-          retention-days: 14
-          path: ${{ runner.temp }}/linux-v2-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}/*/*.json
-
-  contracts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 12.17.0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-          cache: pnpm
-      - uses: ./.github/actions/contracts-build
-        with:
-          build-control-release: "false"
-```
+Every other line, including the `needs: contracts` wiring and the whole `contracts` job, is the
+canonical bytes.
 
 The scratch-only `gh` shim `scripts/ci/scratch-gh-shim` (sha256
 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`; byte-identical to the copy
@@ -673,7 +529,7 @@ M-E1 (delete the skip block):
 -		}
 
 M-E2 (the exemption moved into the equality pass; the skip block deleted as in M-E1):
- 	for _, pair := range pairs {
+	for _, pair := range pairs {
 -		if pair.expected != nil && (pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
 +		if pair.expected != nil && !(pair.expected.PID <= 1 && pair.expected.Identity == "" && pair.actual != nil && pair.actual.PID <= 1 && pair.actual.Identity == "") &&
 +			(pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
@@ -700,9 +556,10 @@ the runner user), not only outside CI.
 
 The fix increment changed the e2e bytes after run 4, so run 4's binding is void for the delivered
 bytes (lesson 86): run 4 still proves the ruling-E bytes §10a froze, and nothing in this increment
-re-proves the fix bytes end to end. The single re-bind run on the final bytes is authorized by the
-fix ruling (2026-11-25, R1) and is the next code-affecting action of record; this stage does not
-push, so it stays pending, and the gates below stand on the delivered bytes.
+re-proves the fix bytes end to end. The single re-bind run on the final bytes was authorized by the
+fix ruling (2026-11-25, R1) as the next code-affecting action of record; this stage did not push, so
+it stayed pending at that point, and the gates below stand on the delivered bytes; §12 carries the
+run that closed it (run `45548810398`, all four sets green on the delivered code bytes).
 
 ### 11e. Local gates on the fix bytes (WSL Ubuntu-24.04, `GOTOOLCHAIN=go1.27.0`, working directory `daemon/`)
 
@@ -718,3 +575,76 @@ push, so it stays pending, and the gates below stand on the delivered bytes.
 
 The full `-race ./...` pass and the guest re-bind run stay with the PR head's `daemon` job and the
 conductor (this stage ran the package-scoped commands above in the foreground).
+
+## 12. Binding run on the delivered bytes (2026-11-25): run `45548810398`
+
+The single re-bind run §11d left outstanding is done: one scratch dispatch on the delivered code
+bytes, all four sets green, manifests `status=passed`, and the equality table below all-EQ. It is
+the binding run of record for the delivered bytes; the round-1 records-only edits after it (PR #284,
+§10e's pin and the wording fixes) touch no code byte, so the binding stands.
+
+- Run `45548810398` (event `push`, attempt 1, conclusion `success`, 2026-11-25 04:44:20Z →
+  04:54:03Z), head branch `scratch/rf-acc-witness-unresolved-exit`, head sha
+  `4e863a694046b57138920951dcc2571a761529a4` = PR head
+  `1c89f2577185fc58c4b2b66033d560b78cff32b8` plus the record's two pinned scratch-only files
+  (workflow `f3cb9e929780e59583ca23714f27879b5f8046ea87cc292ef43ab2395271d2f4`, shim
+  `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`). Jobs: `contracts`
+  `138984769901`, success, 1m6s; `linux-native-v2-acceptance` `138985186344`, success, 8m33s. The
+  scratch branch was deleted afterwards and
+  `git ls-remote origin scratch/rf-acc-witness-unresolved-exit` prints nothing.
+- No stop line anywhere in the log: zero occurrences of `unresolved production recovery exit`,
+  `want deliberate nonzero` or `incomplete process identity`. The ACK-loss leg passes both
+  `linuxV2RequireSameOwnerIdentities` and the journal check the ruling asked to watch,
+  `linuxV2ValidateStageReplayJournal` — no new stop, no `DECISION_NEEDED`.
+
+### 12a. The four sets (verbatim job-log lines)
+
+| Case set | Verdict | Pass line | Deeper verify line |
+| --- | --- | --- | --- |
+| `stage_replay_create_started` | pass (exit 0) | `Case set stage_replay_create_started exited 0` | `verified TestProductionLinuxV2StageCrashReplayMatrix/create_started: run=1 pass=1 skip=0` |
+| `stage_replay_leaf_bound` | pass (exit 0) | `Case set stage_replay_leaf_bound exited 0` | `verified TestProductionLinuxV2StageCrashReplayMatrix/leaf_bound: run=1 pass=1 skip=0` |
+| `stage_replay_launcher_bound` | pass (exit 0) | `Case set stage_replay_launcher_bound exited 0` | `verified TestProductionLinuxV2StageCrashReplayMatrix/launcher_bound: run=1 pass=1 skip=0` |
+| `ack_loss_launcher_bound` | pass (exit 0) | `Case set ack_loss_launcher_bound exited 0` | `verified TestProductionLinuxV2AckLossReplayMatrix/launcher_bound: run=1 pass=1 skip=0` |
+
+Aggregate line, verbatim: `All 4 case sets exited 0.`
+
+Published artifact `linux-v2-native-evidence-45548810398-1` (id `14992993379`, 11875 bytes, zip
+sha256 `4d02111212931778e635f8942c15a978b4144309c8901c360ac6c637a64f8912`), 8 files = 4 manifests +
+4 witness documents:
+
+| Set | `manifest.json` sha256 | Witness document | Witness sha256 |
+| --- | --- | --- | --- |
+| `stage_replay_create_started` | `999d090149c3db946b7866cad61737f5fe39be04ae3cffe6647c1b7fa5516332` | `stage-crash-replay-create_started.json` | `61244a67812a69b13c8a4041be389a4685e9fb5bb049c00d7bc4d56c73e3974a` |
+| `stage_replay_leaf_bound` | `d03b78bcb4e662eb2f0be235f8212159cf88b4b47d78d6268a5fbca0135e95c3` | `stage-crash-replay-leaf_bound.json` | `7495e51f48355cccbc952f48ea67aed75025206182ec9a3ca9c803afd8d917c6` |
+| `stage_replay_launcher_bound` | `227778c2d25b3b428aba5e095f31edd17abddb9660a5a483d38ff4c08e5475e8` | `stage-crash-replay-launcher_bound.json` | `23a583baaeaf19e39d9977685950e68676173216dc95c3c8073fc92ff9597b2a` |
+| `ack_loss_launcher_bound` | `bc2fa148142f067ce36c1b07110ced756980f3d4feaebb1daf1587fbd175aa88` | `ack-loss-replay-launcher_bound.json` | `a084099880107d0dff0ebf31cd536bafe9bfda434725402c1c4f99ecf911a0dd` |
+
+All four manifests: `status=passed`, `source_commit=4e863a694046b57138920951dcc2571a761529a4`,
+`source_tree_digest=sha256:d8be0cef74abd601e5d0f413be6ef0748ec1be7e869fd2aad2729101acba3e7f`,
+`missing_allowlisted_files=[]`, `credentials_included=false`, `raw_logs_included=false`,
+`raw_journals_included=false`, `mode=manual`. Every witness carries
+`owner_witness_outcome=unresolved`, `recovery_state=unresolved`, `journal_unproven=true`,
+`failure_category=containment_unproven`, `native_version=1.5.2` and the same compiled owner-witness
+binary `daemon_sha256=ca26bef56a7e3e94f410c937537f826bdc6c6749b8b1d72f8bd7796d4df225c8`.
+
+### 12b. sha256 equality table (run head vs delivered bytes)
+
+`git diff --stat 1c89f257 4e863a69…` = only the two scratch-only files added (212 insertions; both
+deleted with the branch, neither ever on the PR branch), so the run head and the delivered commit
+differ only by the throwaway trigger files; each tested byte re-derived per file:
+
+| Kind | File | Run head `4e863a69` | Delivered `1c89f257` | Eq |
+| --- | --- | --- | --- | --- |
+| code | `daemon/e2e/production_linux_v2_owner_cli_test.go` | `7b27d40fe3588e80a2bd512368ec2e8a1b36858d6410b6493b4ff932e05b2bb3` | `7b27d40fe3588e80a2bd512368ec2e8a1b36858d6410b6493b4ff932e05b2bb3` | EQ |
+| code | `daemon/e2e/production_linux_v2_owner_identity_test.go` | `eb2aa7b9a5aca84142875ec5834e7aa6c77e56dd829c485d18e502955b9b7130` | `eb2aa7b9a5aca84142875ec5834e7aa6c77e56dd829c485d18e502955b9b7130` | EQ |
+| code | `daemon/internal/app/linux_owner_witness_linux.go` | `7484da8b8bf42d11a7294cbd84e9048ee79e2eac37ee97685f54efbde7dc6a54` | `7484da8b8bf42d11a7294cbd84e9048ee79e2eac37ee97685f54efbde7dc6a54` | EQ |
+| code | `daemon/internal/app/linux_owner_witness_linux_test.go` | `7ef3983b173f1db2ddeaa5c3b3d32964fc496c9fc44d873ba7fd7d6a358f6115` | `7ef3983b173f1db2ddeaa5c3b3d32964fc496c9fc44d873ba7fd7d6a358f6115` | EQ |
+| doc | `docs/TODO.md` | `f3bbe78f3f2f269bfa7b3c28d952eb751378bb1b339ea2340255733362dfe8e5` | `f3bbe78f3f2f269bfa7b3c28d952eb751378bb1b339ea2340255733362dfe8e5` | EQ |
+| doc | `docs/evidence/rf-acc-witness-unresolved-exit-2026-11-25.md` | `75ec3d99eac8ecb7274ee0fb9eec04ab3901f97a6142d5c48fa2449ce0427cb7` | `75ec3d99eac8ecb7274ee0fb9eec04ab3901f97a6142d5c48fa2449ce0427cb7` | EQ |
+| doc | `docs/plans/2026-11-25-rf-acc-witness-unresolved-exit-plan.md` | `cb1bf3b4ed3181f87b2e9d04b94b0a380ddaf374cd7b3d8389ca442ced6f2ad3` | `cb1bf3b4ed3181f87b2e9d04b94b0a380ddaf374cd7b3d8389ca442ced6f2ad3` | EQ |
+
+All EQ. The four code rows are the binding subject and equal the record's frozen digests (§6
+`7484da8b…`/`7ef3983b…`, §11a `7b27d40f…`/`eb2aa7b9…`). The three doc rows pin what the run and the
+delivered commit carried; the records-only round-1 edits landed in the working tree after the run,
+so their current worktree digests differ without touching a code byte — the binding stands
+(conductor ruling, PR #284 round 1).

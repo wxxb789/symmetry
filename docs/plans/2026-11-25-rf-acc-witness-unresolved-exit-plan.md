@@ -20,7 +20,7 @@ site sits within six lines of its contract address:
 | `:556` | `:556` | the same return after the unresolved-authority recovery assignment (`:538`); the authority guard `:531-534` is unchanged | convert |
 | `:596` | `:596` | the same return, shared by every outcome of the `RecoveryState` switch whose `case "unresolved"` sits at `:571` | convert (the helper returns nil for every proven outcome) |
 | `:604-625` | `:604-630` | `writeResponseLost` writes the summary at `:618`, then joins `execution.ErrLinuxV2MutationAckLost` at `:624` | exempt: every caller already returns non-nil |
-| `:1456` | `:1456` | `Outcome = "unresolved"` inside `summarizeResponseLost` | exempt, same reason (its only caller is `writeResponseLost`) |
+| `:1456` | `:1456` | `Outcome = "unresolved"` inside `summarizeResponseLost` | exempt, same reason (its only writer is `writeResponseLost`; its remaining caller is the `journal_store_linux_test.go` probe, which returns early without writing a summary) |
 | `:420` | `:420` | fail-closed struct-literal initializer `Outcome: "unresolved"` | no writer of its own; its bytes are only written through the sites above |
 | `:676` | `:676` | the fresh positive path's final write (`completed`/`recovered`/`peer_denied`) | untouched: proven outcomes keep exit 0 |
 | e2e `:176-193` | e2e `:184-199` | `requireLinuxV2RecoveryExitStatus` | read-only under Q1(a); its stage-runner and ack-runner call sites are `:1883`, `:3461`, `:3496`, `:3726`. Ruling E (§7) amends the owned set for `linuxV2RequireSameOwnerIdentities` only, not for this assertion |
@@ -83,7 +83,7 @@ runs `45481221551`/`45484692731` is the already-recorded end-to-end failure.
   logs, the census (`Outcome = "unresolved"` sites, each converted / exempt / covered), the M1-M4
   mutant rows naming the job that reddens, and the sha256 equality table of the tested bytes (goal
   worktree vs scratch head) plus the base-writer vs helper response-byte sha256. Appendix: the scratch
-  workflow, the shim and the pins verbatim (lesson 76).
+  pins and the shim verbatim, and the scratch workflow pinned by sha256 with its deltas (lesson 76).
 - The TODO amendment above.
 
 ## 5. Local gates

@@ -1900,7 +1900,7 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       `docs/evidence/rf-acc-witness-unresolved-exit-2026-11-25.md`, conductor ruling Q1(a)): the
       three writers return through `writeLinuxV2NativeWitnessSummaryAndExit`, whose sentinel
       `errLinuxV2NativeWitnessContainmentUnproven` the CLI maps to one stderr line plus exit 1, so
-      all four unresolved sets complete at their expected recovery on the final bytes (run
+      all four unresolved sets complete at their expected recovery on the ruling-E bytes (run
       `45540942939`, exit 0 each, with their allowlisted witness document and `status=passed`
       manifest; the response-loss sibling keeps its deliberate exit 1 through
       `execution.ErrLinuxV2MutationAckLost`); the response bytes, the proven outcomes' exit 0 and
@@ -1914,9 +1914,11 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       table test `daemon/e2e/production_linux_v2_owner_identity_test.go`; its M-E1 guest row is run
       `45536878631` (byte-exact: run 3's e2e file is the skip-reverted function bytes) and the
       four-set run `45540942939` is green (record §10). The R2 tightening changed the e2e bytes
-      after run 4, so run 4 no longer binds the delivered bytes and the single re-bind run on the
-      final bytes is the outstanding binding action (record §11). This bullet stays in
-      `docs/TODO.md` while clause (2) and the F4 item are open; no CLOSED-TODO move.
+      after run 4, so run 4 no longer binds the delivered bytes; the re-bind run is `45548810398`
+      (scratch head `4e863a69` = PR head `1c89f257` plus the two pinned scratch files) — all four
+      sets exit 0 on the delivered bytes with `status=passed` manifests and an all-EQ sha256 table
+      (record §12). This bullet stays in `docs/TODO.md` while clause (2) and the F4 item are open;
+      no CLOSED-TODO move.
 
       No clause (1) text above is deleted: the root-cause question it asks is answered by ruling Q1(a)
       and the fix is the behaviour it names.
@@ -1945,6 +1947,17 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       resolved-by-owner-loss state; both change what the pre-existing product test proves. Needs a
       consult before any change; the four stale-journal sets' guest-denial rows (run `45489336388`)
       stay unproven until ruled.
+
+- [ ] rf-acc-owner-loss-semantics: owner-identity polish deferred from the rf-acc-witness-unresolved-exit
+      round-1 reviews (2026-11-25, same goal; evidence record §9 items 8-10): (a) a consistently
+      swapped owner set passes `linuxV2RequireSameOwnerIdentities` because `linuxV2JournalBindsOwnerSlot`
+      is a presence gate only — bind each bound slot's PID/identity to the journal value (security
+      review F1, LOW, pre-existing); (b) the table test does not exercise the handoff, authority,
+      release-proof or pre-gate branches of `linuxV2JournalBindsOwnerSlot` — add rows on
+      `ContainmentAuthority`-backed journals (DS audit F5); (c) the bound→different row changes PID
+      and identity together — add an equal-PID, different-identity row isolating pass 1's identity
+      term (Sol review P3). Deferred to keep the delivered e2e bytes frozen through the binding run
+      (`45548810398`, record §12).
 
 - [ ] Two retargeted case sets have an additional pre-existing stop of their own (2026-11-24, same
       goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its
