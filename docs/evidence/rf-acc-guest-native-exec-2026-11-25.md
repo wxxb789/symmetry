@@ -54,14 +54,21 @@ bytes unless a row names another revision.
 | `truncated_frame` | App read `:530-533` | frame larger than 64 KiB |
 | `empty_packet` | App read `:534-538` | a zero-length record (platform-unreachable, §5) |
 | `magic_or_version` | App read `:541-544`, `:558` | a frame outside the v1/v3 gate families |
-| `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1273-1299` → `send_exec_failure` `:1026-1034` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno; `check_zero_groups` sets none, so a nonzero count reports a stale errno) |
-| `gate_v1_frame` kind 7 | gate `exec_as_b` attempt build/send `:1354-1362` | 28 B: v1 kind 7, dev/inode (non-clone attempt frame; unreachable for a v3 clone release) |
-| `peer_closed_without_frame` | gate `gate_run` silent exits (`:1449-1465` adoption/release wait, `check_parent`, `read_release`) and any failure-send that also fails | none |
+| `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1273-1297` → `send_exec_failure` `:1026-1034` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno; `check_zero_groups` sets none, so a nonzero count reports a stale errno) |
+| `gate_v1_frame` kind 7 | gate `exec_as_b` attempt build/send `:1352-1362` | 28 B: v1 kind 7, dev/inode (non-clone attempt frame; unreachable for a v3 clone release) |
+| `peer_closed_without_frame` | gate `gate_run` silent exits (`:1447-1463` adoption/release wait, `check_parent`, `read_release`) and any failure-send that also fails | none |
 | `frame_header` | App decode `wire.go:526-533`, `wire.go:595-601` | a v3 frame the arm's own decoder refuses: wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader), bad field framing, a non-positive generation, a truncated or trailing image identity, or a receipt `Validate()` refusal |
 | `image_inode_missing` | App decode `:549-551` | v3 kind 20 with inode 0 |
 | `guest_failure_malformed` / `guest_failure_code` | App decode `:677-687` | v3 kind 24 size ≠ 20, or stage outside 1..18 / errno 0 or > u31 |
-| decoded guest failure (`guest_stage`+`errno`) | gate `send_clone_bootstrap_failure` `gate.c:1036-1044` at `:1197`, `:1203`, `:1216`, `:1224`, `:1238`, `:1256`, `:1268`; guest `cmd/symmetry-linux-clone-bootstrap/main.go:22-32` for every `RunBootstrap` failure | 20 B: v3 kind 24, u32 stage 1..18 (guest 1..7, gate-side 8..18), u32 errno |
-| gate pre-clone guard failure (`guest_stage` 8..18) | gate `exec_as_b` pre-clone chain `gate.c:1274-1299` → `send_preclone_failure` `:1049-1055`; the credential-fact classifier `:1061-1098` | 20 B: v3 kind 24 (clone release) with the guard stage; a non-clone release keeps the 16 B v1 kind 8 frame (`§10`) |
+| decoded guest failure (`guest_stage`+`errno`) | gate `send_clone_bootstrap_failure` `gate.c:1036-1045` at `:1195`, `:1201`, `:1214`, `:1222`, `:1236`, `:1254`, `:1266`; guest `cmd/symmetry-linux-clone-bootstrap/main.go:22-32` for every `RunBootstrap` failure | 20 B: v3 kind 24, u32 stage 1..18 (guest 1..7, gate-side 8..18), u32 errno |
+| gate pre-clone guard failure (`guest_stage` 8..18) | gate `exec_as_b` pre-clone chain `gate.c:1273-1297` → `send_preclone_failure` `:1049-1055`; the credential-fact classifier `:1059-1096` | 20 B: v3 kind 24 (clone release) with the guard stage; a non-clone release keeps the 16 B v1 kind 8 frame (`§10`) |
+
+After the stage-2 family fix (§10) the delivered gate never puts a v1 frame on a clone channel:
+`send_preclone_failure` (`gate.c:1049-1055`) sends the v3 kind-24 family for every `clone_mode`
+failure, and only a non-clone release reaches `send_exec_failure` (`gate.c:1026-1034`). The
+`gate_v1_frame` kind-8 and kind-7 rows above are therefore unreachable from the delivered clone
+path, and the sentinel remains only as defence against a mixed-vintage gate (its recognition and
+probes stay).
 
 ## 4. Local gates (delivered stage-1 bytes)
 
@@ -109,10 +116,11 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
   `flags=0x40000000`, the echoed `MSG_CMSG_CLOEXEC`, with `MSG_EOR` clear), so the `:534` producer
   is input-unreachable and a zero-length record is indistinguishable from a peer close: two rows
   pin `peer_closed_without_frame` and `mustNotClass=empty_packet` for that input.
-- C census probe (owned test file): `TestGateReleaseFenceOrdering` runs fifteen scenarios
+- C census probe (owned test file): `TestGateReleaseFenceOrdering` runs sixteen scenarios
   (`exec-fence`, `exec-fence-expired`, `exec-drop-denied`, `clone-fence-expired`,
-  `clone-attempt-fence`, `clone-close-failed`, `clone-parent-death-failed`, and the eight
-  `clone-drop-*` classifier rows) in a compiled probe that includes the current `gate.c` with
+  `clone-attempt-fence`, `clone-close-failed`, `clone-parent-death-failed`, the eight
+  `clone-drop-*` classifier rows, and round 2's `exec-symlinked-image` refusal, §15) in a compiled
+  probe that includes the current `gate.c` with
   `sendmsg`/`poll`/`prctl`/`syscall`/`open`/`_exit`/credential interceptions: it pins the v1 attempt
   frame's shape/dev/ino, `PR_SET_PDEATHSIG`/`SIGKILL` before it, at least one guard poll before it,
   the post-send guard polls strictly between the frame and the intercepted `execveat`, the
@@ -180,6 +188,7 @@ workflow copy and its log shim are scratch-only artifacts (workflow sha256 `2200
 | 1 | `6dd5867c` | `contracts-build`, `migration` | contracts success, acceptance failure (expected at stage 1) | `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other read_class=gate_v1_frame errno=1` |
 | 2 | `57e5ed3e` | `contracts-build`, `migration` | contracts success (1m33s), acceptance failure | `production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`; release detail `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other guest_stage=gate_drop_bounding_set errno=1` |
 | 3 | `74efe855` | `contracts-build`, `migration`, `stale_leaf` | contracts success (1m22s); `Case set migration exited 1`, **`Case set stale_leaf exited 0`** | `production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`; release detail `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other guest_stage=gate_drop_bounding_set errno=1` |
+| 4 | `6d20132f` (bind run on the exact PR head `de442bf2` + workflow sha256 `add561843666661660f0294b49d1db28f72f06a07b1e9a1e6e361927e9617943` / shim sha256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`) | `contracts-build`, `migration`, `stale_leaf` | run `45619888293`; contracts success (1m42s); `Case set migration exited 1`, **`Case set stale_leaf exited 0`**; stale_leaf verify `verified TestProductionLinuxV2StaleLeafIdentityRetainsJournal: run=1 pass=1 skip=0` | `production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`; release detail `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other guest_stage=gate_drop_bounding_set errno=1`; evidence `linux-v2-native-evidence-45619888293-1` (id `15024596705`) sha256 `a18a8c456a56e4b34538136078a81ed85d3649179ddafa9d3ddb37a4985006a0`; host prerequisite `linux-v2-host-prerequisite-45619888293-1` (id `15023004436`) sha256 `a7110d6cc09acb0e751d30d1ac79f519c8760c36c62a9ae605d6579a852b48ba` |
 
 Run 3 evidence artifacts: `linux-v2-native-evidence-45602546196-1` (id `15017315263`, sha256
 `c9fa79cd86c564fff99ffbf97c7acdad421c496498640c731b39069a9c8e4042`, 4359 B — the two case sets'
@@ -322,7 +331,7 @@ Known labelling limits (recorded, not fixed): `PR_SET_KEEPCAPS,0` cannot fail fo
 arguments the gate passes and no read-only probe can reveal it; a failed `PR_SET_DUMPABLE,0` would
 be labelled `gate_drop_no_new_privs` (or `gate_drop_ambient` if ambient capabilities survived the
 credential switch), never `gate_drop_capabilities` — the classifier can only name a fact at or after
-the failing call (`gate.c:1061-1096` re-reads the drop's steps in `gate.c:1009-1013` order, which
+the failing call (`gate.c:1059-1096` re-reads the drop's steps in `gate.c:1010-1013` order, which
 the `clone-drop-capabilities` census row now pins), and `PR_SET_NO_NEW_PRIVS` is set after
 `PR_SET_DUMPABLE` (round-1 review F4).
 Both failures are unreachable for the constant valid arguments the gate passes and neither
@@ -405,6 +414,8 @@ reason:
 | `rg -n "exec-status channel closed or carried ancillary data before a frame" daemon` | `wire_linux.go:706` plus two platform rows that pin the resulting `wait_class` | exempt: the non-clone native-status read is out of this goal's root cause by contract; its bytes and text are unchanged |
 | `rg -n "guest_stage\|GuestStage" daemon/internal/platform` | `helper_v2_protocol.go` (field, `String()`, `Validate()`, `DetailFor`) and its test file | converted: the closed stage vocabulary is validated on receipt and rendered verbatim |
 | `git diff --stat -- scripts/ .github/` | 0 lines | no script or real workflow byte changed by this goal (the scratch copy is branch-only) |
+| `grep -rn '"/bin/\|"/usr/bin/\|"/usr/sbin/\|"/usr/libexec/\|"/usr/local/' daemon/native/linux-gate/protocol/*_test.go` (round 2, R1: the census/probe tests) | 19 hits: `gate_census_linux_test.go` 0 (3 at the PR head), `clone_integration_linux_test.go` 3, `launcher_integration_linux_test.go` 5, `wire_linux_test.go` 9, `wire_test.go` 2 | converted: the census probe's `/bin/true` exec image is round 2's test-owned regular fixture, injected as `argv[2]` (§15). Exempt: `wire_linux_test.go`/`wire_test.go` carry opaque path spans through wire round-trips (never opened); `clone_integration_linux_test.go` is the harness's own `/usr/bin/git` invocation and a mount-source name check in the operator-gated scratch leg; `launcher_integration_linux_test.go` holds the installed-layout gate paths and `/bin/true`/`sleep`/`cat` candidates in the operator-gated scratch legs — its `trustedSleepPath`/`trustedCatPath` already resolve symlinks to a regular executable (the class's own pattern), and its `/bin/true` command is only encoded, never executed |
+| `grep -c 'census_image_path' daemon/native/linux-gate/protocol/gate_census_linux_test.go`; `grep -c '/bin/true' <same>` (round 2, R1) | 5 lines / 0 lines | converted: the compiled probe's exec image is the fixture path (`censusExecImageFixture`: PATH-resolved `true` copied to a regular 0755 file in `t.TempDir()`), its only hardcoded sibling gone |
 
 ## 13. Apply stage — accepted simplify findings (test-only delta after run 3)
 
@@ -425,7 +436,8 @@ Applied: simplify findings 2, 3 (scaffolding), 4, 5 (coverage), 6, 7, 8 (the §1
 re-derivations above), plus finding 1's five test-file comment blocks. Not applied: finding 1's
 `gate.c:1057-1060` block — a `gate.c` byte change is frozen by the conductor ruling ("no further
 code change" after run 3) and would re-baseline the §11 digest of the bytes the run-3 audit trail
-binds.
+binds (round 2 applies it as R2 under the round-1 ruling; the block is now `gate.c:1057-1058`,
+§15).
 
 Every-class census for the new loop (the only new "every X" clause): the twelve
 `CloneReadClass*` constants are defined at `wire.go:494-505`; `Validate()`'s switch spans
@@ -503,3 +515,63 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
 The pinned jscpd 4.3.0 reached the scratch clone through the host's configured npm feed; a direct
 registry fetch failed with a TLS handshake error, so the local install used the feed and the gate
 ran on the pinned version.
+
+## 15. Round-2 fix delta (PR #289 round 1: Sol/DS/Sec findings, conductor ruling 2026-11-25)
+
+The round-1 review returned MUST_FIX on the `exec-fence` fixture (Sol P0-1, DS F-1) plus record and
+comment-policy items (DS F-4/F-5, Sec P3-1/P3-2); R1-R4 are the conductor's dispositions, all
+inside the owned set. No production behavior changed: `wire.go` `93a83daf…`, `wire_linux.go`
+`6205fe63…`, `gate_lifecycle_linux.go` `76f8a0ff…` and `helper_v2_protocol.go` `4ac73de3…` keep
+their §14/§11 digests; `gate.c` changes by the R2 comment only.
+
+| Item | Change | sha256 |
+| --- | --- | --- |
+| R1 `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | the exec-fence image is a test-owned regular ELF copy of the PATH-resolved `true` (`censusExecImageFixture`), injected into the probe as `argv[2]`; new refusal row `exec-symlinked-image` pins ELOOP | `8aeba320a7232837131b0ad42af0f1c09b417edb778c7d1a0f01ad1d1e0b5b8d` |
+| R2 `daemon/native/linux-gate/c-gate/gate.c` | the `classify_drop_failure` comment compressed 4 → 2 lines (now `gate.c:1057-1058`); comment-only | `dff813cee1513477c3cf4ab659154b6fc3e54e4d93336c0bc8cc5b12730260b3` |
+| R4 `daemon/native/linux-gate/protocol/wire_linux_test.go` | the five round-1 test docstrings removed (policy: default to zero comments) | `3d03c590fa0d69e0561586603d7e08862bbfb00adb1da78784646e3b06897540` |
+| R4 `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | the two round-1 test docstrings removed | `17c7e40ec0e551debfaf7accfb3c7f48f72e822deff4fdfd9058348a71616fa7` |
+
+R1 detail: the hosted runner presents the fixture's `/bin/true` with a symlinked final component, so
+the gate's `open(..., O_NOFOLLOW)` returned `ELOOP` and the row asserted against the v1 kind-8
+frame (CI run `45619292760`: `daemon` job `139222938396`, `coverage-daemon` job `139222938357`,
+both `reason=first fd-7 frame is version=1 kind=8 size=16; want version=1 kind=7 size=28`). The
+fixture now resolves `true` through the test process's PATH (`exec.LookPath` → `filepath.EvalSymlinks`
+→ copy into `t.TempDir()` at 0755, `lstat`-verified regular), and the probe opens only that injected
+path; the scenario, its assertions and its dev/ino identity check are otherwise unchanged. The
+census of hardcoded executable paths in the census/probe tests is §12's round-2 rows. The negative
+row hands the probe a symlink in the same directory and requires exactly one v1 kind-8 frame with
+`errno=ELOOP`, no attempt frame and no `execveat`; mutants M21/M22 (§15.2) falsify both sides.
+
+R2 detail: with the same relative source name and the contract's install flags the pre-R2
+(`de442bf2`) and delivered sources compile byte-identical —
+`5fd54967619babd09e9643936d8dc1808e2bad20a544154f59ac588f57e5d7ff`, BuildID
+`69f1e17288a2ae14a9e732a9d7f2d3b1452f436f`; section-wise the `.text` bytes are identical.
+
+R3: §3 carries the statement that the `gate_v1_frame` kind-8/kind-7 sentinels are unreachable from
+the delivered clone path after the Q-C family fix and remain as mixed-vintage defence only; plan
+§4/§10 carry the same statement, and plan §8.2's `PR_SET_DUMPABLE` sentence now matches the
+F4-corrected §10 wording.
+
+### 15.1 Local gates at the round-2 bytes
+
+WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| format | `gofmt -l native/ internal/platform/` | 0 | no file listed |
+| linux vet | `GOOS=linux go vet ./native/linux-gate/protocol/ ./internal/platform/` | 0 | clean |
+| protocol race | `go test -race -count=1 ./native/linux-gate/protocol/` | 0 | `ok protocol 5.676s` |
+| protocol race, symlinked `true` on PATH | the same command with `PATH` whose first entry holds `true` as a symlink to `/usr/bin/true` (`which true` resolves to it) | 0 | `ok protocol 3.216s`; 289 `--- PASS` rows, all sixteen `TestGateReleaseFenceOrdering` scenarios green — the fixture no longer depends on `/bin/true`'s shape |
+| negative row | `go test -race -count=1 -run 'TestGateReleaseFenceOrdering/exec-symlinked-image' ./native/linux-gate/protocol/` | 0 | PASS; the symlinked image is refused with `ELOOP` (M21 reddens it) |
+| production C build | `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o <out> native/linux-gate/c-gate/gate.c` | 0 | static x86-64 ELF, sha256 `5fd54967619b…` |
+| R2 equivalence | the same flags on the pre-R2 and the delivered source (same relative name) | 0 / 0 | byte-identical binaries (`5fd54967619b…`, same BuildID) |
+| test census | `go test -count=1 -v ./native/linux-gate/protocol/ \| grep -c '^=== RUN'` | 0 | 300 (299 at round 1 + the new scenario) |
+| record sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only docs/plans/2026-11-25-rf-acc-guest-native-exec-plan.md docs/evidence/rf-acc-guest-native-exec-2026-11-25.md` | 0 | both changed docs clean |
+| clone gate | `python scripts/ci/jscpd-changed.py --base 30ed5ada… --head HEAD` (scratch clone with the delta committed, pinned jscpd 4.3.0) | 0 | 13 changed files, 1741 scanned sources, 1262 corpus clones, 0 tolerated among the added lines, none new; one notice: `docs/archive/CLOSED-TODO.md` is outside the jscpd scope |
+
+### 15.2 Round-2 mutants (scratch worktree at `de442bf2` + the four changed files, scratch-only)
+
+| id | Mutation | Red probe (verbatim line) | Restored sha256 |
+| --- | --- | --- | --- |
+| M21 | `gate.c`: `open_native_image`'s `open` without `O_NOFOLLOW` | `TestGateReleaseFenceOrdering/exec-symlinked-image`: `reason=symlinked image path still sent a kind-7 attempt frame`; control `exec-fence` green | `dff813cee151…` (restored, re-hashed) |
+| M22 | `gate_census_linux_test.go`: the fixture hands the raw PATH path to the probe (no resolve/copy), run with `true` a symlink on PATH | `TestGateReleaseFenceOrdering/exec-fence`: `[58] open forwarded fd=-1 name=<tmp>/true` / `[59] sendmsg fd=7 size=16 version=1 kind=8 errno=40` / `reason=first fd-7 frame is version=1 kind=8 size=16; want version=1 kind=7 size=28` — the CI line reproduced; the same mutant is green on the host PATH (`true` a regular file) | `8aeba320a723…` (the delivered file was never mutated; scratch-only) |

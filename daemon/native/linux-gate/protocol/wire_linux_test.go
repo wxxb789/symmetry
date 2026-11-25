@@ -631,8 +631,6 @@ func wireTestCloneStatusAttempt(ctx context.Context, fd int) error {
 	return err
 }
 
-// wireTestCloneReadGateV1Failure is the gate's 16-byte v1 FRAME_EXEC_FAILURE
-// (WIRE_MAGIC, version 1, kind 8, errno 13); the test pins the literal bytes.
 func wireTestCloneReadGateV1Failure(t *testing.T) []byte {
 	t.Helper()
 	frame, err := hex.DecodeString("53594d4c41303031010008000d000000")
@@ -642,8 +640,6 @@ func wireTestCloneReadGateV1Failure(t *testing.T) []byte {
 	return frame
 }
 
-// TestCloneStatusReadClassNamesEveryProducer drives each closed clone-read
-// producer through a real seqpacket arm and pins its class, errno and text.
 func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 	attempt := wireTestCloneStatusAttempt
 	receipt := func(ctx context.Context, fd int) error {
@@ -879,8 +875,6 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 	runCloneStatusReadProbes(t, probes)
 }
 
-// TestCloneStatusReadClassSplitsNeighbouringProducers pins that each producer
-// never collapses onto the neighbouring class of the same read family.
 func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 	attempt := wireTestCloneStatusAttempt
 	receipt := func(ctx context.Context, fd int) error {
@@ -991,8 +985,6 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 	runCloneStatusReadProbes(t, probes)
 }
 
-// TestCloneStatusReadClassVocabularyIsPinned pins every closed code by its
-// literal, so a swapped or renamed constant (mutant M2) reddens here.
 func TestCloneStatusReadClassVocabularyIsPinned(t *testing.T) {
 	literals := []struct {
 		literal string
@@ -1023,8 +1015,6 @@ func TestCloneStatusReadClassVocabularyIsPinned(t *testing.T) {
 	}
 }
 
-// TestCloneStatusReadClassAbsentOnSuccess pins that a completed arm read keeps
-// no read sentinel and that the peer close stays a wait-class peer close.
 func TestCloneStatusReadClassAbsentOnSuccess(t *testing.T) {
 	local, peer := wireTestCloneStatusPair(t)
 	defer local.Close()

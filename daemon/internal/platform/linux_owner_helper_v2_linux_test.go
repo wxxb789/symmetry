@@ -955,8 +955,6 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass pins the read
-// class with literal renderings (M3/M5/M7 redden here).
 func TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass(t *testing.T) {
 	rows := []struct {
 		subStep string
@@ -997,8 +995,6 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass(t *testing.T) {
 	}
 }
 
-// TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire pins the
-// new bounded field through the real response codec, validator and client.
 func TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire(t *testing.T) {
 	client, server := dialLinuxOwnerHelperV2TestExchange(t)
 	response := linuxOwnerHelperV2Response{

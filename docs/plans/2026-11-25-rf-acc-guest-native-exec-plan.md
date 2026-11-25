@@ -127,6 +127,11 @@ the refusal behavior is unchanged.
 | `guest_failure_malformed` / `guest_failure_code` | App decode `wire.go:677-687` | v3 kind 24 with size ≠ 20, or stage outside 1..18 / errno 0 or > u31 |
 | decoded guest failure (`guest_stage`+`errno`) | gate `send_clone_bootstrap_failure` `gate.c:1036-1044` called at `:1197`, `:1203`, `:1216`, `:1224`, `:1238`, `:1256`, `:1268`; guest `cmd/symmetry-linux-clone-bootstrap/main.go:22-32` for every `RunBootstrap` failure | 20 B: v3 kind 24, u32 stage 1..18 (guest stages 1..7, gate-side guard and credential facts 8..18 per §8.1), u32 errno |
 
+After the §8.1 Q-C family fix the delivered gate reports every clone-mode pre-clone guard failure
+in the v3 clone family (`send_preclone_failure`; `send_exec_failure` is reached only without
+`clone_mode`), so the `gate_v1_frame` kind-8/kind-7 rows above are unreachable from the delivered
+clone path and stay only as defence against a mixed-vintage gate on the clone channel.
+
 Reading (stage-1 hypothesis marker, never a fix basis): `gate_v1_frame` with kind 8 is the only
 sentinel that yields a bounded errno without a `guest_stage`; every other `wait_class=other` row
 refutes the v1-frame hypothesis and names its own producer.
@@ -147,9 +152,9 @@ refutes the v1-frame hypothesis and names its own producer.
 - `gate_census_linux_test.go`: a compiled-C fence probe (scenarios `exec-fence`,
   `exec-fence-expired`, `clone-fence-expired`, `clone-attempt-fence`) that pins
   `check_exec_guard` before and after every v1 `exec_as_b` attempt-frame send (delivered
-  `gate.c:1347`, `:1367`) and `PR_SET_PDEATHSIG SIGKILL`; on the clone path it pins only the pre-send
+  `gate.c:1345`, `:1365`) and `PR_SET_PDEATHSIG SIGKILL`; on the clone path it pins only the pre-send
   poll (residual, §10). The `clone-drop-capabilities` row also pins the drop's ordered credential
-  steps (delivered `gate.c:1009-1013`), so deleting `setresgid` or `PR_SET_DUMPABLE` reddens it. M8 (`gate.c`: move
+  steps (delivered `gate.c:1010-1013`), so deleting `setresgid` or `PR_SET_DUMPABLE` reddens it. M8 (`gate.c`: move
   the post-send exec guard before the frame send) reddens `exec-fence`.
 - Mutants M1-M8 are applied to a copy of the delivered bytes and restored byte-identical (§ records).
 
@@ -241,9 +246,11 @@ bounded instrument that can name *which* step failed, because `errno=1` alone ca
 - The closed facts are exactly the drop's observable post-conditions in the drop's own order.
   `PR_SET_KEEPCAPS, 0` has no observable post-condition for the constant arguments the gate passes
   and cannot fail with EPERM; a failed `PR_SET_DUMPABLE, 0` (also unreachable for a constant valid
-  argument) would be reported as `gate_drop_capabilities`. Neither can hide a failure: the frame,
-  the failing call's errno and `_exit(1)` are unconditional, and the classifier only selects a
-  label.
+  argument) would be labelled `gate_drop_no_new_privs` (or `gate_drop_ambient` if ambient
+  capabilities survived the credential switch), never `gate_drop_capabilities` — the classifier can
+  only name a fact at or after the failing call, and `PR_SET_NO_NEW_PRIVS` is set after
+  `PR_SET_DUMPABLE` (round-1 review F4). Neither can hide a failure: the frame, the failing call's
+  errno and `_exit(1)` are unconditional, and the classifier only selects a label.
 - `gate_drop_status` is the label for the `read_self_status` path, including its `seen != 511`
   gate, which fabricates `EPERM`; it is reachable only through the drop's own final verification.
 - The census rows drive each fact through its own failing call (the drop dies at the step the row
@@ -271,7 +278,11 @@ verbatim repo-file copies.
 - `readCloneNativeExecResult`'s post-attempt follow-up text stays untyped (not an enumerated
   producer; recorded as a residual in the evidence record).
 - Residual (round-1 review F2): the clone path has no post-send fence. `exec_clone_bootstrap` guards
-  at delivered `gate.c:1220-1221` and then sends the kind-20 attempt frame (`:1235`) straight into
-  `execveat` (`:1265`); only the v1 `exec_as_b` path re-checks after its send (`:1367-1372`). The
-  census pins the clone path's pre-send poll only (`clone-attempt-fence`), and this increment does
-  not touch the clone send.
+  at delivered `gate.c:1218-1219` and then sends the kind-20 attempt frame (`:1226-1238`) straight
+  into `execveat` (`:1263`); only the v1 `exec_as_b` path re-checks after its send (`:1365-1371`).
+  The census pins the clone path's pre-send poll only (`clone-attempt-fence`), and this increment
+  does not touch the clone send.
+- `gate_v1_frame` (kind 8 and kind 7) is unreachable from the delivered clone path after the §8.1
+  family fix — `send_preclone_failure` sends the v3 clone family for every clone-mode pre-clone
+  failure — and the sentinel remains only as defence against a mixed-vintage gate; the non-clone
+  branch keeps the v1 frame for every non-clone release.

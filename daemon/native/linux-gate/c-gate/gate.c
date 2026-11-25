@@ -1054,10 +1054,8 @@ static void send_preclone_failure(const struct release_command *command, uint32_
   }
 }
 
-/* Names the first unsatisfied credential fact after drop_to_b failed, in the
- * drop's own order, so the frame identifies the failing step. Reads only: the
- * drop path, its order, and its decisions are unchanged. Returns 0 when no
- * listed fact is unsatisfied or the facts cannot be read. */
+/* Re-derives the first unsatisfied credential fact in drop_to_b's own order;
+ * read-only, it only selects the stage label. */
 static uint32_t classify_drop_failure(struct owner_config *config) {
   int groups = getgroups(0, NULL);
   if (groups < 0) return 0;

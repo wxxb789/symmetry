@@ -205,10 +205,49 @@ int main(int argc, char **argv) {
 	return compileGateProbe(t, source, "census")
 }
 
+// The hosted runner's true is a symlink, which the gate's O_NOFOLLOW refuses
+// with ELOOP; the exec-fence scenario must own a regular ELF image.
+func censusExecImageFixture(t *testing.T) (string, string) {
+	t.Helper()
+	executable, err := exec.LookPath("true")
+	if err != nil {
+		t.Fatalf("exec-fence scenario requires true on PATH: %v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		t.Fatalf("resolve the exec-fence image: %v", err)
+	}
+	contents, err := os.ReadFile(resolved)
+	if err != nil {
+		t.Fatalf("read the exec-fence image: %v", err)
+	}
+	directory := t.TempDir()
+	image := filepath.Join(directory, "exec-fence-image")
+	if err := os.WriteFile(image, contents, 0o755); err != nil {
+		t.Fatalf("write the exec-fence image: %v", err)
+	}
+	if err := os.Chmod(image, 0o755); err != nil {
+		t.Fatalf("set the exec-fence image mode: %v", err)
+	}
+	identity, err := os.Lstat(image)
+	if err != nil {
+		t.Fatalf("lstat the exec-fence image: %v", err)
+	}
+	if !identity.Mode().IsRegular() || identity.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("exec-fence image is not a regular executable: %v", identity.Mode())
+	}
+	symlinked := filepath.Join(directory, "exec-fence-symlink")
+	if err := os.Symlink(image, symlinked); err != nil {
+		t.Fatalf("symlink the exec-fence image: %v", err)
+	}
+	return image, symlinked
+}
+
 func TestGateReleaseFenceOrdering(t *testing.T) {
 	probe := buildGateReleaseFenceProbe(t)
+	image, symlinkedImage := censusExecImageFixture(t)
 	for _, scenario := range []string{
-		"exec-fence", "exec-fence-expired", "exec-drop-denied", "clone-fence-expired", "clone-attempt-fence",
+		"exec-fence", "exec-symlinked-image", "exec-fence-expired", "exec-drop-denied", "clone-fence-expired", "clone-attempt-fence",
 		"clone-close-failed", "clone-parent-death-failed",
 		"clone-drop-denied", "clone-drop-groups", "clone-drop-bounding-set", "clone-drop-capabilities",
 		"clone-drop-ambient", "clone-drop-no-new-privs", "clone-drop-status", "clone-drop-unclassified",
@@ -216,7 +255,11 @@ func TestGateReleaseFenceOrdering(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			probeContext, cancelProbe := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancelProbe()
-			command := exec.CommandContext(probeContext, probe, scenario)
+			imagePath := image
+			if scenario == "exec-symlinked-image" {
+				imagePath = symlinkedImage
+			}
+			command := exec.CommandContext(probeContext, probe, scenario, imagePath)
 			command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("current gate release-fence probe %s: %v\n%s", scenario, err, output)
@@ -317,6 +360,7 @@ enum census_drop_fact {
   CENSUS_DROP_FACT_UNCLASSIFIED = 8,
 };
 static int census_drop_fact;
+static const char *census_image_path;
 
 static unsigned int census_load_u16(const unsigned char *value) {
   return (unsigned int)value[0] | ((unsigned int)value[1] << 8);
@@ -695,14 +739,13 @@ static void census_child_run(const struct census_child_setup *setup) {
   if (dup2(status_socket[0], EXEC_STATUS_FD) < 0) census_child_abort(10);
   close(owner_pidfd_pipe[0]);
   close(status_socket[0]);
-  static const unsigned char path_bytes[] = "/bin/true";
   static const unsigned char argv_bytes[] = "true";
   static const unsigned char cwd_bytes[] = "/";
   static const unsigned char clone_grant_bytes[] = "{}";
   struct release_command command;
   memset(&command, 0, sizeof(command));
-  command.path.data = path_bytes;
-  command.path.length = sizeof(path_bytes) - 1;
+  command.path.data = (const unsigned char *)census_image_path;
+  command.path.length = (uint32_t)strlen(census_image_path);
   command.argv[0].data = argv_bytes;
   command.argv[0].length = sizeof(argv_bytes) - 1;
   command.argc = 1;
@@ -936,7 +979,7 @@ static long census_count_guard_polls_between(const struct census_trace *trace, l
 
 static int census_scenario_exec_fence(void) {
   struct stat identity;
-  if (stat("/bin/true", &identity) != 0) return census_reason_fail("stat /bin/true failed: %s", strerror(errno));
+  if (stat(census_image_path, &identity) != 0) return census_reason_fail("stat %s failed: %s", census_image_path, strerror(errno));
   struct census_child_setup setup;
   memset(&setup, 0, sizeof(setup));
   setup.release_version = RELEASE_WIRE_VERSION;
@@ -952,7 +995,7 @@ static int census_scenario_exec_fence(void) {
       EXEC_STATUS_FD, frame->version, frame->kind, frame->size,
       WIRE_VERSION, FRAME_EXEC_ATTEMPT, EXEC_ATTEMPT_SIZE);
   CENSUS_REQUIRE(frame->dev == (unsigned long long)identity.st_dev && frame->ino == (unsigned long long)identity.st_ino,
-      "attempt frame dev/ino %llu/%llu does not match /bin/true %llu/%llu",
+      "attempt frame dev/ino %llu/%llu does not match the exec-fence image %llu/%llu",
       frame->dev, frame->ino, (unsigned long long)identity.st_dev, (unsigned long long)identity.st_ino);
   long execveat = census_find_op(run.trace, "execveat");
   CENSUS_REQUIRE(execveat > attempt, "execveat index %ld does not follow the attempt frame index %ld", execveat, attempt);
@@ -972,6 +1015,31 @@ static int census_scenario_exec_fence(void) {
   CENSUS_REQUIRE(run.trace->events[failure].error_number == ENOEXEC,
       "the failure frame after the intercepted execveat carries errno=%u; want ENOEXEC(%d)",
       run.trace->events[failure].error_number, ENOEXEC);
+  return 0;
+}
+
+static int census_scenario_exec_symlinked_image(void) {
+  struct census_child_setup setup;
+  memset(&setup, 0, sizeof(setup));
+  setup.release_version = RELEASE_WIRE_VERSION;
+  struct census_run_result run;
+  if (census_execute_child(&setup, &run) != 0) return 1;
+  if (census_require_child_ok(&run) != 0) return 1;
+  CENSUS_REQUIRE(census_count_frames(run.trace, EXEC_STATUS_FD, FRAME_EXEC_ATTEMPT) == 0,
+      "symlinked image path still sent a kind-%d attempt frame", FRAME_EXEC_ATTEMPT);
+  CENSUS_REQUIRE(census_find_op(run.trace, "execveat") < 0, "symlinked image path still reached execveat");
+  long frames = census_count_frames(run.trace, EXEC_STATUS_FD, -1);
+  CENSUS_REQUIRE(frames == 1, "fd-%d frames on a symlinked image path: %ld; want exactly one failure frame",
+      EXEC_STATUS_FD, frames);
+  long failure = census_first_sendmsg(run.trace, EXEC_STATUS_FD);
+  const struct census_event *frame = &run.trace->events[failure];
+  CENSUS_REQUIRE(frame->version == WIRE_VERSION && frame->kind == FRAME_EXEC_FAILURE &&
+      frame->size == EXEC_FAILURE_SIZE,
+      "symlinked-image frame is version=%u kind=%u size=%llu; want version=%d kind=%d size=%d",
+      frame->version, frame->kind, frame->size, WIRE_VERSION, FRAME_EXEC_FAILURE, EXEC_FAILURE_SIZE);
+  CENSUS_REQUIRE(frame->error_number == ELOOP,
+      "symlinked-image frame errno=%u; want ELOOP(%d) from open_native_image's O_NOFOLLOW",
+      frame->error_number, ELOOP);
   return 0;
 }
 
@@ -1239,11 +1307,13 @@ static int census_scenario_clone_attempt_fence(void) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    fprintf(stderr, "usage: gate-release-fence-probe <scenario>\n");
+  if (argc != 3) {
+    fprintf(stderr, "usage: gate-release-fence-probe <scenario> <image>\n");
     return 2;
   }
+  census_image_path = argv[2];
   if (strcmp(argv[1], "exec-fence") == 0) return census_scenario_exec_fence();
+  if (strcmp(argv[1], "exec-symlinked-image") == 0) return census_scenario_exec_symlinked_image();
   if (strcmp(argv[1], "exec-fence-expired") == 0) return census_scenario_exec_fence_expired();
   if (strcmp(argv[1], "clone-fence-expired") == 0) return census_scenario_clone_fence_expired();
   if (strcmp(argv[1], "exec-drop-denied") == 0) return census_scenario_exec_drop_denied();
