@@ -12,7 +12,7 @@ directory (`daemon/internal/harness/testdata/claude/2.1.323/`), receipt and plan
 | --- | --- | --- |
 | Installed client | `1.5.2` (`pi --version` = `1.5.2\n`, 6 bytes) | `pi --version`, `od -c` |
 | Tested blob | `sha256:40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85` (`…/mise/installs/pi/1.5.2/pi.exe`) | `sha256sum` |
-| PATH entry actually resolved | `C:\Users\lhan\AppData\Local\mise\installs\pi\latest\pi.exe` (symlink to `1.5.2`) | `type -a pi` |
+| PATH entry actually resolved | `<HOST-PATH>\AppData\Local\mise\installs\pi\latest\pi.exe` (symlink to `1.5.2`) | `type -a pi` |
 | PATH shim is a different blob | `…/mise/shims/pi.exe` = `53ca4fc6cfaf2b9b9a9635c54f17e5f4bf6ce599693dc67b17783bf382643850`, same `1.5.2` line | `sha256sum` |
 | RPC transport help | `--mode <mode> Output mode: text (default), json, or rpc` in an 10883-byte help screen | `pi --help` |
 | Probe latency | `--version` 660–712 ms; `--help` 1591–1746 ms (3 runs each, direct `1.5.2` exe: 1597–1643 ms) | shell loop with `date +%s%N` |

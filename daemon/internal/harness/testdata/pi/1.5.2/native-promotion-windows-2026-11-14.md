@@ -13,7 +13,7 @@ synthetic success.
 
 ## Exact binary
 
-- `pi.exe` at `C:\Users\lhan\AppData\Local\mise\installs\pi\1.5.2\pi.exe`,
+- `pi.exe` at `<HOST-PATH>\AppData\Local\mise\installs\pi\1.5.2\pi.exe`,
   129055232 bytes, SHA-256
   `40a062bedd75767e2c3c889265de7c83d64a0ba55c74b60243c2453d97cffd85`.
   `latest` and `global` resolve to the same directory; the `1.5.2` asset is the
@@ -22,7 +22,7 @@ synthetic success.
   archive SHA-256 `e6adb8cb8c84eca14391ad24b363de9d2be98a89ca3ba3fdee1fa4de32b7f2e8`,
   see [the transport receipt](native-windows-2026-11-11.md)).
 - `pi --version` = `1.5.2` (6 bytes including the newline).
-- PATH shim at `C:\Users\lhan\AppData\Local\mise\shims\pi.exe`, 298632 bytes,
+- PATH shim at `<HOST-PATH>\AppData\Local\mise\shims\pi.exe`, 298632 bytes,
   SHA-256 `53ca4fc6cfaf2b9b9a9635c54f17e5f4bf6ce599693dc67b17783bf382643850`.
   It reports the same `1.5.2` line and is a different blob, so it promotes
   nothing.

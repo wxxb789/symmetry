@@ -11,14 +11,14 @@ negative controls for the Symmetry Claude Code adapter.
   `claude doctor` not required for this observation).
 - `claude --version`: `2.1.323 (Claude Code)`
 - `claude.exe` at
-  `C:\Users\lhan\AppData\Local\mise\installs\claude-code\2.1.323\claude.exe`
+  `<HOST-PATH>\AppData\Local\mise\installs\claude-code\2.1.323\claude.exe`
   SHA-256:
   `5064e6e0572dca86257363ca04d48653eef20ef27f1bd04b504ed7199ed3fd13`
   (367634080 bytes)
-- PATH shim at `C:\Users\lhan\AppData\Local\mise\shims\claude.exe` reports the
+- PATH shim at `<HOST-PATH>\AppData\Local\mise\shims\claude.exe` reports the
   same version string but is a different blob:
   `53ca4fc6cfaf2b9b9a9635c54f17e5f4bf6ce599693dc67b17783bf382643850`
-  (298632 bytes). `C:\Users\lhan\.local\bin\claude.exe` is a third blob
+  (298632 bytes). `<HOST-PATH>\.local\bin\claude.exe` is a third blob
   (`85429000ec9b8008…`, 219715232 bytes) and reports the older
   `2.1.259 (Claude Code)`.
 - Committed fixture digests: `fixture-manifest.json` in this directory, verified

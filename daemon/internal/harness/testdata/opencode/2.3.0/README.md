@@ -6,7 +6,7 @@ not a capability promotion. No V1 observation is V2 evidence.
 
 ## Exact executable and platforms
 
-- Owner path: `C:\Users\lhan\AppData\Local\mise\installs\aqua-anomalyco-opencode\latest\opencode.exe`.
+- Owner path: `<HOST-PATH>\AppData\Local\mise\installs\aqua-anomalyco-opencode\latest\opencode.exe`.
 - Size: 257,553,288 bytes.
 - SHA-256: `38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917`.
 - Windows kernel: `10.0.26300`; distribution: `Windows-11-10.0.26300-SP0`.
@@ -27,6 +27,12 @@ It used the raw-socket SSE reader and the rejected host credential; it is not
 current support evidence and is not relabelled as a run of the fixed collector.
 `linux-2026-11-14.json` records the exact WSL command, kernel/distribution,
 binary identity and all seven unavailable native Linux classes.
+All three receipts are byte-redacted since 2026-11-25, widened 2026-11-26: the collecting machine's
+hostname value became `<HOSTNAME>`, the relay host became `<RELAY_HOST>` and the user-profile
+absolute paths became `<HOST-PATH>` — constant-token substitutions, nothing else changed. This
+supersedes the residual those receipts carried in `../2.4.1/README.md`; the census, the
+byte-equality proof and the old→new digests are in
+[the redaction note](../../../../../../docs/evidence/rf-opencode-230-hostname-redact-2026-11-25.md).
 
 ## Decisive observations
 

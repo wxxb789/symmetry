@@ -29,7 +29,7 @@ pin above and start the goal's 12-hour bound):
 
 - **The pin advances to OMP `18.20.0`**, the latest stable client per the
   2026-11-11 directive. The exact installed binaries are
-  `C:\Users\lhan\AppData\Local\mise\installs\oh-my-pi\18.20.0\omp.exe`
+  `<HOST-PATH>\AppData\Local\mise\installs\oh-my-pi\18.20.0\omp.exe`
   (`omp/18.20.0`, 251,502,592 bytes, sha256
   `1b6c7bda8241bc7d948495539f90ec47e6f30d1fec72b6ee097a67a1fc8d8e48`) on Windows
   and `/root/.local/bin/omp` inside the Linux surface below (`omp/18.20.0`,
