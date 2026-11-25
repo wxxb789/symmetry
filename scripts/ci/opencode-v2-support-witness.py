@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Observe the owner-pinned Windows OpenCode blob; never promote capabilities.
+"""Observe the owner-pinned OpenCode blob on its native platform; never promote capabilities.
 
-The operator credential is inherited only through TENCENT_GLM_API_KEY. Native
-HTTP payloads, logs and state are checked before evidence is written. No proxy,
-synthetic provider, credential endpoint or remote mutation is used. The blob's
-host path comes from SYMMETRY_OPENCODE_BINARY; only its exact size and digest are
-committed, and an unset variable, a missing file or a different blob refuses the run.
+Two release blobs are pinned, one per platform: the Windows PE (`MZ`) and the
+Linux ELF (`7f 45 4c 46`). Each run refuses a blob whose size, sha256 or magic
+differs from the running platform's pin. The operator credential is inherited
+only through TENCENT_GLM_API_KEY; `--mode provider-failure` requires it to be
+absent so the relay answers with its own rejection. No proxy, synthetic
+provider, credential endpoint, fault injection or remote mutation is used. The
+credential, the relay base URL and its host are replaced in memory before any
+write; the blob's host path comes from SYMMETRY_OPENCODE_BINARY and only its
+size, digest and release asset are recorded.
 """
 
 import argparse
@@ -17,34 +21,255 @@ import os
 import pathlib
 import platform
 import secrets
+import signal
 import socket
 import subprocess
 import tempfile
 import threading
 import time
+import urllib.parse
 
 import source_subject
 
 BINARY_ENVIRONMENT = "SYMMETRY_OPENCODE_BINARY"
-DIGEST = "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
-SIZE = 257553288
+CREDENTIAL_ENVIRONMENT = "TENCENT_GLM_API_KEY"
+VERSION = "2.4.1"
 MODEL = "deepseek-v4.1-flash-fast"
 PROVIDER = "tencent-litellm"
+CREDENTIAL_TOKEN = "<operator credential redacted>"
+RELAY_BASE_TOKEN = "<RELAY-BASE-URL>"
+RELAY_HOST_TOKEN = "<RELAY-HOST>"
+PERMISSION_REPLY = {"decision": "once"}
+TERMINALS = {"session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"}
+FIRST_TOKEN_KINDS = {"session.step.first-token", "session.text.delta", "session.reasoning.delta"}
+POSIX_SIGTERM_SECONDS = 15
+POSIX_SIGKILL_SECONDS = 5
+# Per-platform release pins: the extracted blob's magic, size and sha256.
+PINS = {
+    "nt": {
+        "label": "Windows PE",
+        "asset": "opencode-windows-x64.zip",
+        "magic": b"MZ",
+        "size": 278383496,
+        "sha256": "f3da11bf51ace25b86f52e20368d415451d200d6b48101d9f4e5d721b1d2020e",
+    },
+    "posix": {
+        "label": "Linux ELF",
+        "asset": "opencode-linux-x64.tar.gz",
+        "magic": b"\x7fELF",
+        "size": 275163312,
+        "sha256": "ec93043f18f8a6b4d8e71ec9260e292ba6f91b66b142782135d40f0b58b0c152",
+    },
+}
+EXECUTION_CLASS = {
+    "nt": "native Windows PE process",
+    "posix": "native Linux ELF process under the WSL2 kernel; not a bare-metal Linux owner containment receipt",
+}
+WINDOWS_ENVIRONMENT = frozenset({"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE"})
+POSIX_ENVIRONMENT = frozenset({"PATH"})
+WINDOWS_ROOTS = {
+    "HOME": "home",
+    "USERPROFILE": "home",
+    "APPDATA": "appdata",
+    "LOCALAPPDATA": "localappdata",
+    "XDG_CONFIG_HOME": "config",
+    "XDG_CACHE_HOME": "cache",
+    "XDG_DATA_HOME": "data",
+    "XDG_STATE_HOME": "state",
+    "TMP": "tmp",
+    "TEMP": "tmp",
+}
+POSIX_ROOTS = {
+    "HOME": "home",
+    "XDG_CONFIG_HOME": "config",
+    "XDG_CACHE_HOME": "cache",
+    "XDG_DATA_HOME": "data",
+    "XDG_STATE_HOME": "state",
+    "TMPDIR": "tmp",
+}
+DISABLED_FEATURES = (
+    "OPENCODE_DISABLE_PROJECT_CONFIG",
+    "OPENCODE_DISABLE_MODELS_FETCH",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+    "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+    "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+)
+# Only a prompt-schema property named among these bounds the model's output length.
+BOUNDING_FIELDS = frozenset({"maxoutputtokens", "maxtokens", "max_tokens", "outputtokens", "tokenlimit", "limit"})
+
+
+def running_platform():
+    return "nt" if os.name == "nt" else "posix"
 
 
 def pinned_binary():
-
+    platform_key = running_platform()
+    pin = PINS[platform_key]
     configured = os.environ.get(BINARY_ENVIRONMENT, "")
     if not configured:
-        raise RuntimeError(BINARY_ENVIRONMENT + " must name the owner-pinned Windows executable")
+        raise RuntimeError(
+            f"{BINARY_ENVIRONMENT} must name the owner-pinned {pin['label']} executable for platform {platform_key}"
+        )
     binary = pathlib.Path(configured).resolve()
     if not binary.is_file():
         raise RuntimeError(BINARY_ENVIRONMENT + " must name an existing file")
     with binary.open("rb") as stream:
+        magic = stream.read(len(pin["magic"]))
+        stream.seek(0)
         size = os.fstat(stream.fileno()).st_size
-        if size != SIZE or hashlib.file_digest(stream, "sha256").hexdigest() != DIGEST:
-            raise RuntimeError("owner-pinned executable identity mismatch")
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if not magic.startswith(pin["magic"]):
+        raise RuntimeError(
+            f"owner-pinned executable magic mismatch for platform {platform_key}: "
+            f"expected {pin['magic'].hex()} ({pin['label']}), observed {magic.hex()}"
+        )
+    if size != pin["size"] or digest != pin["sha256"]:
+        raise RuntimeError(
+            f"owner-pinned executable identity mismatch for platform {platform_key}: "
+            f"expected size {pin['size']} sha256 {pin['sha256']}"
+        )
     return binary
+
+
+def readiness_identity(info, pid):
+    return isinstance(info, dict) and info.get("pid") == pid and info.get("version") == VERSION
+
+
+def recorded_info_body(path, status, raw):
+    if path != "/api/info" or status != 200:
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    return json.dumps(
+        {"pid": parsed.get("pid"), "version": parsed.get("version"), "status": status}, ensure_ascii=True
+    )
+
+
+def bounding_field(properties):
+    return next((name for name in properties if name.lower() in BOUNDING_FIELDS), None)
+
+
+def resolve_prompt_schema(spec):
+    operation = spec.get("paths", {}).get("/api/session/{sessionID}/prompt", {}).get("post", {})
+    body = (
+        operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+        if isinstance(operation, dict)
+        else {}
+    )
+    properties = sorted(body.get("properties", {}))
+    return {
+        "properties": properties,
+        "required": sorted(body.get("required", [])),
+        "bounding_field": bounding_field(properties),
+    }
+
+
+def truncation_marker(events):
+    for event in events:
+        text = json.dumps(event.get("data", {}))
+        if '"truncated": true' in text or '"finish_reason": "length"' in text or '"finishReason": "length"' in text:
+            return True
+    return False
+
+
+def relay_replacements(base_url):
+    host = urllib.parse.urlsplit(base_url).netloc
+    replacements = {base_url: RELAY_BASE_TOKEN} if base_url else {}
+    if host:
+        replacements[host] = RELAY_HOST_TOKEN
+    return replacements
+
+
+def secret_spellings(secret):
+    if not secret:
+        return ()
+    escaped = json.dumps(secret, ensure_ascii=True)[1:-1]
+    return (secret,) if escaped == secret else (secret, escaped)
+
+
+def redact(text, replacements):
+    counts = {}
+    for value, token in replacements.items():
+        for spelling in secret_spellings(value):
+            if spelling in text:
+                counts[token] = counts.get(token, 0) + text.count(spelling)
+                text = text.replace(spelling, token)
+    return text, counts
+
+
+def receipt_bytes(receipt, replacements, secrets):
+    text = json.dumps(receipt, ensure_ascii=True, indent=2) + "\n"
+    data = text.encode()
+    if any(spelling.encode() in data for secret in secrets for spelling in secret_spellings(secret)):
+        raise RuntimeError("credential locality evidence refused")
+    return redact(text, replacements)[0].encode()
+
+
+def carries_credential(data, key):
+    if not key:
+        return False
+    text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+    return any(spelling in text for spelling in secret_spellings(key))
+
+
+def receipt_scan(root, credential):
+    needles = [spelling.encode() for spelling in secret_spellings(credential)]
+    files = 0
+    matches = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        files += 1
+        data = path.read_bytes()
+        if any(needle in data for needle in needles):
+            matches.append(str(path.relative_to(root)))
+    return {"files_scanned": files, "matches": matches}
+
+
+def write_receipt(out, receipt, replacements, secrets, credential, root):
+    receipt["credential_scan"] = receipt_scan(root, credential)
+    _, counts = redact(json.dumps(receipt, ensure_ascii=True, indent=2), replacements)
+    receipt["redaction"] = {"occurrences": counts}
+    if receipt["credential_scan"]["matches"]:
+        raise RuntimeError("credential locality evidence refused")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(receipt_bytes(receipt, replacements, secrets))
+    return receipt
+
+
+def child_environment(root, platform_key, environ):
+    keep = WINDOWS_ENVIRONMENT if platform_key == "nt" else POSIX_ENVIRONMENT
+    roots = WINDOWS_ROOTS if platform_key == "nt" else POSIX_ROOTS
+    environment = {name: value for name, value in environ.items() if name.upper() in keep}
+    for name, directory in roots.items():
+        target = root / directory
+        target.mkdir(exist_ok=True)
+        environment[name] = str(target)
+    return environment
+
+
+def platform_facts(platform_key):
+    facts = {
+        "system": platform.system(),
+        "kernel": platform.version() if platform_key == "nt" else platform.release(),
+        "distribution": platform.platform(),
+        "python": platform.python_version(),
+        "machine": platform.machine(),
+        "execution_class": EXECUTION_CLASS[platform_key],
+    }
+    os_release = pathlib.Path("/etc/os-release")
+    if platform_key != "nt" and os_release.is_file():
+        for line in os_release.read_text(errors="replace").splitlines():
+            if line.startswith("PRETTY_NAME="):
+                facts["distribution_pretty_name"] = line.partition("=")[2].strip().strip('"')
+            elif line.startswith("VERSION_ID="):
+                facts["distribution_version_id"] = line.partition("=")[2].strip().strip('"')
+    return facts
 
 
 def binding_sha256(repository):
@@ -54,6 +279,11 @@ def binding_sha256(repository):
     }
 
 
+def operation_path(operation):
+    # The recorded route keeps its query string; classification matches the path alone.
+    return urllib.parse.urlsplit(operation["path"]).path
+
+
 def classify(receipt):
     """Interpret captured native facts, never HTTP admission or idle as success."""
     classes = receipt["classes"]
@@ -61,8 +291,8 @@ def classify(receipt):
     terminal = success.get("terminal")
     if terminal or any(
         operation["method"] == "POST"
-        and operation["path"].startswith("/api/session/")
-        and operation["path"].endswith("/prompt")
+        and operation_path(operation).startswith("/api/session/")
+        and operation_path(operation).endswith("/prompt")
         for operation in receipt["operations"]
     ):
         success["status"] = (
@@ -85,24 +315,50 @@ def classify(receipt):
     )
     continuation = classes.get("continuation_after_step", {})
     terminal = continuation.get("terminal") or {}
+    reply = continuation.get("reply") or {}
     if "event_start" in continuation:
         window = receipt["events"][continuation["event_start"] :]
         terminal_index = next(
             (index for index, event in enumerate(window) if terminal.get("id") and event == terminal), None
         )
         window = window[:terminal_index] if terminal_index is not None else []
-        kinds = [
-            event.get("type")
+        events = [
+            event
             for event in window
             if event.get("data", {}).get("sessionID") == terminal.get("data", {}).get("sessionID")
         ]
+        kinds = [event.get("type") for event in events]
+        request_id = continuation.get("request_id")
+        replied_index = next(
+            (
+                index
+                for index, event in enumerate(events)
+                if event.get("type") == "permission.replied"
+                and event.get("data", {}).get("requestID") == request_id
+                and event.get("data", {}).get("reply") == PERMISSION_REPLY["decision"]
+            ),
+            None,
+        )
+        tool_index = next((index for index, kind in enumerate(kinds) if kind == "session.tool.success"), None)
         continued = any(
             "session.tool.success" in kinds[:index] and "session.step.started" in kinds[index + 1 :]
             for index, kind in enumerate(kinds)
             if kind == "session.step.ended"
         )
+        approved = (
+            bool(request_id)
+            and replied_index is not None
+            and tool_index is not None
+            and replied_index < tool_index
+        )
         continuation["status"] = (
-            "observed" if continued and terminal.get("type") == "session.execution.succeeded" else "run and failed"
+            "observed"
+            if reply.get("status") == 204
+            and "body" in reply
+            and approved
+            and continued
+            and terminal.get("type") == "session.execution.succeeded"
+            else "run and failed"
         )
     else:
         continuation.update(status="unavailable", blocker="no successful tool continuation captured")
@@ -110,8 +366,8 @@ def classify(receipt):
     interruption = classes.get("interruption", {})
     if interruption.get("terminal") or any(
         operation["method"] == "POST"
-        and operation["path"].startswith("/api/session/")
-        and operation["path"].endswith("/interrupt")
+        and operation_path(operation).startswith("/api/session/")
+        and operation_path(operation).endswith("/interrupt")
         for operation in receipt["operations"]
     ):
         interrupted = interruption.get("response") or {}
@@ -133,9 +389,13 @@ def classify(receipt):
             operation["method"] == "GET"
             and operation["status"] == 200
             and operation["path"].startswith("/api/session/")
+            and operation.get("body")
         ):
-            data = json.loads(operation["body"]).get("data", {})
-            if "tokens" in data:
+            try:
+                data = json.loads(operation["body"]).get("data", {})
+            except ValueError:
+                continue
+            if isinstance(data, dict) and "tokens" in data:
                 counters.append({name: data.get(name) for name in ("id", "outcome", "tokens", "cost")})
     classes["usage"] = {
         "status": "observed" if counters else "unavailable",
@@ -149,6 +409,7 @@ def classify(receipt):
         and cleanup.get("server_exit_code") is not None
         and cleanup.get("stream_reader_stopped") is True
         and cleanup.get("output_readers_stopped") is True
+        and cleanup.get("group_gone", True) is not False
         else "run and failed"
     )
     classes["cleanup"] = cleanup
@@ -164,22 +425,72 @@ def classify(receipt):
     return receipt
 
 
-def close_native(process, connection, stream_reader, output_readers):
-    """Always reach process, socket and reader barriers, including tree-kill failure."""
-    result = {"command": ["taskkill", "/PID", str(process.pid), "/T", "/F"], "exit_code": None}
-    try:
-        result["exit_code"] = subprocess.run(result["command"], capture_output=True, timeout=15).returncode
-    except (OSError, subprocess.TimeoutExpired) as error:
-        result["tree_kill_error"] = type(error).__name__
-    try:
+def native_kwargs(platform_key):
+    return {"start_new_session": True} if platform_key == "posix" else {}
+
+
+def cleanup_failure(receipt):
+    """Name a cleanup failure only when no cause was recorded already."""
+    if receipt["classes"]["cleanup"]["status"] != "observed":
+        receipt.setdefault("failure", "CleanupIncomplete")
+    return receipt
+
+
+def group_pending(process, seconds):
+    # ESRCH on the group is the only proof; reaping the leader keeps its zombie from counting.
+    deadline = time.monotonic() + seconds
+    while True:
+        process.poll()
         try:
-            process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        result["process_stop_error"] = type(error).__name__
-    finally:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.05)
+
+
+def close_native(process, connection, stream_reader, output_readers):
+    """Always reach process, socket and reader barriers, including kill failure."""
+    if running_platform() == "posix":
+        result = {"command": ["SIGTERM", "process-group", str(process.pid)], "exit_code": None, "group_gone": False}
+        try:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                # start_new_session makes the pid the pgid; a reaped child leaves no group to signal.
+                result["group_gone"] = True
+            else:
+                pending = group_pending(process, POSIX_SIGTERM_SECONDS)
+                if pending:
+                    # A native server that ignores SIGTERM is escalated once, still bounded.
+                    result["command"].append("SIGKILL")
+                    result["escalated"] = True
+                    os.killpg(process.pid, signal.SIGKILL)
+                    pending = group_pending(process, POSIX_SIGKILL_SECONDS)
+                if pending:
+                    # The leader's exit does not empty a group a descendant still holds.
+                    result["group_survived"] = True
+                result["group_gone"] = not pending
+            result["exit_code"] = 0
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["signal_error"] = type(error).__name__
+            result["exit_code"] = 1
+    else:
+        result = {"command": ["taskkill", "/PID", str(process.pid), "/T", "/F"], "exit_code": None}
+        try:
+            result["exit_code"] = subprocess.run(result["command"], capture_output=True, timeout=15).returncode
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["tree_kill_error"] = type(error).__name__
+        try:
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["process_stop_error"] = type(error).__name__
+    try:
         if connection is not None:
             try:
                 if connection.sock is not None:
@@ -194,11 +505,12 @@ def close_native(process, connection, stream_reader, output_readers):
             stream_reader.join(timeout=5)
         for reader in output_readers:
             reader.join(timeout=5)
-    result.update(
-        server_exit_code=process.returncode,
-        stream_reader_stopped=stream_reader is None or not stream_reader.is_alive(),
-        output_readers_stopped=all(not reader.is_alive() for reader in output_readers),
-    )
+    finally:
+        result.update(
+            server_exit_code=process.returncode,
+            stream_reader_stopped=stream_reader is None or not stream_reader.is_alive(),
+            output_readers_stopped=all(not reader.is_alive() for reader in output_readers),
+        )
     return result
 
 
@@ -214,7 +526,7 @@ def capture_events(response, key, receipt, condition):
                 raise RuntimeError("native SSE capture limit reached")
             if line.startswith(b"data:"):
                 text = line[5:].strip().decode()
-                if key in text:
+                if carries_credential(text, key):
                     raise RuntimeError("credential native event refused")
                 event = json.loads(text)
                 if isinstance(event, str):
@@ -226,57 +538,82 @@ def capture_events(response, key, receipt, condition):
         receipt["stream_end"] = type(error).__name__
 
 
+def command_observation(binary, arguments, environment):
+    completed = subprocess.run(
+        [str(binary), *arguments],
+        capture_output=True,
+        timeout=60,
+        env=environment,
+        cwd=environment.get("HOME"),
+    )
+    return {
+        "command": [str(binary), *arguments],
+        "exit_code": completed.returncode,
+        "stdout": completed.stdout[:65536].decode(errors="replace"),
+        "stderr": completed.stderr[:65536].decode(errors="replace"),
+    }
+
+
+def api_document(port, authorization):
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    try:
+        connection.request("GET", "/openapi.json", headers={"Authorization": authorization})
+        response = connection.getresponse()
+        raw = response.read(32 << 20)
+        return response.status, raw
+    finally:
+        connection.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=pathlib.Path)
+    parser.add_argument("--mode", choices=("probe", "full", "provider-failure", "truncation"), default="full")
     args = parser.parse_args()
-    key = os.environ.get("TENCENT_GLM_API_KEY", "")
-    if not key or os.name != "nt":
-        raise RuntimeError("Windows and the operator credential environment are required")
+    mode = args.mode
+    platform_key = running_platform()
+    pin = PINS[platform_key]
     binary = pinned_binary()
-    root = pathlib.Path(tempfile.mkdtemp(prefix="symmetry-0006g-witness-"))
+    key = os.environ.get(CREDENTIAL_ENVIRONMENT, "")
+    if mode == "provider-failure" and key:
+        raise RuntimeError("the provider-failure pass must run without the credential environment")
+    if mode == "full" and not key:
+        raise RuntimeError("the collection pass requires the credentialed provider environment")
+    root = pathlib.Path(tempfile.mkdtemp(prefix="symmetry-opencode-witness-"))
     repository = pathlib.Path(__file__).resolve().parents[2]
     receipt = {
         "decision": "unsupported",
-        "binary": {"path": str(binary), "size": SIZE, "sha256": DIGEST},
-        "platform": {"system": platform.system(), "kernel": platform.version(), "distribution": platform.platform()},
+        "mode": mode,
+        "binary": {
+            "path": str(binary),
+            "size": pin["size"],
+            "sha256": pin["sha256"],
+            "magic": pin["magic"].hex(),
+            "asset": pin["asset"],
+        },
+        "platform": platform_facts(platform_key),
         "source_head": source_subject.head_revision(
             lambda *arguments: subprocess.check_output(["git", *arguments], cwd=repository)
         ),
         "binding_sha256": binding_sha256(repository),
-        "command": ["python3", "scripts/ci/opencode-v2-support-witness.py", "--out", str(args.out)],
+        "command": ["python3", "scripts/ci/opencode-v2-support-witness.py", "--mode", mode, "--out", str(args.out)],
         "workspace": str(root),
         "operations": [],
         "events": [],
         "classes": {},
     }
-    environment = {
-        k: v
-        for k, v in os.environ.items()
-        if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE"}
-    }
-    for name, directory in {
-        "HOME": "home",
-        "USERPROFILE": "home",
-        "APPDATA": "appdata",
-        "LOCALAPPDATA": "localappdata",
-        "XDG_CONFIG_HOME": "config",
-        "XDG_CACHE_HOME": "cache",
-        "XDG_DATA_HOME": "data",
-        "XDG_STATE_HOME": "state",
-        "TMP": "tmp",
-        "TEMP": "tmp",
-    }.items():
-        target = root / directory
-        target.mkdir(exist_ok=True)
-        environment[name] = str(target)
+    environment = child_environment(root, platform_key, os.environ)
+    environment["OPENCODE_TEST_MANAGED_CONFIG_DIR"] = str(root / "managed")
+    (root / "managed").mkdir(exist_ok=True)
+    for name in DISABLED_FEATURES:
+        environment[name] = "1"
     source_config = pathlib.Path.home() / ".config/opencode/opencode.json"
     provider = json.loads(source_config.read_text())["provider"][PROVIDER]
     endpoint = provider["options"]["baseURL"]
     if not endpoint.startswith("https://"):
         raise RuntimeError("configured relay is not HTTPS")
     # Keep only this provider/model, replacing the source key without copying it.
-    provider["options"] = {"baseURL": endpoint, "apiKey": "{env:TENCENT_GLM_API_KEY}"}
+    provider["options"] = {"baseURL": endpoint, "apiKey": "{env:" + CREDENTIAL_ENVIRONMENT + "}"}
     provider["models"] = {MODEL: provider["models"][MODEL]}
     config = {
         "model": PROVIDER + "/" + MODEL,
@@ -285,45 +622,48 @@ def main():
         "provider": {PROVIDER: provider},
     }
     encoded_config = json.dumps(config)
-    if key in encoded_config:
+    if any(spelling in encoded_config for spelling in secret_spellings(key)):
         raise RuntimeError("credential in configuration refused")
     config_path = root / "config/opencode.json"
+    config_path.parent.mkdir(exist_ok=True)
     config_path.write_text(encoded_config)
-    environment.update(
-        {
-            "OPENCODE_CONFIG": str(config_path),
-            "OPENCODE_CONFIG_DIR": str(config_path.parent),
-            "OPENCODE_TEST_MANAGED_CONFIG_DIR": str(root / "managed"),
-            "TENCENT_GLM_API_KEY": key,
-        }
-    )
-    (root / "managed").mkdir()
-    for name in (
-        "OPENCODE_DISABLE_PROJECT_CONFIG",
-        "OPENCODE_DISABLE_MODELS_FETCH",
-        "OPENCODE_DISABLE_AUTOUPDATE",
-        "OPENCODE_DISABLE_DEFAULT_PLUGINS",
-        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
-        "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
-    ):
-        environment[name] = "1"
+    environment["OPENCODE_CONFIG"] = str(config_path)
+    environment["OPENCODE_CONFIG_DIR"] = str(config_path.parent)
+    if key:
+        environment[CREDENTIAL_ENVIRONMENT] = key
+    replacements = {key: CREDENTIAL_TOKEN} if key else {}
+    replacements.update(relay_replacements(endpoint))
     password = secrets.token_urlsafe(32)
     environment.update({"OPENCODE_SERVER_USERNAME": "opencode", "OPENCODE_SERVER_PASSWORD": password})
     authorization = "Basic " + base64.b64encode(("opencode:" + password).encode()).decode()
     receipt["provider"] = {
         "id": PROVIDER,
         "model": MODEL,
-        "base_url": endpoint,
+        "base_url": RELAY_BASE_TOKEN,
+        "base_url_redaction": "the literal relay origin is replaced in memory before any write",
         "discovered_from": str(source_config),
-        "credential": "environment:TENCENT_GLM_API_KEY",
+        "credential": ("environment:" + CREDENTIAL_ENVIRONMENT) if key else "unset",
+        "credential_present": bool(key),
     }
     (root / "baseline.txt").write_text("native continuation witness\n")
+    if mode == "probe":
+        receipt["observations"] = [
+            command_observation(binary, ["--version"], environment),
+            command_observation(binary, ["serve", "--help"], environment),
+        ]
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     argv = [str(binary), "serve", "--hostname", "127.0.0.1", "--port", str(port)]
     receipt["server_command"] = argv
-    process = subprocess.Popen(argv, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        argv,
+        cwd=environment["HOME"],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **native_kwargs(platform_key),
+    )
     receipt["server_pid"] = process.pid
     logs = {}
     readers = []
@@ -339,31 +679,36 @@ def main():
     stream_connection = None
     stream_reader = None
 
-    def request(method, path, payload=None, authenticated=True):
+    def request(method, path, payload=None, authenticated=True, record=True):
         body = json.dumps(payload).encode() if payload is not None else None
-        if body and key.encode() in body:
+        if body and carries_credential(body, key):
             raise RuntimeError("credential request payload refused")
         headers = {"Content-Type": "application/json"}
         if authenticated:
             headers["Authorization"] = authorization
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
         try:
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             raw = response.read(8 << 20).decode(errors="replace")
-            redacted = key in raw
-            safe_raw = raw.replace(key, "<operator credential redacted>")
-            operation = {
-                "method": method,
-                "path": path,
-                "authenticated": authenticated,
-                "payload": payload,
-                "status": response.status,
-                "body": safe_raw,
-                "credential_redacted_before_write": redacted,
-            }
-            receipt["operations"].append(operation)
-            return response.status, json.loads(safe_raw) if safe_raw else None
+            safe_raw, redacted = redact(raw, replacements)
+            try:
+                parsed = json.loads(safe_raw) if safe_raw else None
+            except ValueError:
+                parsed = None
+            if record:
+                receipt["operations"].append(
+                    {
+                        "method": method,
+                        "path": path,
+                        "authenticated": authenticated,
+                        "payload": payload,
+                        "status": response.status,
+                        "body": recorded_info_body(path, response.status, safe_raw),
+                        "credential_redacted_before_write": bool(redacted),
+                    }
+                )
+            return response.status, parsed
         finally:
             connection.close()
 
@@ -383,21 +728,14 @@ def main():
                     return None
                 condition.wait(remaining)
 
-    def session():
-        permissions = [
-            {"action": "*", "resource": "*", "effect": "deny"},
-            {"action": "read", "resource": str(root / "baseline.txt"), "effect": "allow"},
-        ]
-        status, response = request(
-            "POST",
-            "/api/session",
-            {
-                "location": {"directory": str(root)},
-                "model": {"providerID": PROVIDER, "id": MODEL},
-                "permissions": permissions,
-            },
-        )
-        if status != 200 or response["data"].get("permissions") != permissions:
+    def session(permissions=None):
+        payload = {"location": {"directory": str(root)}, "model": {"providerID": PROVIDER, "id": MODEL}}
+        if permissions is not None:
+            payload["permissions"] = permissions
+        status, response = request("POST", "/api/session", payload)
+        if status != 200:
+            raise RuntimeError("native session create refused")
+        if permissions is not None and response["data"].get("permissions") != permissions:
             raise RuntimeError("native session did not retain the restrictive permission rules")
         return response["data"]["id"]
 
@@ -408,82 +746,209 @@ def main():
             {"id": "msg_" + secrets.token_hex(12), "text": text, "delivery": "steer", "resume": True},
         )
 
-    terminals = {"session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"}
+    def await_permission_request(session_id):
+        """Poll the authoritative request route; the recorded row is the one that found the request."""
+        deadline = time.monotonic() + 45
+        while True:
+            status, listing = request("GET", "/api/session/" + session_id + "/permission", record=False)
+            if status == 200 and isinstance(listing, dict) and listing.get("data"):
+                _, recorded = request("GET", "/api/session/" + session_id + "/permission")
+                return (recorded.get("data") or [None])[0]
+            if time.monotonic() >= deadline:
+                request("GET", "/api/session/" + session_id + "/permission")
+                return None
+            time.sleep(0.5)
+
+    def tool_outcome(session_id, after):
+        for event in receipt["events"][after:]:
+            if event.get("type") == "session.tool.success" and event.get("data", {}).get("sessionID") == session_id:
+                data = event.get("data", {})
+                return {
+                    "event": "session.tool.success",
+                    "id": data.get("id"),
+                    "executed": data.get("executed"),
+                }
+        return None
+
+    def delete_session(session_id):
+        request("DELETE", "/api/session/" + session_id)
+        request("GET", "/api/session/" + session_id)
+
+    allow_read = [
+        {"action": "*", "resource": "*", "effect": "deny"},
+        {"action": "read", "resource": str(root / "baseline.txt"), "effect": "allow"},
+    ]
+    ask_read = [
+        {"action": "*", "resource": "*", "effect": "deny"},
+        {"action": "read", "resource": "*", "effect": "ask"},
+    ]
     try:
-        deadline = time.monotonic() + 30
+        deadline = time.monotonic() + 60
+        identity_seen = False
         while True:
             try:
                 status, info = request("GET", "/api/info")
-                if status != 200 or info.get("pid") != process.pid or info.get("version") != "2.3.0":
-                    raise RuntimeError("native server identity mismatch")
-                break
+                if status == 200 and readiness_identity(info, process.pid):
+                    break
+                identity_seen = identity_seen or status == 200
             except (OSError, http.client.HTTPException):
-                if process.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError("native server readiness unavailable") from None
-                time.sleep(0.1)
+                pass
+            if process.poll() is not None or time.monotonic() >= deadline:
+                # The Linux server answers 503 from its listening socket before the API is ready.
+                raise RuntimeError(
+                    "native server identity mismatch" if identity_seen else "native server readiness unavailable"
+                ) from None
+            time.sleep(0.1)
+        receipt["readiness"] = {"route": "GET /api/info", "status": status, "pid": info.get("pid"), "version": info.get("version")}
         request("GET", "/api/info", authenticated=False)
         request("GET", "/api/health")
-        # This native route exposes expanded provider settings; redact in memory.
+        # This native route can expose expanded provider settings; redact in memory.
         request("GET", "/api/model")
-        stream_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+        stream_connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
         stream_connection.request(
             "GET", "/api/event", headers={"Authorization": authorization, "Accept": "text/event-stream"}
         )
         response = stream_connection.getresponse()
-        receipt["stream_status"] = response.status
-        if response.status != 200 or "text/event-stream" not in response.getheader("Content-Type", ""):
+        stream_type = response.getheader("Content-Type", "")
+        receipt["stream"] = {"route": "GET /api/event", "status": response.status, "content_type": stream_type}
+        receipt["operations"].append(
+            {
+                "method": "GET",
+                "path": "/api/event",
+                "authenticated": True,
+                "payload": None,
+                "status": response.status,
+                "body": "<event stream captured into events>",
+                "content_type": stream_type,
+                "credential_redacted_before_write": False,
+            }
+        )
+        if response.status != 200 or "text/event-stream" not in stream_type:
             raise RuntimeError("native SSE unavailable")
         stream_socket = stream_connection.sock
         stream_socket.settimeout(None)
 
         stream_reader = threading.Thread(target=capture_events, args=(response, key, receipt, condition), daemon=True)
         stream_reader.start()
-        session_id = session()
-        request("GET", "/api/session/" + session_id + "/event?after=0")
-        start = len(receipt["events"])
-        prompt(session_id, "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.")
-        terminal = await_event(session_id, terminals, start)
-        receipt["classes"]["success"] = {"status": "run and failed", "terminal": terminal}
-        request("GET", "/api/session/" + session_id)
-        if terminal and terminal.get("type") == "session.execution.succeeded":
+        if mode in ("full", "truncation"):
+            document_status, document = api_document(port, authorization)
+            schema = {"route": "GET /openapi.json", "status": document_status}
+            if document_status == 200:
+                schema.update(
+                    {
+                        "bytes": len(document),
+                        "sha256": hashlib.sha256(document).hexdigest(),
+                        **resolve_prompt_schema(json.loads(document)),
+                    }
+                )
+            else:
+                schema.update({"properties": [], "bounding_field": None, "blocker": "the API document is unavailable"})
+            receipt["prompt_schema"] = schema
+        if mode == "full":
+            success_id = session(allow_read)
+            request("GET", "/api/session/" + success_id + "/event?after=0")
             start = len(receipt["events"])
-            prompt(
-                session_id,
-                "Use the read tool to read baseline.txt, then reply with its contents. Do not use any other tool.",
-            )
-            receipt["classes"]["continuation_after_step"] = {
-                "event_start": start,
-                "terminal": await_event(session_id, terminals, start),
+            prompt(success_id, "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools.")
+            terminal = await_event(success_id, TERMINALS, start)
+            receipt["classes"]["success"] = {"status": "run and failed", "terminal": terminal}
+            request("GET", "/api/session/" + success_id)
+            continuation_id = None
+            if terminal and terminal.get("type") == "session.execution.succeeded":
+                continuation_id = session(ask_read)
+                start = len(receipt["events"])
+                prompt(
+                    continuation_id,
+                    "Use the read tool to read baseline.txt, then reply with its contents. Do not use any other tool.",
+                )
+                permission = await_permission_request(continuation_id)
+                continuation = {"event_start": start, "request": permission}
+                if permission:
+                    continuation["request_id"] = permission.get("id")
+                    status, body = request(
+                        "POST",
+                        "/api/session/" + continuation_id + "/permission/" + permission["id"] + "/reply",
+                        dict(PERMISSION_REPLY),
+                    )
+                    continuation["reply"] = {"status": status, "body": body}
+                continuation["terminal"] = await_event(continuation_id, TERMINALS, start)
+                continuation["tool_outcome"] = tool_outcome(continuation_id, start)
+                request("GET", "/api/session/" + continuation_id)
+                receipt["classes"]["continuation_after_step"] = continuation
+            else:
+                receipt["classes"]["continuation_after_step"] = {
+                    "status": "unavailable",
+                    "blocker": "initial success was not observed",
+                }
+            interrupt_id = session(allow_read)
+            start = len(receipt["events"])
+            prompt(interrupt_id, "Output the integers from 1 through 10000, one per line. Do not use tools.")
+            token = await_event(interrupt_id, FIRST_TOKEN_KINDS | TERMINALS, start, 30)
+            if token and token.get("type") in TERMINALS:
+                token = None
+            status, interruption = request("POST", "/api/session/" + interrupt_id + "/interrupt?resume=false")
+            receipt["classes"]["interruption"] = {
+                "status": "observed" if token else "run and failed",
+                "first_token": token,
+                "http_status": status,
+                "response": interruption,
+                "terminal": await_event(interrupt_id, TERMINALS, start, 30),
             }
+            request("GET", "/api/session/" + interrupt_id)
+            for cleanup_session_id in (success_id, continuation_id, interrupt_id):
+                if cleanup_session_id:
+                    delete_session(cleanup_session_id)
+        elif mode == "provider-failure":
+            session_id = session()
+            start = len(receipt["events"])
+            prompt(session_id, "Reply with the single word PROBE. Do not use tools.")
+            terminal = await_event(session_id, TERMINALS, start)
+            receipt["classes"]["provider_failure"] = {"status": "run and failed", "terminal": terminal}
             request("GET", "/api/session/" + session_id)
+            delete_session(session_id)
+        elif mode == "probe":
+            session_id = session()
+            request("GET", "/api/session/" + session_id + "/event?after=0")
+            delete_session(session_id)
         else:
-            receipt["classes"]["continuation_after_step"] = {
-                "status": "unavailable",
-                "blocker": "initial success was not observed",
-            }
-        interrupt_id = session()
-        start = len(receipt["events"])
-        prompt(interrupt_id, "Output the integers from 1 through 10000, one per line. Do not use tools.")
-        token = await_event(
-            interrupt_id,
-            {"session.step.first-token", "session.text.delta", "session.reasoning.delta"} | terminals,
-            start,
-            30,
-        )
-        if token and token.get("type") in terminals:
-            token = None
-        status, interruption = request("POST", "/api/session/" + interrupt_id + "/interrupt")
-        receipt["classes"]["interruption"] = {
-            "status": "observed" if token else "run and failed",
-            "first_token": token,
-            "http_status": status,
-            "response": interruption,
-            "terminal": await_event(interrupt_id, terminals, start, 15),
-        }
-        request("GET", "/api/session/" + interrupt_id)
-        for cleanup_session_id in (session_id, interrupt_id):
-            request("DELETE", "/api/session/" + cleanup_session_id)
-            request("GET", "/api/session/" + cleanup_session_id)
+            schema = receipt.get("prompt_schema", {})
+            field = schema.get("bounding_field")
+            if field:
+                session_id = session(allow_read)
+                start = len(receipt["events"])
+                request(
+                    "POST",
+                    "/api/session/" + session_id + "/prompt",
+                    {
+                        "id": "msg_" + secrets.token_hex(12),
+                        "text": "Output the integers from 1 through 1000000, one per line. Do not use tools.",
+                        "delivery": "steer",
+                        "resume": True,
+                        field: 1,
+                    },
+                )
+                terminal = await_event(session_id, TERMINALS, start)
+                request("GET", "/api/session/" + session_id)
+                receipt["classes"]["truncated_response"] = {
+                    "status": (
+                        "observed"
+                        if truncation_marker(receipt["events"][start:])
+                        and terminal
+                        and terminal.get("type") == "session.execution.succeeded"
+                        else "run and failed"
+                    ),
+                    "field": field,
+                    "terminal": terminal,
+                    "blocker": None if truncation_marker(receipt["events"][start:]) else "no native output bound in the captured response",
+                }
+                delete_session(session_id)
+            else:
+                receipt["classes"]["truncated_response"] = {
+                    "status": "unavailable",
+                    "blocker": (
+                        "the live prompt request schema exposes no output-length bound; "
+                        f"properties {schema.get('properties')}, document sha256 {schema.get('sha256')}"
+                    ),
+                }
     except Exception as error:
         # Do not print exception messages: upstream errors can embed credentials.
         receipt["failure"] = type(error).__name__
@@ -508,20 +973,13 @@ def main():
                 },
             )
         classify(receipt)
-        if receipt["classes"]["cleanup"]["status"] != "observed":
-            receipt["failure"] = "CleanupIncomplete"
-        files = [p for p in root.rglob("*") if p.is_file()]
-        matches = [str(p.relative_to(root)) for p in files if key.encode() in p.read_bytes()]
-        receipt["credential_scan"] = {"files_scanned": len(files), "matches": matches}
-        data = (json.dumps(receipt, ensure_ascii=True, indent=2) + "\n").encode()
-        if matches or any(secret.encode() in data for secret in (key, password, authorization)):
-            raise RuntimeError("credential locality evidence refused")
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_bytes(data)
+        cleanup_failure(receipt)
+        write_receipt(args.out, receipt, replacements, (key, password, authorization, endpoint), key, root)
         print(
             json.dumps(
                 {
                     "artifact": str(args.out),
+                    "mode": mode,
                     "classes": {k: v["status"] for k, v in receipt["classes"].items()},
                     "failure": receipt.get("failure"),
                 }
