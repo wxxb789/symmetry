@@ -1643,10 +1643,10 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness request does not bind the exact live claim, configured runtime, and Subject")
 	}
 	admission, admitted, err := protocol.ParseAdmissionInput(request.Claim.Work.Input)
-	if testCase.harness == "pi" && !testCase.providerActionRequired {
+	if linuxV2WitnessRequiresGoalAdmission(testCase) {
 		if err != nil || !admitted || admission.Subject.Validate() != nil ||
 			admission.Subject != request.Subject || admission.ProviderScope != nil {
-			return linuxV2OwnerWitnessRequest{}, errors.New("pi durability owner-witness claim must carry the Control admission for the exact Subject")
+			return linuxV2OwnerWitnessRequest{}, fmt.Errorf("%s owner-witness claim must carry the Control admission for the exact Subject", testCase.harness)
 		}
 	} else if err != nil || admitted {
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness claim must be a real non-Goal Control task")
@@ -1737,6 +1737,18 @@ func linuxV2AckLossReplayStageSupported(stage string) bool {
 		}
 	}
 	return false
+}
+
+// The clone reserve parses the Claim's Work input as a goal admission
+// (linux_clone_journal.go:864-878), so every provider-free native-harness row must run on one.
+func linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool {
+	if testCase.harness == "pi" && !testCase.providerActionRequired {
+		return true
+	}
+	if testCase.providerActionRequired {
+		return false
+	}
+	return testCase.harness == "codex" || testCase.harness == "claude_code"
 }
 
 func linuxV2WitnessClaimRequirementsMatch(testCase linuxV2NativeWitnessCase, actual map[string]bool) bool {

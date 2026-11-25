@@ -27,6 +27,15 @@ STAGE_REPLAY_NATIVE_RELEASE_CASES = {
     "stage_replay_unprovisioned_refusal",
 }
 PROVIDER_ACCESS_CASES = {name for name, (_, profile, _) in CASES.items() if profile == "pi-native"}
+# Exactly the cases whose fixture route commissions a Control Goal (provision-linux-v2-control-claims.exs);
+# the profile name is not the routing fact, so the admission branch keys on the case set.
+GOAL_ADMISSION_CASES = {
+    "stage_replay",
+    "codex_containment",
+    "claude_containment",
+    "stage_replay_native_release_codex",
+    "stage_replay_native_release_claude",
+}
 STAGE_REPLAY_HOLDS = {
     "reservation_durable",
     "create_started",
@@ -187,12 +196,12 @@ def main() -> int:
     )
     work_input = work.get("input")
     require(isinstance(work_input, dict), "Control ClaimResponse Work input is invalid")
-    if profile_name == "pi-durability":
-        # The retargeted durability Work is a Control-composed goal admission whose
-        # Subject is the exact fence the App's clone reserve parses (linux_clone_journal.go:864).
+    if case in GOAL_ADMISSION_CASES:
+        # The goal-routed Work is a Control-composed admission whose Subject is the exact
+        # fence the App's clone reserve parses (linux_clone_journal.go:864).
         require(
             work_input.get("schema_version") == "symmetry.admission.v1",
-            "durability ClaimResponse Work input is not a goal admission",
+            "goal-routed ClaimResponse Work input is not a goal admission",
         )
         require(
             work_input.get("subject")
@@ -201,11 +210,11 @@ def main() -> int:
                 "commit": run["commit"],
                 "tree_digest": run["tree_digest"],
             },
-            "durability ClaimResponse admission Subject differs from the requested Subject",
+            "goal-routed ClaimResponse admission Subject differs from the requested Subject",
         )
         require(
             "provider_scope" in work_input and work_input["provider_scope"] is None,
-            "durability ClaimResponse admission carries a provider scope",
+            "goal-routed ClaimResponse admission carries a provider scope",
         )
     else:
         require(
