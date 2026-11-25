@@ -5154,3 +5154,29 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       exits 0. Product files untouched (`autonomous.go` blob `d82b5991…`), no assertion removed, no
       bound raised, no skip. Evidence: `docs/evidence/rf-flake-autonomous-return-reader-2026-11-25.md`.
       CI `daemon`/`daemon-windows` on the PR head: pending (conductor-owned).
+
+## rf-acc-clone-cleanup-parent-death: the installed-owner leg's parent-death stop (2026-11-25)
+
+Moved 2026-11-25 from `docs/TODO.md`'s `## rf-acc-native-burndown: Linux v2 native acceptance
+follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under the same heading.
+
+- [ ] Root-cause the installed-owner leg's parent-death stop (2026-11-24, goal
+      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15):
+      `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259` (`A cleanup caller exited
+      without the requested parent-death signal`; run `45398550682` stopped one check earlier at
+      `:207`, cleared by the fixture's six-digit `z-later-` name fix, §3.14/§3.15).
+      **Closed (2026-11-25, branch `refactor/rf-acc-clone-cleanup-parent-death`, base `6b2d4f8f`;
+      plan `docs/plans/2026-11-25-rf-acc-clone-cleanup-parent-death-plan.md`, evidence record
+      `docs/evidence/2026-11-25-rf-acc-clone-cleanup-parent-death.md`):** the stop was the
+      predicate's channel — `os.Process.Wait`'s error is nil for any successfully reaped exit,
+      signal deaths included, so `waitErr == nil` fired on the caller's requested SIGKILL — named in
+      the field as closed values (stage-1 run `45597242823`: caller `signaled=true signal=9
+      exit=-1 core=false wait_error=false`; root deleter `si_signo=17 si_code=2 si_status=9`) and
+      fixed by reading the reaped status instead (`signaled && signal == SIGKILL`, original message
+      kept; the root deleter asserted through the fence's siginfo instead of pidfd readiness). Run
+      `45600764607` passed the test (`fail_events` 4 → 3, test absent from `bad=`), the conductor's
+      Bind run `45611900578` bound the delivered `ac0fa101` bytes (same pass, next stops named
+      verbatim), and no product byte, fixture, bound or assertion class moved (the privileged
+      clone-cleanup set is byte-identical to the base). PR #287's round-1 findings R1-R5
+      (live-probe cleanup, EINTR poll count, dead store, address re-derivation, this move) are
+      applied on the branch; the re-bind on the round-1 head follows.
