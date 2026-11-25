@@ -1068,9 +1068,8 @@ type linuxV2NativeWitnessCase struct {
 	helperCrashWitness     bool
 	daemonCrashWitness     bool
 	containmentRequired    bool
-	// afterStageProcessKilled runs before same-RunKey recovery; nil for ordinary replay cases.
-	// The anchor and helper PIDFDs are pinned at the held boundary: the anchor is
-	// resident by design, the helper exits through its owner-loss fail-safe.
+	// afterStageProcessKilled runs before same-RunKey recovery; nil for ordinary replay cases. The
+	// anchor PIDFD is pinned resident by design and the helper exits through its owner-loss fail-safe.
 	afterStageProcessKilled func(*testing.T, linuxV2NativeFixture, string, *os.File, *os.File)
 }
 

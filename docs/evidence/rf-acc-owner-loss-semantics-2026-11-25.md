@@ -8,12 +8,17 @@ rejected; Q3 = (a); Q4 = (a). Consults: `findings/rf-acc-owner-loss-consult-{sol
 `findings/rf-acc-owner-loss-d1d2-{sol,ds}.md`, `findings/rf-acc-owner-loss-d1b-{sol,ds}.md`. Plan:
 `docs/plans/2026-11-25-rf-acc-owner-loss-semantics-plan.md`.
 
-Line numbers below are at the delivered bytes unless a section says otherwise; the run tables name
-their own head revisions. Records cite final bytes by sha256 only (never commit/head provenance
-claims); docs bytes are never sha256'd.
+Line numbers below are at the fix-round delivered bytes (§7.3) unless a section says otherwise; the
+run tables name their own head revisions. Records cite final bytes by sha256 only (never
+commit/head provenance claims); docs bytes are never sha256'd.
 Apply round 2026-11-25 (simplify findings S1-S4, PD-A, PD-B; S4's B-target element is kept
 unapplied — §7.5): every line anchor below is re-measured at the apply-round bytes, and §7.5 pins
 the eight files again.
+Fix round 2026-11-25 (review findings F1-F8, §11): F1/F7/F8 change the two e2e test files — the
+retention helper now delegates to the exported state predicate, the `afterStageProcessKilled` struct
+comment block is compressed to two lines, and the crash-replay runner asserts the helper's
+owner-loss exit for every caller; F2-F6 are record fixes. Every line anchor is re-measured at the
+fix-round bytes, and §7.3 re-pins the eight files.
 
 ## 1. Clause census at the delivered bytes (re-located by content)
 
@@ -22,7 +27,7 @@ the eight files again.
 | Change 1 consult + guard table | `findings/rf-acc-owner-loss-*`; §3a below | done before dispatch; guard table completed here |
 | Change 2/3/4 ruled as d1b | §2.1-§2.6 | implemented |
 | Change 5 observability | #285's refusal vocabulary unchanged; the d1b refusal is replaced by the named retention outcome (§2.3) | satisfied |
-| Change 6 records | this record, the plan, `docs/runbooks/daemon-process-stop.md:99-133`, `docs/TODO.md:1979-1992` | implemented |
+| Change 6 records | this record, the plan, `docs/runbooks/daemon-process-stop.md:99-154`, `docs/TODO.md:1984-1999` | implemented |
 | Carried #284 items (Sec F1, DS F5, Sol P3) | §2.7 | implemented |
 | Gates: four `stale_journal_*` sets on a hosted runner | §7 | run, see §7 |
 | Owned set (amended by the d1b ruling) | `daemon/internal/app/linux_owner_witness_linux.go`, `daemon/internal/state/linux_clone_validation.go`, `daemon/internal/state/linux_cgroup_journal.go`, their tests, `daemon/e2e/production_linux_v2_{native_witness,owner_cli,owner_identity}_test.go`, the runbook, TODO | matches; nothing outside it edited |
@@ -52,34 +57,41 @@ the eight files again.
    `:3099-3112` and `:745-747`. No journal field is added: the
    durable retention reason is the row's own shape.
 4. **Q3(a) pin discipline** (e2e): the crash-replay runner keeps pinning the resident anchor live
-   after the kill (`daemon/e2e/production_linux_v2_owner_cli_test.go:1953-1956`) and hands the helper
-   PIDFD to the leg (`:1920`, `:1958-1959`); the `afterStageProcessKilled` contract now carries both
-   PIDFDs (`production_linux_v2_native_witness_test.go:1071-1074`); the fresh-request leg pins the
-   anchor and asserts the helper's owner-loss exit before and after the denial (`:420-427`,
-   `:488-491`), waiting 90 s — above the helper's own 30 s `linuxOwnerHelperV2StopTimeout`
-   (`internal/platform/helper_v2_protocol.go:33`) so the fixture cannot race the fail-safe (§7.2).
+   after the kill (`daemon/e2e/production_linux_v2_owner_cli_test.go:1953-1957`) and requires the
+   helper's owner-loss exit itself (`:1958-1964`; fix round: the assertion now covers the three
+   `stale_journal_*` variants and every other crash-replay caller, not only the fresh-request leg);
+   it then hands both PIDFDs to the leg (`:1920`, `:1965-1967`); the `afterStageProcessKilled`
+   contract carries both PIDFDs (`production_linux_v2_native_witness_test.go:1071-1073`); the
+   fresh-request leg pins the anchor and asserts the helper's owner-loss exit before and after the
+   denial (`:420-427`, `:488-491`), waiting 90 s — above the helper's own 30 s
+   `linuxOwnerHelperV2StopTimeout` (`internal/platform/helper_v2_protocol.go:33`) so the fixture
+   cannot race the fail-safe (§7.2).
 5. **Retention assertions** (e2e, new): `linuxV2RequireRetainedPreCheckoutClone`
-   `production_linux_v2_owner_cli_test.go:2275-2291` (journal), `linuxV2RequireRetainedCloneArtifacts`
-   `:2293-2313` (disk, apply round) and `linuxV2RequireRetainedCloneOutcome` `:2315-2326`
-   (response), wired into the released stage-replay arm (`:1246-1248`) and the crash-replay runner
-   for every released replay whose clone never checked out (`:1983-1990`).
+   `production_linux_v2_owner_cli_test.go:2282-2292` (journal; fix round: it delegates to the
+   exported `state.LinuxV2ReleasedCloneRetainedAfterRelease`, so the three later state terms cannot
+   drift out of the assertion, and keeps the validated-seed check as its one extra term, pinned by
+   its own row),
+   `linuxV2RequireRetainedCloneArtifacts` `:2294-2314` (disk, apply round) and
+   `linuxV2RequireRetainedCloneOutcome` `:2316-2327` (response), wired into the released
+   stage-replay arm (`:1246-1248`) and the crash-replay runner for every released replay whose
+   clone never checked out (`:1990-1997`).
 6. **Admitted fresh leg** (e2e, new): after the setup recovery,
    `production_linux_v2_native_witness_test.go:511-583` asserts the retained setup row, then the same
    fresh request the unresolved row denied is admitted, reaches its own `handoff_committed` boundary,
    is killed and recovered to the same released retained shape, with the setup row byte-identical
    throughout. The aliasing denial is pinned at the state layer (§5) because a request cannot mint
    aliasing clone paths (they are RunKey-derived).
-   The fixture builder's shared-State cleanup comparator (`production_linux_v2_native_witness_test.go:1918-1926`)
+   The fixture builder's shared-State cleanup comparator (`production_linux_v2_native_witness_test.go:1917-1925`)
    takes the admitted run's key from a new `allowedNewRunKeys` field the leg fills only after it has
    proven that journal's exact boundary (`:546`), so exactly one additional new journal is
    tolerated while every previously retained row must still be byte-identical.
 7. **Carried #284 items** (e2e): `linuxV2JournalBindsOwnerSlot` now projects PID and creation
-   identity (`owner_cli_test.go:1639-1709`) and `linuxV2RequireSameOwnerIdentities` binds every
+   identity (`owner_cli_test.go:1639-1707`) and `linuxV2RequireSameOwnerIdentities` binds every
    journal-bound slot to that projection (`:1742-1744`), so a consistently swapped marker/response
    set reddens; new rows at `owner_identity_test.go:110-127` (swap, equal-PID/different-identity) and
    the phase-branch table at `:152-237`.
-8. **Records**: runbook section `docs/runbooks/daemon-process-stop.md:99-133` (retention semantics
-   plus the read-only jq locator), TODO item `docs/TODO.md:1979-1992` (authorized disposition
+8. **Records**: runbook section `docs/runbooks/daemon-process-stop.md:99-154` (retention semantics
+   plus the read-only jq locator), TODO item `docs/TODO.md:1984-1999` (authorized disposition
    command), plan `docs/plans/2026-11-25-rf-acc-owner-loss-semantics-plan.md`.
 9. **Apply round** (simplify findings S1-S4, PD-A; 2026-11-25): the two fresh-request legs share
    `linuxV2FreshRequestFixture` (`production_linux_v2_native_witness_test.go:586-618`); four new
@@ -99,7 +111,10 @@ the eight files again.
    A dedupe round driven by the repository's `jscpd` gate (§7.6) then exported item 1's state
    predicate so the app classifier delegates to it, and hoisted the witness-command preamble the
    ACK-loss and helper response-loss tests shared; no term and no row changed, and M13/M14 were
-   re-pinned on the final bytes.
+   re-pinned in the dedupe round.
+10. **Fix round** (review findings F1-F8; 2026-11-25): items 4 and 5 above now describe the
+   fix-round bytes of the two e2e files; §11 carries the per-finding dispositions, the two scratch
+   probes, the F1 mutant row and the re-measured gates.
 
 ## 3. Censuses
 
@@ -112,7 +127,7 @@ the eight files again.
 | 3. Fresh-request pin | `linuxV2OpenStageOwnerPIDFD` `owner_cli_test.go:1798-1807` | converted: only the resident anchor is pinned live; the helper's owner-loss exit is asserted through its PIDFD |
 | 4. Fresh-request denial | `native_run.go:204-207`, `linux_cgroup_journal.go:454-516` | verified, no edit: the denial is durable-only and survives owner loss; the old liveness pins were preconditions, not the assertion |
 | 5. Recovery response read + exit status | `owner_cli_test.go:177-193,222-261` | satisfied for the ruled `released` outcome; the refusal path remains for every other shape |
-| 6. Final journal check | `linuxV2JournalHasPhysicalRelease` `native_witness_test.go:2532-2538` (call `:500`) | verified, no edit; the retained clone is additionally asserted (§2.5) |
+| 6. Final journal check | `linuxV2JournalHasPhysicalRelease` `native_witness_test.go:2531-2537` (call `:500`) | verified, no edit; the retained clone is additionally asserted (§2.5) |
 
 ### 3b. Live-pin census (every site that pins an owner process live after an owner kill)
 
@@ -121,10 +136,10 @@ Command: `grep -rn "linuxV2RequireLivePIDFD\|linuxV2OpenStageOwnerPIDFD\|linuxV2
 | Site | Disposition |
 | --- | --- |
 | `native_witness_test.go:420`, `:488` (fresh-request leg) | converted: anchor live only; the helper's owner-loss exit is asserted (`:425-427`, a 90 s bound above the helper's own 30 s stop timeout, and `:491`) |
-| `owner_cli_test.go:1954` (crash-replay runner) | converted: anchor live only; the helper's exit is asserted where its owner-loss premise is used (`native_witness_test.go:426`) |
+| `owner_cli_test.go:1954` (crash-replay runner) | converted: anchor live only; the runner now asserts the helper's exit itself (`:1958-1964`, fix round — before, only the fresh-request leg asserted it through `native_witness_test.go:426`, so the three `stale_journal_*` variant legs had no helper-exit assertion) |
 | `linuxV2RequireLivePIDFD` other 16 sites | exempt: pre-kill liveness, detached-child/replacement/watcher identity, or the target stop the recovery itself must prove; none pins a helper after an owner kill |
 | `linuxV2OpenStageOwnerPIDFD` (`owner_cli_test.go:1798`, `:1913`, `:1920`) | exempt: the pre-kill stage-entry pin (only the helper one is now consumed by the exit assertion) |
-| `linuxV2KillOwnerWitnessCommand` (`owner_cli_test.go:202,1950,4227,4370`, `native_witness_test.go:547`) | exempt: the kill and the two unrelated runners' own kills |
+| `linuxV2KillOwnerWitnessCommand` (`owner_cli_test.go:202,1950,4233,4376`, `native_witness_test.go:547`) | exempt: the kill and the two unrelated runners' own kills |
 
 ### 3c. Assertion census
 
@@ -136,15 +151,20 @@ assertions are §2.5-§2.7 plus the 9 unit rows, all additive. The apply round a
 rows and one disk subtest with five checks (§2.9); the dedupe round (§7.6) removes no assertion —
 the classifier keeps every term by delegating to the exported state predicate, and the hoisted
 witness-command helper is the same five statements the two tests ran inline.
+The fix round (§11) removes no assertion either: the retention helper replaces its hand-copied term
+list with the production predicate — adding `LinuxCloneReuseGrant == nil`,
+`!NativeUsageRecoveryRequired` and `WorkspaceBindingKey == intent.BindingKey`, and keeping the
+validated-seed check as its one extra term with a row of its own — and the crash-replay runner adds
+the helper-exit assertion every caller now inherits (§2.4).
 
 ## 4. Local gates
 
 | Gate | Command (working directory `daemon/`) | Exit | Result |
 | --- | --- | --- | --- |
-| formatting | `gofmt -l .` (re-run on the final bytes as `accept`) | 0 | empty list |
-| vet | `GOOS=linux go vet ./...` (node 1.27.0, WSL Ubuntu-24.04; re-run on the final bytes as `accept`) | 0 | no findings |
-| focused suites, final bytes | `go test -count=1 -timeout 3600s ./internal/app/ ./internal/platform/ ./internal/state/` as user `accept` with `umask 022` | 0 | `ok app 215.391s`, `ok platform 44.544s`, `ok state 24.133s` (state re-run after the last test-row edit) |
-| e2e unit pins, final bytes | `go test -count=1 -timeout 1800s ./e2e/` as `accept`, `umask 022` (re-run after the wait-bound fix, on the exact final bytes) | 0 | `ok e2e 0.738s` |
+| formatting | `gofmt -l .` (re-run at the implement round as `accept`) | 0 | empty list |
+| vet | `GOOS=linux go vet ./...` (node 1.27.0, WSL Ubuntu-24.04; re-run at the implement round as `accept`) | 0 | no findings |
+| focused suites, implement round | `go test -count=1 -timeout 3600s ./internal/app/ ./internal/platform/ ./internal/state/` as user `accept` with `umask 022` | 0 | `ok app 215.391s`, `ok platform 44.544s`, `ok state 24.133s` (state re-run after the last test-row edit) |
+| e2e unit pins, implement round | `go test -count=1 -timeout 1800s ./e2e/` as `accept`, `umask 022` (re-run after the wait-bound fix, at the implement round) | 0 | `ok e2e 0.738s` |
 | whitespace | `git diff --check` | 0 | clean |
 
 Apply round (2026-11-25, apply-round bytes, as `accept` with `umask 022`): `gofmt -l .` empty;
@@ -152,11 +172,34 @@ Apply round (2026-11-25, apply-round bytes, as `accept` with `umask 022`): `gofm
 `ok state 12.723s`; `go test -count=1 -timeout 1800s ./e2e/` `ok e2e 1.478s`; `git diff --check`
 clean under native git (WSL git cannot resolve this worktree's gitdir pointer, so the whitespace
 gate ran on the Windows checkout of the same bytes).
-Dedupe round (2026-11-25, final bytes, as `accept` with `umask 022`): `gofmt -l .` empty;
+Dedupe round (2026-11-25, dedupe-round bytes, as `accept` with `umask 022`): `gofmt -l .` empty;
 `GOOS=linux go vet ./...` clean; focused suites `ok app 161.697s`, `ok platform 37.316s`,
 `ok state 13.092s`; `go test -count=1 -timeout 1800s ./e2e/` `ok e2e 0.879s`; `git diff --check`
 clean under native git. The two re-pinned mutants (M13b, M14b) ran as focused `go test -overlay`
 invocations on the same bytes (§10).
+
+Fix round (2026-11-25, fix-round bytes, as `accept` with `umask 022`): `gofmt -l .` empty (exit 0);
+`GOOS=linux go vet ./...` clean (exit 0); one combined suite run
+`go test -count=1 -timeout 3600s ./internal/app/ ./internal/platform/ ./internal/state/ ./e2e/`
+exited 0 — `ok app 216.476s`, `ok platform 46.931s`, `ok state 20.608s`, `ok e2e 1.548s`; the
+package's rows under repeats, `GOMAXPROCS=8 go test -race -count=200 -run
+'TestLinuxV2RetainedPreCheckoutClonePredicates|TestLinuxV2JournalBindsOwnerSlotProjectsEveryPhase|TestLinuxV2RequireSameOwnerIdentities'
+./e2e/`, exited 0 (`ok e2e 43.015s`); `git diff --check` clean under native git. The fix round's two
+scratch probes ran as focused `go test` invocations (§11), and the recipe-level gates (record
+cleanliness, citation existence, host-path scan, `jscpd`) ran on a scratch commit of the fix-round
+tree (§11.2).
+Recipe gates on a scratch commit of these bytes (built over HEAD with a temporary index, no ref or
+HEAD moved; range `691eb424…` to the scratch commit): `jscpd-changed.py --repo . --base 691eb424…`
+exit 0 (`13 changed file(s), 1743 scanned source(s), 1261 clone(s) in the corpus, 0 tolerated among
+the added lines, none new`, with a notice that `docs/archive/CLOSED-TODO.md`'s added lines are
+outside jscpd's scan scope); `check-record-cleanliness.py` exit 0 (`1 changed record(s) pass the
+root-only check`); `check-citation-existence.py` exit 0 (`2 changed document(s) pass the path and
+symbol check (633 path citation(s))`, plus three pre-existing ignore-rule notes for CLOSED-TODO
+lines 737, 752 and 2512); `model-routing-record-sanitize.py --check --root-only` exit 0 on this
+record, the plan, the runbook and TODO.md, and exit 1 on `docs/archive/CLOSED-TODO.md` where the
+merge-base bytes hold the flagged fragments (18 rendered lines, none added by this branch; the
+branch's added doc lines pass the same check, exit 0). Host-path scan over the branch diff for the
+user-profile prefix: no match.
 
 Environment fidelity: the suite must run as an unprivileged user with the CI runner's `umask`.
 Two observed environment artifacts on this host, both pre-existing and both absent under the CI
@@ -172,24 +215,28 @@ uses `accept` + `umask 022`, which reproduces the runner.
 | --- | --- | --- | --- |
 | `linuxV2AdmissionRetainsPreCheckoutCloneAfterRelease` (state, 5 rows: admit, seed alias, cross alias, same leaf, blocking shapes) | `go test -count=1 -run 'TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease' ./internal/state/` | 0 | `ok state` (0.7s) |
 | `linuxV2NativeWitnessCloneRetention*` (app, 2 positive checks + 12 mutation + 7 summary rows; the apply round added the five divergence rows) | `go test -count=1 -run 'TestLinuxV2NativeWitnessCloneRetention' ./internal/app/` | 0 | `ok app` (0.42s) |
-| `linuxV2RequireRetainedPreCheckoutClone` + `linuxV2RequireRetainedCloneArtifacts` + `linuxV2RequireRetainedCloneOutcome` (e2e, 7+4 negative, 2 non-applicable rows, plus the apply round's disk subtest: positive + no-intent + 2 removal rows) | `go test -count=1 -run 'TestLinuxV2RetainedPreCheckoutClonePredicates' ./e2e/` | 0 | `ok e2e` (0.43s) |
+| `linuxV2RequireRetainedPreCheckoutClone` + `linuxV2RequireRetainedCloneArtifacts` + `linuxV2RequireRetainedCloneOutcome` (e2e, 11+4 negative, 2 non-applicable rows, plus the apply round's disk subtest: positive + no-intent + 2 removal rows; the fix round added the three delegation rows and the seed-validation row) | `go test -count=1 -run 'TestLinuxV2RetainedPreCheckoutClonePredicates' ./e2e/` | 0 | `ok e2e` (0.38s) |
 | `linuxV2JournalBindsOwnerSlot` phases + strengthened comparator | `go test -count=1 -run 'TestLinuxV2JournalBindsOwnerSlotProjectsEveryPhase\|TestLinuxV2RequireSameOwnerIdentities' ./e2e/` | 0 | `ok e2e` |
 | Existing pins the change must not disturb | `go test -count=1 -run 'TestLinuxCloneAbortCannotUseNormalReleaseAsNoTargetProof\|TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners\|TestLinuxV2AdmissionRejectsTerminalUnremovedAndUnprovenForeignOwners\|TestLinuxV2AdmissionFailsClosedOnCorruptForeignJournal\|TestLinuxCloneIntentFreezesFenceAndReservesUniquePaths' ./internal/state/` | 0 | `ok state` |
 | The authenticated receipt path is probed with `testStateLinuxCgroupV2ReleaseProofFixture` (its own `Validate`) rather than by run luck (§2.1 helper, §3a row 6) | included in the state probe above | 0 | `ok state` |
+| Fix round: the retention helper against the three shapes it used to admit (reuse grant, native-usage recovery, binding-key mismatch) versus `state.LinuxV2ReleasedCloneRetainedAfterRelease` (F1), one scratch overlay, both bytes pinned in §11 | `go test -count=1 -v -overlay=<TMP>/owloss-f1/overlay.json -run 'TestF1CharacterizationRetentionHelperAgreement' ./e2e/` (WSL Ubuntu-24.04, `accept`, `umask 022`) | 0 | `ok e2e`; every row logs `helperRefused=true productionRetained=false` (§11); on the pre-fix bytes the same rows red with `helperRefused=false` |
+| Fix round: both arms of the guard the runner now relies on (`linuxV2WaitPIDFDExited` observes an exited child; a live child stays red), same scratch overlay, 50 repeats under `-race` and `GOMAXPROCS=8` | `go test -race -count=50 -overlay=<TMP>/owloss-f1/overlay.json -run 'TestF8WaitPIDFDGuardArms' ./e2e/` | 0 | `ok e2e 32.175s`; the live arm logs `exact process pidfd remained live beyond the bounded wait` |
+| Fix round: the runbook's locator program extracted verbatim from `docs/runbooks/daemon-process-stop.md:121-139` against 10 synthetic rows (1 candidate + 9 rejected shapes; F6) | host `jq 1.8.2` `-e -f <extracted program>` on the row files | candidate 0, nine refusals 1 | all nine rejected rows refused (reuse grant, cleanup pending, promotion intent, native-usage recovery, binding mismatch, unknown leaf disposition, live authority, unproven containment, missing release proof); the review-round program admitted five of them (§11) |
 
-## 6. Mutants (M1-M14)
+## 6. Mutants (M1-M15)
 
-Every mutation was applied to a scratch copy of the final bytes — M13/M14 as `go test -overlay`
+Every mutation was applied to a scratch copy of the delivered bytes — M13/M14 as `go test -overlay`
 replacements, so the tree itself was never mutated — run as a focused `go test`, and reverted; the
 last column proves the revert is byte-identical (`EQ` = the file's sha256 equals the delivered
 bytes' sha256). Delivered sha256s (final pins, §7.3): `linux_clone_validation.go`
 `9e622b03…`, `linux_cgroup_journal.go` `9358c264…`, `linux_cgroup_v2_test.go` `7353273d…`,
 `linux_owner_witness_linux.go` `50aa3c05…`, `linux_owner_witness_linux_test.go` `fd6a7767…`,
-`production_linux_v2_native_witness_test.go` `5523352b…`, `production_linux_v2_owner_cli_test.go`
-`49d7f50c…`, `production_linux_v2_owner_identity_test.go` `167308c0…` (the app-test, native-e2e
-and identity files are unchanged from the implement round). The M1-M12 rows' `EQ` hashes name the
-bytes delivered at that time (the implement round); the apply round and its dedupe round (§7.6)
-re-ran M13/M14 only.
+`production_linux_v2_native_witness_test.go` `41b844e4…`, `production_linux_v2_owner_cli_test.go`
+`3817826a…`, `production_linux_v2_owner_identity_test.go` `167308c0…` (the fix round changed the
+native-witness and owner-cli files; the app-test, state-test and identity files are unchanged from
+the implement round). The M1-M12 rows' `EQ` hashes name the bytes delivered at that time (the
+implement round); the apply round and its dedupe round (§7.6) re-ran M13/M14 only, and the fix
+round re-ran M15 (overlay, §11).
 
 | id | mutation | expected red | observed red (verbatim) | restored |
 | --- | --- | --- | --- | --- |
@@ -202,12 +249,13 @@ re-ran M13/M14 only.
 | M6 | remove the retained-leaf check call | the same-leaf row | `linux_cgroup_v2_test.go:1043: retained pre-checkout release did not keep its cgroup leaf name reserved` | EQ `63bc4706…` |
 | M7 | hoist the arm above every caller term in `linuxV2ForeignJournalIsSafelyRetired` | the unproven row | `linux_cgroup_v2_test.go:1107: unproven containment shape was admitted as a safely retired foreign owner`; the existing pins (`TestLinuxV2AdmissionRejectsTerminalUnremovedAndUnprovenForeignOwners`, `TestLinuxV2AdmissionFailsClosedOnCorruptForeignJournal`, `TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners`) stayed green because their rows are blocked by terms that mutation does not touch (leaf still bound, unparseable journal, live owner) | EQ `63bc4706…` |
 | M8 | revert the witness third branch to `recoveryErr = cleanupErr` | the four ruled sets red with the pre-change refusal | run `45610526163` (§7.4): all four exit 1 at `production recovery exit = exit status 1, want exit 0` with `refusal=journal_without_unresolved_authority reason=release_proof_present recovery_error_class=recovery_failed` | EQ `6a6f07ad…` in the goal tree; the scratch revert was the mutant itself |
-| M9 | a release tombstone used as abort/cleanup authority | the existing pins | no mutation needed: `TestLinuxCloneAbortCannotUseNormalReleaseAsNoTargetProof`, `TestLinuxCloneCleanupRequiresDeliveredCandidateArtifact` and `TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact` are green on the final bytes (negative control) | n/a |
+| M9 | a release tombstone used as abort/cleanup authority | the existing pins | no mutation needed: `TestLinuxCloneAbortCannotUseNormalReleaseAsNoTargetProof`, `TestLinuxCloneCleanupRequiresDeliveredCandidateArtifact` and `TestDeleteJournalKeepsCandidateCloneWithoutDeliveredArtifact` are green on the fix-round bytes (negative control) | n/a |
 | M10 | `linuxV2RequireSameOwnerIdentities` reverted to the presence-only comparator | the swapped and equal-PID rows | `production_linux_v2_owner_identity_test.go:146`: `owner identity comparison error = <nil>, want "does not match its exact RunJournal PID/creation identity"` on `/a_consistently_swapped_bound_owner_set_fails_against_the_journal` and `/a_different_creation_identity_at_the_journal_PID_fails` | EQ `233d848d…` at the time; the file then took the §7.2 cleanup-allowance fix (`3e353cd3…`) |
 | M11 | drop the admitted leg's `allowedNewRunKeys` registration (the pre-fix bytes of the cleanup comparator) | the run_key set reds at the fixture cleanup | run `45599614997`: `production witness changed a previously retained RunJournal: shared StateDir added unrelated RunJournal 43f0a37f-…/1` (§7.2) | n/a (the fix is run `45608856419`, all four sets exit 0) |
 | M12 | leave the helper-exit wait at 30 s (equal to the helper's own stop timeout) | the run_key set reds intermittently in the `fresh_request` leg | run `45604636169`: `A helper did not exit with owner loss before the fresh request: exact process pidfd remained live beyond the bounded wait`, after the leg consumed its whole 30 s bound (0.23 s in run `45599614997`) — one red in two runs of the same leg | n/a (the bound is now 90 s) |
 | M13 | drop the app classifier's delegation to the state predicate (the classifier reduced to the physical-release term alone; re-pinned in the dedupe round) | the five new classifier rows | all five red: `…/the_row_no_longer_requires_workspace_recovery`, `…/the_row's_workspace_binding_differs_from_its_clone_intent`, `…/the_row_carries_a_clone_reuse_grant`, `…/the_row_requires_native_usage_recovery`, `…/the_row's_clone_intent_is_no_longer_journal-valid` | n/a (overlay; delivered sha `50aa3c05…` unchanged) |
 | M14 | `linuxV2RequireRetainedCloneArtifacts` neutered (`return nil` first; re-run in the dedupe round) | the disk subtest | `--- FAIL: TestLinuxV2RetainedPreCheckoutClonePredicates/retained_clone_artifacts_on_disk` | n/a (overlay; delivered sha `49d7f50c…` unchanged) |
+| M15 | restore the pre-fix hand-copied body of `linuxV2RequireRetainedPreCheckoutClone` (F1's pre-fix bytes, §11) in an overlay copy (one hunk against the delivered file) | the three delegation rows and the F1 characterization | `production_linux_v2_owner_cli_test.go:2405: a non-retained shape passed the retained pre-checkout clone predicate` on `…/reuse_grant_present`, `…/native_usage_recovery_required`, `…/workspace_binding_key_differs_from_the_intent_binding` (the mutant's own line numbering; `:2399` in the delivered file); the characterization rows log `helperRefused=false productionRetained=false`; the seed-validation row stays green (it pins the extra term, not the delegation) | n/a (overlay; delivered sha `3817826a…` unchanged) |
 
 ## 7. Scratch runs
 
@@ -232,9 +280,9 @@ keeping the same four-set workflow; runs 6-8 below, §7.5, and the dedupe round'
 | --- | --- | --- | --- | --- |
 | 0 | `45594766773` | all 14 | `a2ba9779` | workflow-only failure: `Install scratch-only gh credential-ingestion shim` failed because `scripts/ci/scratch-gh-shim` is a scratch-only file absent from the base; no case set ran and no evidence artifact was uploaded. Fixed by scratch commit `78daf41f`, which adds the shim verbatim. |
 | 1 | `45595454970` | all 14 | `78daf41f` (base `6b2d4f8f` + the probe workflow + the shim) | base census: nine sets exit 1, five exit 0 (below) |
-| 2 | `45599614997` | all 14 | final bytes (commit `4fc35f42`) | `run_key_legacy`, `fence`, `subject` exit 0; `run_key` red at the fixture builder's own shared-State cleanup after the new admitted leg had passed (§7.2) |
-| 3 | `45604636169` | all 14 | final bytes + the scoped cleanup allowance (`a46e2e3e`) | `run_key_legacy`, `fence`, `subject` exit 0; `run_key` red at the fresh-request leg's helper-exit wait — a fixture bound of 30 s racing the helper's own 30 s stop timeout (§7.2) |
-| 4 | `45608856419` | the four ruled sets | final bytes + the corrected wait bound (`9089efba`; workflow array trimmed to the four sets) | **acceptance: all four sets exit 0**, `All 4 case sets exited 0.` |
+| 2 | `45599614997` | all 14 | implement-round bytes (commit `4fc35f42`) | `run_key_legacy`, `fence`, `subject` exit 0; `run_key` red at the fixture builder's own shared-State cleanup after the new admitted leg had passed (§7.2) |
+| 3 | `45604636169` | all 14 | implement-round bytes + the scoped cleanup allowance (`a46e2e3e`) | `run_key_legacy`, `fence`, `subject` exit 0; `run_key` red at the fresh-request leg's helper-exit wait — a fixture bound of 30 s racing the helper's own 30 s stop timeout (§7.2) |
+| 4 | `45608856419` | the four ruled sets | implement-round bytes + the corrected wait bound (`9089efba`; workflow array trimmed to the four sets) | **acceptance: all four sets exit 0**, `All 4 case sets exited 0.` |
 | 5 | `45610526163` | the four ruled sets | witness third branch reverted (`c802fe27`) | M8: all four sets exit 1 with the pre-change refusal |
 | 6 | `45616416727` | the four ruled sets | apply-round bytes, first attempt (`5fe6044d`) | red: the S4 disk twin asserted the B target path, which does not exist at this crash point; the failing message exceeded the probe's 400-byte print bound (§7.5) |
 | 7 | `45619184193` | the four ruled sets | diagnostic build logging the artifact state before a forced failure (`b6cbed4b`) | all four sets red only at the forced assertion, with `target=ENOENT len=111`, `seed=file len=117`, `baseref=present len=98` — the artifact-state measurement that shaped the corrected predicate (§7.5) |
@@ -276,7 +324,7 @@ written), while both runs stop at the same product refusal — whose text now ca
 (`#285`). The base census confirms every red source outside this goal's four sets before the fix:
 none of the five other red sets names this goal's owned files.
 
-### 7.2 Acceptance runs on the delivered bytes (runs `45599614997`, `45604636169`, `45608856419`)
+### 7.2 Acceptance runs on the implement-round bytes (runs `45599614997`, `45604636169`, `45608856419`)
 
 Run `45599614997` (14 sets; the other ten sets' rows are identical to §7.1, five red for their own
 pre-existing reasons):
@@ -286,7 +334,7 @@ pre-existing reasons):
 | `stale_journal_run_key_legacy` | 0 | the setup recovery returned `released` with its retained clone; the stale-request denial red at its intended identity mismatch |
 | `stale_journal_fence` | 0 | same, at the persisted runtime-epoch mismatch |
 | `stale_journal_subject` | 0 | same, at the changed Subject revision |
-| `stale_journal_run_key` | 1 | `/fresh_request` PASS (0.23s); `/fresh_request_admitted` PASS (1.33s) — the admitted run reached its own `handoff_committed` boundary, was killed, recovered to the same released retained shape, and the retained setup row stayed byte-identical; then `t.Cleanup` at `production_linux_v2_native_witness_test.go:1933-1940` failed with `production witness changed a previously retained RunJournal: shared StateDir added unrelated RunJournal 43f0a37f-…/1` |
+| `stale_journal_run_key` | 1 | `/fresh_request` PASS (0.23s); `/fresh_request_admitted` PASS (1.33s) — the admitted run reached its own `handoff_committed` boundary, was killed, recovered to the same released retained shape, and the retained setup row stayed byte-identical; then the fixture builder's `t.Cleanup` comparator (`production_linux_v2_native_witness_test.go:1917-1925`; `:1918-1926` at the run's bytes) failed with `production witness changed a previously retained RunJournal: shared StateDir added unrelated RunJournal 43f0a37f-…/1` |
 
 The run_key red is exactly the lesson-83 class: the admitted fresh request's own new RunJournal was
 unknown to the fixture builder's cleanup comparator, which until then had only ever seen tests that
@@ -318,7 +366,7 @@ leg passed again (1.18 s) and the `t.Cleanup` comparator stayed green, so the cl
 run `45599614997` is fixed. The bound is now 90 s (§2 item 4); the M12 row (§6) names this run as
 the mutant's red.
 
-Run `45608856419` on the final bytes (`9089efba`), the four ruled sets:
+Run `45608856419` on the implement-round bytes (`9089efba`), the four ruled sets:
 
 | Set | Exit | Rows |
 | --- | --- | --- |
@@ -330,10 +378,10 @@ Run `45608856419` on the final bytes (`9089efba`), the four ruled sets:
 Final line: `All 4 case sets exited 0.` and the run's conclusion is `success` (the workflow job
 fails when any set does). Each set's event gate reports `fail_events` absent, no skipped test and no
 invalid JSON line, so the four sets' boundaries are reached on the delivered bytes — the same eight
-product/e2e file bytes as the implement-round goal tree, superseded by the apply round's pins in
-§7.3.
+product/e2e file bytes as the implement-round goal tree, superseded by the apply round's and the
+fix round's pins in §7.3.
 
-### 7.3 sha256 equality (final delivered bytes = run `45628215703`'s product/e2e bytes)
+### 7.3 sha256 equality (fix-round delivered bytes)
 
 | File | sha256 |
 | --- | --- |
@@ -342,19 +390,23 @@ product/e2e file bytes as the implement-round goal tree, superseded by the apply
 | `daemon/internal/state/linux_cgroup_v2_test.go` | `7353273d61e13beae90e2db5866f3767ec71537e67a009174be2b404d66a0d35` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `50aa3c05ac5bc384dc1018b77c14c9135dc9df25688c9df1d8786baaaa68cbbc` |
 | `daemon/internal/app/linux_owner_witness_linux_test.go` | `fd6a77674ad85379ce8f83fa221abc1992d25609ad8567aff4a6152cb4d14346` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `5523352b94ee642e03f451fcaf0c4ea2039d613dc0fb22bf763412c45f8888e0` |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `49d7f50c7a587c19cb515eb79c2cd058f6ff41727e894e17e24a6b3472bb7e55` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `41b844e4f892a4d04e5adf6050541c8fb4f12633b8234fea0b63bbd7de4a7826` (fix round; the dedupe-round bytes were `5523352b94ee642e03f451fcaf0c4ea2039d613dc0fb22bf763412c45f8888e0`) |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `3817826a40664a96565df5431d5553d63b0d00823a58bf9477c14e3030dcdf99` (fix round; the dedupe-round bytes were `49d7f50c7a587c19cb515eb79c2cd058f6ff41727e894e17e24a6b3472bb7e55`) |
 | `daemon/e2e/production_linux_v2_owner_identity_test.go` | `167308c0b8468a19f4c854d0a18196a443953f2df654225e507b9e1d5bebf1b2` |
 
-Run `45628215703`'s head (`d8723d74`, the §7.6 dedupe round) holds these seven pushed files
-byte-identically (verified by re-hashing the copied files in the scratch worktree — the sha256
-lines the push printed are the table's `EQ` values); the identity-test file is byte-unchanged from
-the implement round (`167308c0…`). The run-8 apply-round head (`50d99ae2`) held the pre-dedupe pins
-(`8e5613e4…`, `ae3307c5…`, `a5cdde02…`, `7d6b7b82…`, and `88ad36cb…` for the owner-cli file); the
-implement-round run `45608856419` held the implement-round pins (`098a47d5…`, `63bc4706…`,
-`cb7e26cb…`, `6a6f07ad…`, `94699059…`, `659febb5…`, `3e353cd3…`), both superseded here.
-The record, plan, runbook and TODO bytes were finalized after the acceptance commit, so those four
-docs bytes are not part of the run's head (no test or product behaviour depends on them).
+Six of the eight files are byte-identical to run `45628215703`'s head (`d8723d74`, the §7.6 dedupe
+round): run 45628215703 held them byte-identically (verified at the time by re-hashing the copied
+files in the scratch worktree — the sha256 lines the push printed are the table's `EQ` values), and
+the fix round touched only the two e2e files. The fix round changed those two (F7's comment
+compression in the native-witness file; F1's delegation and F8's runner assertion in the owner-cli
+file) and re-computed their pins with `sha256sum` on the delivered worktree bytes; the four
+`stale_journal_*` sets have not been re-run on those two bytes, so the fix-round acceptance is the
+bind run the conductor runs on the PR head (§9). The run-8 apply-round head (`50d99ae2`) held the
+pre-dedupe pins (`8e5613e4…`, `ae3307c5…`, `a5cdde02…`, `7d6b7b82…`, and `88ad36cb…` for the
+owner-cli file); the implement-round run `45608856419` held the implement-round pins
+(`098a47d5…`, `63bc4706…`, `cb7e26cb…`, `6a6f07ad…`, `94699059…`, `659febb5…`, `3e353cd3…`), both
+superseded here. The record, plan, runbook and TODO bytes are not part of any run's head (no test
+or product behaviour depends on them).
 
 ### 7.4 M8 (run `45610526163`)
 
@@ -413,7 +465,7 @@ Final line `All 4 case sets exited 0.`; each set's event gate reports no fail ev
 test and no invalid JSON line. The pushed tree equals the apply-round worktree files
 byte-for-byte (its seven file bytes are the pre-dedupe pins §7.3 lists).
 
-### 7.6 jscpd dedupe round (final bytes, run `45628215703`)
+### 7.6 jscpd dedupe round (dedupe-round bytes, run `45628215703`)
 
 The repository's duplicate gate (`python scripts/ci/jscpd-changed.py --base 30ed5ada…`, the stage's
 merge base `git merge-base HEAD origin/main`) refused the first apply-round bytes twice (exit 1):
@@ -447,7 +499,7 @@ disk subtest (§10).
 
 For the four `stale_journal_*` sets the pre-change runs stopped at the same two points
 (`45485437534`, `45489336388`): the recovery leg died at the refusal, so every assertion *after*
-the response read had never executed in any run. On the final bytes the following execute for the
+the response read had never executed in any run. On the implement-round bytes the following execute for the
 first time: the response decode, `requireLinuxV2RecoveryExitStatus`, the released arm of
 `linuxV2ValidateStageReplayResponse` (including the new retention outcome check), the released case
 of `linuxV2ValidateStageReplayJournal`, and — for `stale_journal_run_key` — the entire
@@ -460,11 +512,11 @@ them.
 
 Run `45599614997` then produced exactly the wall the discipline predicts, and it was one the trace
 did not cover: the fixture builder's `t.Cleanup` shared-State comparator
-(`production_linux_v2_native_witness_test.go:1933-1940`), which fires only after a test body has
+(`production_linux_v2_native_witness_test.go:1917-1925`), which fires only after a test body has
 finished and had never seen a test whose fresh request is admitted. The trace in §2 covered the test
 body's assertions and the new leg; it did not enumerate teardown-time comparisons. The next wall
 behind it is empty: no other `t.Cleanup` in the file compares the shared StateDir, the three variant
-sets pass, and the run_key body ends at the admitted leg (`:631`).
+sets pass, and the run_key body ends at the admitted leg (`:580-584`).
 
 Run `45604636169` then found a second wall, this one of a different species: not an assertion that
 had never executed, but a **fixture bound that races the product's own bound**. The Q3(a) pin waited
@@ -476,11 +528,13 @@ lesson for bound-carrying pins: a fixture wait must be *strictly above* the prod
 never equal to it.
 
 The apply round re-ran the same four sets on the corrected bytes (run `45621915266`): the three
-added assertion sites — `native_witness_test.go:506-508`, `:569-571` and `owner_cli_test.go:1987-1989`
+added assertion sites — `native_witness_test.go:506-508`, `:569-571` and `owner_cli_test.go:1990-1997`
 — executed green for the first time there, and no new wall appeared (§7.5).
-The dedupe round re-ran the same four sets on the final bytes (run `45628215703`): the same rows
-verified, the three sites sit on the success paths those rows cover, and no new wall appeared
-(§7.6).
+The dedupe round re-ran the same four sets on the dedupe-round bytes (run `45628215703`): the same
+rows verified, the three sites sit on the success paths those rows cover, and no new wall appeared
+(§7.6). The fix round keeps both e2e edits on those same success paths — the helper delegates to the
+production predicate and the runner adds the helper-exit assertion before it hands the PIDFDs to the
+leg (§11).
 
 ## 9. Residual risks and limits
 
@@ -488,6 +542,11 @@ verified, the three sites sit on the success paths those rows cover, and no new 
   apply round, `45628215703` dedupe round, §7.5-§7.6); the other case sets' pre-existing reds
   (`shared` owner-leg scratch group, `synthetic_goal_cleanup` release refusal, `migration`/`stale_leaf`
   release machinery, `stage_replay_*` exit contract) are reported, never fixed here.
+- The fix round changes the two e2e files (§11), so the four sets have no run on the fix-round bytes:
+  the fix-round acceptance is the conductor's bind run on the PR head. The two changed assertions are
+  on paths those sets already reach green (F1's rows are unit-level; F8's assertion waits on the same
+  helper exit the fresh-request leg observed in every green run), and the bind run is their first
+  end-to-end check.
 - The exported `LinuxV2ReleasedCloneRetainedAfterRelease`'s exact scope is the place a later
   refactor can silently widen; the mutant rows M1/M3/M4/M7 (state arm) and M13 (app classifier) in
   §6 are the guard.
@@ -500,8 +559,9 @@ verified, the three sites sit on the success paths those rows cover, and no new 
   `linuxV2VerifyNoTargetCloneAbort` (`production_linux_v2_owner_cli_test.go:1406`).
 - The retained row has no deletion path by design; the disposition command is a TODO item, not built.
 - The witness retention classification is shape-driven: a future cleanup failure that leaves the
-  exact retained shape would be reported as retention, but the e2e asserts the durable row itself, so
-  a masked mutation is visible there.
+  exact retained shape would be reported as retention, but the e2e asserts the durable row through
+  the production predicate itself (fix round: the helper delegates, so it cannot drift), so a masked
+  mutation is visible there.
 - The run-set census and the per-set rows are §7; a set reddening for a reason outside this goal's
   owned files is reported as its own row and not repaired here.
 - The admitted-leg shared-State allowance is the one place the fixture could over-tolerate: it is
@@ -518,7 +578,8 @@ verified, the three sites sit on the success paths those rows cover, and no new 
   `state.LinuxV2ReleasedCloneRetainedAfterRelease` dropped from
   `linuxV2NativeWitnessCloneRetainedAfterRelease`, which is then the physical-release term alone.
 - M14 target `daemon/e2e/production_linux_v2_owner_cli_test.go`, delivered sha256
-  `49d7f50c7a587c19cb515eb79c2cd058f6ff41727e894e17e24a6b3472bb7e55`; mutant file (built in
+  `49d7f50c7a587c19cb515eb79c2cd058f6ff41727e894e17e24a6b3472bb7e55` (the apply round's bytes);
+  mutant file (built in
   `<TMP>/apply-m14b`) sha256
   `61e486d62eacbf27e855ab906803a3a243273c0d7927be45866ef9779b032b90`; delta: one statement,
   `return nil` inserted first in `linuxV2RequireRetainedCloneArtifacts`.
@@ -527,4 +588,177 @@ verified, the three sites sit on the success paths those rows cover, and no new 
   five rows §6 names red) and `-overlay=<TMP>/apply-m14b/overlay.json -run
   'TestLinuxV2RetainedPreCheckoutClonePredicates' ./e2e/` (exit 1, the disk subtest red). The
   delivered files were never mutated, so no revert step applies; the worktree sha256s stayed at the
-  §7.3 pins throughout.
+  apply-round pins throughout.
+
+## 11. Fix round (review findings F1-F8, 2026-11-25)
+
+Every finding is FIX; none was judged invalid. F1/F7/F8 change the two e2e files and F2-F6 change
+the records; no production file changes, so the accepted product surfaces (§7.5-§7.6) keep their
+bytes.
+
+| Finding | Site (fix-round bytes) | What changed | Observed before-state | Proof (command, exit) |
+| --- | --- | --- | --- | --- |
+| F1 (P2) | `daemon/e2e/production_linux_v2_owner_cli_test.go:2282-2292`; four new rows `:2380-2393` | The retention helper delegates to the exported `state.LinuxV2ReleasedCloneRetainedAfterRelease`, so `LinuxCloneReuseGrant == nil`, `!NativeUsageRecoveryRequired` and `WorkspaceBindingKey == intent.BindingKey` are asserted instead of hand-copied, and the validated-seed check stays as its one extra term with its own row. | The scratch characterization logged `helperRefused=false productionRetained=false` for all three shapes: the pre-fix helper admitted rows the production predicate rejects. | `go test -count=1 -run 'TestLinuxV2RetainedPreCheckoutClonePredicates' ./e2e/` exit 0 (§5); M15 reds the three delegation rows under the pre-fix body; the characterization run (§11.1) exits 0 on the delivered bytes |
+| F2 (P3) | this record §7.2/§7.3; `docs/TODO.md:1975-1977`; `docs/archive/CLOSED-TODO.md:5207-5210` | The three acceptance rounds are named per round, §7.2 is titled "on the implement-round bytes", the ledger entries name the implement/apply/dedupe runs, and §7.3 re-pins the fix-round bytes and names the two changed files plus the bind-run gap. | The ledger cited `45608856419` "on the final bytes" while §7.3 pinned `45628215703` and marked the earlier pins superseded; §7.2's title said "on the delivered bytes". | The three files' own text now matches the runs they cite; the doc gates (§11.2) cover them |
+| F3 (P3) | `docs/plans/2026-11-25-rf-acc-owner-loss-semantics-plan.md:42-43` | `WorkspaceRecoveryRequired` appended to the plan's exact-term list, which now matches the delivered predicate term-for-term (17/17 against `linux_clone_validation.go:57-64`). | The list stopped at `WorkspaceBindingKey == intent.BindingKey`; the predicate requires `WorkspaceRecoveryRequired` (`linux_clone_validation.go:64`). | term-by-term read of `:57-64` against the plan's list |
+| F4 (P3) | `docs/plans/…plan.md:55,61,78,112` | The plan's identifiers are the delivered ones: `scanLinuxV2NativeAdmissionLocked`, the 90 s wait, `linuxV2JournalBindsOwnerSlot`, `TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease`. | `scaPlayerLinuxV2NativeAdmissionLocked`, `linuxV2JournalOwnerSlot`, `TestLinuxV2ReleasedCloneRetainedShape` and a 30 s wait existed nowhere in the delivered bytes (whole-repo grep: no hit). | `grep -rn` over `daemon/` finds each new identifier; §5's probe command names the delivered state test |
+| F5 (P3) | `docs/runbooks/daemon-process-stop.md:102-106`; `docs/TODO.md:1994-1998` | Both texts now say the retention keeps the clone row, the A seed bundle and the base ref, and that the B target exists only once the clone bootstrap has created it, citing the artifact-state measurement. | Both said the retained row keeps "the B checkout"/"the B clone … on disk" while the goal's own diagnostic (run `45619184193`, §7.5) measured `target=ENOENT` at the crash point. | §7.5's `target=ENOENT` measurement, named in the corrected texts |
+| F6 (P3) | `docs/runbooks/daemon-process-stop.md:121-139,148-152` | The locator gained every expressible missing term (seed receipt, promotion intent, cleanup pending, target removal proof, reuse grant, native-usage recovery, workspace path/binding/recovery, release-proof version/stop-receipt/leaf-disposition, pre-gate proof, containment terms) and names its residual approximation. | The review-round program admitted five rejected shapes when probed with the same ten fixtures (reuse grant, cleanup pending, promotion intent, native-usage recovery, binding mismatch). | §5's jq row: the extracted program admits the candidate (exit 0) and refuses all nine rejected shapes (exit 1 each); the before-state is the review-round program |
+| F7 (P3) | `daemon/e2e/production_linux_v2_native_witness_test.go:1071-1073` | The `afterStageProcessKilled` comment block is two lines (1071-1072), the field at 1073. | The block ran three lines (1071-1073), one over the contract's two-line cap for a comment block this diff extended. | `gofmt -l .` exit 0 (§4); the block is 1071-1072 |
+| F8 (P3) | `daemon/e2e/production_linux_v2_owner_cli_test.go:1958-1964` | The crash-replay runner asserts the helper's owner-loss exit (`linuxV2WaitPIDFDExited`, 90 s) for every caller before it hands the PIDFDs to the leg, so the three `stale_journal_*` variant legs inherit the Q3(a) assertion. | Only the fresh-request leg asserted the exit (`native_witness_test.go:424-426`, `:491`); the three variants ran with `afterStageProcessKilled == nil` and the runner pinned only the anchor, so a fail-safe regression would not have reddened them. | §5's F8 probe row (both arms of the relied-on wait, 50 repeats under `-race`, exit 0); the same assertion text has one observed CI red (M12, run `45604636169`); its own red needs a helper that never exits — recorded as an oracle gap below |
+
+### 11.1 Scratch pins and mutants (verbatim)
+
+- Overlay test file `<scratch>/owloss-f1/f1_characterization_test.go`, sha256
+  `6db75aa1bcdfb7fc302034d7ef90894b425c784d634fe6777c6d07794540b9ad`, mapped by
+  `<scratch>/owloss-f1/overlay.json` (sha256
+  `557612e1f31c60616524fdb9fcce98489b64d0ff7721187728c15d4b989de41b`) to the in-package path
+  `<worktree>/daemon/e2e/zz_f1_characterization_overlay_test.go`; the tree itself was never
+  written. It carries the F1 characterization (one positive row per shape) and the F8 guard probe
+  (one positive and one negative case for the wait the runner relies on), both verbatim:
+
+```go
+//go:build linux && amd64
+
+package e2e_test
+
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
+)
+
+// F1: the e2e retention helper must admit exactly what the production predicate admits; these three
+// shapes were the drift between the hand-copied term list and state.LinuxV2ReleasedCloneRetainedAfterRelease.
+func TestF1CharacterizationRetentionHelperAgreement(t *testing.T) {
+	target := "/srv/symmetry-fixture/workspaces/binding-b9/run-fix1-run/generation-7"
+	retained := state.RunJournal{RunID: "fix1-run", Generation: 7, RunCloneState: state.RunCloneState{
+		WorkspacePath: target, WorkspaceBindingKey: "b9", WorkspaceRecoveryRequired: true,
+		LinuxCloneSeedReceipt: &authority.LinuxCloneSeedReceipt{Version: authority.LinuxCloneVersion,
+			BaseCommit: strings.Repeat("1", 40), Digest: "sha256:" + strings.Repeat("2", 64), Size: 4096, Device: 9, Inode: 13},
+	}}
+	intent := authority.LinuxCloneIntent{Version: authority.LinuxCloneVersion, RunID: "fix1-run", Generation: 7,
+		BindingKey: "b9", ResourceID: "11111111-2222-4333-8444-555555555555", BaseCommit: strings.Repeat("1", 40),
+		BaseTreeDigest: "sha256:" + strings.Repeat("2", 64), Nonce: strings.Repeat("3", authority.LinuxCloneNonceBytes*2),
+		SeedPath: "/srv/symmetry-fixture/seeds/binding-b9/run-fix1-run/generation-7.bundle", Target: target}
+	retained.LinuxCloneIntent = &intent
+	if err := retained.LinuxCloneIntent.Validate(); err != nil {
+		t.Fatalf("intent fixture: %v", err)
+	}
+	if !state.LinuxV2ReleasedCloneRetainedAfterRelease(retained) {
+		t.Fatal("the fixture row is not the retained shape the predicate reports")
+	}
+	for _, shape := range []struct {
+		name   string
+		change func(*state.RunJournal)
+	}{
+		{"reuse grant present", func(journal *state.RunJournal) {
+			journal.LinuxCloneReuseGrant = &authority.LinuxCloneReuseGrant{}
+		}},
+		{"native usage recovery required", func(journal *state.RunJournal) {
+			journal.NativeUsageRecoveryRequired = true
+		}},
+		{"workspace binding key differs from the intent binding", func(journal *state.RunJournal) {
+			journal.WorkspaceBindingKey = "secondary"
+		}},
+	} {
+		t.Run(shape.name, func(t *testing.T) {
+			journal := retained
+			shape.change(&journal)
+			helperErr := linuxV2RequireRetainedPreCheckoutClone(journal)
+			production := state.LinuxV2ReleasedCloneRetainedAfterRelease(journal)
+			t.Logf("F1CHAR %s: helperRefused=%t productionRetained=%t", shape.name, helperErr != nil, production)
+			if (helperErr == nil) != production {
+				t.Errorf("F1CHAR disagreement: helperRefused=%t productionRetained=%t", helperErr != nil, production)
+			}
+		})
+	}
+}
+
+// F8: the crash-replay runner's new assertion relies on linuxV2WaitPIDFDExited; one positive case
+// (an exited child is observed) and one negative case (a live child stays red) pin both of its arms.
+func TestF8WaitPIDFDGuardArms(t *testing.T) {
+	startChild := func(t *testing.T, script string) (*os.File, *exec.Cmd) {
+		t.Helper()
+		command := exec.Command("/bin/sh", "-c", script)
+		if err := command.Start(); err != nil {
+			t.Fatalf("spawn probe child: %v", err)
+		}
+		identity, err := platform.ProcessIdentity(command.Process.Pid)
+		if err != nil {
+			t.Fatalf("read probe child identity: %v", err)
+		}
+		pidfd, err := linuxV2OpenExactPIDFD(command.Process.Pid, identity)
+		if err != nil {
+			t.Fatalf("open exact probe child pidfd: %v", err)
+		}
+		return pidfd, command
+	}
+	t.Run("exited child is observed", func(t *testing.T) {
+		pidfd, command := startChild(t, "sleep 0.3")
+		defer func() {
+			_ = pidfd.Close()
+			_ = command.Wait()
+		}()
+		if err := linuxV2WaitPIDFDExited(int(pidfd.Fd()), 10*time.Second); err != nil {
+			t.Fatalf("F8PROBE exited child: %v", err)
+		}
+	})
+	t.Run("live child stays red", func(t *testing.T) {
+		pidfd, command := startChild(t, "sleep 30")
+		defer func() {
+			_ = pidfd.Close()
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}()
+		err := linuxV2WaitPIDFDExited(int(pidfd.Fd()), 300*time.Millisecond)
+		t.Logf("F8PROBE live child: %v", err)
+		if err == nil {
+			t.Fatal("F8PROBE live child passed the bounded exit wait")
+		}
+	})
+}
+```
+
+- M15 mutant `<scratch>/owloss-f1/mutant1/production_linux_v2_owner_cli_test.go`, sha256
+  `cee4c6001924296b11c50dd3263e376ac351989c2258f80401db0681098fe3a7`, mapped by
+  `<scratch>/owloss-f1/mutant-overlay.json` (sha256
+  `437e79e1faf99c8a5d9b35d1537146559bebd1661208e1bc0a49c6da0828832e`). Delta against the delivered
+  file: exactly one hunk — the helper body and its comment reverted to the pre-fix bytes (the
+  hand-copied term list exactly as the review round had it, 17 lines against the delegate's 11) —
+  with F8's runner assertion and all four new rows kept, so the mutation isolates the delegation.
+- Commands (WSL Ubuntu-24.04, user `accept`, `umask 022`, Go 1.27.0, working directory `daemon/`):
+  - `go test -count=1 -v -overlay=<scratch>/owloss-f1/overlay.json -run 'TestF1CharacterizationRetentionHelperAgreement|TestF8WaitPIDFDGuardArms|TestLinuxV2RetainedPreCheckoutClonePredicates' ./e2e/` — exit 0 on the delivered bytes (`ok e2e 0.382s`); every shape logs `helperRefused=true productionRetained=false`.
+  - the same command on `<scratch>/owloss-f1/mutant-overlay.json` — exit 1: the three new rows red with `a non-retained shape passed the retained pre-checkout clone predicate` and each shape logs `helperRefused=false productionRetained=false`.
+  - `GOMAXPROCS=8 go test -race -count=50 -overlay=<scratch>/owloss-f1/overlay.json -run 'TestF1CharacterizationRetentionHelperAgreement|TestF8WaitPIDFDGuardArms' ./e2e/` — exit 0 (the §5 row carries the observed timing); the live arm logs `exact process pidfd remained live beyond the bounded wait`.
+  - F6: a read-only script extracted the runbook's program into `<scratch>/owloss-f1/locator.jq` (sha256 `9f88ec5f2d24f6517ddec5f3be72a5bf3d71a009c64882da2ac41b4c8f39342d`, so the probe binds the delivered program text), and `jq -e -f locator.jq row-*.json` (host jq 1.8.2) over ten fixtures admitted the candidate and refused the nine rejected shapes (§5).
+- F8 oracle gap: the runner's assertion can only redden when a helper does not exit on owner loss,
+  and the helper's fail-safe lives outside this goal's owned set
+  (`daemon/internal/platform/helper_v2_recovery.go`); no mutant inside the owned set produces that
+  red. Its two arms are probed locally instead, and the assertion's class has the M12 CI red (a
+  fixture bound racing the product bound) as its closest observed failure.
+
+### 11.2 Fix-round recipe gates
+
+Run on a scratch commit of the fix-round tree built over HEAD with a temporary index (no branch,
+remote ref or HEAD moved), each with `--repo .` and `--base 691eb424…`:
+
+- `python scripts/ci/jscpd-changed.py` — exit 0: `13 changed file(s), 1743 scanned source(s), 1261
+  clone(s) in the corpus, 0 tolerated among the added lines, none new`; a notice records that
+  `docs/archive/CLOSED-TODO.md`'s added lines are outside jscpd's scan scope.
+- `python scripts/ci/check-record-cleanliness.py` — exit 0: `1 changed record(s) pass the root-only
+  check`.
+- `python scripts/ci/check-citation-existence.py` — exit 0: `2 changed document(s) pass the path and
+  symbol check (633 path citation(s))`, plus three pre-existing ignore-rule notes (CLOSED-TODO lines
+  737, 752, 2512).
+- `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc — exit 0
+  for this record, the plan, the runbook and TODO.md; exit 1 for `docs/archive/CLOSED-TODO.md`,
+  whose flagged fragments sit in the merge-base bytes (18 rendered lines, none added by this branch;
+  the branch's added doc lines pass the same check, exit 0).
+- Host-path scan over the branch diff for the user-profile prefix: no match (`grep` exit 1).

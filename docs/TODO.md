@@ -1972,8 +1972,9 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       new goal `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling; per-arm entry above) routes
       from that arm. The four
       `stale_journal_*` sets' green rows belong to
-      `rf-acc-owner-loss-semantics` and are delivered there (acceptance run `45608856419` on the
-      final bytes, all four sets exit 0): the guard this entry named
+      `rf-acc-owner-loss-semantics` and are delivered there (acceptance runs `45608856419`,
+      `45621915266` and `45628215703` on the implement, apply and dedupe rounds, all four sets
+      exit 0): the guard this entry named
       (`refusal=journal_without_unresolved_authority reason=release_proof_present
       recovery_error_class=recovery_failed`) is consumed by the ruled d1b retention outcome. The two
       `rf-acc-owner-loss-semantics` entries this goal carried (the F4 design question and the
@@ -1990,10 +1991,12 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       treats exactly that shape as retired for unrelated work while keeping the seed/target paths
       and the cgroup leaf name reserved, but `LinuxCloneCleanupEligible`,
       `ClearLinuxCloneNoTargetRetention` and `DeleteJournal` still refuse it by design: a normal
-      release proves that containment stopped, not that B never ran. The row, the B checkout, the A
+      release proves that containment stopped, not that B never ran. The row, the A
       seed bundle and the `refs/heads/symmetry/clone-v2/base/<hash>` ref stay on disk until an
-      explicitly authorized disposition command exists; building that command needs its own ruling
-      (which authority authorizes deletion and what evidence the disposition records).
+      explicitly authorized disposition command exists (the B target exists only once the clone
+      bootstrap has created it, and the pre-checkout crash point this retention is recovered from
+      precedes it: evidence record §7.5); building that command needs its own ruling (which
+      authority authorizes deletion and what evidence the disposition records).
 
 - [ ] Two retargeted case sets have an additional pre-existing stop of their own (2026-11-24, same
       goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its

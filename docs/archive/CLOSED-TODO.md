@@ -5204,9 +5204,10 @@ follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under 
       witness's forced clone cleanup. The ruled d1b increment makes the deliberate pre-checkout clone
       retention a named witness outcome (`linux_owner_witness_linux.go:512-535`) and closes the
       cgroup leaf gap in admission (`linux_cgroup_journal.go`, `linux_clone_validation.go`). The
-      four sets now reach their contract boundaries on the delivered bytes: base census run
-      `45595454970` shows the pre-change refusal, acceptance run `45608856419` exits 0 for all four
-      (`All 4 case sets exited 0.`), mutants M1-M12 in record §6. The unbuilt clone-row disposition
+      four sets now reach their contract boundaries: base census run `45595454970` shows the
+      pre-change refusal, and acceptance runs `45608856419`, `45621915266` and `45628215703`
+      (implement, apply and dedupe rounds) exit 0 for all four (`All 4 case sets exited 0.`),
+      mutants M1-M12 in record §6. The unbuilt clone-row disposition
       command keeps its own open entry.
 
 - [ ] rf-acc-owner-loss-semantics: owner-identity polish deferred from the rf-acc-witness-unresolved-exit

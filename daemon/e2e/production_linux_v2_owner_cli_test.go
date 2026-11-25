@@ -1955,6 +1955,13 @@ func runProductionLinuxV2StageCrashReplayCase(
 			t.Fatalf("A anchor exited with the SIGKILLed stage-replay process: %v", err)
 		}
 	}
+	if helperPIDFD != nil {
+		// The helper's owner-loss fail-safe is bounded at linuxOwnerHelperV2StopTimeout; the
+		// fixture must wait strictly past that product bound or it races the fail-safe.
+		if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 90*time.Second); err != nil {
+			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", err)
+		}
+	}
 	if testCase.afterStageProcessKilled != nil {
 		testCase.afterStageProcessKilled(t, fixture, binary, anchorPIDFD, helperPIDFD)
 	}
@@ -2272,20 +2279,14 @@ func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linu
 	return nil
 }
 
-// linuxV2RequireRetainedPreCheckoutClone requires the exact post-release retention the
-// product keeps: intent and seed with no checkout, promotion, abort or cleanup receipt.
+// linuxV2RequireRetainedPreCheckoutClone requires the exact post-release retention the product
+// keeps (state.LinuxV2ReleasedCloneRetainedAfterRelease) plus a validated seed receipt.
 func linuxV2RequireRetainedPreCheckoutClone(journal state.RunJournal) error {
-	intent := journal.LinuxCloneIntent
-	if intent == nil || journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt != nil ||
-		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
-		journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
-		journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
-		journal.LinuxCloneCleanupProof != nil {
+	if !state.LinuxV2ReleasedCloneRetainedAfterRelease(journal) {
 		return errors.New("released journal did not retain its exact pre-checkout clone")
 	}
-	if intent.ValidateForJournal() != nil || journal.LinuxCloneSeedReceipt.Validate() != nil ||
-		journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
-		return errors.New("retained pre-checkout clone lost its exact intent, seed, or workspace reservation")
+	if journal.LinuxCloneSeedReceipt.Validate() != nil {
+		return errors.New("retained pre-checkout clone lost its validated seed receipt")
 	}
 	return nil
 }
@@ -2375,6 +2376,20 @@ func TestLinuxV2RetainedPreCheckoutClonePredicates(t *testing.T) {
 		}},
 		{name: "workspace path differs from the intent target", mutate: func(journal *state.RunJournal) {
 			journal.WorkspacePath = "/home/native-b/workspaces/elsewhere"
+		}},
+		{name: "reuse grant present", mutate: func(journal *state.RunJournal) {
+			journal.LinuxCloneReuseGrant = &authority.LinuxCloneReuseGrant{}
+		}},
+		{name: "native usage recovery required", mutate: func(journal *state.RunJournal) {
+			journal.NativeUsageRecoveryRequired = true
+		}},
+		{name: "workspace binding key differs from the intent binding", mutate: func(journal *state.RunJournal) {
+			journal.WorkspaceBindingKey = "secondary"
+		}},
+		{name: "seed receipt fails validation", mutate: func(journal *state.RunJournal) {
+			invalid := *journal.LinuxCloneSeedReceipt
+			invalid.Digest = "sha256:" + strings.Repeat("z", 64)
+			journal.LinuxCloneSeedReceipt = &invalid
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -99,27 +99,44 @@ it.
 ## Retained pre-checkout clone after a normal release
 
 A same-RunKey recovery that consumes an authenticated physical release for a run
-whose B-owned clone never checked out keeps the clone row, the B checkout, the A
-seed bundle and that RunKey's `refs/heads/symmetry/clone-v2/base/<hash>` ref on
-disk. That retention is the recorded durable shape, not a failure: the row keeps
-its `linux_clone_intent` (`seed_path`, `target`), `linux_clone_seed_receipt` and
-the containment release proof, and carries no checkout, promotion, abort or
-cleanup field. A normal release proves that containment stopped; it does not
-prove that B never ran, so a release tombstone never authorizes clone deletion
-and no product disposition deletes this row today. The row no longer blocks
-unrelated native admission, and its seed and target paths and its cgroup leaf
-name stay reserved for new reservations until an explicitly authorized
-disposition exists.
+whose B-owned clone never checked out keeps the clone row, the A seed bundle and
+that RunKey's `refs/heads/symmetry/clone-v2/base/<hash>` ref on disk; the B target
+exists only when the clone bootstrap had already created it, which the
+pre-checkout crash point this shape is recovered from precedes (artifact-state
+measurement on all four `stale_journal_*` sets, evidence record §7.5). That
+retention is the recorded durable shape, not a failure: the row keeps its
+`linux_clone_intent` (`seed_path`, `target`), `linux_clone_seed_receipt` and the
+containment release proof, and carries no checkout, promotion, abort or cleanup
+field. A normal release proves that containment stopped; it does not prove that
+B never ran, so a release tombstone never authorizes clone deletion and no
+product disposition deletes this row today. The row no longer blocks unrelated
+native admission, and its seed and target paths and its cgroup leaf name stay
+reserved for new reservations until an explicitly authorized disposition exists.
 
 Read-only locator over the daemon's configured StateDir; it changes nothing:
 
 ```bash
 state_dir=$(jq -r .state_dir /etc/symmetry/daemon.json)
 for journal in "$state_dir"/runs/journal-*.json; do
-  jq -e 'select(.linux_clone_intent != null and .containment_cgroup_release_proof != null
-    and .linux_clone_checkout_receipt == null and .linux_clone_abort_pending != true
-    and .linux_clone_abort_proof == null and .linux_clone_cleanup_intent == null
-    and .linux_clone_cleanup_proof == null and .linux_clone_promotion_receipt == null)' \
+  jq -e 'select(.linux_clone_intent != null and .linux_clone_seed_receipt != null
+    and .linux_clone_checkout_receipt == null and .linux_clone_promotion_intent == null
+    and .linux_clone_promotion_receipt == null and .linux_clone_abort_pending != true
+    and .linux_clone_abort_proof == null and .linux_clone_cleanup_pending != true
+    and .linux_clone_cleanup_intent == null and .linux_clone_target_removal_proof == null
+    and .linux_clone_cleanup_proof == null and .linux_clone_reuse_grant == null
+    and .native_usage_recovery_required != true
+    and .workspace_path == .linux_clone_intent.target
+    and .workspace_binding_key == .linux_clone_intent.binding_key
+    and .workspace_recovery_required == true
+    and .containment_cgroup_release_proof != null
+    and .containment_cgroup_release_proof.version == 2
+    and .containment_cgroup_release_proof.stop_receipt != null
+    and (.containment_cgroup_release_proof.leaf_disposition == "removed"
+      or .containment_cgroup_release_proof.leaf_disposition == "absent_after_receipt")
+    and .containment_cgroup_pre_gate_release_proof == null
+    and .containment_cgroup == null and .containment_unproven != true
+    and .containment_authority == null and .containment_handoff == null
+    and .containment_scans == null)' \
     "$journal" >/dev/null || continue
   run_id=$(jq -r .run_id "$journal")
   generation=$(jq -r .generation "$journal")
@@ -128,7 +145,11 @@ for journal in "$state_dir"/runs/journal-*.json; do
 done
 ```
 
-The row's B clone, A seed and base ref stay on disk until an authorized
+The locator still approximates the admission predicate: jq cannot evaluate the
+intent/seed receipt `Validate()` terms or the process-detail terms, so a listed
+row stays a candidate; the authoritative predicate is
+`state.LinuxV2ReleasedCloneRetainedAfterRelease` plus the caller's release-proof
+terms. The row's A seed bundle and base ref stay on disk until an authorized
 disposition exists; `docs/TODO.md` tracks the disposition command that does not
 exist yet.
 

@@ -39,7 +39,8 @@ is out of scope.
    `!LinuxCloneAbortPending`, `LinuxCloneAbortProof == nil`, `!LinuxCloneCleanupPending`,
    `LinuxCloneCleanupIntent == nil`, `LinuxCloneTargetRemovalProof == nil`,
    `LinuxCloneCleanupProof == nil`, `LinuxCloneReuseGrant == nil`, `!NativeUsageRecoveryRequired`,
-   `WorkspacePath == intent.Target`, `WorkspaceBindingKey == intent.BindingKey`. The caller
+   `WorkspacePath == intent.Target`, `WorkspaceBindingKey == intent.BindingKey`,
+   `WorkspaceRecoveryRequired`. The caller
    (`linuxV2ForeignJournalIsSafelyRetired`, release branch) already supplies the release-proof,
    leaf-disposition, `ContainmentCgroup == nil` and no-live-authority terms.
 3. **The witness-side classifier** (app): `linuxV2NativeWitnessCloneRetentionAfterRelease(before, after state.RunJournal) bool`
@@ -51,13 +52,13 @@ is out of scope.
    seed, release proof, workspace path/binding, `RetainWorkspace`) so a cleanup that mutated
    anything can never be classified as retention.
 4. **Admission leaf closure** (state): inside the existing per-foreign-row loop
-   (`scaPlayerLinuxV2NativeAdmissionLocked`), the `reservation != nil` branch gains an `else if` arm:
+   (`scanLinuxV2NativeAdmissionLocked`), the `reservation != nil` branch gains an `else if` arm:
    when the foreign row is the d1b shape and its release proof carries `CgroupIdentity`, refuse a
    reservation whose `Parent.Path` and `LeafName` equal the proof's. Same error string as the
    existing leaf refusal. The alias block above it is not skipped, and no `continue` is added.
 5. **e2e pin discipline** (owner, Q3(a)): `runProductionLinuxV2StageCrashReplayCase` pins the anchor
    PIDFD (survives by design) and requires the helper PIDFD to signal exit (`linuxV2WaitPIDFDExited`,
-   30 s) instead of requiring it live. The fresh-request leg of
+   90 s) instead of requiring it live. The fresh-request leg of
    `TestProductionLinuxV2UnresolvedJournalBlocksFreshRun` pins only the anchor and asserts the
    helper's owner-loss exit the same way.
 
@@ -74,7 +75,7 @@ is out of scope.
    `LinuxCloneCleanupEligible`, `DeleteJournal`, the workspace rename guard and `daemon/internal/app/cleanup.go`
    are not edited (M9's pins `linux_clone_journal_test.go:423-424,454` stay green).
 4. **Carried #284 items**: `linuxV2JournalBindsOwnerSlot` becomes an identity projection
-   (`linuxV2JournalOwnerSlot(journal, slot) (int, string, bool)`) and
+   (the projection inline in `linuxV2JournalBindsOwnerSlot(journal, slot) (int, string, bool)`) and
    `linuxV2RequireSameOwnerIdentities` additionally requires every actual bound slot to equal the
    journal's projection — so a consistently swapped marker/response set reddens. Table rows are
    added for the handoff, authority, release-proof and pre-gate journal branches (DS F5) and for an
@@ -108,7 +109,7 @@ is out of scope.
 
 ## 5. Local probes (lesson 74) and gates
 
-1. Probes: `go test -count=1 -run 'TestLinuxV2ReleasedCloneRetainedShape|TestLinuxV2Admission…' ./internal/state/`
+1. Probes: `go test -count=1 -run 'TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease' ./internal/state/`
    and `go test -count=1 -run 'TestLinuxV2NativeWitnessCloneRetention' ./internal/app/`, each with
    one positive and one negative case per arm; the auth-receipt path (release proof + leaf
    disposition) is probed with the existing `testStateLinuxCgroupV2ReleaseProofFixture`, not by run
