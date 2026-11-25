@@ -32,7 +32,7 @@ pin above and start the goal's 12-hour bound):
   2026-11-11 directive, taken from the upstream GitHub release `v5.1.69` of
   `code-yeongyu/oh-my-openagent` (the `omo update` path returns 403 on this
   network, so the release asset is the channel). The exact installed binaries
-  are `C:\Users\lhan\.local\bin\omo.exe` (`omo 5.1.69 (engine: senpi
+  are `<HOST-PATH>\.local\bin\omo.exe` (`omo 5.1.69 (engine: senpi
   2026.11.10-2)`, 202,352,128 bytes, sha256
   `04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464`) on Windows
   and `/root/.local/bin/omo` inside the Linux surface below (`omo 5.1.69 (engine:
@@ -52,7 +52,7 @@ pin above and start the goal's 12-hour bound):
   distribution that produced it; Windows observations come from this host.
 - **The credentialed provider is the operator's Tencent LiteLLM relay**, model
   `tencent-litellm/deepseek-v4.1-flash-fast`, base URL
-  `https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1`
+  `https://<RELAY_HOST>/v1`
   (verified reachable from this host and from the Linux surface). The working
   credential is the one carried by the harness's own configuration
   (`~/.omp/agent/models.yml`, provider `tencent-litellm`); this host's

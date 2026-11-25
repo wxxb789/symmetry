@@ -431,7 +431,7 @@ it only with another absolute loopback `http(s)` URL whose path is exactly `/v1`
 
 ```powershell
 pwsh -NoLogo -NoProfile -File .\scripts\claude-code-local-transport-smoke.ps1 `
-  -ClaudeExecutable C:\Users\lhan\.local\bin\claude.exe `
+  -ClaudeExecutable <HOST-PATH>\.local\bin\claude.exe `
   -ProviderEndpoint http://localhost:4141/v1
 ```
 

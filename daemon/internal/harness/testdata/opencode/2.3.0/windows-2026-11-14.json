@@ -1,7 +1,7 @@
 {
   "decision": "unsupported",
   "binary": {
-    "path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "path": "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
     "size": 257553288,
     "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
   },
@@ -18,7 +18,7 @@
     "--out",
     ".tmp\\opencode-v2-windows-final.json"
   ],
-  "workspace": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav",
+  "workspace": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav",
   "operations": [
     {
       "method": "GET",
@@ -26,7 +26,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"version\":\"2.3.0\",\"pid\":32376,\"hostname\":\"CPC-lhan-AWGGLB\",\"urls\":[\"http://127.0.0.1:50377\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "body": "{\"version\":\"2.3.0\",\"pid\":32376,\"hostname\":\"<HOSTNAME>\",\"urls\":[\"http://127.0.0.1:50377\"],\"paths\":{\"tmp\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
       "credential_redacted_before_write": false
     },
     {
@@ -53,7 +53,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
+      "body": "{\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://<RELAY_HOST>/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
       "credential_redacted_before_write": true
     },
     {
@@ -62,7 +62,7 @@
       "authenticated": true,
       "payload": {
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
         },
         "model": {
           "providerID": "tencent-litellm",
@@ -76,13 +76,13 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
             "effect": "allow"
           }
         ]
       },
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794641999789,\"updated\":1794641999789},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794641999789,\"updated\":1794641999789},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -114,7 +114,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794641999789,\"updated\":1794642000509,\"busy\":1794641999822,\"idle\":1794642000516},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e27004858ffe20EdPC4njb3gls\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794641999789,\"updated\":1794642000509,\"busy\":1794641999822,\"idle\":1794642000516},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -123,7 +123,7 @@
       "authenticated": true,
       "payload": {
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
         },
         "model": {
           "providerID": "tencent-litellm",
@@ -137,13 +137,13 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
             "effect": "allow"
           }
         ]
       },
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794642000545,\"updated\":1794642000545},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794642000545,\"updated\":1794642000545},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -175,7 +175,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794642000545,\"updated\":1794642000771,\"busy\":1794642000564,\"idle\":1794642000774},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e27004568ffezTfTp5yHr4A8Ft\",\"projectID\":\"f64ccee3b7176df93f57dcc63196893e741da076\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"failed\",\"time\":{\"created\":1794642000545,\"updated\":1794642000771,\"busy\":1794642000564,\"idle\":1794642000774},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -226,7 +226,7 @@
       "created": 1794641999789,
       "type": "session.created",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
@@ -234,7 +234,7 @@
         "version": "2.3.0",
         "projectID": "f64ccee3b7176df93f57dcc63196893e741da076",
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
         },
         "subpath": "",
         "permissions": [
@@ -245,7 +245,7 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
             "effect": "allow"
           }
         ],
@@ -265,7 +265,7 @@
       "created": 1794641999818,
       "type": "session.inbox.enqueued",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "inboxID": "msg_bad6a64e106862c6af490aa5",
@@ -307,7 +307,7 @@
       },
       "type": "session.instructions.updated",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
@@ -327,7 +327,7 @@
       "created": 1794641999839,
       "type": "session.inbox.delivered",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
@@ -344,7 +344,7 @@
       "created": 1794642000501,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
@@ -368,7 +368,7 @@
       "created": 1794642000509,
       "type": "session.step.failed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004858ffe20EdPC4njb3gls",
@@ -414,7 +414,7 @@
       "created": 1794642000545,
       "type": "session.created",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
@@ -422,7 +422,7 @@
         "version": "2.3.0",
         "projectID": "f64ccee3b7176df93f57dcc63196893e741da076",
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
         },
         "subpath": "",
         "permissions": [
@@ -433,7 +433,7 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav\\baseline.txt",
             "effect": "allow"
           }
         ],
@@ -453,7 +453,7 @@
       "created": 1794642000559,
       "type": "session.inbox.enqueued",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "inboxID": "msg_bddb0d5d40df5d7cfd2a120a",
@@ -495,7 +495,7 @@
       },
       "type": "session.instructions.updated",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
@@ -515,7 +515,7 @@
       "created": 1794642000576,
       "type": "session.inbox.delivered",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
@@ -532,7 +532,7 @@
       "created": 1794642000768,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
@@ -556,7 +556,7 @@
       "created": 1794642000771,
       "type": "session.step.failed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-lmxvrbav"
       },
       "data": {
         "sessionID": "ses_e27004568ffezTfTp5yHr4A8Ft",
@@ -785,12 +785,12 @@
   "provider": {
     "id": "tencent-litellm",
     "model": "deepseek-v4.1-flash-fast",
-    "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
-    "discovered_from": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+    "base_url": "https://<RELAY_HOST>/v1",
+    "discovered_from": "<HOST-PATH>\\.config\\opencode\\opencode.json",
     "credential": "environment:TENCENT_GLM_API_KEY"
   },
   "server_command": [
-    "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
     "serve",
     "--hostname",
     "127.0.0.1",

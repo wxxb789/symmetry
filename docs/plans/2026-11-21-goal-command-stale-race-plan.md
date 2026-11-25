@@ -172,7 +172,7 @@ before it).
 ## Evidence plan (all commands FOREGROUND, serialized; never a suite beside a benchmark)
 
 1. Runner: a worktree copy of the `retro-g2-mix.sh` recipe
-   (`C:/Users/lhan/.local/state/gdd/scratch/retro-g2-mix.sh`) — portable Elixir 1.20.4 / OTP 29.0.6
+   (`<HOST-PATH>/.local/state/gdd/scratch/retro-g2-mix.sh`) — portable Elixir 1.20.4 / OTP 29.0.6
    invoked directly, `cd` to this worktree's `control/`, `unset PHX_SERVER POSTGRES_PORT
    SYMMETRY_CONTRACTS_DIR`, `MIX_ENV=test`, an own `MIX_TEST_PARTITION=stale_race` (its own
    database), and `MIX_DEPS_PATH` pointing at the main checkout's `deps/` (identical `mix.lock`;

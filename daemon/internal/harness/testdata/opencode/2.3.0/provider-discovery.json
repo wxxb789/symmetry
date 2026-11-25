@@ -7,14 +7,14 @@
   },
   "provider": "tencent-litellm",
   "model": "deepseek-v4.1-flash-fast",
-  "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
+  "base_url": "https://<RELAY_HOST>/v1",
   "discovery": [
     {
-      "config": "C:\\Users\\lhan\\.omp\\agent\\models.yml",
+      "config": "<HOST-PATH>\\.omp\\agent\\models.yml",
       "field": "providers/tencent-litellm/baseUrl"
     },
     {
-      "config": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+      "config": "<HOST-PATH>\\.config\\opencode\\opencode.json",
       "field": "provider/tencent-litellm/options/baseURL"
     }
   ],

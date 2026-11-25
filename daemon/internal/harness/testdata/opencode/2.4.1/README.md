@@ -79,6 +79,8 @@ post-render substitution: the collector narrows the recorded `/api/info` 200 bod
 `pid`/`version`/`status` and keeps the 401 row's `UnauthorizedError` body verbatim, so no host
 metadata reaches it at capture time. The frozen 2.3.0 receipts keep their `hostname` field
 verbatim — not edited, recorded as a residual.
+Superseded 2026-11-26: the 2.3.0 receipts are redacted by goal `rf-opencode-230-hostname-redact`
+(record: `docs/evidence/rf-opencode-230-hostname-redact-2026-11-25.md`).
 
 Every committed receipt carries the collector binding
 `087e07a8acaab7c9d07c169acdbd70342e651112e66d0d2a4bdfb3d00c98b0f5` for
@@ -221,6 +223,8 @@ row keeps the server's `UnauthorizedError` body verbatim (§2).
   the server's `UnauthorizedError` body verbatim. No committed record carries the machine
   hostname value (census in the evidence record §12). The frozen 2.3.0 receipts keep their
   `hostname` field verbatim — not edited, recorded as a residual in the evidence record §10.
+  Superseded 2026-11-26: the 2.3.0 receipts are redacted by goal `rf-opencode-230-hostname-redact`
+  (record: `docs/evidence/rf-opencode-230-hostname-redact-2026-11-25.md`).
 
 ## 6. Credential and record locality
 
