@@ -21,11 +21,17 @@ Working tree at the time of this record (all paths in scope; `git status --porce
 | `.github/workflows/ci.yml` | `a7d2d138475fd6397ec970e14e5d2b1ef2f013be3c67acff6ecde4cf5623c95c` | `5997f368ce8464db54f37c1bcfe03cf27ac8235c114c9b77d2af96ab86244197` |
 | `.github/actions/contracts-build/action.yml` | `2d36e663dc8b0f34eecfd44b0dc4e0758405c2797259f0d3671d3040dd505e55` | `5c49e6cea58e0b0516238378d9dcc0abd6b0382784e351d89a55f057d29f6767` |
 | `docs/design/quality.md` | `f34eca086f43ae1ad4751e1e92c59b69b222202dd4e76aa50fc5e9deedf9be41` | `04adc7faa77acb7831f7638c7ca4a243375de11547f81f0ce53a18b172e58b75` |
-| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `f4b1a7e0a686340277f03feb1be2b9e9ec9f1088d79559df2669efd196890438` |
-| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | `d1392647d9cc1afa0fd65382ead4cefca229dd5f5408fd10eb50cea5dd37f0b9` | `87df1c4713ca5195441345ca30e0671d24aad28ae05de87d1488566aab06a0b8` |
+| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `3cd77159258f8536ecd58c2c815606d6d284e1fd9ca480f1472b353c1dbde115` |
+| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | `d1392647d9cc1afa0fd65382ead4cefca229dd5f5408fd10eb50cea5dd37f0b9` | `fde9c590bc5ad4de35efc3949ff513eb88311d7b78096e1e963538f9abe097e7` |
 | `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` | new | `63b5626a25b6232cd90fdce430e53258f6322e7ee4669c6cea6f80b10373abf9` |
 
 `ci.yml` is 2216 lines after the change (2158 before).
+
+Fix r1 (2026-11-26, the round whose review is recorded in §5) re-measured the two files whose bytes changed
+again in this round; both hash equal in the working tree and in the scratch commit every fix-round gate ran
+on — `scripts/ci/test-ci-structure-extraction.py` `3cd77159…`,
+`control/test/symmetry_control/migrations/goal_0006_migration_test.exs` `fde9c590…`; §3 records the commands
+and §7 binds the migration test's bytes at its own run.
 
 ## 2. Censuses re-measured at `61399984`
 
@@ -41,6 +47,7 @@ Working tree at the time of this record (all paths in scope; `git status --porce
 | C8 | `git ls-tree -r --name-only HEAD control/deps \| wc -l` | 0 (deps are not vendored; `.gitignore` lines 43-44 ignore `/control/_build/` and `/control/deps/`) |
 | C9 | `grep -nA1 "name: Check auditable model-routing workflow" .github/workflows/ci.yml` | the step is now in `daemon-audit` with exactly its `name` and `run: \|` keys (no `continue-on-error`, no narrowing `if:`) |
 | C10 | `grep -nA3 "Measure golangci-lint findings (GOOS=linux, advisory)\|Measure govulncheck findings (advisory)" .github/workflows/ci.yml` | both blocks still carry `if: always()` + `continue-on-error: true`, now inside `daemon-audit` |
+| C11 | `grep -rnE "pnpm[^\"]*\btest\b" .github` and a scan for `working-directory: frontend` / `cd frontend` (F4's "every spelling" census, on the fix-round tree) | 5 hits, every one `pnpm --filter symmetry-browser-acceptance test …` — the browser acceptance package, not `@symmetry/frontend` (exempt); 0 hits for the `frontend` work-directory forms; the two frontend spellings the review constructed are covered by the F4 witnesses (§4) |
 
 Corrections the measurements force on the contract's own assumptions:
 
@@ -66,7 +73,12 @@ Corrections the measurements force on the contract's own assumptions:
 
 | gate | command (working directory: repository root) | result |
 | --- | --- | --- |
-| structure extraction | `python3 scripts/ci/test-ci-structure-extraction.py` | `Ran 62 tests`, `OK`, exit 0 (baseline at drafting: 40 tests OK; +5 pins, +17 mutations, of which 5 were added in response to the two reviews below and 1 to the simplify pass) |
+| structure extraction | `python3 scripts/ci/test-ci-structure-extraction.py` | `Ran 70 tests`, `OK`, exit 0 (drafting baseline 40; this change adds 5 pins and 30 test methods — 8 in the fix round, all F2/F3/F4 witnesses; 52 of the 70 are mutation tests) |
+| F2/F3/F4 pin-gap probe (not a repo gate; the fix round's mutation inputs) | `python3 <scratch>/pin_gap_probe.py scripts/ci/test-ci-structure-extraction.py` | pre-fix: all six rows green; post-fix: all six rows red — `if: false` on the owner step, the golangci `if: always()` / `timeout-minutes: 12` drops, the govulncheck `continue-on-error: true` drop, the `working-directory: frontend` + `pnpm test` spelling, and the backslash-continued `run: \|` body |
+| goal_0006 migration test (scratch harness: Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6, run-local port; both match the CI control job) | `mix format --check-formatted`; `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686`; the same with `--repeat-until-failure 50`; then the §7 drop-membership mutant | format exit 0 (silent); single run `1 passed, 57 excluded`; repeat mode 51 runs (countdown 50→0), every one `1 passed, 57 excluded`; mutant: 1 failure at the new arm (`:709`) |
+| fix-round citation / record-cleanliness / sanitize gates (scratch clone holding the delivered bytes; `HEAD` = its scratch commit) | `python3 scripts/ci/check-citation-existence.py --repo . --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD`; `python3 scripts/ci/check-record-cleanliness.py --repo . --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD`; `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | citation exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))`; cleanliness exit 0 — `1 changed record(s) pass the root-only check`; sanitize exit 0 on `docs/design/quality.md`, `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` and `docs/evidence/rf-ci-wave1-hygiene-2026-11-25.md` |
+| fix-round whitespace and host-path scan | `git diff --check origin/main...HEAD`; a case-insensitive scan of the same diff for the user-profile directory prefix | exit 0; 0 matches |
+| fix-round jscpd gate (same scratch clone) | `python3 scripts/ci/jscpd-changed.py --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD` | exit 0 — `7 changed file(s), 1748 scanned source(s), 1263 clone(s) in the corpus, 1 tolerated among the added lines, none new`; the tolerated clone is the pre-existing `ci.yml` 603-636 / 169-202 pair, whose added lines held no content the file did not already hold |
 | changed-path classifier | `python3 scripts/ci/test-ci-changed-path-classifier.py` | `Ran 37 tests`, `OK`, exit 0 (unmodified file) |
 | citation existence (amended `quality.md`) | `python3 scripts/ci/check-citation-existence.py --base HEAD^1 --head HEAD` in a scratch repository holding the head tree plus the amended document | exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))` |
 | record cleanliness (this new record) | `python3 scripts/ci/check-record-cleanliness.py --base HEAD^1 --head HEAD` in the same scratch repository | exit 0 — `1 changed record(s) pass the root-only check` |
@@ -89,10 +101,14 @@ Corrections the measurements force on the contract's own assumptions:
 | §5 restore lines / M13 | *not run in this stage* (§8) | — | — | before-window per-site baselines are in §6 |
 | §6 before-window | `gh api` collection (§6 command) | 0 | §6 tables | — |
 | §6 after-window | *not run in this stage* (§8) | — | — | — |
-| flake item | ExUnit: `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686` | 0 | §7: fixed row `1 test, 0 failures`; the same harness with the pre-fix row under the forced trigger order: `1 test, 1 failure` with `tasks_context_snapshot_ownership_fkey` | pre-fix red reproduced first (§7). **The contract's literal fix sentence is superseded by proof** (ratified deviation, see §7): "make the row violate only the asserted FK" is unsatisfiable at the schema this test builds — `AddPlanningTaskIdentityGuards` (`20260910000000`, which drops the 4-column ownership FK) is not in `MigrationModules.base_migrations()` (ends at `20260907000000`, `VersionRequestHashes`, `control/test/support/migration_modules.ex:65-87`), `migrate_goal_up!/0` runs only `AddGoal0006ControlPlane`, `tasks_goal_fields_all_or_none` requires `context_snapshot_id IS NOT NULL` (`20260909000000_add_goal_0006_control_plane.exs:1237-1245`) and `context_snapshots_work_item_ownership_fkey` (same file, `:425-430`) forces the referenced pair into `work_items`, which is exactly what the asserted work-item FK needs absent |
+| flake item | ExUnit: `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686` | 0 | §7: fixed row `1 test, 0 failures`; the same harness with the pre-fix row under the forced trigger order: `1 test, 1 failure` with `tasks_context_snapshot_ownership_fkey` | pre-fix red reproduced first (§7). **The contract's literal fix sentence is superseded by proof** (deviation ratified by conductor ruling 2026-11-26 (contract); see §7): "make the row violate only the asserted FK" is unsatisfiable at the schema this test builds — `AddPlanningTaskIdentityGuards` (`20260910000000`, which drops the 4-column ownership FK) is not in `MigrationModules.base_migrations()` (ends at `20260907000000`, `VersionRequestHashes`, `control/test/support/migration_modules.ex:65-87`), `migrate_goal_up!/0` runs only `AddGoal0006ControlPlane`, `tasks_goal_fields_all_or_none` requires `context_snapshot_id IS NOT NULL` (`20260909000000_add_goal_0006_control_plane.exs:1237-1245`) and `context_snapshots_work_item_ownership_fkey` (same file, `:425-430`) forces the referenced pair into `work_items`, which is exactly what the asserted work-item FK needs absent |
 | branch protection | `gh api repos/wxxb789/symmetry/branches/main/protection` and `.../rulesets` | 404 "Branch not protected"; `[]` | no required-check contexts exist, so no job name is a protected context and nothing is renamed | re-read before the wave PR (§8) |
 | citation gate for the amended document | see §3 | 0 | 19 path citations pass | — |
-| reviewers | 2 read-only dispatches (§5) | — | §5 | — |
+| reviewers | 3 dispatches (§5) plus the fix round's own probes (§3) | — | §5 | — |
+| F2 (fix round) — the vitest owner cannot be silently disabled | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_one_step_owns_the_frontend_suite` | 0 | the owner step's exact scalar map (`name`, `run`, no `if`) is asserted; `test_mutation_adding_an_if_false_to_the_owner_step_reddens_the_owner_pin` reddens the pin on `if: false`; the suite runs in `legacy-route-audit` (text parse, no user dimension) | pre-fix characterisation: `if: false` on the owner step left the pin green (§3 probe) |
+| F3 (fix round) — the moved advisories keep their full step shape | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_the_daemon_audit_job_holds_the_moved_steps_and_the_blocking_model_routing_step` | 0 | `ADVISORY_STEP_SCALARS` pins each moved advisory's scalar map (golangci: name, `if: always()`, `continue-on-error: true`, `timeout-minutes: 12`, `run: \|`; govulncheck the same minus the cap); one witness per key: renaming a moved advisory, dropping `if: always()`, dropping `continue-on-error: true`, dropping `timeout-minutes: 12`, inlining the run body | pre-fix characterisation: the `if: always()`, `continue-on-error: true` and `timeout-minutes: 12` drops each left the pin green (§3 probe) |
+| F4 (fix round) — every plain-suite spelling is caught | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_one_step_owns_the_frontend_suite` | 0 | the plain-suite matcher normalises run text (block bodies joined, backslash continuations folded) and treats `working-directory: frontend` (or `cd frontend`) plus a bare `pnpm test` as the plain suite; witnesses `test_mutation_a_working_directory_spelling_reddens_the_owner_pin` and `test_mutation_a_backslash_continued_spelling_reddens_the_owner_pin`; `\btest\b` keeps `vitest` legal | pre-fix characterisation: both spellings left the pin green (§3 probe) |
+| F5 (fix round) — the membership FK is proven by exact name | `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686` in the §3 scratch harness | 0 | a third arm inserts a task whose `work_item_id` is a goal-less work item inside the deferred-ownership transaction, so only `tasks_goal_work_item_membership_fkey` can report; the drop-membership mutant reds exactly that arm while the disjunctive arm stays green (§7); repeat mode: 51 green runs | pre-fix: dropping the membership constraint left the test green (the review's counterexample, reproduced in §7) |
 
 ## 5. Reviews of the diff
 
@@ -159,6 +175,30 @@ Sound-by-both statements worth keeping: the relocation is genuine (byte-identica
 weakened or deleted; the cache keys/paths/env split are correct, including Windows path resolution for
 `uses:` steps (precedent: `coverage-daemon`'s `path: daemon/coverage.out`); the flake mechanism and the
 impossibility argument hold; the `quality.md` row keeps every citation token and stays citation-gate-safe.
+
+### Fix round: ce-code-review (run `20261126-ci-wave1-31856`, verdict `MUST_FIX`)
+
+`ce-code-review` (agent mode, depth full, six in-process reviewers plus an independent validator with
+4/4 batched findings confirmed; the cross-model pass was not run under that invocation's rules) re-read
+the 7 changed paths at the delivered revision plus the contract and returned five findings at P2-P3.
+The conductor's 2026-11-26 ruling (contract store) accepted all five and amended the flake clause; the
+dispositions, each with its witness in §3/§4/§7:
+
+* **F1** — the record called the flake repair a "ratified deviation" while no ratification existed in
+  the contract store. Fixed by the conductor's explicit ratification in the contract (which also
+  amended the flake clause to "each arm pins its asserted constraint deterministically") and by this
+  record's §4 flake row citing "deviation ratified by conductor ruling 2026-11-26 (contract)".
+* **F2** — `check_single_frontend_suite_owner` compared only the owner step's run text, so an `if: false`
+  could disable the suite while every pin stayed green. Fixed by the exact scalar map plus an `if: false`
+  witness (§4 F2 row; pre-fix reproduction in §3).
+* **F3** — the moved advisory steps were pinned by run-body digest only, so dropping `if: always()`,
+  `continue-on-error: true` or `timeout-minutes: 12` reddened nothing. Fixed by the full scalar-map pin
+  with one witness per key (§4 F3 row).
+* **F4** — the plain-suite pattern missed a `working-directory: frontend` context and backslash-continued
+  run bodies. Fixed by the normalising matcher plus two spelling witnesses (§4 F4 row).
+* **F5** — the de-flaked assertion's disjunction (`tasks_(work_item_id|goal_work_item_membership)_fkey`)
+  let the membership FK break silently. Fixed by the deterministic third arm; numbers, mutant and
+  bytes in §7.
 
 ## 6. Measurement windows
 
@@ -300,6 +340,35 @@ sha256 is in §1. The reviewer independently re-derived the schema facts the imp
 on (constraint inventory at this test's migration version, the CHECK's non-null requirement, the FK
 columns, the absent goal-revision FK) and confirmed the argument; §9 records the fix's brittleness and
 §4 marks the contract sentence as superseded by proof.
+
+### F5 fix-round arm, its repeat run, and the drop-membership mutant
+
+Delivered bytes of `control/test/symmetry_control/migrations/goal_0006_migration_test.exs`:
+`fde9c590bc5ad4de35efc3949ff513eb88311d7b78096e1e963538f9abe097e7` (the §3 harness copied exactly these
+bytes into its scratch tree). Harness: Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6 on a run-local port —
+both match the CI `control` job — with `POSTGRES_DB=symmetry_control_test` and the tree's migrations.
+
+* The two work-item assertions now go through the helper `assert_deferred_ownership_insert_error!/2`,
+  which inserts its row inside a transaction that defers `tasks_context_snapshot_ownership_fkey`.
+  Three arms: the pre-existing disjunctive arm, the new membership arm, the sibling-snapshot ownership arm.
+* The new arm's row takes `work_item_id` from a `work_items` row no goal owns (`goal_id` NULL), so
+  `tasks_work_item_id_fkey` is satisfied and the deferred ownership FK cannot report before the insert
+  fails; the only immediate FK left to report is `tasks_goal_work_item_membership_fkey`, independent of
+  trigger OID order, and the assertion names it exactly (no alternation).
+* Runs: `mix format --check-formatted` exit 0 (silent); `mix test …:686` → `1 passed, 57 excluded`; the
+  same command with `--repeat-until-failure 50` → its countdown ran 50 → 0, 51 runs, every one
+  `1 passed, 57 excluded` (52 green runs including the single one).
+* Mutant: one inserted line, immediately after the `migrate_goal_up!()` call that follows the `:686`
+  test header —
+  `Repo.query!("ALTER TABLE tasks DROP CONSTRAINT tasks_goal_work_item_membership_fkey")` — giving the
+  mutant file `<scratch>/goal_0006_mutant_drop_membership.exs`, sha256
+  `00069c47c4596aa669810d17ac4f68338c84b12928da5a97e1d44171f0b7414b` (the scratched file re-hashed to
+  the delivered value after the run). Result: the disjunctive arm stays green — with the constraint
+  dropped, that row's only reportable work-item violation is `tasks_work_item_id_fkey`, which its regex
+  accepts — and the test reds at the new arm (`:709` in the mutant file): expected
+  `tasks_goal_work_item_membership_fkey`, actual `tasks_context_snapshot_ownership_fkey` (the insert
+  otherwise succeeds and the deferred ownership check fires at commit). This is the review's
+  counterexample, now red; the mutant is an oracle gap for CI — a schema mutation, not a suite pin.
 
 ## 8. Not run in this stage (handover)
 
