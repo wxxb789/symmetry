@@ -247,6 +247,20 @@ Replace the placeholder paths with local absolute paths. The
 runnable local profiles. Use HTTPS outside a trusted local or container network
 and omit `allow_insecure_http`.
 
+`state_dir` is optional for a plain daemon start. When the key is absent, the
+daemon resolves a per-user platform default: on Linux
+`$XDG_STATE_HOME/symmetry`, falling back to `~/.local/state/symmetry` when
+`XDG_STATE_HOME` is unset or not absolute; on Windows `%LOCALAPPDATA%\Symmetry`;
+on macOS `~/Library/Application Support/Symmetry` (logic-only row, not
+host-verified). An explicit `state_dir` always wins, and a start fails closed
+when the environment component it needs (`$HOME`, `%LOCALAPPDATA%`) is unset or
+not absolute. The installed owner path never resolves this default: the
+installer probe `-print-state-dir` and the owner commands
+`-verify-legacy-owner-drained`, `-verify-linux-owner-install` and
+`-recover-containment-only` require an explicit `state_dir` and fail closed
+without one. The example above keeps the explicit installed-owner form. Only
+`state_dir` has a default; workspace `root` and `seed_root` stay explicit.
+
 The daemon takes its configuration path from `-config`, with no default, and its
 first start needs `SYMMETRY_ENROLLMENT_TOKEN` in the daemon process's own
 environment, not only in the control plane's.
