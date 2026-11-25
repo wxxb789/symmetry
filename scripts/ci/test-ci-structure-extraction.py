@@ -162,15 +162,16 @@ ACTION_STEPS = (
     "run: pnpm contracts:check",
     "run: pnpm --filter @symmetry/frontend typecheck",
     "run: pnpm --filter @symmetry/frontend lint",
-    "run: pnpm --filter @symmetry/frontend test",
     "run: pnpm --filter @symmetry/frontend build",
     "uses: actions/upload-artifact@v7",
     "uses: erlef/setup-beam@v1",
+    "uses: actions/cache@v6",
     "name: Build production Control release",
     "uses: actions/upload-artifact@v7",
 )
 ACTION_CONDITIONS = (
     ("uses: erlef/setup-beam@v1", "inputs.build-control-release == 'true'"),
+    ("uses: actions/cache@v6", "inputs.build-control-release == 'true'"),
     ("name: Build production Control release", "inputs.build-control-release == 'true'"),
     ("uses: actions/upload-artifact@v7", "inputs.build-control-release == 'true'"),
 )
@@ -194,8 +195,8 @@ CONTRACTS_ADVISORY_STEP = {
 ADVISORY_STEPS = frozenset(
     {
         ("control", "Measure Hex advisories (advisory)"),
-        ("daemon", "Measure golangci-lint findings (GOOS=linux, advisory)"),
-        ("daemon", "Measure govulncheck findings (advisory)"),
+        ("daemon-audit", "Measure golangci-lint findings (GOOS=linux, advisory)"),
+        ("daemon-audit", "Measure govulncheck findings (advisory)"),
         ("legacy-route-audit", "Measure ruff findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure shellcheck findings in scripts/ci (advisory)"),
         ("legacy-route-audit", "Measure actionlint findings for the workflows (advisory)"),
@@ -226,6 +227,115 @@ LEGACY_ROUTE_AUDIT_INVOCATIONS = (
     "python3 scripts/ci/assert-browser-suite-coverage.py",
 )
 
+# The workflow-level concurrency key: superseded pull-request revisions cancel each other, every other
+# event keeps a per-run group. A constant group would cancel pushes; an unconditional cancel would too.
+CONCURRENCY_BLOCK = (
+    "concurrency:",
+    "  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}",
+    "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}",
+)
+JOB_TIMEOUTS = {
+    "changes": 5,
+    "record-cleanliness": 5,
+    "citation-existence": 5,
+    "contracts": 10,
+    "control": 25,
+    "coverage-control": 30,
+    "coverage-daemon": 60,
+    "coverage-frontend": 30,
+    "pi-control-e2e-windows": 30,
+    "daemon": 30,
+    "daemon-audit": 20,
+    "legacy-route-audit": 10,
+    "daemon-windows": 20,
+    "integration": 10,
+    "compose": 40,
+    "browser-fixture-linux": 35,
+}
+JOB_TIMEOUT_LINE = re.compile(r"^    timeout-minutes: (\d+)$")
+STEP_TIMEOUT_LINE = re.compile(r"^        timeout-minutes: (\d+)$")
+DAEMON_AUDIT_JOB = "daemon-audit"
+DAEMON_AUDIT_STEPS = (
+    "Measure golangci-lint findings (GOOS=linux, advisory)",
+    "Measure govulncheck findings (advisory)",
+    "Check auditable model-routing workflow",
+)
+MODEL_ROUTING_STEP = "Check auditable model-routing workflow"
+MODEL_ROUTING_INVOCATIONS = (
+    "python3 ../scripts/ci/test-model-routing-evaluation.py",
+    "python3 ../scripts/ci/test-model-routing-omp-usage.py",
+    "python3 ../scripts/ci/test-model-routing-record-sanitize.py",
+    "python3 ../scripts/ci/test-model-routing-record-sanitize-json.py",
+    "python3 ../scripts/ci/test-check-record-cleanliness.py",
+    "python3 ../scripts/ci/test-model-routing-source-subject.py",
+)
+FRONTEND_SUITE_JOB = "coverage-frontend"
+FRONTEND_SUITE_STEP = "Run the frontend suite with a coverage report"
+FRONTEND_SUITE_COMMAND = "pnpm --filter @symmetry/frontend exec vitest run --coverage"
+FRONTEND_SUITE_SCALARS = {"name": FRONTEND_SUITE_STEP, "run": FRONTEND_SUITE_COMMAND}
+FRONTEND_DIRECTORY = "frontend"
+# Every spelling that would run the frontend package's `test` script again: the package or directory on
+# one line, or a `frontend` work directory with a bare `pnpm test`; `\btest\b` never matches `vitest`.
+PLAIN_FRONTEND_SUITE = re.compile(
+    r"@symmetry/frontend\b[^\n]*\btest\b|--dir[ =]frontend\b[^\n]*\btest\b|-C[ =]frontend\b[^\n]*\btest\b"
+)
+PLAIN_PACKAGE_SCRIPT = re.compile(r"\bpnpm\b[^\n]*\btest\b")
+FRONTEND_CD = re.compile(r"(?:^|\n)\s*cd\s+frontend\b(?![-\w])")
+WORKFLOW_LABEL = "ci.yml"
+ACTION_LABEL = "contracts-build/action.yml"
+ADVISORY_BODY_SHA256 = {
+    "Measure golangci-lint findings (GOOS=linux, advisory)": (
+        "8a9af339b2faf39d333274211fffdeb8b13c9852582ddb898d3667572ee0c39d"
+    ),
+    "Measure govulncheck findings (advisory)": "aad6fd52299ff5be9e18dabecc57c537d1af8f7ba9f2f6a652c9db42254d4546",
+}
+ADVISORY_STEP_SCALARS = {
+    "Measure golangci-lint findings (GOOS=linux, advisory)": {
+        "name": "Measure golangci-lint findings (GOOS=linux, advisory)",
+        "if": "always()",
+        "continue-on-error": "true",
+        "timeout-minutes": "12",
+        "run": "|",
+    },
+    "Measure govulncheck findings (advisory)": {
+        "name": "Measure govulncheck findings (advisory)",
+        "if": "always()",
+        "continue-on-error": "true",
+        "run": "|",
+    },
+}
+ELIXIR_CACHE_ACTION = "actions/cache@v6"
+ELIXIR_CACHE_PATHS = ("control/deps", "control/_build")
+ELIXIR_CACHE_KEYS = {
+    "test": "elixir-test-${{ runner.os }}-otp-29.0.6-elixir-1.20.4-${{ hashFiles('control/mix.lock') }}",
+    "dev": "elixir-dev-${{ runner.os }}-otp-29.0.6-elixir-1.20.4-${{ hashFiles('control/mix.lock') }}",
+    "prod": "elixir-prod-${{ runner.os }}-otp-29.0.6-elixir-1.20.4-${{ hashFiles('control/mix.lock') }}",
+}
+
+
+@dataclasses.dataclass(frozen=True)
+class ElixirCacheSite:
+    """One `mix deps.get` step and the cache step that must immediately precede it."""
+
+    file: str
+    job: str
+    key: str
+    condition: str | None = None
+
+
+ELIXIR_CACHE_SITES = (
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="control", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="coverage-control", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="pi-control-e2e-windows", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="browser-fixture-linux", key=ELIXIR_CACHE_KEYS["dev"]),
+    ElixirCacheSite(
+        file=ACTION_LABEL,
+        job=ACTION_JOB,
+        key=ELIXIR_CACHE_KEYS["prod"],
+        condition="inputs.build-control-release == 'true'",
+    ),
+)
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -239,6 +349,15 @@ def job_blocks(workflow_text: str) -> dict[str, list[str]]:
     for position, (name, start) in enumerate(starts):
         end = starts[position + 1][1] if position + 1 < len(starts) else len(lines)
         blocks[name] = lines[start:end]
+    return blocks
+
+
+def workflow_jobs(workflow_text: str) -> dict[str, list[str]]:
+    """The jobs under the workflow's top-level `jobs:` key; the `on.push` block is not a job."""
+    lines = workflow_text.split("\n")
+    jobs_index = lines.index("jobs:")
+    blocks = job_blocks("\n".join(lines[jobs_index:]))
+    require(bool(blocks), "no job headers found under the workflow's `jobs:` key")
     return blocks
 
 
@@ -350,6 +469,68 @@ def find_step(job_lines: list[str], name: str) -> list[str]:
         if scalars_at(normalized, WORKFLOW_INDENT[1]).get("name") == name:
             return normalized
     raise AssertionError(f"the job no longer carries the step {name!r}")
+
+
+def named_steps(job_lines: list[str]) -> list[str]:
+    names = []
+    for step_lines in split_steps(job_lines, WORKFLOW_INDENT[0]):
+        name = scalars_at(normalized_step(step_lines, *WORKFLOW_INDENT), WORKFLOW_INDENT[1]).get("name")
+        if name is not None:
+            names.append(name)
+    return names
+
+
+def step_run_text(normalized: list[str], key_indent: int) -> str | None:
+    """A step's run text: its inline `run:` value, or the joined body of a `run: |` block."""
+    run = scalars_at(normalized, key_indent).get("run")
+    if run is None:
+        return None
+    if run != "|":
+        return run
+    body = run_body_at(normalized, key_indent)
+    return "\n".join(body) if body is not None else ""
+
+
+def nested_values(lines: list[str], key: str, key_indent: int) -> dict[str, tuple[str, ...] | str]:
+    """A nested block's values: scalars as strings, block scalars as their dedented body lines."""
+    values: dict[str, tuple[str, ...] | str] = {}
+    index = next((index for index, line in enumerate(lines) if line == " " * key_indent + key + ":"), None)
+    if index is None:
+        return values
+    child_indent = key_indent + 2
+    index += 1
+    while index < len(lines):
+        line = lines[index]
+        if line.strip() and len(line) - len(line.lstrip(" ")) <= key_indent:
+            break
+        match = KEY.match(line)
+        if match is None or len(match.group(1)) != child_indent:
+            index += 1
+            continue
+        name, inline = match.group(2), match.group(3)
+        if inline is not None and inline != "|":
+            values[name] = inline
+            index += 1
+            continue
+        body = block_body(lines, index, child_indent)
+        values[name] = tuple(body)
+        index += len(body) + 1
+    return values
+
+
+def all_steps(workflow_text: str, action_text: str) -> list[tuple[str, str, str, str | None, list[str]]]:
+    """Every step of both files, as (file, job, name, run text or None, normalized lines)."""
+    found: list[tuple[str, str, str, str | None, list[str]]] = []
+    for label, dash_indent, key_indent, blocks in (
+        (WORKFLOW_LABEL, WORKFLOW_INDENT[0], WORKFLOW_INDENT[1], workflow_jobs(workflow_text)),
+        (ACTION_LABEL, ACTION_INDENT[0], ACTION_INDENT[1], {ACTION_JOB: action_text.split("\n")}),
+    ):
+        for job, block in blocks.items():
+            for step_lines in split_steps(block, dash_indent):
+                normalized = normalized_step(step_lines, dash_indent, key_indent)
+                name = scalars_at(normalized, key_indent).get("name") or step_lines[0].strip()
+                found.append((label, job, name, step_run_text(normalized, key_indent), normalized))
+    return found
 
 
 def assertion_gates(job_lines: list[str], job: str) -> set[str]:
@@ -675,6 +856,167 @@ def check_legacy_route_audit_invocations(workflow_text: str) -> None:
     )
 
 
+def check_workflow_concurrency(workflow_text: str) -> None:
+    block = "\n" + "\n".join(CONCURRENCY_BLOCK) + "\n"
+    require(
+        workflow_text.count(block) == 1,
+        "the workflow must carry exactly one concurrency block made of the three pinned lines",
+    )
+    start = workflow_text.index(block)
+    require(
+        workflow_text.index("permissions:") < start < workflow_text.index("\njobs:\n"),
+        "the concurrency block must sit between `permissions:` and `jobs:`",
+    )
+
+
+def check_job_timeouts(workflow_text: str) -> None:
+    blocks = workflow_jobs(workflow_text)
+    require(
+        sorted(blocks) == sorted(JOB_TIMEOUTS),
+        f"the workflow's job set and the pinned timeout table diverged: {sorted(blocks)} != {sorted(JOB_TIMEOUTS)}",
+    )
+    for job, block in blocks.items():
+        ceilings = [match.group(1) for line in block if (match := JOB_TIMEOUT_LINE.match(line))]
+        require(len(ceilings) == 1, f"job {job}: expected exactly one job-level `timeout-minutes`; found {ceilings}")
+        caps = [int(match.group(1)) for line in block if (match := STEP_TIMEOUT_LINE.match(line))]
+        require(
+            all(cap < int(ceilings[0]) for cap in caps),
+            f"job {job}: a step cap {max(caps) if caps else '-'} leaves no room under the ceiling {ceilings[0]}",
+        )
+        require(
+            int(ceilings[0]) == JOB_TIMEOUTS[job],
+            f"job {job}: the job ceiling is {ceilings[0]}, the pinned ceiling is {JOB_TIMEOUTS[job]}",
+        )
+
+
+def check_daemon_audit_relocation(workflow_text: str) -> None:
+    jobs = job_blocks(workflow_text)
+    require(DAEMON_AUDIT_JOB in jobs, f"the workflow lost the {DAEMON_AUDIT_JOB} job")
+    audit_steps = named_steps(jobs[DAEMON_AUDIT_JOB])
+    require(tuple(audit_steps) == DAEMON_AUDIT_STEPS, f"the {DAEMON_AUDIT_JOB} steps changed: {tuple(audit_steps)!r}")
+    daemon_steps = named_steps(jobs["daemon"])
+    for moved in DAEMON_AUDIT_STEPS:
+        require(moved not in daemon_steps, f"the daemon job must not keep the moved step {moved!r}")
+    defaults = nested_values(jobs[DAEMON_AUDIT_JOB], "defaults", 4)
+    require(
+        defaults == {"run": ("working-directory: daemon",)},
+        f"the {DAEMON_AUDIT_JOB} defaults block changed: {defaults!r}",
+    )
+    for step, pinned in ADVISORY_STEP_SCALARS.items():
+        normalized = find_step(jobs[DAEMON_AUDIT_JOB], step)
+        scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+        require(
+            scalars == pinned,
+            f"{step!r}: the moved advisory step's keys changed: {scalars!r} (pinned {pinned!r})",
+        )
+        body = run_body_at(normalized, WORKFLOW_INDENT[1]) or []
+        digest = hashlib.sha256("\n".join(body).encode("utf-8")).hexdigest()
+        require(digest == ADVISORY_BODY_SHA256[step], f"{step!r}: the moved advisory body changed (sha256 {digest})")
+    prerequisites = []
+    for step_lines in split_steps(jobs[DAEMON_AUDIT_JOB], WORKFLOW_INDENT[0]):
+        normalized = normalized_step(step_lines, *WORKFLOW_INDENT)
+        scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+        if "name" not in scalars:
+            prerequisites.append((scalars.get("uses"), nested_at(normalized, "with", WORKFLOW_INDENT[1])))
+    require(
+        prerequisites
+        == [
+            ("actions/checkout@v7", {}),
+            ("actions/setup-go@v7", {"go-version": "1.27.4", "cache-dependency-path": "daemon/go.sum"}),
+        ],
+        f"the {DAEMON_AUDIT_JOB} prerequisites changed: {prerequisites!r}",
+    )
+    normalized = find_step(jobs[DAEMON_AUDIT_JOB], MODEL_ROUTING_STEP)
+    scalars = scalars_at(normalized, WORKFLOW_INDENT[1])
+    require(
+        scalars == {"name": MODEL_ROUTING_STEP, "run": "|"},
+        f"the moved model-routing step must keep exactly its name and run keys: {scalars!r}",
+    )
+    commands = check_blocking_gate_step(
+        workflow_text, DAEMON_AUDIT_JOB, MODEL_ROUTING_STEP, MODEL_ROUTING_INVOCATIONS[-1]
+    )
+    require(
+        tuple(commands) == MODEL_ROUTING_INVOCATIONS,
+        f"the model-routing step's invocations changed: {tuple(commands)!r}",
+    )
+
+
+def normalized_run_text(text: str) -> str:
+    """A run text with its backslash continuations folded onto one logical line."""
+    return text.replace("\\\n", " ")
+
+
+def runs_the_plain_frontend_suite(normalized: list[str], key_indent: int) -> bool:
+    text = step_run_text(normalized, key_indent)
+    if text is None:
+        return False
+    text = normalized_run_text(text)
+    if PLAIN_FRONTEND_SUITE.search(text) is not None:
+        return True
+    in_frontend_directory = (
+        scalars_at(normalized, key_indent).get("working-directory") == FRONTEND_DIRECTORY
+        or FRONTEND_CD.search(text) is not None
+    )
+    return in_frontend_directory and PLAIN_PACKAGE_SCRIPT.search(text) is not None
+
+
+def check_single_frontend_suite_owner(workflow_text: str, action_text: str) -> None:
+    steps = all_steps(workflow_text, action_text)
+    owners = [(file, job, name, text) for file, job, name, text, _ in steps if text is not None and "vitest" in text]
+    require(
+        owners == [(WORKFLOW_LABEL, FRONTEND_SUITE_JOB, FRONTEND_SUITE_STEP, FRONTEND_SUITE_COMMAND)],
+        f"exactly one step must run vitest, with the pinned command, in {FRONTEND_SUITE_JOB}: {owners!r}",
+    )
+    owner = find_step(workflow_jobs(workflow_text)[FRONTEND_SUITE_JOB], FRONTEND_SUITE_STEP)
+    scalars = scalars_at(owner, WORKFLOW_INDENT[1])
+    require(
+        scalars == FRONTEND_SUITE_SCALARS,
+        f"{FRONTEND_SUITE_STEP!r} must keep exactly its name and run keys: {scalars!r}",
+    )
+    plain = [
+        (file, job, text)
+        for file, job, _, text, normalized in steps
+        if text is not None
+        and runs_the_plain_frontend_suite(normalized, ACTION_INDENT[1] if file == ACTION_LABEL else WORKFLOW_INDENT[1])
+    ]
+    require(plain == [], f"the plain `pnpm --filter @symmetry/frontend test` suite returned: {plain!r}")
+
+
+def check_elixir_cache_sites(workflow_text: str, action_text: str) -> None:
+    steps = all_steps(workflow_text, action_text)
+    deps_get = [(file, job) for file, job, _, text, _ in steps if text is not None and "mix deps.get" in text]
+    require(
+        deps_get == [(site.file, site.job) for site in ELIXIR_CACHE_SITES],
+        f"the `mix deps.get` sites changed: {deps_get!r}",
+    )
+    for site in ELIXIR_CACHE_SITES:
+        job_steps = [step for step in steps if step[0] == site.file and step[1] == site.job]
+        positions = [index for index, step in enumerate(job_steps) if step[3] is not None and "mix deps.get" in step[3]]
+        index = positions[0]
+        require(index > 0, f"{site.job}: no step precedes its `mix deps.get` step")
+        file, job, _, _, normalized = job_steps[index - 1]
+        key_indent = ACTION_INDENT[1] if file == ACTION_LABEL else WORKFLOW_INDENT[1]
+        scalars = scalars_at(normalized, key_indent)
+        require(
+            scalars.get("uses") == ELIXIR_CACHE_ACTION,
+            f"{job}: the step before `mix deps.get` must be {ELIXIR_CACHE_ACTION}; found {scalars.get('uses')!r}",
+        )
+        require(
+            scalars.get("if") == site.condition,
+            f"{job}: the cache step's `if:` must be {site.condition!r}; found {scalars.get('if')!r}",
+        )
+        with_values = nested_values(normalized, "with", key_indent)
+        require(
+            with_values.get("path") == ELIXIR_CACHE_PATHS,
+            f"{job}: the cache paths must be {ELIXIR_CACHE_PATHS}; found {with_values.get('path')!r}",
+        )
+        require(
+            with_values.get("key") == site.key,
+            f"{job}: the cache key must be {site.key!r}; found {with_values.get('key')!r}",
+        )
+        require("restore-keys" not in with_values, f"{job}: the cache step must not carry restore-keys")
+
+
 def check_folded_gate_completeness(workflow_text: str, action_text: str) -> None:
     steps, jobs = workflow_advisories(workflow_text)
     steps |= action_advisories(action_text)
@@ -737,6 +1079,23 @@ class CredoGateStepTests(unittest.TestCase):
 class LegacyRouteAuditStepTests(unittest.TestCase):
     def test_the_gate_suite_steps_stay_wired_and_ordered(self) -> None:
         check_legacy_route_audit_invocations(WORKFLOW.read_text(encoding="utf-8"))
+
+
+class WorkflowHygieneTests(unittest.TestCase):
+    def test_only_superseded_pull_request_runs_are_cancelled(self) -> None:
+        check_workflow_concurrency(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_every_job_carries_its_pinned_ceiling_and_no_step_cap_meets_it(self) -> None:
+        check_job_timeouts(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_the_daemon_audit_job_holds_the_moved_steps_and_the_blocking_model_routing_step(self) -> None:
+        check_daemon_audit_relocation(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_one_step_owns_the_frontend_suite(self) -> None:
+        check_single_frontend_suite_owner(WORKFLOW.read_text(encoding="utf-8"), ACTION.read_text(encoding="utf-8"))
+
+    def test_every_mix_deps_get_site_is_preceded_by_its_elixir_cache_step(self) -> None:
+        check_elixir_cache_sites(WORKFLOW.read_text(encoding="utf-8"), ACTION.read_text(encoding="utf-8"))
 
 
 class MutationTests(unittest.TestCase):
@@ -1026,6 +1385,255 @@ class MutationTests(unittest.TestCase):
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
         with self.assertRaises(AssertionError):
             check_legacy_route_audit_invocations(mutated)
+
+    def test_mutation_cancelling_every_event_reddens_the_concurrency_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n",
+            "  cancel-in-progress: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_workflow_concurrency(mutated)
+
+    def test_mutation_a_constant_concurrency_group_reddens_the_concurrency_pin(self) -> None:
+        group = "  group: ci-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.run_id }}\n"
+        self.assertIn(group, self.workflow_text, "the mutation's anchor must be the pinned group")
+        mutated = self.workflow_text.replace(group, "  group: ci-main\n")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_workflow_concurrency(mutated)
+
+    def test_mutation_deleting_the_daemon_ceiling_reddens_the_timeout_pin(self) -> None:
+        ceiling = (
+            "  daemon:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+            "    runs-on: ubuntu-latest\n    timeout-minutes: 30\n"
+        )
+        self.assertIn(ceiling, self.workflow_text, "the mutation's anchor must be the daemon header")
+        mutated = self.workflow_text.replace(ceiling, ceiling.replace("    timeout-minutes: 30\n", ""))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_job_timeouts(mutated)
+
+    def test_mutation_raising_a_ceiling_reddens_the_timeout_pin(self) -> None:
+        ceiling = "  changes:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n"
+        self.assertIn(ceiling, self.workflow_text, "the mutation's anchor must be the changes header")
+        mutated = self.workflow_text.replace(ceiling, ceiling.replace("timeout-minutes: 5", "timeout-minutes: 360"))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_job_timeouts(mutated)
+
+    def test_mutation_a_ceiling_below_its_step_cap_reddens_the_timeout_pin(self) -> None:
+        ceiling = (
+            "  compose:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+            "    runs-on: ubuntu-latest\n    timeout-minutes: 40\n"
+        )
+        self.assertIn(ceiling, self.workflow_text, "the mutation's anchor must be the compose header")
+        mutated = self.workflow_text.replace(ceiling, ceiling.replace("timeout-minutes: 40", "timeout-minutes: 15"))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "leaves no room under the ceiling"):
+            check_job_timeouts(mutated)
+
+    def test_mutation_a_step_cap_above_its_job_ceiling_reddens_the_cap_invariant(self) -> None:
+        cap = "        timeout-minutes: 35\n"
+        self.assertIn(cap, self.workflow_text, "the mutation's anchor must be a step cap")
+        mutated = self.workflow_text.replace(cap, "        timeout-minutes: 45\n", 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "leaves no room under the ceiling"):
+            check_job_timeouts(mutated)
+
+    def test_mutation_marking_the_model_routing_step_advisory_reddens_the_relocation_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"      - name: {MODEL_ROUTING_STEP}\n",
+            f"      - name: {MODEL_ROUTING_STEP}\n        continue-on-error: true\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_emptying_a_moved_advisory_body_reddens_the_relocation_pin(self) -> None:
+        invocation = '          GOOS=linux "$golangci_bin" run --config .golangci.yml \\\n'
+        self.assertIn(invocation, self.workflow_text, "the mutation's anchor must be the golangci invocation")
+        mutated = self.workflow_text.replace(invocation, "          exit 0\n")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "the moved advisory body changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_swapping_the_govulncheck_status_read_reddens_the_relocation_pin(self) -> None:
+        status = "          govulncheck_status=${PIPESTATUS[0]}\n"
+        self.assertIn(status, self.workflow_text, "the mutation's anchor must be the govulncheck status read")
+        mutated = self.workflow_text.replace(status, "          govulncheck_status=$?\n")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "the moved advisory body changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_pointing_the_moved_jobs_defaults_at_the_root_reddens_the_relocation_pin(self) -> None:
+        defaults = (
+            "  daemon-audit:\n    needs: changes\n    if: needs.changes.outputs.run-heavy == 'true'\n"
+            "    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    defaults:\n      run:\n"
+            "        working-directory: daemon\n"
+        )
+        self.assertIn(defaults, self.workflow_text, "the mutation's anchor must be the daemon-audit header")
+        mutated = self.workflow_text.replace(defaults, defaults.replace("working-directory: daemon", "working-directory: ."))
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "working-directory"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_dropping_the_moved_jobs_setup_go_reddens_the_relocation_pin(self) -> None:
+        setup_go = (
+            "      - uses: actions/setup-go@v7\n        with:\n          go-version: 1.27.4\n"
+            "          cache-dependency-path: daemon/go.sum\n"
+        )
+        audit_header = "  daemon-audit:\n"
+        anchor = setup_go + "      # Build tags change"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved setup-go step")
+        mutated = self.workflow_text.replace(anchor, "      # Build tags change")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        self.assertIn(audit_header, mutated)
+        with self.assertRaisesRegex(AssertionError, "prerequisites changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_replacing_a_model_routing_invocation_with_exit_zero_reddens_the_relocation_pin(self) -> None:
+        mutated = self.workflow_text.replace(
+            f"          {MODEL_ROUTING_INVOCATIONS[0]}\n",
+            "          exit 0\n",
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_renaming_a_moved_advisory_step_reddens_the_relocation_pin(self) -> None:
+        anchor = "      - name: Measure golangci-lint findings (GOOS=linux, advisory)\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved golangci step")
+        mutated = self.workflow_text.replace(anchor, "      - name: Measure golangci-lint findings (advisory)\n", 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "steps changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_dropping_a_moved_advisorys_always_reachability_reddens_the_relocation_pin(self) -> None:
+        anchor = "      - name: Measure golangci-lint findings (GOOS=linux, advisory)\n        if: always()\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved golangci header")
+        mutated = self.workflow_text.replace(
+            anchor, "      - name: Measure golangci-lint findings (GOOS=linux, advisory)\n", 1
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "keys changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_dropping_a_moved_advisorys_continue_on_error_reddens_the_relocation_pin(self) -> None:
+        anchor = (
+            "      - name: Measure govulncheck findings (advisory)\n        if: always()\n"
+            "        continue-on-error: true\n"
+        )
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved govulncheck header")
+        mutated = self.workflow_text.replace(
+            anchor, "      - name: Measure govulncheck findings (advisory)\n        if: always()\n", 1
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "keys changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_dropping_a_moved_advisorys_step_cap_reddens_the_relocation_pin(self) -> None:
+        anchor = "        # Bounded: a hung analysis can only redden this advisory step, never consume the job.\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved golangci cap")
+        mutated = self.workflow_text.replace(anchor + "        timeout-minutes: 12\n", anchor, 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "keys changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_inlining_a_moved_advisorys_run_body_reddens_the_relocation_pin(self) -> None:
+        anchor = (
+            "        # Bounded: a hung analysis can only redden this advisory step, never consume the job.\n"
+            "        timeout-minutes: 12\n        run: |\n"
+        )
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the moved golangci run body")
+        mutated = self.workflow_text.replace(
+            anchor, anchor.replace("        run: |\n", "        run: echo skipped\n"), 1
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "keys changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_restoring_the_plain_frontend_suite_reddens_the_owner_pin(self) -> None:
+        lint = "    - run: pnpm --filter @symmetry/frontend lint\n"
+        self.assertIn(lint, self.action_text, "the mutation's anchor must be the lint step")
+        mutated = self.action_text.replace(lint, lint + "    - run: pnpm --filter @symmetry/frontend test\n")
+        self.assertNotEqual(mutated, self.action_text, "the mutation must edit the action text")
+        with self.assertRaises(AssertionError):
+            check_single_frontend_suite_owner(self.workflow_text, mutated)
+        with self.assertRaises(AssertionError):
+            check_action(mutated, self.workflows)
+
+    def test_mutation_re_adding_the_plain_frontend_suite_to_a_job_reddens_the_owner_pin(self) -> None:
+        anchor = f"      - name: {FRONTEND_SUITE_STEP}\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the coverage owner step")
+        mutated = self.workflow_text.replace(
+            anchor, "      - run: pnpm --filter @symmetry/frontend run test\n" + anchor, 1
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "plain"):
+            check_single_frontend_suite_owner(mutated, self.action_text)
+
+    def test_mutation_adding_an_if_false_to_the_owner_step_reddens_the_owner_pin(self) -> None:
+        anchor = f"      - name: {FRONTEND_SUITE_STEP}\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the coverage owner step")
+        mutated = self.workflow_text.replace(anchor, anchor + "        if: false\n", 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "name and run keys"):
+            check_single_frontend_suite_owner(mutated, self.action_text)
+
+    def test_mutation_a_working_directory_spelling_reddens_the_owner_pin(self) -> None:
+        anchor = f"      - name: {FRONTEND_SUITE_STEP}\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the coverage owner step")
+        mutated = self.workflow_text.replace(
+            anchor, "      - run: pnpm test\n        working-directory: frontend\n" + anchor, 1
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "plain"):
+            check_single_frontend_suite_owner(mutated, self.action_text)
+
+    def test_mutation_a_backslash_continued_spelling_reddens_the_owner_pin(self) -> None:
+        anchor = f"      - name: {FRONTEND_SUITE_STEP}\n"
+        self.assertIn(anchor, self.workflow_text, "the mutation's anchor must be the coverage owner step")
+        mutated = self.workflow_text.replace(
+            anchor,
+            "      - run: |\n          pnpm --filter @symmetry/frontend \\\n            test\n" + anchor,
+            1,
+        )
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "plain"):
+            check_single_frontend_suite_owner(mutated, self.action_text)
+
+    def test_mutation_deleting_a_cache_step_reddens_the_cache_site_pin(self) -> None:
+        cache_step = (
+            "      - uses: actions/cache@v6\n"
+            "        with:\n"
+            "          path: |\n"
+            "            control/deps\n"
+            "            control/_build\n"
+            f"          key: {ELIXIR_CACHE_KEYS['dev']}\n"
+        )
+        self.assertIn(cache_step, self.workflow_text, "the mutation's anchor must be the fixture cache step")
+        mutated = self.workflow_text.replace(cache_step, "")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_elixir_cache_sites(mutated, self.action_text)
+
+    def test_mutation_stripping_the_lock_hash_from_a_cache_key_reddens_the_cache_site_pin(self) -> None:
+        key = ELIXIR_CACHE_KEYS["prod"]
+        stripped = key.replace("-${{ hashFiles('control/mix.lock') }}", "")
+        self.assertNotEqual(stripped, key, "the mutation must strip the lock hash from the key")
+        mutated = self.action_text.replace(key, stripped)
+        self.assertNotEqual(mutated, self.action_text, "the mutation must edit the action text")
+        with self.assertRaises(AssertionError):
+            check_elixir_cache_sites(self.workflow_text, mutated)
+
+    def test_mutation_a_sixth_mix_deps_get_without_a_cache_step_reddens_the_cache_site_pin(self) -> None:
+        deps_get = "      - run: mix deps.get\n"
+        self.assertIn(deps_get, self.workflow_text, "the mutation's anchor must be a `mix deps.get` step")
+        mutated = self.workflow_text.replace(deps_get, deps_get + deps_get, 1)
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaises(AssertionError):
+            check_elixir_cache_sites(mutated, self.action_text)
 
 
 class FailClosedPowerShellTests(unittest.TestCase):
