@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1242,6 +1243,9 @@ func linuxV2ValidateStageReplayResponseState(fixture linuxV2NativeFixture, stage
 			!response.Release.OpaquePlatformRelease || !response.Release.LeafRemoved || !response.Release.ClearPersisted || !response.Release.AnchorRetired {
 			return errors.New("released stage replay lacks exact recovered opaque-clear proof")
 		}
+		if err := linuxV2RequireRetainedCloneOutcome(response); err != nil {
+			return err
+		}
 	case "aborted_no_target":
 		if response.Outcome != "aborted_no_target" || !response.NoTargetAbort || response.JournalUnproven ||
 			response.Release != nil && (response.Release.OpaquePlatformRelease || response.Release.ClearPersisted) ||
@@ -1630,9 +1634,9 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 	}
 }
 
-// linuxV2JournalBindsOwnerSlot projects one owner slot the way fillSummaryFromJournal does;
-// a placeholder pair is only legitimate where that projection is empty.
-func linuxV2JournalBindsOwnerSlot(journal state.RunJournal, slot string) bool {
+// linuxV2JournalBindsOwnerSlot projects one owner slot, PID and creation identity, the
+// way fillSummaryFromJournal does; bound reports whether the journal names the slot.
+func linuxV2JournalBindsOwnerSlot(journal state.RunJournal, slot string) (int, string, bool) {
 	var pid int
 	var identity string
 	if reservation := journal.ContainmentCgroup; reservation != nil {
@@ -1699,7 +1703,7 @@ func linuxV2JournalBindsOwnerSlot(journal state.RunJournal, slot string) bool {
 			pid, identity = proof.Receipt.Launcher.PID, proof.Receipt.Launcher.Identity
 		}
 	}
-	return pid > 1 && identity != ""
+	return pid, identity, pid > 1 && identity != ""
 }
 
 func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwners, journal state.RunJournal) error {
@@ -1725,14 +1729,18 @@ func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwner
 		if process == nil {
 			continue
 		}
+		journalPID, journalIdentity, bound := linuxV2JournalBindsOwnerSlot(journal, pair.name)
 		// The witness emits an unbound owner slot as the same zero object on both sides;
 		// only a placeholder pair the journal has not bound may escape the completeness check.
 		if pair.expected != nil && pair.expected.PID <= 1 && pair.expected.Identity == "" &&
-			process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
+			process.PID <= 1 && process.Identity == "" && !bound {
 			continue
 		}
 		if process.PID <= 1 || process.Identity == "" {
 			return errors.New("replayed owner set contains an incomplete process identity")
+		}
+		if bound && (process.PID != journalPID || process.Identity != journalIdentity) {
+			return fmt.Errorf("replayed owner %s does not match its exact RunJournal PID/creation identity", pair.name)
 		}
 		if _, ok := seenPIDs[process.PID]; ok {
 			return errors.New("replayed owner set duplicates a numeric PID")
@@ -1942,15 +1950,13 @@ func runProductionLinuxV2StageCrashReplayCase(
 	if err := linuxV2KillOwnerWitnessCommand(command); err != nil {
 		t.Fatalf("SIGKILL exact stage-replay App process: %v", err)
 	}
-	for _, owner := range []*os.File{anchorPIDFD, helperPIDFD} {
-		if owner != nil {
-			if err := linuxV2RequireLivePIDFD(int(owner.Fd())); err != nil {
-				t.Fatalf("A owner exited with the SIGKILLed stage-replay process: %v", err)
-			}
+	if anchorPIDFD != nil {
+		if err := linuxV2RequireLivePIDFD(int(anchorPIDFD.Fd())); err != nil {
+			t.Fatalf("A anchor exited with the SIGKILLed stage-replay process: %v", err)
 		}
 	}
 	if testCase.afterStageProcessKilled != nil {
-		testCase.afterStageProcessKilled(t, fixture, binary)
+		testCase.afterStageProcessKilled(t, fixture, binary, anchorPIDFD, helperPIDFD)
 	}
 	command = startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessCommand(command, 90*time.Second, true); err != nil {
@@ -1973,6 +1979,11 @@ func runProductionLinuxV2StageCrashReplayCase(
 	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, response)
 	if err != nil {
 		t.Fatalf("stage %s recovery did not preserve the correct physical Journal state: %v", stage, err)
+	}
+	if response.RecoveryState == "released" && finalFound && final.Journal.LinuxCloneCheckoutReceipt == nil {
+		if err := linuxV2RequireRetainedPreCheckoutClone(final.Journal); err != nil {
+			t.Fatalf("stage %s release did not retain its exact pre-checkout clone: %v", stage, err)
+		}
 	}
 	if normalStop != nil {
 		initialReceipt := initial.Journal.ContainmentAuthority.StopReceipt
@@ -2258,13 +2269,154 @@ func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linu
 	return nil
 }
 
+// linuxV2RequireRetainedPreCheckoutClone requires the exact post-release retention the
+// product keeps: intent and seed with no checkout, promotion, abort or cleanup receipt.
+func linuxV2RequireRetainedPreCheckoutClone(journal state.RunJournal) error {
+	intent := journal.LinuxCloneIntent
+	if intent == nil || journal.LinuxCloneSeedReceipt == nil || journal.LinuxCloneCheckoutReceipt != nil ||
+		journal.LinuxClonePromotionIntent != nil || journal.LinuxClonePromotionReceipt != nil ||
+		journal.LinuxCloneAbortPending || journal.LinuxCloneAbortProof != nil || journal.LinuxCloneCleanupPending ||
+		journal.LinuxCloneCleanupIntent != nil || journal.LinuxCloneTargetRemovalProof != nil ||
+		journal.LinuxCloneCleanupProof != nil {
+		return errors.New("released journal did not retain its exact pre-checkout clone")
+	}
+	if intent.ValidateForJournal() != nil || journal.LinuxCloneSeedReceipt.Validate() != nil ||
+		journal.WorkspacePath != intent.Target || !journal.WorkspaceRecoveryRequired {
+		return errors.New("retained pre-checkout clone lost its exact intent, seed, or workspace reservation")
+	}
+	return nil
+}
+
+// linuxV2RequireRetainedCloneOutcome requires the named retention outcome for a
+// released replay whose clone never checked out.
+func linuxV2RequireRetainedCloneOutcome(response linuxV2OwnerWitnessResponse) error {
+	clone := response.Clone
+	if response.RecoveryState != "released" || clone != nil && clone.CheckoutReady {
+		return nil
+	}
+	if clone == nil || clone.Retention != "retained_after_release" || clone.IntentSHA256 == "" || clone.SeedDigest == "" {
+		return errors.New("released pre-checkout stage replay did not name its retained clone")
+	}
+	return nil
+}
+
 func linuxV2RequireSameStoreJournalSnapshot(before, after map[state.RunKey]linuxV2StoreJournalSnapshot) error {
-	return linuxV2RequireStoreJournalHistoryPreserved(before, after, nil)
+	return linuxV2RequireStoreJournalHistoryPreserved(before, after)
+}
+
+func TestLinuxV2RetainedPreCheckoutClonePredicates(t *testing.T) {
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: "run-1", Generation: 1, BindingKey: "primary",
+		ResourceID: "00000000-0000-4000-8000-000000000012", BaseCommit: strings.Repeat("a", 40),
+		BaseTreeDigest: "sha256:" + strings.Repeat("b", 64),
+		Nonce:          strings.Repeat("c", authority.LinuxCloneNonceBytes*2),
+		SeedPath:       "/var/lib/symmetry/seeds/binding-primary/run-run-1/generation-1.bundle",
+		Target:         "/home/native-b/workspaces/binding-primary/run-run-1/generation-1",
+	}
+	if err := intent.Validate(); err != nil {
+		t.Fatalf("retained clone intent fixture: %v", err)
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 1024, Device: 7, Inode: 11,
+	}
+	retained := state.RunJournal{
+		RunID: intent.RunID, Generation: intent.Generation,
+		RunCloneState: state.RunCloneState{
+			WorkspacePath: intent.Target, WorkspaceBindingKey: intent.BindingKey, WorkspaceRecoveryRequired: true,
+			LinuxCloneIntent: &intent, LinuxCloneSeedReceipt: &seed,
+		},
+	}
+	if err := linuxV2RequireRetainedPreCheckoutClone(retained); err != nil {
+		t.Fatalf("the exact retained pre-checkout clone was refused: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.RunJournal)
+	}{
+		{name: "checkout receipt present", mutate: func(journal *state.RunJournal) {
+			journal.LinuxCloneCheckoutReceipt = &authority.LinuxCloneCheckoutReceipt{}
+		}},
+		{name: "promotion receipt present", mutate: func(journal *state.RunJournal) {
+			journal.LinuxClonePromotionReceipt = &authority.LinuxClonePromotionReceipt{}
+		}},
+		{name: "abort proof present", mutate: func(journal *state.RunJournal) {
+			journal.LinuxCloneAbortProof = &authority.LinuxCloneAbortProof{}
+		}},
+		{name: "cleanup pending", mutate: func(journal *state.RunJournal) { journal.LinuxCloneCleanupPending = true }},
+		{name: "seed receipt missing", mutate: func(journal *state.RunJournal) { journal.LinuxCloneSeedReceipt = nil }},
+		{name: "workspace reservation missing", mutate: func(journal *state.RunJournal) {
+			journal.WorkspaceRecoveryRequired = false
+		}},
+		{name: "workspace path differs from the intent target", mutate: func(journal *state.RunJournal) {
+			journal.WorkspacePath = "/home/native-b/workspaces/elsewhere"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := retained
+			test.mutate(&journal)
+			if err := linuxV2RequireRetainedPreCheckoutClone(journal); err == nil {
+				t.Fatal("a non-retained shape passed the retained pre-checkout clone predicate")
+			}
+		})
+	}
+
+	named := linuxV2OwnerWitnessResponse{
+		RecoveryState: "released",
+		Clone: &linuxV2OwnerWitnessClone{
+			IntentSHA256: strings.Repeat("e", 64), SeedDigest: seed.Digest, Retention: "retained_after_release",
+		},
+	}
+	if err := linuxV2RequireRetainedCloneOutcome(named); err != nil {
+		t.Fatalf("the exact retained clone outcome was refused: %v", err)
+	}
+	for _, test := range []struct {
+		name     string
+		response linuxV2OwnerWitnessResponse
+	}{
+		{name: "unresolved replay", response: linuxV2OwnerWitnessResponse{RecoveryState: "unresolved"}},
+		{name: "checked-out release", response: linuxV2OwnerWitnessResponse{
+			RecoveryState: "released", Clone: &linuxV2OwnerWitnessClone{CheckoutReady: true},
+		}},
+	} {
+		t.Run(test.name+" needs no retention outcome", func(t *testing.T) {
+			if err := linuxV2RequireRetainedCloneOutcome(test.response); err != nil {
+				t.Fatalf("a replay that retains no pre-checkout clone was refused: %v", err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*linuxV2OwnerWitnessResponse)
+	}{
+		{name: "retention code missing", mutate: func(response *linuxV2OwnerWitnessResponse) {
+			response.Clone.Retention = ""
+		}},
+		{name: "unknown retention code", mutate: func(response *linuxV2OwnerWitnessResponse) {
+			response.Clone.Retention = "retained"
+		}},
+		{name: "intent digest missing", mutate: func(response *linuxV2OwnerWitnessResponse) {
+			response.Clone.IntentSHA256 = ""
+		}},
+		{name: "seed digest missing", mutate: func(response *linuxV2OwnerWitnessResponse) {
+			response.Clone.SeedDigest = ""
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := named
+			mutated := *named.Clone
+			response.Clone = &mutated
+			test.mutate(&response)
+			if err := linuxV2RequireRetainedCloneOutcome(response); err == nil {
+				t.Fatal("a release without its named retained clone passed the retention predicate")
+			}
+		})
+	}
 }
 
 func linuxV2RequireStoreJournalHistoryPreserved(
 	before, after map[state.RunKey]linuxV2StoreJournalSnapshot,
-	allowedNew *state.RunKey,
+	allowedNew ...state.RunKey,
 ) error {
 	for key, oldSnapshot := range before {
 		newSnapshot, found := after[key]
@@ -2279,7 +2431,7 @@ func linuxV2RequireStoreJournalHistoryPreserved(
 		if _, existed := before[key]; existed {
 			continue
 		}
-		if allowedNew == nil || key != *allowedNew {
+		if !slices.Contains(allowedNew, key) {
 			return fmt.Errorf("shared StateDir added unrelated RunJournal %s/%d", key.RunID, key.Generation)
 		}
 	}
@@ -4410,7 +4562,7 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 	}
 	journalSetAfter, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
 	key := state.RunKey{RunID: fixture.request.RunKey.RunID, Generation: fixture.request.RunKey.Generation}
-	setErr := linuxV2RequireStoreJournalHistoryPreserved(journalSetBefore, journalSetAfter, &key)
+	setErr := linuxV2RequireStoreJournalHistoryPreserved(journalSetBefore, journalSetAfter, key)
 	if err != nil || setErr != nil {
 		t.Fatalf("alternate-mount refusal changed retained StateDir journals: %v", errors.Join(err, setErr))
 	}

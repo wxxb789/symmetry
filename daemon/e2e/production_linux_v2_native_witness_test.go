@@ -368,11 +368,14 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "handoff_committed", markerDirectory: "negative-stale_journal_run_key-setup",
-		afterStageProcessKilled: func(t *testing.T, fixture linuxV2NativeFixture, binary string) {
+		afterStageProcessKilled: func(t *testing.T, fixture linuxV2NativeFixture, binary string, anchorPIDFD, helperPIDFD *os.File) {
 			t.Helper()
 			t.Run("fresh_request", func(t *testing.T) {
 				t.Helper()
 				assertDaemonServiceStopped(t)
+				if anchorPIDFD == nil || helperPIDFD == nil {
+					t.Fatal("the held setup boundary did not pin its exact anchor and helper PIDFDs")
+				}
 				if err := linuxV2ValidateRootWitnessFile(freshConfigPath, fixture.owner); err != nil {
 					t.Fatalf("validate root-controlled unresolved-guard config: %v", err)
 				}
@@ -428,25 +431,16 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 					marker.Owners.Gate.Identity != staged.Journal.ContainmentCgroup.Gate.Process.Identity {
 					t.Fatal("setup RunJournal does not bind the exact live anchor/helper/gate identities")
 				}
-				var processPIDFDs []*os.File
-				defer func() {
-					for _, fd := range processPIDFDs {
-						_ = fd.Close()
-					}
-				}()
-				for _, ownerProcess := range []*linuxV2OwnerWitnessProcess{marker.Owners.Anchor, marker.Owners.Helper} {
-					fd, err := linuxV2OpenStageOwnerPIDFD(ownerProcess, fixture.owner)
-					if err != nil {
-						t.Fatalf("pin exact live A anchor/helper PIDFD before fresh request: %v", err)
-					}
-					processPIDFDs = append(processPIDFDs, fd)
-				}
 				// A parked gate exits on owner loss by design (gate.c wait_for_release polls the owner
-				// pidfd), so only the anchor/helper must survive; the marker/RunJournal comparison still binds the gate.
-				for _, fd := range processPIDFDs {
-					if err := linuxV2RequireLivePIDFD(int(fd.Fd())); err != nil {
-						t.Fatalf("A anchor/helper was not live before fresh request: %v", err)
-					}
+				// pidfd) and the un-released helper exits through its owner-loss fail-safe; only the
+				// resident anchor must survive, and the marker/RunJournal comparison binds the rest.
+				if err := linuxV2RequireLivePIDFD(int(anchorPIDFD.Fd())); err != nil {
+					t.Fatalf("A anchor was not live before the fresh request: %v", err)
+				}
+				// The helper's own owner-loss stop is bounded at 30 s (linuxOwnerHelperV2StopTimeout);
+				// the fixture must wait past that bound or it races the fail-safe.
+				if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 90*time.Second); err != nil {
+					t.Fatalf("A helper did not exit with owner loss before the fresh request: %v", err)
 				}
 				journalsBefore, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
 				if err != nil {
@@ -520,21 +514,124 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 				if _, found := journalsAfter[freshKey]; found {
 					t.Fatal("fresh request persisted a new RunJournal before unresolved-journal denial")
 				}
-				for _, fd := range processPIDFDs {
-					if err := linuxV2RequireLivePIDFD(int(fd.Fd())); err != nil {
-						t.Fatalf("fresh request changed or lost the exact A anchor/helper process: %v", err)
-					}
+				if err := linuxV2RequireLivePIDFD(int(anchorPIDFD.Fd())); err != nil {
+					t.Fatalf("fresh request changed or lost the exact A anchor process: %v", err)
+				}
+				if exited, err := linuxV2PIDFDExitedNow(int(helperPIDFD.Fd())); err != nil || !exited {
+					t.Fatalf("fresh request changed or revived the exited A helper: exited=%t error=%v", exited, err)
 				}
 			})
 		},
 	}
-	fixture, _ := runProductionLinuxV2StageCrashReplayCase(t, "handoff_committed", setupCase)
-	final, found, err := readLinuxWitnessJournalForKey(fixture.stateDir, state.RunKey{
-		RunID: fixture.request.RunKey.RunID, Generation: fixture.request.RunKey.Generation,
-	})
+	fixture, binary := runProductionLinuxV2StageCrashReplayCase(t, "handoff_committed", setupCase)
+	setupKey := state.RunKey{RunID: fixture.request.RunKey.RunID, Generation: fixture.request.RunKey.Generation}
+	final, found, err := readLinuxWitnessJournalForKey(fixture.stateDir, setupKey)
 	if err != nil || !found || !linuxV2JournalHasPhysicalRelease(final.Journal) {
 		t.Fatalf("same-RunKey setup recovery did not persist its exact v2 physical release proof: found=%t error=%v", found, err)
 	}
+	if err := linuxV2RequireRetainedPreCheckoutClone(final.Journal); err != nil {
+		t.Fatalf("setup recovery did not retain its exact pre-checkout clone: %v", err)
+	}
+	// The retained row no longer blocks unrelated work: the same fresh request the
+	// unresolved row denied must now be admitted and reach its own boundary.
+	t.Run("fresh_request_admitted", func(t *testing.T) {
+		t.Helper()
+		assertDaemonServiceStopped(t)
+		freshRequestPath := strings.TrimSpace(os.Getenv(linuxV2UnresolvedJournalGuardFreshRequestEnvironment))
+		freshCase := linuxV2NativeWitnessCase{
+			harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+			requestEnvironment: linuxV2UnresolvedJournalGuardFreshRequestEnvironment,
+			requestCase:        "stage_replay", barrierStage: "handoff_committed",
+			markerDirectory: "negative-stale_journal_run_key-setup",
+		}
+		if err := linuxV2ValidateRootWitnessFile(freshConfigPath, fixture.owner); err != nil {
+			t.Fatalf("validate root-controlled unresolved-guard config: %v", err)
+		}
+		freshValue, err := config.Load(freshConfigPath)
+		if err != nil {
+			t.Fatalf("load root-controlled unresolved-guard config: %v", err)
+		}
+		freshRequest, err := linuxV2ReadOwnerWitnessRequest(freshRequestPath, freshCase, freshValue, fixture.owner)
+		if err != nil {
+			t.Fatalf("fresh request is not an authentic, non-replay native claim: %v", err)
+		}
+		profile, ok := freshValue.AgentProfiles[freshValue.Runtime.AgentProfile]
+		if !ok {
+			t.Fatal("fresh-run config omitted the installed native profile")
+		}
+		workspaceBinding, ok := freshValue.Workspaces[freshValue.Runtime.Workspace]
+		if !ok {
+			t.Fatal("fresh-run config omitted the installed native workspace")
+		}
+		freshFixture := fixture
+		freshFixture.value, freshFixture.configPath, freshFixture.requestPath = freshValue, freshConfigPath, freshRequestPath
+		freshFixture.request, freshFixture.profile, freshFixture.workspace = freshRequest, profile, workspaceBinding
+		freshFixture.responsePath = filepath.Join(fixture.artifactDir, "fresh-admitted-response.json")
+		freshKey := state.RunKey{RunID: freshRequest.RunKey.RunID, Generation: freshRequest.RunKey.Generation}
+		freshBarrierEntries, err := os.ReadDir(freshRequest.Barrier.Directory)
+		if err != nil || len(freshBarrierEntries) != 0 {
+			t.Fatalf("admitted fresh request barrier is not empty: entries=%d error=%v", len(freshBarrierEntries), err)
+		}
+		journalsBefore, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
+		if err != nil {
+			t.Fatalf("snapshot shared State before the admitted fresh request: %v", err)
+		}
+		if _, present := journalsBefore[freshKey]; present {
+			t.Fatal("the fresh request already persisted a RunJournal before its admitted run")
+		}
+		command := startLinuxV2OwnerWitnessCommand(t, binary, freshFixture)
+		if err := waitLinuxV2OwnerWitnessStage(freshRequest, time.Duration(freshRequest.Barrier.TimeoutSeconds)*time.Second); err != nil {
+			linuxV2ReportOwnerWitnessFailure(t, freshFixture, command)
+			t.Fatalf("admitted fresh request did not reach its durable stage boundary: %v", err)
+		}
+		marker, err := linuxV2ReadOwnerWitnessStageMarker(freshFixture, "handoff_committed")
+		if err != nil {
+			t.Fatalf("read admitted fresh stage marker: %v", err)
+		}
+		admitted, admittedFound, err := readLinuxWitnessJournalForKey(fixture.stateDir, freshKey)
+		if err != nil || !admittedFound {
+			t.Fatalf("read admitted fresh RunJournal: found=%t error=%v", admittedFound, err)
+		}
+		if err := linuxV2ValidateStageJournalBoundary(freshFixture, "handoff_committed", marker, admitted.Journal); err != nil {
+			t.Fatalf("admitted fresh run did not expose its exact persisted boundary: %v", err)
+		}
+		// The fixture's shared-State cleanup allows exactly the keys a test proves; the
+		// admitted run's journal is registered here and nowhere else.
+		*fixture.allowedNewRunKeys = append(*fixture.allowedNewRunKeys, freshKey)
+		if err := linuxV2KillOwnerWitnessCommand(command); err != nil {
+			t.Fatalf("SIGKILL the admitted fresh run: %v", err)
+		}
+		recovery := startLinuxV2OwnerWitnessCommand(t, binary, freshFixture)
+		if err := waitLinuxV2OwnerWitnessCommand(recovery, 90*time.Second, true); err != nil {
+			t.Fatalf("wait for the admitted fresh same-RunKey recovery: %v", err)
+		}
+		response, err := linuxV2ReadOwnerWitnessResponse(recovery.responsePath, freshRequest, true)
+		if err != nil {
+			t.Fatalf("read admitted fresh recovery response: %v", err)
+		}
+		requireLinuxV2RecoveryExitStatus(t, recovery, response.Outcome)
+		if err := linuxV2ValidateStageReplayResponse(freshFixture, "handoff_committed", response); err != nil {
+			t.Fatalf("admitted fresh recovery response failed exact-state assertions: %v", err)
+		}
+		admittedFinal, admittedFinalFound, err := linuxV2ValidateStageReplayJournal(freshFixture, response)
+		if err != nil || !admittedFinalFound {
+			t.Fatalf("admitted fresh recovery did not preserve its exact Journal state: found=%t error=%v", admittedFinalFound, err)
+		}
+		if err := linuxV2RequireRetainedPreCheckoutClone(admittedFinal.Journal); err != nil {
+			t.Fatalf("admitted fresh recovery did not retain its pre-checkout clone: %v", err)
+		}
+		journalsAfter, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
+		if err != nil {
+			t.Fatalf("snapshot shared State after the admitted fresh run: %v", err)
+		}
+		if err := linuxV2RequireStoreJournalHistoryPreserved(journalsBefore, journalsAfter, freshKey); err != nil {
+			t.Fatalf("admitted fresh run changed another retained RunJournal: %v", err)
+		}
+		setupAfter, setupFound := journalsAfter[setupKey]
+		if !setupFound || !bytes.Equal(final.Raw, setupAfter.raw) {
+			t.Fatal("the admitted fresh run changed the retained setup RunJournal")
+		}
+	})
 }
 
 func linuxV2AssertStaleRequestVariant(caseName, harnessKind string, setup, stale linuxV2OwnerWitnessRequest) error {
@@ -989,7 +1086,9 @@ type linuxV2NativeWitnessCase struct {
 	daemonCrashWitness     bool
 	containmentRequired    bool
 	// afterStageProcessKilled runs before same-RunKey recovery; nil for ordinary replay cases.
-	afterStageProcessKilled func(*testing.T, linuxV2NativeFixture, string)
+	// The anchor and helper PIDFDs are pinned at the held boundary: the anchor is
+	// resident by design, the helper exits through its owner-loss fail-safe.
+	afterStageProcessKilled func(*testing.T, linuxV2NativeFixture, string, *os.File, *os.File)
 }
 
 type linuxV2HelperResponseLossCase struct {
@@ -1077,6 +1176,7 @@ type linuxV2OwnerWitnessClone struct {
 	CheckoutReady  bool   `json:"checkout_ready"`
 	CheckoutDevice uint64 `json:"checkout_device"`
 	CheckoutInode  uint64 `json:"checkout_inode"`
+	Retention      string `json:"retention"`
 }
 
 type linuxV2OwnerWitnessExit struct {
@@ -1518,6 +1618,7 @@ type linuxV2NativeFixture struct {
 	helperResponseDrop string
 	helperAction       string
 	keepRoot           *bool
+	allowedNewRunKeys  *[]state.RunKey
 }
 
 func linuxV2ReadOwnerWitnessRequest(path string, testCase linuxV2NativeWitnessCase, value config.Config, owner linuxgate.OwnerConfig) (linuxV2OwnerWitnessRequest, error) {
@@ -1828,13 +1929,16 @@ func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) li
 		value: value, configPath: configPath, requestPath: requestPath, request: request,
 		stateDir: stateDir, root: root, artifactDir: artifactDir, responsePath: filepath.Join(artifactDir, "owner-witness-response.json"), profile: profile,
 		workspace: workspace, owner: owner, keepRoot: new(bool),
-		markerDir: markerDir, helperResponseDrop: testCase.helperResponseDrop, helperAction: testCase.helperAction,
+		allowedNewRunKeys: new([]state.RunKey),
+		markerDir:         markerDir, helperResponseDrop: testCase.helperResponseDrop, helperAction: testCase.helperAction,
 	}
 	t.Cleanup(func() {
 		currentJournals, err := linuxV2SnapshotStoreJournals(stateDir)
 		if err != nil {
 			t.Errorf("read shared StateDir after production witness: %v", err)
-		} else if err := linuxV2RequireStoreJournalHistoryPreserved(priorJournals, currentJournals, &key); err != nil {
+		} else if err := linuxV2RequireStoreJournalHistoryPreserved(
+			priorJournals, currentJournals, append([]state.RunKey{key}, *fixture.allowedNewRunKeys...)...,
+		); err != nil {
 			t.Errorf("production witness changed a previously retained RunJournal: %v", err)
 		}
 		if t.Failed() || *fixture.keepRoot {

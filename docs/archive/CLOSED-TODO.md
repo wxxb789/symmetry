@@ -5154,3 +5154,51 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       exits 0. Product files untouched (`autonomous.go` blob `d82b5991…`), no assertion removed, no
       bound raised, no skip. Evidence: `docs/evidence/rf-flake-autonomous-return-reader-2026-11-25.md`.
       CI `daemon`/`daemon-windows` on the PR head: pending (conductor-owned).
+
+## rf-acc-owner-loss-semantics (2026-11-25)
+
+- [ ] rf-acc-owner-loss-semantics: F4 design question — owner-loss resolution versus the
+      unresolved-journal premise (2026-11-25, same goal and ruling; evidence record §4c): a parked
+      gate exits on owner loss by design (`daemon/native/linux-gate/c-gate/gate.c:731-757`) and the
+      un-released helper aborts the containment and exits
+      (`daemon/internal/platform/helper_v2_recovery.go:223-225`), so the same-RunKey recovery leg
+      refuses with `recover existing owner witness RunJournal without launch` where the test's
+      premise wants the unresolved journal to survive the SIGKILL. Either the product must let a
+      same-RunKey recovery consume the owner-loss receipt, or the test must assert the
+      resolved-by-owner-loss state; both change what the pre-existing product test proves. Needs a
+      consult before any change; the four stale-journal sets' guest-denial rows (run `45489336388`)
+      stay unproven until ruled.
+
+      **Closed (2026-11-25, branch `refactor/rf-acc-owner-loss-semantics`, plan
+      `docs/plans/2026-11-25-rf-acc-owner-loss-semantics-plan.md`):** Q1 = (a), ruled from the two
+      step-1 consults (`findings/rf-acc-owner-loss-consult-{sol,ds}.md`): the owner-loss stop
+      evidence is already anchor-authenticated and its dead-helper branch
+      (`linux_owner_recovery_linux.go:1238-1257`) consumes it, so the same-RunKey recovery reaches
+      the post-tombstone step; candidate (B) was then confirmed by run `45557621798`, which names the
+      witness's forced clone cleanup. The ruled d1b increment makes the deliberate pre-checkout clone
+      retention a named witness outcome (`linux_owner_witness_linux.go:512-535`) and closes the
+      cgroup leaf gap in admission (`linux_cgroup_journal.go`, `linux_clone_validation.go`). The
+      four sets now reach their contract boundaries on the delivered bytes: base census run
+      `45595454970` shows the pre-change refusal, acceptance run `45608856419` exits 0 for all four
+      (`All 4 case sets exited 0.`), mutants M1-M12 in record §6. The unbuilt clone-row disposition
+      command keeps its own open entry.
+
+- [ ] rf-acc-owner-loss-semantics: owner-identity polish deferred from the rf-acc-witness-unresolved-exit
+      round-1 reviews (2026-11-25, same goal; evidence record §9 items 8-10): (a) a consistently
+      swapped owner set passes `linuxV2RequireSameOwnerIdentities` because `linuxV2JournalBindsOwnerSlot`
+      is a presence gate only — bind each bound slot's PID/identity to the journal value (security
+      review F1, LOW, pre-existing); (b) the table test does not exercise the handoff, authority,
+      release-proof or pre-gate branches of `linuxV2JournalBindsOwnerSlot` — add rows on
+      `ContainmentAuthority`-backed journals (DS audit F5); (c) the bound→different row changes PID
+      and identity together — add an equal-PID, different-identity row isolating pass 1's identity
+      term (Sol review P3). Deferred to keep the delivered e2e bytes frozen through the binding run
+      (`45548810398`, record §12).
+
+      **Closed (2026-11-25, branch `refactor/rf-acc-owner-loss-semantics`, plan
+      `docs/plans/2026-11-25-rf-acc-owner-loss-semantics-plan.md` §2.7):** all three items landed on
+      the delivered e2e bytes. (a) every journal-bound owner slot is bound to the journal's own
+      PID/creation projection (`production_linux_v2_owner_cli_test.go:1742-1744`), so a consistently
+      swapped marker/response set reddens; mutant M10 (record §6) reverts the binding and reds the
+      swap row and the equal-PID row verbatim. (b) the table gains the handoff, authority,
+      release-proof and pre-gate rows (`production_linux_v2_owner_identity_test.go`, phase table).
+      (c) the equal-PID, different-identity row isolates the identity term.

@@ -96,6 +96,42 @@ missing creation identity or lost native containment evidence remains an explici
 recovery limitation, and no synthetic identity or claimed native capability fills
 it.
 
+## Retained pre-checkout clone after a normal release
+
+A same-RunKey recovery that consumes an authenticated physical release for a run
+whose B-owned clone never checked out keeps the clone row, the B checkout, the A
+seed bundle and that RunKey's `refs/heads/symmetry/clone-v2/base/<hash>` ref on
+disk. That retention is the recorded durable shape, not a failure: the row keeps
+its `linux_clone_intent` (`seed_path`, `target`), `linux_clone_seed_receipt` and
+the containment release proof, and carries no checkout, promotion, abort or
+cleanup field. A normal release proves that containment stopped; it does not
+prove that B never ran, so a release tombstone never authorizes clone deletion
+and no product disposition deletes this row today. The row no longer blocks
+unrelated native admission, and its seed and target paths and its cgroup leaf
+name stay reserved for new reservations until an explicitly authorized
+disposition exists.
+
+Read-only locator over the daemon's configured StateDir; it changes nothing:
+
+```bash
+state_dir=$(jq -r .state_dir /etc/symmetry/daemon.json)
+for journal in "$state_dir"/runs/journal-*.json; do
+  jq -e 'select(.linux_clone_intent != null and .containment_cgroup_release_proof != null
+    and .linux_clone_checkout_receipt == null and .linux_clone_abort_pending != true
+    and .linux_clone_abort_proof == null and .linux_clone_cleanup_intent == null
+    and .linux_clone_cleanup_proof == null and .linux_clone_promotion_receipt == null)' \
+    "$journal" >/dev/null || continue
+  run_id=$(jq -r .run_id "$journal")
+  generation=$(jq -r .generation "$journal")
+  base_ref="refs/heads/symmetry/clone-v2/base/$(printf '%s\0%s' "$run_id" "$generation" | sha256sum | cut -d' ' -f1)"
+  jq -r --arg ref "$base_ref" '"\(.run_id) \(.generation) \(.linux_clone_intent.seed_path) \(.linux_clone_intent.target) \($ref)"' "$journal"
+done
+```
+
+The row's B clone, A seed and base ref stay on disk until an authorized
+disposition exists; `docs/TODO.md` tracks the disposition command that does not
+exist yet.
+
 ## Run the checks
 
 From `daemon/`, per [`daemon/AGENTS.md`](../../daemon/AGENTS.md):

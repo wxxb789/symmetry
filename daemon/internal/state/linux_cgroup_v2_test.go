@@ -910,6 +910,206 @@ func TestLinuxV2AdmissionAllowsLiveFencedAndPhysicallyReleasedOwners(t *testing.
 	}
 }
 
+// retainStateReleasedPreCheckoutClone persists the retained pre-checkout shape through
+// production mutations: intent and seed with an exact v2 release tombstone, no checkout.
+func retainStateReleasedPreCheckoutClone(t *testing.T, store *Store, runID string) RunJournal {
+	t.Helper()
+	journal, intent := newLinuxCloneJournal(t, runID)
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReserveLinuxCloneIntent(journal.Key(), journal.Fence(), intent, nil); err != nil {
+		t.Fatal(err)
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("a", 64), Size: 1024, Device: 7, Inode: 11,
+	}
+	if _, err := store.BindLinuxCloneSeed(journal.Key(), journal.Fence(), intent, seed); err != nil {
+		t.Fatal(err)
+	}
+	releaseProof := testStateLinuxCgroupV2ReleaseProofFixture(t)
+	if _, err := store.mutateJournal(journal.Key(), func(value *RunJournal) error {
+		value.ContainmentCgroupReleaseProof = &releaseProof
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retained := loadStateJournal(t, store, journal.Key())
+	if !linuxV2ReleasedCloneRetainedAfterRelease(retained) {
+		t.Fatal("the production release mutations did not persist the retained pre-checkout shape")
+	}
+	return retained
+}
+
+// retainedLeafReservation names a reservation on the retained release's exact parent
+// path with the requested leaf name.
+func retainedLeafReservation(t *testing.T, retained RunJournal, leafName string) LinuxCgroupReservation {
+	t.Helper()
+	proof := retained.ContainmentCgroupReleaseProof
+	if proof == nil || proof.CgroupIdentity == nil {
+		t.Fatal("retained pre-checkout release lacks its cgroup identity")
+	}
+	reservation := testStateLinuxCgroupV2Reservation()
+	reservation.Parent = proof.CgroupIdentity.Parent
+	reservation.LeafName = leafName
+	if err := reservation.Validate(); err != nil {
+		t.Fatalf("retained leaf reservation fixture: %v", err)
+	}
+	return reservation
+}
+
+func saveLinuxV2AdmissionTarget(t *testing.T, store *Store, runID string) (RunJournal, authority.LinuxCloneIntent) {
+	t.Helper()
+	target, intent := newLinuxCloneJournal(t, runID)
+	if err := store.SaveJournal(target); err != nil {
+		t.Fatal(err)
+	}
+	return target, intent
+}
+
+// TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease pins the d1b clone-retention
+// ruling: a normal release whose clone never checked out stops blocking unrelated
+// foreign native admission while its intent keeps the seed/target paths and its cgroup
+// leaf name reserved. Every other shape stays blocking.
+func TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease(t *testing.T) {
+	t.Parallel()
+	requireLinuxCloneAMD64(t)
+	freshLeafName := strings.Repeat("0", authority.TokenBytes*2)
+	if freshLeafName == testStateLinuxCgroupV2ReadyReservation().LeafName {
+		t.Fatal("fresh leaf fixture name collides with the retained reservation fixture")
+	}
+
+	t.Run("non-aliasing intent and fresh leaf are admitted", func(t *testing.T) {
+		t.Parallel()
+		store := mustStore(t)
+		retained := retainStateReleasedPreCheckoutClone(t, store, "retained-pre-checkout-admit")
+		retainedBefore := readStateJournalBytes(t, store, retained.Key())
+		if err := store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err != nil {
+			t.Fatalf("preclaim dispatch rejected the exact retained pre-checkout release: %v", err)
+		}
+		target, intent := saveLinuxV2AdmissionTarget(t, store, "admission-pre-checkout-target")
+		if err := store.CheckLinuxV2NativeAdmission(target.Key(), target.Fence(), time.Now().UTC(), nil); err != nil {
+			t.Fatalf("post-claim admission rejected a fresh run beside the retained pre-checkout release: %v", err)
+		}
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err != nil {
+			t.Fatalf("clone intent reservation blocked by the retained pre-checkout release: %v", err)
+		}
+		reservation := retainedLeafReservation(t, retained, freshLeafName)
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), reservation, nil); err != nil {
+			t.Fatalf("fresh cgroup reservation blocked by the retained pre-checkout release: %v", err)
+		}
+		if after := readStateJournalBytes(t, store, retained.Key()); !bytes.Equal(retainedBefore, after) {
+			t.Fatal("admitting an unrelated run mutated the retained pre-checkout release")
+		}
+	})
+
+	t.Run("seed path alias is refused", func(t *testing.T) {
+		t.Parallel()
+		store := mustStore(t)
+		retained := retainStateReleasedPreCheckoutClone(t, store, "retained-pre-checkout-seed-alias")
+		target, intent := saveLinuxV2AdmissionTarget(t, store, "admission-pre-checkout-seed-alias")
+		intent.SeedPath = retained.LinuxCloneIntent.SeedPath
+		before := readStateJournalBytes(t, store, retained.Key())
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err == nil {
+			t.Fatal("retained pre-checkout release did not keep its seed path reserved")
+		}
+		if after := readStateJournalBytes(t, store, retained.Key()); !bytes.Equal(before, after) {
+			t.Fatal("refused clone intent alias mutated the retained pre-checkout release")
+		}
+	})
+
+	t.Run("cross seed/target alias is refused", func(t *testing.T) {
+		t.Parallel()
+		store := mustStore(t)
+		retained := retainStateReleasedPreCheckoutClone(t, store, "retained-pre-checkout-cross-alias")
+		target, intent := saveLinuxV2AdmissionTarget(t, store, "admission-pre-checkout-cross-alias")
+		intent.SeedPath = retained.LinuxCloneIntent.Target
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err == nil {
+			t.Fatal("retained pre-checkout release did not keep its target path reserved against a seed alias")
+		}
+	})
+
+	t.Run("same leaf name is refused", func(t *testing.T) {
+		t.Parallel()
+		store := mustStore(t)
+		retained := retainStateReleasedPreCheckoutClone(t, store, "retained-pre-checkout-leaf")
+		target, intent := saveLinuxV2AdmissionTarget(t, store, "admission-pre-checkout-leaf")
+		if _, err := store.ReserveLinuxCloneIntent(target.Key(), target.Fence(), intent, nil); err != nil {
+			t.Fatal(err)
+		}
+		same := retainedLeafReservation(t, retained, retained.ContainmentCgroupReleaseProof.CgroupIdentity.LeafName)
+		if _, err := store.ReserveLinuxCgroup(target.Key(), target.Fence(), same, nil); err == nil {
+			t.Fatal("retained pre-checkout release did not keep its cgroup leaf name reserved")
+		}
+	})
+
+	t.Run("other shapes stay blocking", func(t *testing.T) {
+		t.Parallel()
+		store := mustStore(t)
+		retained := retainStateReleasedPreCheckoutClone(t, store, "retained-pre-checkout-blocking")
+		if !linuxV2ForeignJournalIsSafelyRetired(retained) {
+			t.Fatal("the exact retained pre-checkout release is not classified as safely retired")
+		}
+		for _, test := range []struct {
+			name   string
+			mutate func(RunJournal) RunJournal
+		}{
+			{name: "native usage recovery required", mutate: func(journal RunJournal) RunJournal {
+				journal.NativeUsageRecoveryRequired = true
+				return journal
+			}},
+			{name: "unproven containment", mutate: func(journal RunJournal) RunJournal {
+				journal.ContainmentUnproven = true
+				return journal
+			}},
+			{name: "pending clone abort", mutate: func(journal RunJournal) RunJournal {
+				journal.LinuxCloneAbortPending = true
+				return journal
+			}},
+			{name: "clone cleanup pending", mutate: func(journal RunJournal) RunJournal {
+				journal.LinuxCloneCleanupPending = true
+				return journal
+			}},
+			{name: "checkout receipt present", mutate: func(journal RunJournal) RunJournal {
+				checkout := authority.LinuxCloneCheckoutReceipt{
+					Version: authority.LinuxCloneVersion, RunID: journal.RunID, Generation: journal.Generation,
+					BindingKey: journal.LinuxCloneIntent.BindingKey, ResourceID: journal.LinuxCloneIntent.ResourceID,
+					Target: journal.LinuxCloneIntent.Target, Nonce: journal.LinuxCloneIntent.Nonce,
+					SeedDigest: journal.LinuxCloneSeedReceipt.Digest, BaseCommit: journal.LinuxCloneIntent.BaseCommit,
+					TargetDevice: 1, TargetInode: 2,
+				}
+				journal.LinuxCloneCheckoutReceipt = &checkout
+				return journal
+			}},
+			{name: "release proof without a stop receipt", mutate: func(journal RunJournal) RunJournal {
+				proof := journal.ContainmentCgroupReleaseProof.Clone()
+				proof.StopReceipt = nil
+				journal.ContainmentCgroupReleaseProof = &proof
+				return journal
+			}},
+			{name: "leaf disposition is not removal", mutate: func(journal RunJournal) RunJournal {
+				proof := journal.ContainmentCgroupReleaseProof.Clone()
+				proof.LeafDisposition = ""
+				journal.ContainmentCgroupReleaseProof = &proof
+				return journal
+			}},
+			{name: "unreleased row", mutate: func(journal RunJournal) RunJournal {
+				journal.ContainmentCgroupReleaseProof = nil
+				return journal
+			}},
+			{name: "reuse grant", mutate: func(journal RunJournal) RunJournal {
+				journal.LinuxCloneReuseGrant = &authority.LinuxCloneReuseGrant{}
+				return journal
+			}},
+		} {
+			if linuxV2ForeignJournalIsSafelyRetired(test.mutate(retained)) {
+				t.Fatalf("%s shape was admitted as a safely retired foreign owner", test.name)
+			}
+		}
+	})
+}
+
 func TestLinuxV2TargetAdmissionRejectsUnsafeLifecycleAtEveryEffectCAS(t *testing.T) {
 	t.Parallel()
 	requireLinuxCloneAMD64(t)

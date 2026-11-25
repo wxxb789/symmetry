@@ -1569,3 +1569,161 @@ func TestLinuxV2NativeWitnessConfigRequiresThePinnedKindVersion(t *testing.T) {
 		}
 	}
 }
+
+// testLinuxV2NativeWitnessRetainedCloneJournal builds the released pre-checkout
+// clone value the ordinary release leaves behind, through the App clone callbacks.
+func testLinuxV2NativeWitnessRetainedCloneJournal(t *testing.T) state.RunJournal {
+	t.Helper()
+	store, key, _, grant, _ := linuxCloneCallbackFixtureAt(t, t.TempDir())
+	defer store.Close()
+	handoff, owner, _ := bindAppLinuxV2Owner(t, store, key, testAppLinuxV2Reservation())
+	proof := linuxCloneAppReleaseProof(t, handoff, appLinuxV2StopReceipt(t, owner))
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent, seed := grant.Intent, grant.Seed
+	journal.LinuxCloneIntent = &intent
+	journal.LinuxCloneSeedReceipt = &seed
+	journal.WorkspacePath = intent.Target
+	journal.WorkspaceRecoveryRequired = true
+	journal.PID, journal.ProcessIdentity, journal.StartedAt = 0, "", time.Time{}
+	journal.ContainmentCgroup = nil
+	journal.ContainmentAuthority = nil
+	journal.ContainmentHandoff = nil
+	journal.ContainmentScans = nil
+	journal.ContainmentUnproven = false
+	journal.ContainmentCgroupReleaseProof = &proof
+	return journal
+}
+
+func TestLinuxV2NativeWitnessCloneRetentionNamesOnlyTheRetainedRelease(t *testing.T) {
+	t.Parallel()
+	retained := testLinuxV2NativeWitnessRetainedCloneJournal(t)
+	if !linuxV2NativeWitnessCloneRetainedAfterRelease(retained) {
+		t.Fatal("the released pre-checkout clone is not recognized as the retained shape")
+	}
+	if !linuxV2NativeWitnessCloneRetentionAfterRelease(retained, retained) {
+		t.Fatal("an unchanged released pre-checkout clone is not classified as its deliberate retention")
+	}
+	cases := []struct {
+		name   string
+		before func(state.RunJournal) state.RunJournal
+		after  func(state.RunJournal) state.RunJournal
+	}{
+		{
+			name: "the cleanup attempt changed the retained row",
+			before: func(journal state.RunJournal) state.RunJournal {
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.RetainWorkspace = true
+				return journal
+			},
+		},
+		{
+			name: "the row carries a checkout receipt",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneCheckoutReceipt = &authority.LinuxCloneCheckoutReceipt{}
+				return journal
+			},
+		},
+		{
+			name: "the row carries a promotion receipt",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxClonePromotionReceipt = &authority.LinuxClonePromotionReceipt{}
+				return journal
+			},
+		},
+		{
+			name: "the row carries a clone cleanup intent",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneCleanupIntent = &authority.LinuxCloneCleanupIntent{}
+				return journal
+			},
+		},
+		{
+			name: "the row carries a pending clone abort",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneAbortPending = true
+				return journal
+			},
+		},
+		{
+			name: "the row is not physically released",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.ContainmentCgroupReleaseProof = nil
+				return journal
+			},
+		},
+		{
+			name: "the retained seed receipt is missing",
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneSeedReceipt = nil
+				return journal
+			},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			before, after := retained, retained
+			if test.before != nil {
+				before = test.before(retained)
+			}
+			after = test.after(retained)
+			if linuxV2NativeWitnessCloneRetentionAfterRelease(before, after) {
+				t.Fatal("a non-retention cleanup outcome was named as the deliberate clone retention")
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessCloneRetentionSummaryVocabulary(t *testing.T) {
+	t.Parallel()
+	base := linuxV2NativeWitnessSummary{
+		Case: "stage_replay", RecoveryState: "released",
+		Clone: linuxV2NativeWitnessClone{IntentSHA256: strings.Repeat("a", 64), SeedDigest: "sha256:" + strings.Repeat("b", 64)},
+	}
+	if err := linuxV2NativeWitnessCloneRetentionError("stage_replay", base); err != nil {
+		t.Fatalf("a summary without a named retention was refused: %v", err)
+	}
+	named := base
+	named.Clone.Retention = linuxV2NativeWitnessCloneRetentionRetainedAfterRelease
+	if err := linuxV2NativeWitnessCloneRetentionError("stage_replay", named); err != nil {
+		t.Fatalf("the exact retained outcome was refused: %v", err)
+	}
+	cases := []struct {
+		name     string
+		caseName string
+		mutate   func(*linuxV2NativeWitnessSummary)
+	}{
+		{name: "unknown retention code", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.Clone.Retention = "retained"
+		}},
+		{name: "another case", caseName: "codex_containment", mutate: func(summary *linuxV2NativeWitnessSummary) {}},
+		{name: "another recovery state", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.RecoveryState = "unresolved"
+		}},
+		{name: "unproven journal", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.JournalUnproven = true
+		}},
+		{name: "checked out clone", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.Clone.CheckoutReady = true
+		}},
+		{name: "missing intent digest", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.Clone.IntentSHA256 = ""
+		}},
+		{name: "missing seed digest", caseName: "stage_replay", mutate: func(summary *linuxV2NativeWitnessSummary) {
+			summary.Clone.SeedDigest = ""
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			summary := named
+			test.mutate(&summary)
+			if err := linuxV2NativeWitnessCloneRetentionError(test.caseName, summary); err == nil {
+				t.Fatal("an inconsistent clone retention outcome was accepted")
+			}
+		})
+	}
+}
