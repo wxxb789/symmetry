@@ -1664,9 +1664,10 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `launcher_integration_linux_test.go:439` checks pass); the runs stop beyond the wall at
       rows named verbatim in the record §8 (the migration turn wait and `shared`'s
       `/proc/<pid>/environ` identity rows) — next-goal territory, out of this goal's scope. The
-      apply and fix stages changed bytes after that head, so this entry binds the wall rows to
-      `ce3c30b9` alone; the conductor's Bind run on the PR head re-binds the delivered revisions
-      (record §1 digests, §8 delta tables).
+      apply, fix and round-1 stages changed bytes after that head, so this entry binds the wall
+      rows to `ce3c30b9` alone; the conductor's Bind run `45688173130` bound `2d423748`, the
+      round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds the delivered
+      revisions (record §1 digests, §8 delta tables).
 
 ## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
 

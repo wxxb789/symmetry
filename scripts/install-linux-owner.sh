@@ -51,10 +51,12 @@ fails closed: a profile that cannot be loaded and verified is not published, a h
 carries the profile while the restriction is absent or 0 is refused, and a re-run whose staged
 text differs from the published file stops naming -remove-userns-profile as the remedy. The
 policy inputs must be root-owned and non-writable: the profile file, its include closure
-(abi/4.0, tunables/global) and their directories. Verification compares the compilation of the
-exact staged bytes with compression disabled against the kernel's recorded policy hash, whole or
-from byte 9 (apparmor_parser < 5 writes the whole output uncompressed and is accepted there);
-the kernel hashes the decompressed policy, so a compressed compile never matches.
+(abi/4.0, tunables/global) and the closure's directories; a closure ACL that cannot be read or
+grants an effective write to any identity but root is refused before anything loads. Verification
+compares the compilation of the exact staged bytes with compression disabled against the
+kernel's recorded policy hash, whole or from byte 9 (apparmor_parser < 5 writes the whole output
+uncompressed and is accepted there); the kernel hashes the decompressed policy, so a compressed
+compile never matches.
 
 Bounded AppArmor modes outside a full install:
   install-linux-owner.sh -print-userns-profile    print the exact profile text to stdout
@@ -83,6 +85,11 @@ USERSNS_SYSCTL=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 USERSNS_PROFILES_ROOT=/sys/kernel/security/apparmor/policy/profiles
 USERSNS_ABI_FILE=/etc/apparmor.d/abi/4.0
 USERSNS_TUNABLES_FILE=/etc/apparmor.d/tunables/global
+
+# The daemon preflight bounds the same parser at 10s and a 4 MiB compile capture; a longer wait
+# or a bigger capture must fail closed here too.
+USERSNS_PARSER_DEADLINE=10
+USERSNS_PARSER_OUTPUT_MAX=4194304
 
 print_userns_profile() {
   printf 'abi <abi/4.0>,\n'
@@ -505,6 +512,70 @@ read_userns_restriction() {
   printf 'absent\n'
 }
 
+# Mirrors the preflight's no-untrusted-ACL-write rule: the mode bits show only the ACL mask, so
+# a named grant needs its own read, and root is the only trusted ACL identity.
+verify_userns_acl_write_free() {
+  acl_path=$1
+  acl_kind=$2
+  acl_text=$(/usr/bin/getfacl "--$acl_kind" --numeric --omit-header "$acl_path" 2>/dev/null) ||
+    fail "cannot read the POSIX $acl_kind ACL of $acl_path"
+  acl_mask=rwx
+  for acl_entry in $acl_text; do
+    case "$acl_entry" in
+      [#]*) ;;
+      default:*) acl_entry=${acl_entry#default:} ;;
+    esac
+    case "$acl_entry" in
+      mask::*) acl_mask=${acl_entry#mask::} ;;
+    esac
+  done
+  case "$acl_mask" in
+    [r-][w-][x-]) ;;
+    *) fail "cannot parse the POSIX $acl_kind ACL mask of $acl_path" ;;
+  esac
+  acl_mask_write=0
+  case "$acl_mask" in
+    ?w?) acl_mask_write=1 ;;
+  esac
+  for acl_entry in $acl_text; do
+    case "$acl_entry" in
+      [#]*) continue ;;
+    esac
+    acl_entry=${acl_entry#default:}
+    acl_tag=${acl_entry%%:*}
+    acl_tail=${acl_entry#*:}
+    acl_qualifier=${acl_tail%%:*}
+    acl_permissions=${acl_tail##*:}
+    case "$acl_tag" in
+      mask) continue ;;
+      user|group|other) ;;
+      *) fail "cannot parse the POSIX $acl_kind ACL of $acl_path" ;;
+    esac
+    case "$acl_permissions" in
+      [r-][w-][x-]) ;;
+      *) fail "cannot parse the POSIX $acl_kind ACL of $acl_path" ;;
+    esac
+    acl_effective_write=0
+    case "$acl_permissions" in
+      ?w?)
+        case "$acl_tag:$acl_qualifier" in
+          user:|other:) acl_effective_write=1 ;;
+          *) if [ "$acl_mask_write" -eq 1 ]; then acl_effective_write=1; fi ;;
+        esac
+        ;;
+    esac
+    [ "$acl_effective_write" -eq 1 ] || continue
+    case "$acl_tag:$acl_qualifier" in
+      user:) continue ;;
+      user:0) continue ;;
+      user:*) fail "the POSIX $acl_kind ACL of $acl_path grants an effective write to user $acl_qualifier" ;;
+      group:) fail "the POSIX $acl_kind ACL of $acl_path grants an effective write to its owning group" ;;
+      group:*) fail "the POSIX $acl_kind ACL of $acl_path grants an effective write to group $acl_qualifier" ;;
+      other:) fail "the POSIX $acl_kind ACL of $acl_path grants an effective write to other" ;;
+    esac
+  done
+}
+
 # The compiled policy embeds the include closure, so a writable closure widens the loaded
 # policy while the profile file stays byte-identical.
 verify_userns_include_closure() {
@@ -520,6 +591,9 @@ verify_userns_include_closure() {
     [ "$#" -eq 4 ] && [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$4" -eq 1 ] || fail "$include_file must be root:root and singly linked"
     include_permissions=$(printf '%d' "0$3") || fail "cannot parse $include_file permissions"
     [ $((include_permissions & 18)) -eq 0 ] || fail "$include_file is group/world writable"
+    verify_userns_acl_write_free "$include_file" access
+    verify_userns_acl_write_free "$include_directory" access
+    verify_userns_acl_write_free "$include_directory" default
   done
 }
 
@@ -563,6 +637,25 @@ scan_loaded_userns_profile_directory() {
   [ -z "$found" ] || printf '%s\n' "$found"
 }
 
+# Bounds every parser invocation to the 10s the daemon preflight allows, with a kill grace for a
+# parser that ignores TERM.
+run_userns_parser_deadline() {
+  /usr/bin/timeout --kill-after=5s "$USERSNS_PARSER_DEADLINE" "$@"
+}
+
+# The compile capture is the only parser output read back: the file-size limit turns a flooding
+# parser into the existing parser-failure refusal instead of an unbounded write.
+run_userns_parser_compile() {
+  capture_path=$1
+  shift
+  capture_status=0
+  (ulimit -f $((USERSNS_PARSER_OUTPUT_MAX / 512 + 1)) && run_userns_parser_deadline "$@") \
+    > "$capture_path" 2>/dev/null || capture_status=$?
+  [ "$capture_status" -eq 0 ] || return 1
+  capture_size=$(/usr/bin/wc -c < "$capture_path") || return 1
+  [ "$capture_size" -gt 0 ] && [ "$capture_size" -le "$USERSNS_PARSER_OUTPUT_MAX" ]
+}
+
 # The same readback the installed preflight performs, against the exact staged bytes this run
 # loaded: the kernel hashes the decompressed policy and the `attach` file carries no path evidence.
 verify_userns_profile_load() {
@@ -577,8 +670,8 @@ verify_userns_profile_load() {
   esac
   [ "${#kernel_hash}" -eq 64 ] || { report 'the loaded AppArmor userns profile reports a malformed policy hash'; return 1; }
   TMP_PROFILE_COMPILE=$(/usr/bin/mktemp "$ROOT_STAGE/.linux-owner-userns-compile.XXXXXX") || { report 'create temporary compiled userns profile'; return 1; }
-  if ! "$PARSER" -c0 -Q -S -K -T --skip-bad-cache "$staged" > "$TMP_PROFILE_COMPILE" 2>/dev/null || [ ! -s "$TMP_PROFILE_COMPILE" ]; then
-    if ! "$PARSER" -Q -S -K -T --skip-bad-cache "$staged" > "$TMP_PROFILE_COMPILE" 2>/dev/null || [ ! -s "$TMP_PROFILE_COMPILE" ]; then
+  if ! run_userns_parser_compile "$TMP_PROFILE_COMPILE" "$PARSER" -c0 -Q -S -K -T --skip-bad-cache "$staged"; then
+    if ! run_userns_parser_compile "$TMP_PROFILE_COMPILE" "$PARSER" -Q -S -K -T --skip-bad-cache "$staged"; then
       /usr/bin/rm -f "$TMP_PROFILE_COMPILE"
       TMP_PROFILE_COMPILE=
       report 'apparmor_parser could not compile the installed userns profile'
@@ -605,13 +698,13 @@ unload_userns_profile() {
   for candidate in "${TMP_PROFILE:-}" "$USERSNS_PROFILE_FILE"; do
     if [ -n "$candidate" ] && [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
       [ "$(sha256_file "$candidate")" = "$fixed_hash" ]; then
-      "$PARSER" -R "$candidate" >/dev/null 2>&1 && return 0
+      run_userns_parser_deadline "$PARSER" -R "$candidate" >/dev/null 2>&1 && return 0
     fi
   done
   fallback=$(/usr/bin/mktemp /etc/apparmor.d/.linux-owner-userns-unload.XXXXXX 2>/dev/null) || return 1
   print_userns_profile > "$fallback"
   unload_status=0
-  "$PARSER" -R "$fallback" >/dev/null 2>&1 || unload_status=$?
+  run_userns_parser_deadline "$PARSER" -R "$fallback" >/dev/null 2>&1 || unload_status=$?
   /usr/bin/rm -f "$fallback"
   return "$unload_status"
 }
@@ -628,7 +721,7 @@ rollback_userns_profile() {
   fi
   USERSNS_LOADED_BY_RUN=0
   if [ "${USERSNS_RESTORE_PUBLISHED:-0}" = 1 ]; then
-    "$PARSER" --replace "$USERSNS_PROFILE_FILE" >/dev/null 2>&1 || report 'the previously published AppArmor userns profile could not be reloaded'
+    run_userns_parser_deadline "$PARSER" --replace "$USERSNS_PROFILE_FILE" >/dev/null 2>&1 || report 'the previously published AppArmor userns profile could not be reloaded'
     return 0
   fi
   loaded=$(scan_loaded_userns_profile_directory) || { report 'cannot enumerate the loaded AppArmor profiles after the rollback'; return 0; }
@@ -646,6 +739,8 @@ install_userns_profile() {
     printf 'apparmor_userns=not_needed\n'
     return 0
   fi
+  # The closure ACL arm below reads through getfacl; the acl package provides it.
+  [ -x /usr/bin/getfacl ] || fail 'getfacl is required while the AppArmor unprivileged user-namespace restriction is active; install the acl package'
   check_root_directory /etc
   [ -d /etc/apparmor.d ] && [ ! -L /etc/apparmor.d ] || fail 'the AppArmor policy directory /etc/apparmor.d is required while the AppArmor unprivileged user-namespace restriction is active'
   check_root_directory /etc/apparmor.d
@@ -671,7 +766,7 @@ install_userns_profile() {
     verify_published_file "$USERSNS_PROFILE_FILE" "$PROFILE_HASH" 0 644 'AppArmor userns profile'
     USERSNS_RESTORE_PUBLISHED=1
   fi
-  if ! "$PARSER" --replace "$TMP_PROFILE"; then
+  if ! run_userns_parser_deadline "$PARSER" --replace "$TMP_PROFILE"; then
     rollback_userns_profile
     fail 'apparmor_parser could not load the installed userns profile'
   fi

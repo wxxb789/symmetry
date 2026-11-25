@@ -11,8 +11,8 @@ the repository or to the GDD state root.
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
-| `scripts/install-linux-owner.sh` | `8d61c5ba7077808b20934aa42f6d44b6542adbf789fe5e622328a697c42367cf` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `4f14046a2351dfe069aacc417cd4985ec91e4fb54cce5e89784f68241cb16bd4` |
+| `scripts/install-linux-owner.sh` | `4559df444e8bfcd0b00cfa21cc551e088baeb05df4aba53e9d090befed3a7e71` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `da7af1ea74d4167c4ac12bda16e80a872ca1c9b27b2cb2654f24cb2f9d910996` |
 | `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` |
 | `daemon/internal/linuxpreflight/preflight_linux.go` | `50f56f3f5b2190e186172fccd556c613037ae48617a3662f95fef6be9933aba9` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `62a1bd7a9b37b3a48b91a3c5d5ddb938461407e86e1452e207a8cacb71276868` |
@@ -20,8 +20,8 @@ the repository or to the GDD state root.
 | `daemon/internal/linuxpreflight/preflight_unsupported_test.go` | `dfcb8084daa1edbcf68eee5800f78bb783bc4d6302327cff792398c68cf442ec` |
 | `daemon/internal/linuxpreflight/apparmor_userns.go` | `e53a5a81f89c34e09ccf694556a4325d4a7f4ddc91dfb104daa06f0acb0aba6f` |
 | `daemon/cmd/symmetry-daemon/main.go` | `ad8547f13c0c080eb674f08799ca881be142cb549e292c2fa2b685176af73890` |
-| `docs/runbooks/control-plane-and-daemon.md` | `49a61eb7e93de4a1183ed11dc72887d6fadba825397ce653910b3588ba4f7d7f` |
-| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `e02bd66774869cad0bffec854a4d04ccb09833f0e613f3ea8d6d1ab5fb5cac5a` (record revision; not run-bound) |
+| `docs/runbooks/control-plane-and-daemon.md` | `d8f632135a79b4ad16c535bfff484302e603aad8544c6c2b0dde7a0a184500a3` |
+| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `5208bb95cbd10dca40ed39d733328e25ef5d60061a372c055cde848735b01938` (record revision; not run-bound) |
 
 Run 3's head `ce3c30b9` (the amendment plus the round-2 hardening commits) is bound to the
 run-3 code revisions by the §8 equality table; the apply-stage simplification (2026-11-26) and
@@ -30,6 +30,15 @@ delivered post-fix revisions and the §8 delta tables record each change, its cl
 re-run gates. The plan and this record carry post-run, record-only edits and are not run-bound
 code, and `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are deliberately not
 hashed anywhere.
+
+The conductor's Bind run `45688173130` (2026-11-26, the single scratch run on the PR head)
+bound `2d423748`: its run head `3024fc34` is `2d423748` plus the three scratch-only files, and
+the binding report's sha256 equality table proves every delivered file byte-equal between the
+two. The round-1 fix stage (the reviews' R1-R6, 2026-11-26) then changed
+`scripts/install-linux-owner.sh` and the runbook above, and the getfacl-dependency fix
+(2026-11-26) changed both again, so those two digests postdate the bind run and the conductor
+re-binds the delivered bytes with the next Bind; no row here claims a runner run on this
+round's installer or runbook bytes.
 
 ## 2. Readback rule (amended after run 2; §2 of the plan carries the source evidence)
 
@@ -68,9 +77,10 @@ sysctl:
    `include <tunables/global>` compile into the loaded policy, so the preflight verifies the
    two closure files and their directories exactly like the profile file (root-owned, singly
    linked, no group/world write, no untrusted ACL writer, readable by A) and the installer
-   verifies their owner, mode and link count before it loads anything. A writable closure
-   would otherwise let a writer widen the loaded policy while the profile file stays
-   byte-identical.
+   verifies their owner, mode and link count plus their POSIX ACLs (access for the two files,
+   access and default for their directories; round-1 ruling R4) before it loads anything. A
+   writable closure would otherwise let a writer widen the loaded policy while the profile file
+   stays byte-identical.
 8. Every unload passes only a definition file whose bytes equal the fixed text — the staged
    file, the verified published file, or a freshly printed declaration — so a foreign
    declaration placed at the published path is never unloaded (a pre-fix differential pins the
@@ -111,10 +121,11 @@ fail-closed state).
 | C6 | `grep -c "apparmor" scripts/ci/linux-v2-native-acceptance.sh` | 0 | the fixture authors no policy text: the case-sensitive census stays 0. The case-insensitive form (`grep -ci apparmor`) reads 13 because the new rows name the test family and the restriction; the policy-text census (`grep -c -e 'profile ' -e 'userns,' -e 'apparmor_parser'`) is 0, which is the property this row protects |
 | C7 | `grep -rn -- "-verify-linux-owner-install" scripts daemon` | 18 in 8 files | every entry point known; the check lands on the existing path only |
 | C8 | `grep -rn -- "unload_userns_profile" scripts/install-linux-owner.sh` | 3 (definition, rollback call, removal call) | every unload goes through the fixed-text gate; no other `-R` site exists |
-| C9 | `grep -c -- '\$PARSER' scripts/install-linux-owner.sh` and `grep -c "exec.CommandContext" daemon/internal/linuxpreflight/preflight_linux.go` | 7 shell invocations, 1 Go invocation | every parser invocation uses the resolver-pinned absolute parser (shell) or the context-bounded `exec.CommandContext` (Go); no other process is started |
+| C9 | `grep -c -- '\$PARSER' scripts/install-linux-owner.sh` and `grep -c "exec.CommandContext" daemon/internal/linuxpreflight/preflight_linux.go` | 6 shell invocation sites (plus one `$PARSER` presence guard), 1 Go invocation | every shell invocation goes through `run_userns_parser_deadline` (the single `/usr/bin/timeout --kill-after=5s 10` site) or `run_userns_parser_compile` (the same deadline plus the 4 MiB file-size limit); the Go invocation runs through the 10s `exec.CommandContext`; no other process is started |
 | C10 | `grep -c "linuxAppArmorInstallerUID" daemon/internal/linuxpreflight/preflight_linux.go` | 9 | every root-identity comparison in the AppArmor checks reads the single seam (production value 0) |
 | C11 | `sed -n '1084,1571p' daemon/internal/linuxpreflight/preflight_linux_test.go \| grep -c 'Geteuid() == 0'` | 0 | no AppArmor row is gated on root any more; the four `os.Geteuid()` uses in the region feed the identity seam, so the rows run in the unprivileged `daemon` job and again as root in the fixture's guest |
 | C12 | the branch-diff host-path scan (the conductor's command, described here in prose: the profile-name path segment and the `/mnt` and `/home` prefixes) | 0 | no host path containing a user profile name in the branch diff |
+| C13 | `grep -c "verify_userns_acl_write_free" scripts/install-linux-owner.sh` | 4 (definition + 3 calls) | every closure ACL read goes through the one predicate, whose single `/usr/bin/getfacl` call is the installer's only ACL reader |
 
 ## 5. Fixture rows (Change 3)
 
@@ -123,10 +134,12 @@ fail-closed state).
   (`nspawn.c` `arg_caps_retain`: the default already carries `CAP_SYS_ADMIN`, omits
   `CAP_MAC_ADMIN`; `--capability=` adds). The first draft's `--capability=all` was a round-1
   finding (P2-6/F4) and is not shipped.
-- `:1644-1649`: the securityfs guard uses the repository's own
-  `findmnt --noheadings --output TARGET --target` pattern and then `mount -t securityfs` with a
-  named failure; run 2 showed the first draft's `findmnt --quiet` is not a findmnt option, which
-  made the guard dead and the mount unconditional (EBUSY on an already mounted guest).
+- `:1651-1654` (restriction read `:1646-1650`, in-guest installer run `:1659`, installer-log
+  decision grep `:1671`, `-verify-linux-owner-install` `:1686` with its decision grep `:1692`,
+  root preflight rows `:1699-1728`): the securityfs guard uses the repository's own `findmnt
+  --noheadings --output TARGET --target` pattern and then `mount -t securityfs` with a named
+  failure; run 2 showed the first draft's `findmnt --quiet` is not a findmnt option, which made
+  the guard dead and the mount unconditional (EBUSY on an already mounted guest).
 - `scripts/ci/linux-v2-native-rootfs-base.sh:70-72`: the pinned package set gains `apparmor`
   (the in-guest parser the load and the readback need) and masks the guest's own policy service
   so its boot does not reload the distro profile set into the shared kernel policy.
@@ -217,6 +230,43 @@ call, all listed in §7):
   `ReadFrom` that routes through `Write`, and the pin now reddens when that method is removed
   (§7, M-A06b). The same predicate is used by the accounts and systemd callers.
 
+### Round-1 rows (2026-11-26, R3 parser bounds and R4 closure ACLs)
+
+The same WSL Ubuntu-24.04 host as root, the same stub-parser driver family (the §7
+substitutions, extended with one substituted `getfacl` wrapper under the probe root), plus two
+standalone isolation checks:
+
+- The ACL predicate against real POSIX ACLs under `dash` (a 13-row matrix): a plain file and a
+  plain directory pass; a named user write, a named group write and `other` write refuse; a
+  named *root* write and a mask-blocked named write pass (the preflight's mask semantics); an
+  owning-group write on an ACL-less file refuses; a default ACL granting a non-root user or
+  group write refuses and a mask-blocked default grant passes.
+- The parser helpers under `dash`: a normal compile passes; a flooding parser is stopped with a
+  `4,194,816`-byte capture (the 4 MiB bound plus one 512-byte block) at `flood-stopped=1024` of
+  a 5,000-write loop; a hung compile is cut after 10s and a hung `--replace` after 10s (exit
+  124).
+- The round-1 stub probe: 27 rows, 0 FAIL — the 20 fix-stage rows re-run on the round-1 bytes
+  plus R18-R24. The R18-R23 rows ran at the round-1 bytes (driver sha256 `ce155542…`, built
+  copy `23ac6ce4…`); the getfacl-dependency fix added R24 and re-ran the whole probe at its
+  bytes (driver `0c986063…`, built copy `f60b99fe…`). Stub `4b55a767…` and the pre-fix built
+  copy `6ed7aed7…` are byte-identical across both.
+  - R18: a parser hanging on the load and on the rollback unload attempts is cut by the 10s
+    deadline; the run refuses with `apparmor_parser could not load the installed userns
+    profile`, publishes nothing, completes in 30s and issues three bounded invocations.
+  - R19: a parser hanging on both compile attempts is cut twice; both map to `could not
+    compile the installed userns profile` and the run then refuses at the readback with no
+    published file.
+  - R20: a parser flooding the compile capture is stopped by the file-size limit
+    (`flood-stopped=1024` of 5,000) and maps to the same compile refusal.
+  - R21: the ACL predicate refuses an effective named write and accepts the mask-blocked one.
+  - R22: a default ACL granting a non-root user write on the include directory refuses before
+    any load (no parser invocation, no published file).
+  - R23: an unreadable closure ACL (the substituted `getfacl` wrapper fails) refuses before any
+    load.
+  - R24 (getfacl-dependency fix): a policy branch whose substituted `getfacl` is absent refuses
+    with `getfacl is required ...; install the acl package` before any parser invocation and
+    publishes nothing.
+
 ## 7. Mutation rows (scratch copies and in-place runs, all restored byte-identically)
 
 | id | mutation | observed red (verbatim row) |
@@ -270,6 +320,15 @@ and `adc21ea1…` (pre-fix); all scratch paths under a disposable root. 20 rows,
 | M-A07 | the pre-fix preflight package test run as the unprivileged user | `preflight_linux_test.go:1333: the parser identity and directory checks require root` → `--- SKIP: TestLinuxAppArmorCompileRows`; the delivered bytes PASS the same row |
 | M-A08 | `LinuxAppArmorUsernsNotNeeded` renamed in the delivered source on the non-Linux build | `preflight_unsupported_test.go:30: LinuxOwnerAppArmorUsernsDecision() = "not_needed_v2", want the recorded not_needed token` (FAIL; in-place change restored to `e53a5a81…`) |
 
+Round-1 arms (R3/R4): the red rows are R18-R23 rather than source mutants — the adverse
+condition is injected at the external boundary (a hanging or flooding stub parser, a real ACL,
+a failing `getfacl` wrapper), which is the same red the mutants would produce and does not edit
+the delivered bytes. The file-ACL arm is a faithful mirror of the preflight's mask semantics,
+not a new first line of defence: where an access ACL carries an effective write grant the mask
+itself shows in the mode's group bits, so the existing mode check refuses first; the arm's new
+binding power is the default-ACL arm on the two closure directories, which the mode bits cannot
+see, and R22 proves it end to end.
+
 ## 8. Runs (foreground, watched; artifacts by id and sha256)
 
 | run | head | sets | outcome | first failing check (verbatim) |
@@ -277,6 +336,7 @@ and `adc21ea1…` (pre-fix); all scratch paths under a disposable root. 20 rows,
 | 1 `45644664168` | `7db44f4e` (base bytes) | migration, shared | both exit 1 — the base red the goal exists for | `migration`: `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other guest_stage=gate_drop_bounding_set errno=1`; `shared`: `clone_integration_linux_test.go:240 … Linux B clone bootstrap failed at stage 13 (errno=1)` and `launcher_integration_linux_test.go:439 … native exec failed after RELEASE: errno=1` |
 | 2 `45651150146` | `af5804b9` (round-1 fix) | migration, shared | both exit 1 — fail-closed refusal at the readback; the probe measured the amendment's evidence | both sets: `install-linux-owner: the loaded AppArmor userns profile differs from the installed userns profile text` (log `gdd/native/run-45651150146.log`) |
 | 3 `45659523339` | `ce3c30b9` (the amended, review-hardened bytes) | migration, shared | both exit 1 — the installer and the preflight passed end-to-end (`apparmor_userns=per_program`) and the wall's named rows are cleared; the next stops are named in the last column | `migration`: `production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`, with the owner-witness command exiting 1 on `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn` (run 1's transport-start row `start native owner witness transport: resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: ... guest_stage=gate_drop_bounding_set errno=1` is cleared; the RunJournal grew 5988 → 6559 bytes with the same projection flags); `shared`: `clone_integration_linux_test.go:252: same-PID clone-native process is not exact B: open /proc/7171/environ: permission denied` and `launcher_integration_linux_test.go:451: native process did not retain the exact B-only boundary: open /proc/7197/environ: permission denied` (run 1's :240/:439 rows are cleared) |
+| 4 (bind) `45688173130` | `3024fc34` (bind run: PR head `2d423748` + the three scratch-only files; single push, branch deleted) | migration, shared | conclusion `failure`; both exit 1 — the same named stops as run 3 recur on the delivered bytes; both sets' in-guest root rows pass (`apparmor_userns=per_program`; `TestLinuxAppArmorAttachmentSensitivePolicyHash: run=1 pass=1 skip=0`), so SPEC-A01's runner condition is carried by the in-guest Go row; the scratch probe's fixed-text `-c0` row is a probe-script defect (missing file, parser exit=2) with the two altered rows measured and the limit rows printed, and the next Bind reruns the corrected probe; evidence artifact `linux-v2-native-evidence-45688173130-1` sha256 `4fed8e464b897b3970e413f44f6c99588cd3962eabf60ffb104042986008d1fc`, host prerequisite `linux-v2-host-prerequisite-45688173130-1` sha256 `b1277d0cff8716bd0527db04ea50cc17af671689f43da4afdecd9c6dc2a98502` | `migration`: `Go native acceptance event gate failed: bad=TestProductionLinuxV2MigrationDenialRetainsJournal=run:1,pass:0,skip:0, skipped=[], fail_events=2, invalid_json_lines=0`, then `production_linux_v2_native_witness_test.go:693: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage` with the owner-witness command exiting 1 on `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn`; `shared`: `Go native acceptance event gate failed: bad=TestInstalledLinuxOwnerBoundaryScratch=run:1,pass:0,skip:0; TestInstalledLinuxOwnerCloneCheckoutScratch=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`, then `clone_integration_linux_test.go:252: same-PID clone-native process is not exact B: open /proc/7654/environ: permission denied` and `launcher_integration_linux_test.go:451: native process did not retain the exact B-only boundary: open /proc/7680/environ: permission denied` |
 
 Artifacts (id, name, sha256 of each file that is goal evidence; `portal-assets` is the build
 artifact and carries no goal evidence):
@@ -359,7 +419,7 @@ Every delivered file below is the §1 revision; the left column is the apply-sta
 fix round starts from. No profile-text byte, fence, credential readback, census count, gate byte
 or existing test changes: the fixes strengthen checks or name remedies.
 
-| file | apply-stage sha256 | delivered sha256 | delta |
+| file | apply-stage sha256 | fix-stage delivered sha256 | delta |
 | --- | --- | --- | --- |
 | `scripts/install-linux-owner.sh` | `ab0780fc…` | `8d61c5ba…` | A01: the published-bytes refusal names `-remove-userns-profile` itself (the shared check's message names no remedy) and the usage text says so; A02: the staged-hash and publication arms roll back explicitly, the exit trap performs the full rollback (unload plus the verified-published reload) and the loaded flag now stays armed until publication succeeded; A03: `verify_userns_include_closure` checks both include files and their directories before any load; A04: removal refuses when the policy interface is invisible or not a directory and the fixed declaration could not be unloaded; A10: every unload candidate must byte-equal the fixed text |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `e85c1c32…` | `4f14046a…` | A05: the timeout-safe glob read of the restriction asserts `1` before anything is installed, and both captured logs must carry a line ending `userns=per_program`; A07: the seven AppArmor preflight tests run as root in the guest through `assert-go-test-json.py` (run-and-pass exactly once; a skip fails) |
@@ -370,13 +430,37 @@ or existing test changes: the fixes strengthen checks or name remedies.
 | `daemon/internal/linuxpreflight/apparmor_userns.go` | new | `e53a5a81…` | A08: the closed vocabulary lives outside the `linux && amd64` build tag, so both builds share it |
 | `docs/runbooks/control-plane-and-daemon.md` | `06b6ae87…` | `49a61eb7…` | A01/A03/A04/A10 documentation: the remedy-naming refusal, the include-closure requirement, the fixed-text-only unload, and refusal instead of a removed claim when the interface cannot be read |
 
+### Post-fix (2d423748) and round-1 deltas (post-bind)
+
+`2d423748` is the PR head the conductor's Bind run `45688173130` bound; only the acceptance
+script moved between the fix-stage bytes and that head (a comment compressed at :1641-1643,
+2+/3−, behavior-identical). The round-1 fix stage then changed the installer and the runbook
+only; both postdate the bind run, so the conductor re-binds the next run.
+
+| file | fix-stage sha256 | post-fix (bind-run head) sha256 | delivered sha256 (§1) | delta |
+| --- | --- | --- | --- | --- |
+| `scripts/install-linux-owner.sh` | `8d61c5ba…` | `8d61c5ba…` | `ae20028a…` | R3: every shell `apparmor_parser` call runs through `timeout --kill-after=5s 10` (the daemon preflight's own 10s bound) and the compile capture through an `ulimit -f`-backed 4 MiB limit, both mapping to the existing parser-failure refusals; R4: `verify_userns_include_closure` reads the closure's POSIX ACLs (access for the two files, access and default for their directories) and refuses an untrusted effective write or an unreadable ACL |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `4f14046a…` | `da7af1ea…` | `da7af1ea…` | the post-fix commit compresses one comment block at :1641-1643 (2+/3−) — behavior-identical; the fixture anchors move by −1 line (§10) |
+| `docs/runbooks/control-plane-and-daemon.md` | `49a61eb7…` | `d40b2c19…` | `aabb6361…` | the main merge applies the `<HOST-PATH>` redaction (one line); R4 rewords the closure paragraph so the installer's ACL arm and the preflight's wider rule are attributed exactly |
+| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `8fe8ef41…` | `e02bd667…` | `5208bb95…` | record-only edits (R1 anchors, R2/R6 notes, the bind/round-1 paragraphs) |
+
+### Getfacl-dependency deltas (post-round-1)
+
+The installer's closure ACL read gained a pre-load dependency guard, and the runbook names the
+same prerequisite; only those two files moved, and both postdate the bind run.
+
+| file | round-1 sha256 | delivered sha256 (§1) | delta |
+| --- | --- | --- | --- |
+| `scripts/install-linux-owner.sh` | `ae20028a…` | `4559df44…` | the profile branch requires an executable `getfacl` before any load and refuses a host without it with the `acl` package named as the remedy; probe R24 covers the refusal, its precedence over the parser and the empty publication |
+| `docs/runbooks/control-plane-and-daemon.md` | `aabb6361…` | `d8f63213…` | the userns section names `getfacl` from the `acl` package as the installer's prerequisite for the closure ACL read |
+
 ## 9. Preflight rows on the runner
 
 In-guest `-verify-linux-owner-install` (the fixture's second oracle) prints
 `apparmor_userns=<token>` beside `LinuxOwnerPreflightRuntimeBoundary`; the run-3 log row is the
 end-to-end evidence for the decision line. Refusal rows and their tokens are the 21 decision
 rows (§6) plus the installer's refusal rows (§7). Run 3, both sets, from the in-guest install and
-the installed daemon's own ExecStartPre verify (`daemon_verify_log`, fixture :1674-1681):
+the installed daemon's own ExecStartPre verify (`daemon_verify_log`, fixture :1684-1691):
 `Installing production owner artifacts inside the disposable systemd guest.` →
 `apparmor_userns=per_program` → `legacy Linux owners are drained; pending Goal deliveries may
 remain` → `Verified fixed Linux owner assets for A=symmetry-a(52000:52000)
@@ -399,7 +483,8 @@ rows (21, §6); the closure rows are unit rows (§6/§7) because a runner cannot
 
 ## 10. Gates (commands, counts, exit codes)
 
-Re-run at the delivered bytes (delivered-file digests in §1; the run-3 binding is §8):
+Re-run at the fix-stage bytes (2026-11-26; the §8 delta tables carry every later revision, and
+the getfacl-dependency gates below carry the final one):
 
 - `bash -n` on the two changed bash scripts, `dash -n` and `sh -n` on the POSIX installer:
   exit 0 each.
@@ -457,9 +542,11 @@ Re-run at the delivered bytes (delivered-file digests in §1; the run-3 binding 
 - Shell syntax and shellcheck, each script compared against its own pre-fix bytes with the same
   command (`shellcheck --severity=warning -f gcc <script>`, finding text normalized by stripping
   the `file:line:col` prefix, then `sort -u` and `diff`): `sh -n` installer exit 0, `dash -n`
-  installer exit 0, `bash -n` fixture exit 0, `bash -n` rootfs-base exit 0; finding sets
-  installer 2 = 2, fixture 15 = 15, rootfs-base 0 = 0, delta 0 in all three (the delivered
-  installer's two warnings are the pre-existing `SC2034` rows at `:282` and `:805`).
+  installer exit 0, `bash -n` fixture exit 0, `bash -n` rootfs-base exit 0. The finding sets
+  carry no new finding classes: installer 2 → 2 (the pre-existing `SC2034` rows at `:282` and
+  `:805`), fixture 16 → 17 — one additional `SC2024` instance on the new sudo-redirect line
+  (the same idiom as `:1605`) — and rootfs-base 0 → 0; the normalized class sets are identical
+  in all three.
 - Go: `gofmt -l daemon/internal/linuxpreflight daemon/cmd/symmetry-daemon` empty;
   `GOOS=linux GOARCH=amd64 go vet` and `GOOS=windows GOARCH=amd64 go vet` on both packages exit
   0; `go test -count=1 -v ./internal/linuxpreflight/` on the Windows host (the non-Linux build,
@@ -500,7 +587,79 @@ Re-run at the delivered bytes (delivered-file digests in §1; the run-3 binding 
   `firstInstalledApparmorParser`; the final run over the delivered bytes reports 38 changed
   files and 0 findings (the repository's own `scripts/ci/test-jscpd-changed.py` cannot pass here
   either: 30 of its 32 pinned-dependency fixtures fail with the dependency absent). The real
-  gate remains the CI contracts job's own run.
+  gate remains the CI contracts job's own run; the round-1 gates below run the same script
+  against a pinned, complete scratch dependency tree.
+
+### Round-1 gates (2026-11-26, at the §1 digests)
+
+- `bash -n`, `sh -n` and `dash -n` on the delivered installer in WSL Ubuntu-24.04: exit 0 each
+  (`bash -n` and `dash -n` also under the Windows shell: exit 0 each).
+- Shellcheck base-vs-head with `shellcheck --severity=warning -f gcc <script>` (instances
+  normalized by stripping the `file:line:col` prefix, then `sort -u` and `diff`): installer
+  2 → 2 with an identical normalized set against the merge-base bytes and against `2d423748`
+  (the two pre-existing `SC2034` rows move to `:289` and `:898`) — the R3/R4 arms add no
+  finding class; fixture 16 → 17 (the pre-existing `SC2024` instance at `:1605` plus its new
+  same-idiom sibling at `:1714`); rootfs-base 0 → 0. The scripts' exit 1/1/0 are the
+  pre-existing findings' exits.
+- Go: `gofmt -l .` in `daemon/` empty; `GOOS=linux GOARCH=amd64 go vet` and
+  `GOOS=windows GOARCH=amd64 go vet` on `./internal/linuxpreflight/ ./cmd/symmetry-daemon/`
+  exit 0 each (no Go file changed in this round).
+- WSL Ubuntu-24.04: `go test -count=1 ./internal/linuxpreflight/ ./cmd/symmetry-daemon/` `ok`
+  as root and `ok` as the unprivileged `accept` user, exit 0 both.
+- The round-1 stub probe (§6): 27 rows, 0 FAIL, exit 0 (the getfacl-dependency fix added R24
+  and re-ran the whole probe); both isolation checks (§6) pass.
+- Censuses: §4 counts re-run at the delivered bytes (C1 3, C2 1, C3 3, C4 16 in 11 files, C5 4,
+  C6 0, C7 18 in 8 files, C8 3, C9 6 + 1 guard / 1, C10 9, C11 0, C12 0, C13 4).
+- Anchors re-measured by content at the delivered bytes (each group cited by its §1 digest):
+  installer `ae20028a…` `USERSNS_PROFILE_FILE` :82, `USERSNS_ATTACH` :83,
+  `USERSNS_ABI_FILE`/`USERSNS_TUNABLES_FILE` :86-87, `USERSNS_PARSER_DEADLINE` :91,
+  `print_userns_profile` :94, usage paragraph :46-59, `verify_published_file` :334,
+  `verify_existing_or_absent` :352, `publish_or_verify` :389, `read_userns_restriction` :501,
+  `verify_userns_acl_write_free` :517, `verify_userns_include_closure` :581,
+  `resolve_apparmor_parser` :611, `scan_loaded_userns_profile_directory` :625,
+  `run_userns_parser_deadline` :642, `run_userns_parser_compile` :648,
+  `verify_userns_profile_load` :661, `unload_userns_profile` :695,
+  `rollback_userns_profile` :714, `install_userns_profile` :733, `remove_userns_profile` :789,
+  `cleanup` :976; fixture `da7af1ea…` capability :967, `shared` group guard :1556, restriction
+  read :1646-1650, securityfs guard :1651-1654, installer run :1659, installer-log grep :1671,
+  `-verify-linux-owner-install` :1686 with its grep :1692, root preflight rows :1699-1728;
+  rootfs-base `c8e49724…` package :47, mask :70-72; runbook `aabb6361…` section :264. The Go
+  anchors and `main.go:266` stand from the fix-stage list (those files are byte-identical);
+  `daemon/native/linux-gate/**` remains byte-identical to `61399984`.
+- Duplication: a scratch commit of the round-1 diff in a temporary clone, with the pinned
+  `jscpd@4.3.0` resolved from a scratch dependency tree: `python
+  scripts/ci/jscpd-changed.py --base 9eb874bf --head HEAD` exit 0 — `14 changed file(s), 1753
+  scanned source(s), 1261 clone(s) in the corpus, 0 tolerated among the added lines, none new`
+  (the gate's notice that `docs/archive/CLOSED-TODO.md` is outside the configured scan scope is
+  emitted on every run and is not a failure).
+- Record hygiene on the same scratch commit: `python scripts/ci/check-record-cleanliness.py
+  --base 9eb874bf --head HEAD` exit 0 (`1 changed record(s) pass the root-only check`) and
+  `python scripts/ci/check-citation-existence.py --base 9eb874bf --head HEAD` exit 0 (`2
+  changed document(s) pass the path and symbol check (656 path citation(s))`; the notes name
+  pre-existing gitignored citations).
+- `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed
+  document: exit 0 for `docs/TODO.md`, this record and the plan; the runbook and
+  `docs/archive/CLOSED-TODO.md` refuse on the same pre-existing host-path spellings as their
+  merge-base bytes (unchanged lines), which is why the enforceable range gate is
+  `check-record-cleanliness.py` above. `git diff --check` exit 0; the branch-diff host-path scan
+  (C12) has no hits.
+- The PR body is refreshed from the live PR into the fixes' findings area with no HTML
+  comments.
+
+### Getfacl-dependency gates (2026-11-26, at the re-derived §1 digests)
+
+- `bash -n` and `dash -n` on the installer in WSL Ubuntu-24.04 and under the Windows shell, and
+  `sh -n` in WSL Ubuntu-24.04: exit 0 each.
+- Shellcheck, same command and normalization as the round-1 gates: installer 2 → 2 with an
+  identical normalized set against the merge-base bytes, against `2d423748` and against the
+  pre-guard bytes `ae20028a` (the two pre-existing `SC2034` rows now at `:289` and `:900`) —
+  the guard adds no finding class.
+- The stub probe re-run (§6): 27 rows, 0 FAIL, exit 0; R24 is the new row.
+- §1 digests re-derived at the delivered bytes: installer `4559df44…`, runbook `d8f63213…`;
+  the full-table re-check (`final-r1.sh`, the eleven §1 files) prints MATCH for every entry.
+- Anchors re-measured at the new installer digest: only `remove_userns_profile` (:789 → :791)
+  and `cleanup` (:976 → :978) move; every other anchor line in this § stands, the runbook's
+  `:264` section heading included.
 
 ## 11. Reviews (rounds 1-3) and findings' dispositions
 
@@ -511,7 +670,7 @@ on its findings on 2026-11-26). STD axis dispositions:
 | --- | --- |
 | STD-A01 (a mismatched published file refuses without naming a remedy) | fixed: the userns re-run checks the published bytes itself and fails with `re-run with -remove-userns-profile ...`; the runbook and the usage text match (probe R3/R4, differential R4) |
 | STD-A02 (a failure between the load and publication leaves the policy loaded) | fixed: the staged-hash arm rolls back explicitly, the exit trap performs the full rollback and the loaded flag stays armed until publication succeeded (probe R6, R7, R8; differential R6b) |
-| STD-A03 (the include closure is unchecked in both implementations) | fixed: `verifyLinuxAppArmorIncludeClosure` in the preflight (owner, mode, link, ACL, A-read, B-no-write, plus each include directory) and `verify_userns_include_closure` in the installer (owner, mode, link, plus each directory); pinned by the unit rows and probe R5/R5b. The installer has no ACL reader; the preflight's refusal is the ACL authority (residual §12) |
+| STD-A03 (the include closure is unchecked in both implementations) | fixed: `verifyLinuxAppArmorIncludeClosure` in the preflight (owner, mode, link, ACL, A-read, B-no-write, plus each include directory) and `verify_userns_include_closure` in the installer (owner, mode, link, plus each directory; round-1 ruling R4 adds the closure ACL arm — access for the two files, access and default for their directories); pinned by the unit rows and probe R5/R5b plus R21-R23. The preflight still carries the wider ACL surface (the profile file, its directory and `/etc`, residual §12) |
 | STD-A04 (removal claims success while the state is undecidable) | fixed: an invisible interface that could not be unloaded through the fixed declaration, and an interface that is not a directory, both exit non-zero (probe R11-R13) |
 | STD-A05 (the fixture asserts only exit status) | fixed: both logs must carry `userns=per_program` and the restriction must read `1` before anything is installed (probe R16/R17; runner arms in the next acceptance run) |
 | STD-A06 (unbounded, environment-inheriting parser child) | fixed: `exec.CommandContext` with a 10s deadline, a sanitized environment and bounded stdout/stderr; the bound needed an explicit `ReadFrom` (the embedded `bytes.Buffer` promoted one that bypassed `Write`) and the pins for the leak and the oversize arms were added (§6/§7) |
@@ -525,11 +684,26 @@ SPEC axis: SPEC-A01 was **ratified by the conductor with conditions** (`conducto
 equality with the compiled fixed text stands as the exact-attachment proof only together with
 the attachment-sensitivity row, which now exists locally (§6: attachment- and name-changes both
 change the compiled hash) and as a Go test row; its runner row belongs to the conductor's Bind
-run. SPEC-A02: the TODO and CLOSED-TODO sentences now bind the wall rows to run 3's head
-(`ce3c30b9`), not to the delivered bytes; the Bind run re-binds the delivered bytes. SPEC-A03:
+run — the Bind run `45688173130` then captured it in both sets on `2d423748` (§8), and the
+round-1 installer and runbook edits postdate that run. SPEC-A02: the TODO and CLOSED-TODO
+sentences now bind the wall rows to run 3's head (`ce3c30b9`), not to the delivered bytes; the
+next Bind re-binds the delivered bytes. SPEC-A03:
 the conductor ratified the three added files (`preflight_unsupported.go`, the rootfs-base mask
 lines, the runbook). SPEC-A04: both embedded profile-text copies are deleted; the text is cited
 through `-print-userns-profile`, the §1 digest and `TestLinuxAppArmorProfileTextMatchesTheInstaller`.
+
+PR #293 round 1 (the reviews over `2d423748`: Sol `293-opus-review-1`, DS `293-ds-audit-1`,
+security `293-sec-review-1`; the conductor ruled R1-R6). None of the three found a P0/P1 or a
+code defect; all six rulings are fixed or recorded here:
+
+| ruling | disposition |
+| --- | --- |
+| R1 (Sol P2, DS P2-1) — every delivered digest and anchor re-derived | fixed: §1 carries the round-1 digests, §8 the three-stage delta tables (fix-stage, post-fix/`2d423748`, round-1) and the two originally stale cells, §10/plan the re-measured anchors |
+| R2 (Sol P3, DS P3-3) — the two unratified scope files | fixed: plan §5 and §12 below list `apparmor_userns.go` and `preflight_unsupported_test.go` as conductor-ratified additions |
+| R3 (Sec F4, Sol P3) — unbounded shell parser calls | fixed: every call runs under `timeout --kill-after=5s 10` and the compile capture under a 4 MiB `ulimit -f` bound, both mapping to the existing parser-failure refusals (probe R18-R20, §6) |
+| R4 (Sec F2, DS P3-2) — the shell closure check has no ACL arm | fixed: `verify_userns_acl_write_free` reads the closure ACLs with `getfacl` and mirrors the preflight's mask semantics; the runbook attributes both implementations exactly (probe R21-R23, §6) |
+| R5 (DS P3-1) — the shellcheck claim | fixed: the fix-stage bullet and the PR body now read "no new finding classes; one additional `SC2024` instance on the new sudo-redirect line (the same idiom as `:1605`)" |
+| R6 (Sol P3, latent) — the package-level decision accessor | recorded residual (§12): the return-value rewrite changes the exported signature, both build-tag variants, 28 return sites and call sites outside the owned set |
 
 Round 1 (before run 2's readback failure was understood): a Sol review, a DeepSeek audit and a
 `security-reviewer` pass over the `61399984..af5804b9` diff; findings under the GDD state root.
@@ -543,11 +717,11 @@ Dispositions:
 | Sol P2-4 (unreachable rollback; a failed re-run could destroy a working install) | fixed: `verify_userns_profile_load` returns instead of exiting, publication moved after the readback, the rollback only touches this run's artifacts and reloads a verified pre-existing text |
 | Sol P2-5 (fail-open `[ -z "$(scan …)" ]`) | fixed: every scan call captures the status (`x=$(scan …) || fail/report …`), in the installer's install, removal and rollback paths |
 | Sol P2-6 / security F2-part (`--capability=all`; attach shortcut) | fixed: `--capability=CAP_MAC_ADMIN` + the base rootfs mask; the attach shortcut is removed |
-| Sol P3-8 (`preflight_unsupported.go` outside the owned list) | kept, flagged for owner ratification (build requirement of `main.go` on every GOOS; plan §5) |
+| Sol P3-8 (`preflight_unsupported.go` outside the owned list) | kept, flagged for owner ratification (build requirement of `main.go` on every GOOS; plan §5), ratified by round-1 ruling R2 together with `preflight_unsupported_test.go` |
 | Sol P3-9 / security F2 (no rows binding the IO; the decision line untested by unit rows) | fixed: `TestLinuxAppArmorHostStateRows` (sysctl/files/compile); the decision line is exercised end-to-end by the fixture's in-guest verify (run 3) |
 | Sol P3-10 (parser directory not checked) | fixed: `verifyLockedRootDirectory` on the parser's directory |
 | Sol P3-11 (pinned package postinst in debootstrap) | confirmed benign: run 2's base build step succeeded |
-| security F3 (installer bound the readback to the current file; ACL-blind directory check) | mitigated: the readback now proves the *staged* bytes this run loaded and the publication is atomic after it; the directory ACL checks stay in the preflight (the installer's `check_root_directory` is owner/mode only) — recorded residual |
+| security F3 (installer bound the readback to the current file; ACL-blind directory check) | mitigated: the readback now proves the *staged* bytes this run loaded and the publication is atomic after it; round-1 ruling R4 adds the closure ACL arm in the installer, so the remaining owner/mode-only site is `/etc/apparmor.d` itself (recorded residual, §12) |
 | DeepSeek audit C5 = 4 files, C7 = 18 in 8 files, shellcheck sets identical | adopted into §4/§10 (the contract's plan numbers 2/16 were corrected) |
 
 Round 2 (over the amended diff, before run 3): a second Sol review, DeepSeek audit and
@@ -576,7 +750,7 @@ or the decompressed equivalent), and found:
 | P3-4 (candidate-set divergence for a <8-byte compile; a misleading usage line) | fixed: the shell adds the byte-9 candidate only above 8 bytes and the usage line now says parser < 5 is accepted on the whole output |
 | P3-5 (a post-publish verification failure leaves the suspect file) | accepted as a residual: the next run and the preflight refuse it |
 | P3-6 (a SIGKILL can leave a stray `/etc/apparmor.d/.linux-owner-userns.*`) | accepted as a residual: normal failures remove the temporaries |
-| P3-7/P3-8 (`preflight_unsupported.go` outside the owned list; the probe's determinism row compared the wrong pair) | P3-7 stays for owner ratification; P3-8 fixed (each probe compile has its own output file) |
+| P3-7/P3-8 (`preflight_unsupported.go` outside the owned list; the probe's determinism row compared the wrong pair) | P3-7 ratified by round-1 ruling R2 (`preflight_unsupported.go` and `preflight_unsupported_test.go`); P3-8 fixed (each probe compile has its own output file) |
 
 DeepSeek round 2: re-ran the whole gate battery at these bytes (all pass, §10), re-measured the
 censuses (C1 3, C2 1, C3 3, C5 4 files, C6 0, C7 18 in 8 files; C4 re-measured below), confirmed
@@ -599,22 +773,26 @@ pinned on the runner.
 - `attach` never carries the path for these parser/DFA attachments (measured), so the loaded
   identity rests on the kernel's recorded hash; a same-named, same-mode profile attached
   elsewhere cannot satisfy it without a sha256 preimage or root.
-- The installer's directory check is owner/mode only (no ACL inspection); a non-root writer with
-  an ACL grant on `/etc/apparmor.d` could win the load window; the fixed-text hash check refuses
+- The installer's `/etc/apparmor.d` check remains owner/mode only (the round-1 ACL arm covers
+  the two closure files and their directories, not that parent); a non-root writer with an ACL
+  grant on `/etc/apparmor.d` could win the load window; the fixed-text hash check refuses
   publication and the rollback unloads the swapped policy again, so nothing persists, and the
-  preflight's own file check refuses as well — root is out of the threat model either way.
+  preflight's own file/directory ACL checks refuse as well — root is out of the threat model
+  either way.
 - The staged-file identity checks hash by path while the published-file check pins an FD; a
   SIGKILL can leave a stray `/etc/apparmor.d/.linux-owner-userns.*` temporary, and a
   post-publication verification failure leaves the suspect file for the next run to refuse.
 - The in-guest load mutates the runner host's kernel policy (policy is not namespaced); the guest
   is disposable and loads only the installer's own profile, and the guest's distro set is no
   longer reloaded (the mask).
-- Owner ratification is requested for four bounded additions outside the contract's literal
-  owned list: `daemon/internal/linuxpreflight/preflight_unsupported.go` (the cross-platform
-  build stub), the fixture's `--capability=CAP_MAC_ADMIN` (exactly the load's missing
-  capability, strictly narrower than the round-1 draft), the base rootfs' single mask line (it
-  cannot move into the fixture without breaking the C6 census), and the runbook section that
-  documents the removal procedure Q-E asked for.
+- Conductor-ratified scope additions outside the contract's literal owned list: the
+  cross-platform build stub `daemon/internal/linuxpreflight/preflight_unsupported.go` and its
+  test `preflight_unsupported_test.go`, the build-tag-free vocabulary `apparmor_userns.go`, the
+  fixture's `--capability=CAP_MAC_ADMIN` (exactly the load's missing capability, strictly
+  narrower than the round-1 draft), the base rootfs' single mask line (it cannot move into the
+  fixture without breaking the C6 census) and the runbook section that documents the removal
+  procedure Q-E asked for. SPEC-A03 ratified three of them; round-1 ruling R2 ratified the two
+  remaining package files (recorded in plan §5).
 - Run-1's probe defect rows (void attribution) are recorded in plan §2; run 2's corrected probe
   supplies the measurements used above.
 - Run 3's probe aborted after its host rows inside its own scratch helper
@@ -648,25 +826,42 @@ pinned on the runner.
 - The shell reader strips the whole sysctl file's ASCII whitespace while the Go reader's
   `TrimSpace` also accepts Unicode-whitespace edges, so the shell side is strictly narrower; a
   divergent input can only refuse an install, never accept one.
-- The installer's include-closure check reads owner, mode and link count (POSIX sh, no ACL
-  reader in the pinned toolchain); the ACL arm lives in the preflight, which refuses such a host
-  at every daemon start, so a non-root writer who wins an ACL grant between the installer's
-  check and its load cannot make the state persist. This extends the earlier ACL-blindness
-  residual to the closure files rather than removing it.
-- The parser deadline (10s) has no dedicated pin: producing a timeout costs at least the
+- The installer's closure ACL arm mirrors the preflight's mask-aware rule on the two closure
+  files (access) and their directories (access and default). On the files the arm cannot be the
+  first refusal — where an access ACL carries an effective write, the mask shows in the mode's
+  group bits and the existing mode check refuses first — so its new binding power is the default
+  ACL on the two directories, which the mode cannot see (row R22). An ACL that cannot be read
+  refuses the load, which makes a filesystem without ACL support a refusal rather than a silent
+  pass. The profile file's own ACL arm and `/etc`/`/etc/apparmor.d` remain preflight-only (the
+  residual above).
+- The shell parser bound is the same 10s the daemon preflight allows (`timeout
+  --kill-after=5s`), chosen so a hung parser cannot stall a root install; the 4 MiB capture cap
+  equals `linuxAppArmorCompileMaxBytes`. Only the capture the installer reads back is capped —
+  the load and unload calls discard their output — and both the deadline and the oversize arm
+  are pinned by probe rows (R18-R20) rather than by a wall-clock assertion inside a unit test;
+  the probe asserts a bounded wall time (30s for three cut invocations) as the outer envelope.
+- R6 (the package-level `linuxOwnerAppArmorUsernsDecision` accessor) is recorded as a residual,
+  not fixed: replacing it with a return value changes the exported
+  `VerifyLinuxOwnerInstallation` signature, both build-tag variants, 17 + 11 return sites and
+  the call sites in `daemon/internal/app/**` and `daemon/e2e/**`, both outside this goal's owned
+  set; every caller today is the one-shot CLI path and the package's rows run sequentially, so
+  the window is latent (the reset at the entry point keeps a failed verify from reporting a
+  stale token).
+- The Go parser deadline (10s) has no dedicated Go test pin: producing a timeout costs at least the
   deadline plus the fallback attempt in test wall time, and the arm is exercised by
   construction (`exec.CommandContext` with `context.WithTimeout`) on the service and CLI paths
   alike. The output bound and the sanitized environment do have pins (mutants M-A06a/M-A06b).
 - The fixture's read of the restriction (`R17`) can only fail closed on this host, which has no
   restriction file; its accepting arm runs on the runner, where the same value also has to
   satisfy the two log greps.
-- SPEC-A01's runner row (the attachment-sensitivity probe) and SPEC-A02's re-binding of the
-  delivered bytes belong to the conductor's Bind run on the PR head; until it lands, the
-  delivered bytes are bound by the fix-stage gates above and the run-3 rows stay bound to
-  `ce3c30b9`.
+- The conductor's Bind run `45688173130` bound `2d423748` (SPEC-A01's runner condition arrived
+  as the in-guest `TestLinuxAppArmorAttachmentSensitivePolicyHash` row in both sets, §8). The
+  round-1 installer and runbook edits postdate that run, so those bytes are bound by the
+  round-1 gates above until the next Bind re-binds the delivered bytes; the run-3 rows stay
+  bound to `ce3c30b9`.
 - `scripts/ci/omo-control-native-evidence.py`'s `SOURCE_PATHS` freeze does not list
   `daemon/internal/linuxpreflight/apparmor_userns.go`; adding the new file to that list is a
   candidate for the next record-hygiene change outside this goal's owned set.
-- The duplication gate itself is unrun in this environment (the registry fetch above); the
-  replacement proof is narrower than the gate's run-based rule, so the CI contracts job's run of
-  `scripts/ci/jscpd-changed.py` stays the binding check for this range.
+- The duplication gate ran in the round-1 gates above (exit 0) against a pinned scratch
+  dependency tree; that run is this revision's recorded result, and the CI contracts job still
+  re-runs the same script on the PR.

@@ -13,10 +13,10 @@ choices it leaves open and records the probe evidence that closed them.
 
 | Contract clause | Dispatch head | Content |
 | --- | --- | --- |
-| Change 1 installer | `scripts/install-linux-owner.sh` | 9-argument install, root-only, marker/resume, `verify_published_file`/`publish_or_verify`/`verify_existing_or_absent` (delivered :327, :382, :345), fixed publish list, no service start/stop |
+| Change 1 installer | `scripts/install-linux-owner.sh` | 9-argument install, root-only, marker/resume, `verify_published_file`/`publish_or_verify`/`verify_existing_or_absent` (delivered :334, :389, :352), fixed publish list, no service start/stop |
 | Change 2 preflight | `daemon/internal/linuxpreflight/preflight_linux.go` | `LinuxOwnerPreflightRuntimeBoundary` (delivered :45), `verifyInstalledLinuxOwnerAssets` (delivered :141), `verifyLinuxOwnerAppArmorUserns` (delivered :467) |
 | Change 2 decision line | `daemon/cmd/symmetry-daemon/main.go` | `-verify-linux-owner-install` prints the boundary line and `apparmor_userns=` (delivered :266) |
-| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :967), restriction read (delivered :1647-1651), securityfs guard (delivered :1652-1655), in-guest installer run (delivered :1660), installer-log decision grep (delivered :1672), in-guest `-verify-linux-owner-install` (delivered :1687) with its decision grep (delivered :1693), in-guest root preflight rows (delivered :1700-1730), `shared` group guard (delivered :1556) |
+| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :967), restriction read (delivered :1646-1650), securityfs guard (delivered :1651-1654), in-guest installer run (delivered :1659), installer-log decision grep (delivered :1671), in-guest `-verify-linux-owner-install` (delivered :1686) with its decision grep (delivered :1692), in-guest root preflight rows (delivered :1699-1728), `shared` group guard (delivered :1556) |
 | Change 3 base package | `scripts/ci/linux-v2-native-rootfs-base.sh` | pinned `--include=` set (delivered :47) and the guest policy-service mask (delivered :70-72) |
 | Change 4 design text | `docs/design/harness.md`, `docs/goals/0010-refactor-program.md` | not owned; the amendment text is proposed in §9 and applied by the D3 amendment |
 
@@ -118,10 +118,11 @@ The text is not copied here (contract Change 5); it is emitted by
   bootstrap create no user namespace and are not attached. No glob, directory, regex or prefix.
 - The only rule is `userns,`; the only other bytes are the probe's two boilerplate lines; the
   attachment is unquoted, matching Ubuntu's shipped per-program `flags=(unconfined)` pattern.
-- Those two boilerplate lines are *inputs*: the fix stage verifies `abi <abi/4.0>` and
-  `tunables/global` (owner, mode, link count, and — in the preflight — the ACL and the
-  effective A/B access, plus each include directory) before anything is compiled or loaded, so a
-  writable closure cannot widen the loaded policy behind a byte-identical profile file.
+- Those two boilerplate lines are *inputs*: both implementations verify `abi <abi/4.0>` and
+  `tunables/global` (owner, mode and link count; plus POSIX ACLs — access for the two files,
+  access and default for their directories — and, in the preflight, the effective A/B access)
+  before anything is compiled or loaded, so a writable closure cannot widen the loaded policy
+  behind a byte-identical profile file.
 - File `/etc/apparmor.d/symmetry-linux-owner-userns`, root:root mode 0644, singly linked,
   published through the installer's existing machinery (hash-pinned temp file beside the final
   path + `publish_or_verify` + `verify_published_file`), so a re-run is idempotent and a
@@ -175,8 +176,8 @@ securityfs) stays `not_needed` — the installer and the preflight agree on both
 The cross-platform build needs one `LinuxOwnerAppArmorUsernsDecision` stub in
 `preflight_unsupported.go` (the only non-Linux-amd64 home in the package); its value is the
 vocabulary's `not_needed` token and it is unreachable, because the unsupported verify always
-fails first. That file is outside the contract's owned list and is the one addition the plan
-justifies for the build.
+fails first. That file and its test `preflight_unsupported_test.go` are outside the contract's
+owned list; the round-1 ruling R2 ratifies both as scope additions (record §12).
 
 Fix-stage amendments to this section (review STD-A03/A06/A07/A08/A09): the include closure is
 verified with the same rules as the profile file through `verifyLinuxAppArmorIncludeClosure`
@@ -189,6 +190,13 @@ as root in the fixture's guest; the vocabulary moved to the build-tag-free
 `apparmor_userns.go`, with `preflight_unsupported.go` and its test returning and pinning the
 shared token; and `VerifyLinuxOwnerInstallation` resets the recorded decision before its first
 check, so a failing verify never reports an earlier call's value.
+Round-1 ruling R2 records the two further files this section depends on as ratified scope
+additions — the build-tag-free `apparmor_userns.go` and `preflight_unsupported_test.go`, beside
+`preflight_unsupported.go`, the rootfs-base mask lines and the runbook section. R6 (the
+package-level decision accessor) is recorded as a residual instead of a rewrite: returning the
+token from `VerifyLinuxOwnerInstallation` changes the exported signature, both build-tag
+variants, 17 + 11 return sites and the call sites in `daemon/internal/app/**` and
+`daemon/e2e/**`, the last two outside this goal's owned set.
 
 ## 6. Fixture (Change 3)
 
@@ -315,6 +323,25 @@ delivered bytes: SPEC-A01's attachment-sensitivity probe row and SPEC-A02's equa
 the delivered revisions belong to the conductor's Bind run on the PR head, which is why the
 TODO and CLOSED-TODO sentences bind the wall rows to run 3's head until then.
 
+### Bind run and round-1 fix stage (2026-11-26)
+
+The conductor's Bind run `45688173130` was the single scratch run on the PR head: its run head
+`3024fc34` is `2d423748` plus the three scratch-only files, and the binding report's equality
+table proves every delivered file sha256-equal between the two. Both case sets exited 1 at the
+same named stops as run 3; the in-guest root rows cleared the wall on those bytes
+(`apparmor_userns=per_program`, `TestLinuxAppArmorAttachmentSensitivePolicyHash: run=1 pass=1
+skip=0`), and the scratch probe's fixed-text compile row is recorded as a probe-script defect
+with the corrected probe deferred to the next Bind.
+
+The round-1 fix stage (the reviews' R1-R6) then changed the installer and the runbook only:
+every shell `apparmor_parser` call is bounded by the same 10s the daemon preflight allows (with
+a kill grace), the compile capture by a 4 MiB file-size limit, and the include-closure check
+reads POSIX ACLs (access for the two files, access and default for their directories) and
+refuses an untrusted or unreadable one. R6 is recorded as a residual; nothing else changes an
+accepted decision, profile-text byte, gate byte or census. The installer edits postdate the
+Bind run, so the conductor re-binds the delivered bytes with the next Bind; the round-1 probe
+rows R18-R23 carry the new arms (26 rows, 0 FAIL).
+
 ## 9. Records and the proposed D3 amendment text
 
 The evidence record `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md` carries the
@@ -353,4 +380,15 @@ different policy hash). That row now exists as a local measurement and as
 Bind run. The ruling also ratified SPEC-A03's three added files (`preflight_unsupported.go`,
 the rootfs-base mask lines, this runbook's section) and directed SPEC-A02's rewording: the
 TODO and CLOSED-TODO sentences bind the wall rows to run 3's head (`ce3c30b9`) until the Bind
-run re-binds the delivered bytes. SPEC-A04's two embedded profile-text copies are deleted.
+run re-binds the delivered bytes; the Bind run `45688173130` then carried the row in both
+sets on `2d423748`, which the round-1 installer and runbook edits postdate. SPEC-A04's two
+embedded profile-text copies are deleted.
+
+Round-1 rulings (same day, over PR #293's Sol/DS/security reviews at `2d423748`): R1 re-derives
+every delivered digest and anchor; R2 ratifies `apparmor_userns.go` and
+`preflight_unsupported_test.go` as scope additions; R3 bounds the installer's parser calls
+(10s deadline, 4 MiB compile capture) with stub-probe rows; R4 adds the shell closure ACL arm
+and keeps the runbook wording matching both implementations, with a stub-probe row; R5 rewords
+the shellcheck claim; R6's return-value rewrite is recorded as a residual. Nothing here changes
+the gate, the sysctl or an accepted decision, and the delivered bytes are re-bound by the next
+Bind.

@@ -273,8 +273,13 @@ recorded policy hash is not published, and a host that already carries the
 profile or the loaded policy while the restriction is absent or `0` is refused.
 It also refuses to load while any policy input is writable by a non-root
 identity: the profile file, its include closure (`abi/4.0`, `tunables/global`)
-and their directories must stay root-owned and non-writable, and the daemon
-preflight refuses a host whose closure a non-root writer could widen.
+and the closure's directories must stay root-owned and non-writable. The
+installer reads the closure's POSIX ACLs and refuses an effective write for any
+identity but root, or an ACL it cannot read. The read uses `getfacl` from the
+`acl` package, so the installer refuses a host that lacks it before anything is
+loaded, with a message naming that package as the remedy. The daemon preflight
+applies the same rule to the profile file and its directory as well, and refuses
+a host whose closure a non-root writer could widen.
 A re-run whose staged text differs from the published file stops with a
 message naming `install-linux-owner.sh -remove-userns-profile` as the remedy.
 `install-linux-owner.sh -print-userns-profile` prints the exact profile text
