@@ -1898,25 +1898,17 @@ section below.
       `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §3, run `45671784251`):
       both sets now pass the clone reserve and the fresh-leg umask wall (the authorized one-line
       `production` UMask arm is in; runs `45665341553`/`45668197894` red at the wall, run 4 zero
-      `… are 05` lines) and stop at, verbatim, `codex_containment` — `start native owner witness
-      transport: resume process "/usr/local/bin/codex": one-use Linux v2 RELEASE result is
-      unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown;
-      stage=clone_bootstrap arm=bootstrap_attempt wait_class=other
-      guest_stage=gate_drop_bounding_set errno=1)` (the same pre-clone credential fact the
-      `## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction` entry above records;
-      the AppArmor userns wall, owned by the in-flight goal `rf-acc-apparmor-userns-profile` per
-      the conductor ruling 2026-11-26 — not `rf-acc-guest-native-exec`, which merged as #289);
-      `claude_containment` — `start native owner witness transport: start
-      "/usr/local/bin/claude": validate native command and three Runner pipes before cgroup
-      reservation: Linux owner native argv contains an empty, oversized, or NUL value` (root
-      cause measured: the Claude adapter's fixed `--json-schema` element is 23 881 bytes,
-      `daemon/internal/harness/claude/adapter.go:160-180`, over the 16 KiB `maxCommandString`
-      bound, `daemon/native/linux-gate/protocol/wire.go:53`, refused at `wire_linux.go:450-452`
-      via `daemon/internal/execution/linux_owner_v2_linux.go:182`; owner `rf-claude-schema-argv`,
-      a new conductor goal whose design is pending: raise the argv bound, shrink the schema
-      argument, or move the schema off argv). Both sets'
-      `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
-      failing leg).
+      `… are 05` lines), and both walls the run then stopped at are closed, moved to
+      `docs/archive/CLOSED-TODO.md`: `codex_containment`'s AppArmor userns wall by
+      `rf-acc-apparmor-userns-profile` (#293; its record §8 names the rows that clear the wall
+      and the runs' next stops — the migration turn wait and the `shared` `/proc/<pid>/environ`
+      identity rows — as next-goal territory), and `claude_containment`'s fixed
+      `--json-schema` argv wall by `rf-claude-schema-argv` (closure under
+      `## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg
+      (2026-11-26)`; its binding run — the conductor's Bind scratch run of `claude_containment`
+      on the PR head — is pending at the delivered bytes, so the claude set's next stop is
+      unmeasured). Both sets' `stage_replay_native_release_<kind>` legs remain unexecuted (each
+      set stops at its first failing leg).
 
 - [ ] `pi_provider_action` and the two crash legs still need a provider-scoped admission
       (2026-11-26, goal `rf-acc-containment-goal-admission`, stage-1(b); evidence record

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -202,7 +203,181 @@ int main(int argc, char **argv) {
   return 0;
 }
 `
-	return compileGateProbe(t, source, "census")
+	return compileGateProbe(t, "#define CENSUS_GO_MAX_COMMAND_STRING "+strconv.Itoa(maxCommandString)+"\n"+source+`
+_Static_assert(MAX_COMMAND_STRING == 64 * 1024, "the gate C cap must be the ruled 64 KiB bound");
+_Static_assert(MAX_COMMAND_STRING == CENSUS_GO_MAX_COMMAND_STRING,
+    "the gate C cap must track Go protocol.maxCommandString");
+`, "census")
+}
+
+// The rows take their element size from the Go cap, so a C-only revert turns the
+// at-cap row red while a drift in either constant reds the census pin.
+func TestGateCommandStringBound(t *testing.T) {
+	probe := buildGateCommandStringBoundProbe(t)
+	for _, scenario := range []string{"at-cap-accepted", "cap-plus-one-refused"} {
+		t.Run(scenario, func(t *testing.T) {
+			probeContext, cancelProbe := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelProbe()
+			command := exec.CommandContext(probeContext, probe, scenario)
+			command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C"}
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("current gate command-string bound probe %s: %v\n%s", scenario, err, output)
+			}
+		})
+	}
+}
+
+func buildGateCommandStringBoundProbe(t *testing.T) string {
+	t.Helper()
+	// Call the gate's real read_release over a real SOCK_SEQPACKET release channel
+	// with a real parent pidfd; no production mode or user namespace is added.
+	const source = `#define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#define main symmetry_gate_main
+#include "gate.c"
+#undef main
+
+static int bound_high_dup(int fd) {
+  if (fd < 0) return fd;
+  int high = fcntl(fd, F_DUPFD, 8);
+  int saved_errno = errno;
+  close(fd);
+  errno = saved_errno;
+  return high;
+}
+
+static void bound_put_count(unsigned char *body, size_t *position, uint32_t count) {
+  memcpy(body + *position, &count, sizeof(count));
+  *position += sizeof(count);
+}
+
+static void bound_put_span(unsigned char *body, size_t *position, const unsigned char *data, uint32_t length) {
+  bound_put_count(body, position, length);
+  memcpy(body + *position, data, length);
+  *position += length;
+}
+
+static int bound_run(int oversized) {
+  unsigned char token[32];
+  memset(token, 0xa5, sizeof(token));
+  pid_t owner_pid = getppid();
+  int pidfd = bound_high_dup((int)syscall(SYS_pidfd_open, owner_pid, 0));
+  int release_pair[2];
+  if (pidfd < 0 || socketpair(AF_UNIX, SOCK_SEQPACKET, 0, release_pair) != 0) return 10;
+  int release_receiver = bound_high_dup(release_pair[0]);
+  int release_sender = bound_high_dup(release_pair[1]);
+  int stdio[RELEASE_STDIO_FD_COUNT][2];
+  for (int index = 0; index < RELEASE_STDIO_FD_COUNT; ++index) {
+    if (pipe(stdio[index]) != 0) return 11;
+  }
+  int owner_pipe[2];
+  if (pipe(owner_pipe) != 0) return 12;
+  int stdin_read = bound_high_dup(stdio[0][0]);
+  int stdout_write = bound_high_dup(stdio[1][1]);
+  int stderr_write = bound_high_dup(stdio[2][1]);
+  int owner_read = bound_high_dup(owner_pipe[0]);
+  close(stdio[0][1]);
+  close(stdio[1][0]);
+  close(stdio[2][0]);
+  close(owner_pipe[1]);
+  if (stdin_read < 0 || stdout_write < 0 || stderr_write < 0 || owner_read < 0) return 13;
+  if (dup2(pidfd, OWNER_PIDFD) < 0 || dup2(release_receiver, RELEASE_FD) < 0) return 14;
+  close(pidfd);
+  close(release_receiver);
+  static const unsigned char path_bytes[] = "/bin/true";
+  static const unsigned char cwd_bytes[] = "/";
+  size_t element = (size_t)CENSUS_GO_MAX_COMMAND_STRING + (oversized ? 1 : 0);
+  unsigned char *body = (unsigned char *)malloc(2 * element + 128);
+  if (body == NULL) return 15;
+  size_t position = 0;
+  bound_put_span(body, &position, path_bytes, sizeof(path_bytes) - 1);
+  bound_put_count(body, &position, 1);
+  bound_put_count(body, &position, (uint32_t)element);
+  memset(body + position, 'x', element);
+  position += element;
+  bound_put_count(body, &position, 0);
+  bound_put_span(body, &position, cwd_bytes, sizeof(cwd_bytes) - 1);
+  unsigned char *packet = (unsigned char *)calloc(1, RELEASE_HEADER_SIZE + position);
+  if (packet == NULL) return 16;
+  memcpy(packet, WIRE_MAGIC, sizeof(WIRE_MAGIC));
+  uint16_t header[2] = {RELEASE_WIRE_VERSION, FRAME_RELEASE};
+  memcpy(packet + 8, header, sizeof(header));
+  memcpy(packet + 12, token, sizeof(token));
+  uint32_t body_size = (uint32_t)position;
+  memcpy(packet + 44, &body_size, sizeof(body_size));
+  uint32_t descriptor_count = RELEASE_FD_COUNT;
+  memcpy(packet + 48, &descriptor_count, sizeof(descriptor_count));
+  uint64_t deadline = 1;
+  memcpy(packet + 52, &deadline, sizeof(deadline));
+  memcpy(packet + RELEASE_HEADER_SIZE, body, position);
+  struct msghdr message;
+  memset(&message, 0, sizeof(message));
+  struct iovec vector = {.iov_base = packet, .iov_len = RELEASE_HEADER_SIZE + position};
+  message.msg_iov = &vector;
+  message.msg_iovlen = 1;
+  unsigned char control[CMSG_SPACE(sizeof(int) * RELEASE_FD_COUNT)];
+  memset(control, 0, sizeof(control));
+  message.msg_control = control;
+  message.msg_controllen = sizeof(control);
+  struct cmsghdr *header_out = CMSG_FIRSTHDR(&message);
+  header_out->cmsg_level = SOL_SOCKET;
+  header_out->cmsg_type = SCM_RIGHTS;
+  header_out->cmsg_len = CMSG_LEN(sizeof(int) * RELEASE_FD_COUNT);
+  int rights[RELEASE_FD_COUNT] = {stdin_read, stdout_write, stderr_write, owner_read};
+  memcpy(CMSG_DATA(header_out), rights, sizeof(rights));
+  if (sendmsg(release_sender, &message, 0) < 0) return 17;
+  close(release_sender);
+  unsigned char *sealed = NULL;
+  size_t sealed_size = 0;
+  struct owner_config config;
+  memset(&config, 0, sizeof(config));
+  struct release_command command;
+  memset(&command, 0, sizeof(command));
+  if (read_release(owner_pid, OWNER_PIDFD, &config, token, &sealed, &sealed_size, &command) != 0) {
+    if (errno != EPROTO) {
+      fprintf(stderr, "read_release refused with errno %d, want EPROTO\n", errno);
+      return 18;
+    }
+    if (!oversized) {
+      fprintf(stderr, "read_release refused an argv element of %zu bytes (the Go cap)\n", element);
+      return 18;
+    }
+    fprintf(stderr, "read_release refused an argv element of %zu bytes with EPROTO (the cap plus one)\n", element);
+  return 0;
+  }
+  if (oversized) {
+    fprintf(stderr, "read_release accepted an argv element of %zu bytes above the cap\n", element);
+    return 18;
+  }
+  if (command.argc != 1 || command.argv[0].length != (uint32_t)element ||
+      command.argv[0].data[0] != 'x' || command.argv[0].data[element - 1] != 'x' ||
+      command.path.length != sizeof(path_bytes) - 1 ||
+      memcmp(command.path.data, path_bytes, sizeof(path_bytes) - 1) != 0) {
+    fprintf(stderr, "read_release parsed the bounded command with the wrong shape\n");
+    return 18;
+  }
+  fprintf(stderr, "read_release accepted and parsed an argv element of %zu bytes (the Go cap)\n", element);
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  if (argc != 2) return 1;
+  if (strcmp(argv[1], "at-cap-accepted") == 0) return bound_run(0);
+  if (strcmp(argv[1], "cap-plus-one-refused") == 0) return bound_run(1);
+  return 1;
+}
+`
+	return compileGateProbe(t, "#define CENSUS_GO_MAX_COMMAND_STRING "+strconv.Itoa(maxCommandString)+"\n"+source, "command-string-bound")
 }
 
 // The hosted runner's true is a symlink, which the gate's O_NOFOLLOW refuses
