@@ -1827,6 +1827,10 @@ type linuxV2WitnessReleaseFixture struct {
 }
 
 func newLinuxV2WitnessReleaseFixture(t *testing.T, hold string) linuxV2WitnessReleaseFixture {
+	return newLinuxV2WitnessReleaseFixtureWithJournal(t, hold, nil)
+}
+
+func newLinuxV2WitnessReleaseFixtureWithJournal(t *testing.T, hold string, mutate func(*state.RunJournal)) linuxV2WitnessReleaseFixture {
 	t.Helper()
 	identity, err := platform.ProcessIdentity(os.Getpid())
 	if err != nil {
@@ -1857,7 +1861,7 @@ func newLinuxV2WitnessReleaseFixture(t *testing.T, hold string) linuxV2WitnessRe
 			request: request.Barrier, caseName: request.Case, runKey: request.RunKey, aUID: uint32(os.Geteuid()),
 		},
 	}
-	store := linuxV2WitnessReleaseJournalStore{journal: state.RunJournal{
+	journal := state.RunJournal{
 		RunID: key.RunID, Generation: key.Generation, RuntimeID: fence.RuntimeID,
 		ClaimedRuntimeEpoch: fence.RuntimeEpoch, ClaimID: fence.ClaimID, LeaseToken: fence.LeaseToken,
 		RunContainmentState: state.RunContainmentState{
@@ -1865,7 +1869,11 @@ func newLinuxV2WitnessReleaseFixture(t *testing.T, hold string) linuxV2WitnessRe
 			ContainmentCgroup:    &state.LinuxCgroupReservation{Gate: &authority.LinuxCgroupGateIdentity{Process: target}},
 			ContainmentAuthority: &authority.Supervisor{TargetPID: target.PID, TargetIdentity: target.Identity},
 		},
-	}}
+	}
+	if mutate != nil {
+		mutate(&journal)
+	}
+	store := linuxV2WitnessReleaseJournalStore{journal: journal}
 	callbacks := execution.LinuxV2JournalCallbacks{}
 	if err := witness.wrapLinuxV2Callbacks(nil, store, &callbacks); err != nil {
 		t.Fatalf("wrap the owner witness release callbacks: %v", err)
@@ -1893,8 +1901,12 @@ func (fixture linuxV2WitnessReleaseFixture) readMarker(t *testing.T) linuxV2Nati
 
 func (fixture linuxV2WitnessReleaseFixture) writeRelease(t *testing.T) {
 	t.Helper()
-	if err := os.WriteFile(fixture.release, []byte("release\n"), 0o600); err != nil {
+	staged := fixture.release + ".staged"
+	if err := os.WriteFile(staged, []byte("release\n"), 0o600); err != nil {
 		t.Fatalf("write the witness release marker: %v", err)
+	}
+	if err := os.Rename(staged, fixture.release); err != nil {
+		t.Fatalf("publish the witness release marker: %v", err)
 	}
 }
 
@@ -1987,5 +1999,57 @@ func TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage(t *testing.T) {
 	if marker.DropAckAfter != linuxV2NativeWitnessReleaseStage || !marker.Target.PIDFDVerified ||
 		marker.Target.PID != fixture.target.PID || marker.Owners.Gate.Identity != fixture.target.Identity {
 		t.Fatalf("ACK-loss release marker = %#v, want the exact lost-ACK boundary with peer evidence", marker)
+	}
+}
+
+func TestLinuxV2NativeWitnessRunnerReleaseRejectionsStayFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.RunJournal)
+	}{
+		{name: "gate PID mismatch", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup.Gate.Process.PID = os.Getpid() + 1
+		}},
+		{name: "authority target mismatch", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentAuthority.TargetPID = os.Getpid() + 1
+		}},
+		{name: "zero PID", mutate: func(journal *state.RunJournal) {
+			journal.PID = 0
+		}},
+		{name: "missing gate", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup.Gate = nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLinuxV2WitnessReleaseFixtureWithJournal(t, linuxV2NativeWitnessReleaseStage, test.mutate)
+			if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err == nil {
+				t.Fatal("release callback accepted a journal outside the exact committed target")
+			}
+			fixture.witness.mu.Lock()
+			peer := fixture.witness.peer
+			fixture.witness.mu.Unlock()
+			if peer != nil {
+				t.Fatalf("rejected release witness evidence = %#v, want no peer publication", peer)
+			}
+			if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected release staged its held marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessRunnerReleaseReplaySkipsWithoutStaging(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, true); err != nil {
+		t.Fatalf("replay release callback: %v", err)
+	}
+	fixture.witness.mu.Lock()
+	peer := fixture.witness.peer
+	fixture.witness.mu.Unlock()
+	if peer != nil {
+		t.Fatalf("replay release witness evidence = %#v, want no peer publication", peer)
+	}
+	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replay release staged its held marker: %v", err)
 	}
 }

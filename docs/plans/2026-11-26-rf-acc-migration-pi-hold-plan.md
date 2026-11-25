@@ -19,13 +19,13 @@ implementation choices those leave open, the per-clause baseline, and what is ou
   (`linux_owner_witness_linux.go:3456,3470,3488`), which is wired into a harness launch only for
   codex/claude through `harness.StartRequest.StartProcess` (`:3509-3522`). `daemon/internal/harness/pi/adapter.go`
   installs its own `runnerProcessStarter` (`:81-87,105,175-176`), so a Pi launch never runs that
-  closure; the same is true of `harness/opencode/adapter.go` (`:77-83,134`).
+  closure; the same is true of `harness/opencode/adapter.go` (`:73-79,204,213`).
 - The release ACK seam fires on every launch path:
   `execution/linux_owner_v2_linux.go:1073-1077` calls
   `invocation.Callbacks.DropAckAfter(LinuxV2AckStageNativeRelease, …)` after
   `owner.releaseSucceeded = true`; the witness already wraps that callback for its ACK-loss cases
-  (`linux_owner_witness_linux.go:3923-3934`) and the stop-receipt/leaf-removed/cleared stages are
-  already staged from the same callback family (`:3861-3935`, record `rf-acc-pi-durability-matrices`
+  (`linux_owner_witness_linux.go:3927-3936` at base) and the stop-receipt/leaf-removed/cleared
+  stages are already staged from the same callback family (`:3886-3926` at base, record `rf-acc-pi-durability-matrices`
   §4b: `stale_leaf`'s `stop_receipt_durable` hold is reached on the pi vehicle).
 - The released same-PID target is A-observable: the gate user namespace is created by the gate
   *after* it drops to A (`c-gate/gate.c:1404-1414`), so A owns it and can `stat`
@@ -35,11 +35,11 @@ implementation choices those leave open, the per-clause baseline, and what is ou
   parked gate → `stat ns/user`/`stat ns/net`/`environ`/`readlink fd` all OK; released target →
   `stat ns/user`/`stat ns/net` OK, `environ`/`fd` EACCES (the `shared`-set defect, not this goal's).
 - The e2e marker contract the hold must satisfy:
-  `linuxV2MarkerHasNativePeerProof` (`production_linux_v2_owner_cli_test.go:1083-1090`) requires
+  `linuxV2MarkerHasNativePeerProof` (`production_linux_v2_owner_cli_test.go:1083-1089`) requires
   `Target.PID/Identity` equal to `Owners.Gate`, `PIDFDVerified`, `HostUID == owner.BUID`,
   `SamePIDExec`, and nonzero user/network namespace device+inode; the replay leg restores the
-  evidence from the durable marker (`restoreStageMarkers`, `:2305-2310`;
-  `linuxV2ValidateStageReplayResponseState`, `:1229-1233`).
+  evidence from the durable marker (`restoreStageMarkers`, `linux_owner_witness_linux.go:2336`;
+  `linuxV2ValidateStageReplayResponseState`, `production_linux_v2_owner_cli_test.go:1162`, released-evidence check at `:1229-1233`).
 
 ## 2. Public/API shape
 
@@ -50,14 +50,18 @@ e2e already validates the marker exactly).
 1. `daemon/internal/app/linux_owner_witness_linux.go`
    - `linuxV2NativeWitnessRun` gains one boolean recording that the launch path observes the
      release through `daemon.start` (codex/claude) instead of the runner callback.
-   - New `captureRunnerReleasedTarget(store journalStore) error`: binds the committed
+   - New `captureReleasedNativeTarget(store journalStore) error`: binds the committed
      RunJournal target (`ContainmentAuthority` + `ContainmentCgroup.Gate` + process marker, all
      equal), verifies the live same-PID process identity before and after `PidfdOpen`, requires
      the pidfd live, stats `/proc/<pid>/ns/user` (new small helper) and reuses
      `linuxV2NativeWitnessNetworkNamespace`, then publishes the exact target through the existing
      `witness.peer` + `summary.Target` fields.
    - `wrapLinuxV2Callbacks`' `DropAckAfter` wrapper stages `native_release` on the runner path
-     (plain hold and ACK-loss alike) and keeps the codex/claude behavior byte-identical.
+     (plain hold and ACK-loss alike) and leaves the generated codex/claude rows unchanged (their
+     plain release hold still stages from `daemon.start` and the callback no-ops); the one
+     validator-permitted configuration that differs — a `native_release` ACK-loss drop on a
+     `daemon.start`-wired adapter — captures the released target, and no generated row is affected
+     because the ACK-loss selectors are built from the pi-only `pi-durability.json` template.
    - The Pi turn failures keep their message and gain the inner cause (`%w`), which is the bounded
      log-only instrument Stage 1 asks for: the fixture prints a bounded stderr tail
      (`linuxV2ReportOwnerWitnessFailure` → `linuxV2OwnerWitnessStderrBoundedLines`).
@@ -92,7 +96,7 @@ aborts earlier on its own pinned-version gate today, so no observed row changes,
 
 The codex path takes `UserNamespace` from `DuplicateLinuxV2Peer`, whose value is the parked gate's
 A-side observation cross-checked with the authenticated root launcher
-(`execution/linux_owner_v2_linux.go:2558-2571`). An adapter that owns its Runner never hands the App
+(`execution/linux_owner_v2_linux.go:2558-2572`). An adapter that owns its Runner never hands the App
 that pidfd, so the equivalent A-side observation is made directly: the userns is the same ns object
 across the same-PID exec, A owns it, and the release ACK already binds the helper's one-use RELEASE
 to that exact gate PID/identity. The marker therefore carries the same field shape as the codex

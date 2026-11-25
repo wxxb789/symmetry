@@ -11,9 +11,9 @@ is the conductor's; this record carries the local code, unit and compile rows.
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
-| `daemon/internal/app/linux_owner_witness_linux.go` | `a6834897f8a30f62d6bb86f7daff1e8622a90b83780b70f53d08c5f5c77cbafd` |
-| `daemon/internal/app/linux_owner_witness_linux_test.go` | `2e68d2493381860b675b4d81b0e4b7f0022fbdde228a6b93902c04ec739e78d2` |
-| `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md` | `75455a41e31c497caa73caeca4a96afd2a1ef6f842b166f9903db01f4f8f751f` (record revision; not run-bound) |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `df9cdda37dc735983fcfb87dadd02d57d8cf1b0aa67b21bfc1400a7c9bf9fcbb` |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `0f6b0f016bbe2217773bd99941dbeb35b90476b37b2a1835dbdf93121d2d45c3` |
+| `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md` | `a0031a9edffecebb02a480432d1ea58f9e8f1f0426dfeea1ad89112d4e9c6eba` (record revision; not run-bound) |
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. The
 `linux_owner_witness_linux_test.go` row is a recorded scope addition (plan §3.5): the contract's
@@ -39,7 +39,7 @@ and the stage-marker listing of the same failure context contains no `native_rel
 (`negative-root/migration/request` lists only directories). Chain, all cited at the base revision:
 
 1. The migration request holds at `native_release`
-   (`scripts/ci/linux-v2-native-acceptance.sh:2616-2632`; the request writer's `stage_replay`
+   (`scripts/ci/linux-v2-native-acceptance.sh:2616-2626`; the request writer's `stage_replay`
    default hold) on the provider-free `pi-durability` vehicle.
 2. `native_release` is staged only from the witness's `daemon.start` closure
    (`linux_owner_witness_linux.go:3456,3470,3488` at base), and that closure reaches a harness only
@@ -47,7 +47,7 @@ and the stage-marker listing of the same failure context contains no `native_rel
    (`:3509-3522`).
 3. `daemon/internal/harness/pi/adapter.go:81-87,105,175-176` installs its own
    `runnerProcessStarter`, so a pi launch runs `execution.NewRunner()` directly and never calls the
-   closure — the durable marker cannot be written. `daemon/internal/harness/opencode/adapter.go:77-83,134`
+   closure — the durable marker cannot be written. `daemon/internal/harness/opencode/adapter.go:73-79,204,213`
    is the same shape.
 4. The witness therefore ran on to its pi turn and failed there
    (`linux_owner_witness_linux.go:3633-3636` at base), which is the line the retained bounded stderr
@@ -61,7 +61,7 @@ and the stage-marker listing of the same failure context contains no `native_rel
    why the pi `stale_leaf` leg reaches its hold while the release hold did not.
 
 Stage-1 instrument: both pi turn failures now wrap their cause (`%w`,
-`linux_owner_witness_linux.go:3724-3730`), and the fixture prints a bounded tail of the App's stderr
+`linux_owner_witness_linux.go:3724-3728`), and the fixture prints a bounded tail of the App's stderr
 (`linuxV2ReportOwnerWitnessFailure` → `linuxV2OwnerWitnessStderrBoundedLines`, 20 lines and a
 per-line byte bound). With the fix in place the migration case is held *before* any turn, so the
 inner error is moot for that case; any pi case that still reaches a turn names it verbatim on the
@@ -100,8 +100,13 @@ Runner, with the exact released target as evidence:
 - `linuxV2NativeWitnessRun.startProcessStagesRelease` is set once in `launchNative` from
   `linuxV2NativeWitnessStagesReleaseFromStartProcess(kind)`, the same predicate that wires
   `startRequest.StartProcess` — one source of truth for "this adapter hands the witness the exact
-  Process". Codex/claude behavior is byte-identical (their release stays staged from `daemon.start`
-  after the peer pidfd/namespace checks).
+  Process". The generated codex/claude rows are unchanged (their plain release hold stays staged
+  from `daemon.start` after the peer pidfd/namespace checks and the callback no-ops); the one
+  validator-permitted configuration that differs is a `native_release` ACK-loss drop on a
+  `daemon.start`-wired adapter, where the ACK-loss capture now publishes the released target's
+  evidence too (`TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` pins it), and no
+  generated row is affected because the ACK-loss selectors are built from the pi-only
+  `pi-durability.json` template (`scripts/ci/linux-v2-native-acceptance.sh:1314-1329`).
 - `callbacks.DropAckAfter` now stages the release when `!startProcessStagesRelease` (plain hold) or
   when the request selected that stage (ACK-loss), after
   `captureReleasedNativeTarget` publishes the target evidence; the ACK-loss drop
@@ -116,7 +121,7 @@ Runner, with the exact released target as evidence:
   every later stage marker and the replay response inherit the evidence through
   `fillSummaryFromJournal`/`restoreStageMarkers`.
 - Marker evidence at the held boundary (the e2e predicate
-  `linuxV2MarkerHasNativePeerProof`, `production_linux_v2_owner_cli_test.go:1083-1090`, field by
+  `linuxV2MarkerHasNativePeerProof`, `production_linux_v2_owner_cli_test.go:1083-1089`, field by
   field): `Target.PID`/`Identity` = journal marker = authority = gate; `PIDFDVerified` =
   the verified pidfd; `HostUID` = the installed B uid; `SamePIDExec`; `UserNamespace` =
   `/proc/<pid>/ns/user`; `NetworkNamespace` = `/proc/<pid>/ns/net` (host namespace proven);
@@ -131,28 +136,28 @@ be rejected by the e2e marker contract).
 
 ## 5. Gate rows (commands, working directory, exit)
 
-All commands run in WSL `Ubuntu-24.04` (`/mnt/q/repos/wt-acc-migration-hold/symmetry/daemon`,
-`CGO_ENABLED=0`, `GOFLAGS=-mod=mod`), on the delivered bytes:
+All commands run in WSL `Ubuntu-24.04` (`<HOST-PATH>/daemon`, `CGO_ENABLED=0`, `GOFLAGS=-mod=mod`),
+on the §1 delivered bytes (§10 records the apply-stage re-run on the same digests):
 
 | gate | command | exit | result |
 | --- | --- | --- | --- |
 | format | `gofmt -l .` | 0 | no output |
 | vet (unit) | `go vet ./...` | 0 | no output |
-| unit suite | `go test ./internal/app/ -count=1` | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/app 135.187s`, on the §1 delivered bytes |
-| focused witness tests | `go test ./internal/app/ -run 'TestLinuxV2NativeWitness' -count=1` | 0 | `ok …` (includes the three new tests) |
+| unit suite | `go test ./internal/app/ -count=1` | 0 | `ok github.com/wxxb789/symmetry/daemon/internal/app 154.349s` |
+| focused witness tests | `go test ./internal/app/ -run 'TestLinuxV2NativeWitness' -count=1` | 0 | `ok …` 1.252s (includes the five new tests: the three implement-stage pins plus the two apply-stage pins) |
 | vet (e2e compile) | `go vet ./e2e/` | 0 | no output |
-| e2e compile of the case | `go test ./e2e/ -run TestProductionLinuxV2MigrationDenialRetainsJournal -count=1` | 0 | `ok …` (the witness opt-in skip; no guest here) |
+| e2e compile of the case | `go test ./e2e/ -run TestProductionLinuxV2MigrationDenialRetainsJournal -count=1` | 0 | `ok github.com/wxxb789/symmetry/daemon/e2e 0.021s` (the witness opt-in skip; no guest here) |
 
 ## 6. Mutant rows
 
-Each mutant was applied to the delivered source, run against the new tests, and reverted; the final
-tree equals §1.
+Each mutant was applied to the delivered source, run against the new tests, and reverted (re-run at
+the apply-stage refresh on the §1 bytes, §10); the final tree equals §1.
 
 | # | mutant | expected | observed |
 | --- | --- | --- | --- |
-| M1 | the release callback reverted to its pre-fix body (`request.DropAckAfter != stage` gating only) | the runner-path hold test reddens | `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`: `release callback returned before its held stage: <nil>`; `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage`: the ACK-loss marker carries `PIDFDVerified:false`, zero namespaces (`FAIL`, exit 1) |
+| M1 | the release callback reverted to its pre-fix body (`request.DropAckAfter != stage` gating only) | the runner-path hold test reddens | `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`: `release callback returned before its held stage: <nil>`; `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage`: the ACK-loss marker carries `PIDFDVerified:false`, zero namespaces; `TestLinuxV2NativeWitnessRunnerReleaseRejectionsStayFailClosed`: all four cases `release callback accepted a journal outside the exact committed target` (`FAIL`, exit 1) |
 | M2 | `captureReleasedNativeTarget` publishes no `witness.peer` (no verified pidfd) | the evidence assertions redden | `release witness evidence = (*execution.LinuxV2Peer)(nil)/…` (`FAIL`, exit 1) |
-| M3 | `linuxV2NativeWitnessStagesReleaseFromStartProcess` returns true for every kind | the launch-seam table reddens | `witness stages the release from daemon.start for "pi" = true, want false` and the same for `"opencode"` (`FAIL`, exit 1) |
+| M3 | `linuxV2NativeWitnessStagesReleaseFromStartProcess` returns true unconditionally | the launch-seam table reddens | `witness stages the release from daemon.start for "pi" = true, want false` and the same for `"opencode"` (`FAIL`, exit 1) |
 
 M1 also shows the ACK-loss release marker gaining the exact evidence the e2e predicate requires
 (`PIDFDVerified`, `UserNamespace`/`NetworkNamespace`, `Owners.Gate`), which is the same class the
@@ -163,7 +168,7 @@ plain hold needs.
 | contract clause | proof |
 | --- | --- |
 | 1 root cause named verbatim, source + log | §2 rows and line cites; the diagnosis is confirmed, not refuted; the inner turn error is instrumented (bounded wrap) rather than asserted |
-| 2 the fix reaches the hold on the production path | §4; the hold engaging is pinned by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget` (marker observed while the callback still blocks, released through the bounded release-file protocol); the guest Bind row is the conductor's |
+| 2 the fix reaches the hold on the production path | §4; the hold engaging is pinned by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget` (marker observed while the callback still blocks, released through the bounded release-file protocol); the fail-closed journal rejections and the replay skip are pinned by the apply-stage `TestLinuxV2NativeWitnessRunnerReleaseRejectionsStayFailClosed` and `TestLinuxV2NativeWitnessRunnerReleaseReplaySkipsWithoutStaging`; the guest Bind row is the conductor's |
 | 2 no `pi/**` change, no new provider access, no second authority | `git status`/`git diff` scope (§1 files only); the release ACK is the existing App-owned seam; no new store, scheduler or provider path |
 | 3 records name the root cause verbatim | §2 |
 | Invariants (denial/retention assertions, ≤2-line comments, `go vet`, host-layout independence) | no e2e validator or fixture byte changed; every added comment is ≤2 lines; §5 rows; the new test reads `/proc/self/ns/*` and the journal, never a host layout |
@@ -196,3 +201,35 @@ plain hold needs.
 - Scratch probes in the GDD state root `scratch/` (§3), and the verbatim re-run of
   `findings/probe-gate-sequence.py`.
 - Retained run log `gdd/native/run-45696662454.log` (raw 3213-3221, 3784+) as cited by the diagnosis.
+
+## 10. Apply-stage refresh (2026-11-26)
+
+Applied under the conductor's apply brief from the simplify run
+(`runs/2026-11-26/symmetry-rf-acc-migration-pi-hold-simplify/answer.md`): F1, one
+`openExactLiveLinuxV2WitnessPIDFD` for both witness pidfd captures (the two `unix.PidfdOpen` sites
+in the witness collapse to one helper); F2, one `linuxV2NativeWitnessNamespaceStat` for the
+nsfs-stat preamble; F3, the release fixture's journal is parameterized and four fail-closed
+rejection cases plus the `ownerEffectAlreadyAckedOnEntry` replay skip are pinned in the unit file;
+F4/F5, this record's and the plan's amended sentences. §1 digests, §2's instrument anchor, §5 rows
+and §6 mutants are re-measured from these bytes.
+
+Recorded deviations and repairs, not hidden:
+
+- Determinism repair applied with F3: the unit fixture published the release signal with a
+  non-atomic `os.WriteFile` while the pre-existing barrier (`waitRelease`, unchanged) hard-fails on
+  incomplete content; one gate run caught the mid-write state (`witness release marker is not the
+  exact bounded root-controlled signal`). `writeRelease` now writes `<release>.staged` and renames
+  it into place; the barrier's checks are untouched and no production byte changed.
+- F1 harmonizes two unasserted release-path diagnostics (the identity-change suffix and the
+  pidfd-liveness wording); F2's helper keeps the `net`/`network` and `user` strings verbatim via
+  the nsfs entry name. Each message template has only its definition site as a consumer (census in
+  the apply report).
+
+Appendix — mutant deltas re-run on the §1 bytes (verbatim; reverted after each run, hashes back to
+§1):
+
+| # | delta | mutated sha256 | observed |
+| --- | --- | --- | --- |
+| M1 | the `selected`/`runnerRelease` gate and the `captureReleasedNativeTarget` block in the `DropAckAfter` wrapper replaced by `if witness.request.DropAckAfter != stage || ownerEffectAlreadyAckedOnEntry {` / `return nil` / `}` | `33fb7ca9643c00562618065e1ee2b3de71feafff949b9aac136c2761a15d4fcf` | §6 M1 row |
+| M2 | `witness.peer = nil` inserted after the peer literal in `captureReleasedNativeTarget` | `30ce79daf3128358a6e96319d653ffbbc69218e405d780d3afe2b7bd8e5c9909` | §6 M2 row |
+| M3 | `linuxV2NativeWitnessStagesReleaseFromStartProcess` body `return true` | `e98ae7f69f77c8115cf01c2f0b99a8528a5d13a0bf700e2e520cc3807e0a17a8` | §6 M3 row |
