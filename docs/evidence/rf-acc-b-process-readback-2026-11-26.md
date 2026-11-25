@@ -13,22 +13,28 @@ distro); gates that must not depend on host layout ran on the pinned toolchain
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
-| `daemon/internal/linuxreadback/readback.go` | `780970abf799073fba9d114b6632ed20260cc5c25b845c97eac3d6e0e49298dd` |
-| `daemon/internal/linuxreadback/reader_linux.go` | `29f0c2c1321c3ef205efd18b5f4fb67369ebd727f0e39b0eed1b2f706353b2d9` |
+| `daemon/internal/linuxreadback/readback.go` | `7653e0dcc3f476599f2f53eefb5c8ac4efb124100dc555531a908f3d591d0619` |
+| `daemon/internal/linuxreadback/reader_linux.go` | `750b04628e81053247c4dbe00691a0083083054b6f32d203c825d329d41f20d8` |
 | `daemon/internal/linuxreadback/reader_unsupported.go` | `9cb3aea49d3d12d4414e93c6c52e069e91f34eb5666f44e3bf44e4a1d4fd93ba` |
 | `daemon/internal/linuxreadback/local_repro_linux_test.go` | `0802c8a9f52181646bb4ab62a2a7fd9f3a1dab6b53eb88e69a003214734c01bc` |
-| `daemon/internal/linuxreadback/cmd/linux-v2-readback-reader/main.go` | `d740a787549f2b6cf676f47fe2c6a4a9a70a7a19f8f28df9a581291275c0f8ae` |
-| `daemon/native/linux-gate/protocol/readback_integration_linux_test.go` | `170ea85fdeda954892543d5c05eab1b7f58478b21bfd0de715c95ccfb49a3de8` |
+| `daemon/internal/linuxreadback/cmd/linux-v2-readback-reader/main.go` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` |
+| `daemon/native/linux-gate/protocol/readback_helpers_linux_test.go` | `170ea85fdeda954892543d5c05eab1b7f58478b21bfd0de715c95ccfb49a3de8` |
 | `daemon/native/linux-gate/protocol/clone_integration_linux_test.go` | `4ce7d2216f990c9c67d24be8944249c906871a571db7a53c4e5086a72aeb9d5b` |
 | `daemon/native/linux-gate/protocol/launcher_integration_linux_test.go` | `11629ac47f874cc1dc7781eaa94b7b69dd77f1e2fe08b731aa5fa565d55e36f4` |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `3c26bf3f729342b8e088ba9470236485f09cb6924bf05267df7cb44243e3e558` |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `ff40b2b1d88b7fbb2266fabf7d29bfd50427424b329cd767dc39e9b007b529f1` |
-| `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md` | `65f4d3407e183ae59c7b8b2582b7b8fd39e3316855c054c89d421f470e78510e` (record revision) |
+| `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md` | `490961718b434aed989e132b067fca917017f84dc95c3a0bac8c0c08516f8ea6` (record revision) |
 
-The readback digests above are the post-simplification revision: the first pass had the
-channel/bound names exported, and the scoped simplification review unexported the names no caller
-outside the package uses, then trimmed the two comment runs the contract's two-line bound refuses
-(the reproduction rows and gates were re-run at these digests, §6). The same review dropped a
+The readback digests above are the post-apply revision: the first pass had the channel/bound names
+exported, the scoped simplification review unexported the names no caller outside the package uses
+and trimmed the two comment runs the contract's two-line bound refuses, and the apply stage then
+deleted the dead `ErrRefused`/`Is` pair, unexported `ChannelEnv`, deleted the three never-set
+`ServeOptions` knobs with their flags (`--ready-file`, `--stop-file`, `--max-requests`), hoisted
+the request budget to one `maxRequests` bound, replaced the hand-rolled slice lookup with
+`slices.Contains`, and renamed the shared request helper from the misleading
+`readback_integration_linux_test.go` to `readback_helpers_linux_test.go` (bytes unchanged; the
+plan's §8.3 records the flag-list, client-name and check-order amendments). The reproduction rows
+and gates were re-run at these digests (§6). The simplification review had also dropped a
 `readlink`-vanished-descriptor tolerance from the FD census: the inline census it replaces treated
 any `readlink` failure as a hard test error, so the reader refuses with `stage=read` instead of
 censusing a shorter table — base parity, no weakened predicate.
@@ -41,9 +47,10 @@ record are deliberately not hashed.
 Scope additions beyond the contract's file list (ratification requested, analogous to
 `rf-acc-apparmor-userns-profile`'s R2): `daemon/internal/linuxreadback/**` (the reader/channel
 package and its fixture-only `cmd`), and
-`daemon/native/linux-gate/protocol/readback_integration_linux_test.go` (the shared request helper).
-They are test-support code: no production package imports the readback package, and the fixture
-builds the helper binary only for the disposable guest.
+`daemon/native/linux-gate/protocol/readback_helpers_linux_test.go` (the shared request helper,
+renamed from `readback_integration_linux_test.go` by the apply stage; bytes unchanged, digest row
+above). They are test-support code: no production package imports the readback package, and the
+fixture builds the helper binary only for the disposable guest.
 
 ## 2. Mechanism and bounds
 
@@ -135,8 +142,8 @@ a converted leg has it running.
 | fixture syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | exit 0 |
 | shellcheck (advisory CI metric) | `shellcheck --severity=warning --format=gcc scripts/ci/linux-v2-native-acceptance.sh` | baseline `8453da12`: 17 findings; delivered bytes: 17 findings (none in the new functions) |
 | fixture contract suite | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | `Ran 55 tests … OK` |
-| reader unit proof | `unit-proof.sh` (WSL Ubuntu-24.04 root, real systemd) | `root readback reader ready: unit=… MainPID=450468` … `readback-reader: stop requests=0` … `UNIT-PROOF-OK` (the start/ready/stop proof blocks are the fixture's own) |
-| WSL reproduction, helper-binary mode | `SYMMETRY_LINUX_READBACK_LOCAL_REPRO=1 SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY=<reader> readback.test -test.run '^TestReadbackLocalReproduction$' -test.v` | `A_DIRECT_ENVIRON=denied`, `A_DIRECT_FD=denied`, `READER_CAPTURE=ok environ_bytes=98 descriptors=9 user_ns=4:4026532241 net_ns=4:4026531833`, `MUTANT_ENV_BYTE=red`, `PID_MISMATCH=refused stage=identity`, `READBACK_LOCAL_CLIENT=ok`, `--- PASS` (exit 0) |
+| reader unit proof | `unit-proof.sh` (WSL Ubuntu-24.04 root, real systemd) | `root readback reader ready: unit=… MainPID=457470` … `readback-reader: stop requests=0` … `UNIT-PROOF-OK` (the start/ready/stop proof blocks are the fixture's own) |
+| WSL reproduction, helper-binary mode | `SYMMETRY_LINUX_READBACK_LOCAL_REPRO=1 SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY=<reader> readback.test -test.run '^TestReadbackLocalReproduction$' -test.v` | `A_DIRECT_ENVIRON=denied`, `A_DIRECT_FD=denied`, `READER_CAPTURE=ok environ_bytes=98 descriptors=9 user_ns=4:4026532219 net_ns=4:4026531833`, `MUTANT_ENV_BYTE=red`, `PID_MISMATCH=refused stage=identity`, `READBACK_LOCAL_CLIENT=ok`, `--- PASS` (exit 0) |
 | WSL reproduction, in-process mode | same without the binary variable | identical rows, `--- PASS` (exit 0) |
 | gate-shape probe | `python3 findings/probe-gate-sequence.py` | root OK; `read as A(52000) … Permission denied`; `read as B(52001) … Permission denied`; `read as A+2caps: OK`; `A stat ns/user: Permission denied` |
 | capability census | `python3 probe-visibility.py` / `probe-a-with-ptrace.py` | the §3 matrix |
@@ -147,10 +154,13 @@ map is measured by the two probes above). The mutant row corrupts one expected e
 (`mutated[0][0] ^ 1`) and requires the shared `CheckEnvironment` to redden — the single test the
 contract asks for.
 
-Every row above was re-run after the simplification pass at the §1 digests (gofmt/vet/compile, the
-protocol unit rows, the fixture syntax/contract suite, the reader unit proof and both reproduction
-modes); only the run-specific identifiers differ between passes (`MainPID=450468` → `450765`, the
-userns inode numbers, nonces, the child PID).
+Every row above that the delivered bytes can move was re-run after the simplification review and
+again after the apply stage at the §1 digests (gofmt/vet/compile, the protocol unit rows, the
+fixture syntax/contract suite, the reader unit proof and both reproduction modes); only the
+run-specific identifiers differ between passes (`MainPID=450468` → `450765` → `457132` → `457470`,
+the userns inode numbers, nonces, the child PID). The kernel-shape probes and the capability
+census (`findings/probe-gate-sequence.py`, `probe-visibility.py`, `probe-a-with-ptrace.py`) are
+unchanged rows: no production or kernel-facing byte moved, and their host kernel is the same.
 
 ## 7. Runs
 

@@ -224,3 +224,16 @@ membership. Bounds and refusals are otherwise unchanged.
 - The fixture's reader step is validated against real systemd off-guest (unit start, ready-file
   mode/owner/helper-identity proof, root-owned stop file, `Result=success` + `ExecMainStatus=0` +
   ready-file removal) because the CI guest itself only exists on the runner.
+
+### 8.3 Apply-stage amendments (simplification findings)
+
+- §3.1's flag list shrinks to the six flags every invocation passes: `--ready-file`, `--stop-file`
+  and `--max-requests` were never passed and are deleted. The ready/stop markers stay at
+  `<channel>/ready` / `<channel>/stop`, the reader logs to stderr, and the request budget is the
+  single compile-time `maxRequests` (4096) bound in the package.
+- §3.1's A-side client sketch `Capture(channel string, want Want, timeout time.Duration)` is
+  implemented as `Read(channel string, want Want, timeout time.Duration) (Capture, error)`:
+  `Capture` is the capture type, so the sketched name cannot exist in Go; callers use `Read`.
+- §2.3 item 3 lists boot ID before start time; `readTarget` checks the start time first and the
+  boot ID second. Both bindings exist and both refuse `stage=identity`; only the refusal reason
+  when both mismatch differs, accepted as implemented rather than reordering the code.

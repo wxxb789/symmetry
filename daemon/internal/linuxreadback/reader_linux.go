@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,46 +21,26 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func (options ServeOptions) readyPath() string {
-	if options.ReadyFile != "" {
-		return options.ReadyFile
-	}
-	return filepath.Join(options.Channel, "ready")
-}
-
-func (options ServeOptions) stopPath() string {
-	if options.StopFile != "" {
-		return options.StopFile
-	}
-	return filepath.Join(options.Channel, "stop")
-}
-
 // Serve runs the bounded root reader until the context is cancelled or a
 // root-owned stop file appears. The ready file exists only while it serves.
 func Serve(ctx context.Context, options ServeOptions) error {
 	if err := validateServeOptions(options); err != nil {
 		return err
 	}
-	if options.Log == nil {
-		options.Log = os.Stderr
-	}
-	if options.MaxRequests == 0 {
-		options.MaxRequests = 4096
-	}
 	logf := func(format string, args ...any) {
-		fmt.Fprintf(options.Log, "readback-reader: "+format+"\n", args...)
+		fmt.Fprintf(os.Stderr, "readback-reader: "+format+"\n", args...)
 	}
 	if err := publishReadyFile(options); err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(options.readyPath()) }()
+	defer func() { _ = os.Remove(filepath.Join(options.Channel, "ready")) }()
 	logf("ready channel=%s leaf_root=%s", options.Channel, options.LeafRoot)
 	served := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if rootStopRequested(options.stopPath()) {
+		if rootStopRequested(filepath.Join(options.Channel, "stop")) {
 			logf("stop requests=%d", served)
 			return nil
 		}
@@ -68,8 +49,8 @@ func Serve(ctx context.Context, options ServeOptions) error {
 			return err
 		}
 		for _, name := range names {
-			if served >= options.MaxRequests {
-				return fmt.Errorf("readback request budget %d exhausted", options.MaxRequests)
+			if served >= maxRequests {
+				return fmt.Errorf("readback request budget %d exhausted", maxRequests)
 			}
 			served++
 			serveRequest(options, name, logf)
@@ -98,14 +79,11 @@ func validateServeOptions(options ServeOptions) error {
 	if options.AUID == 0 || options.BUID == 0 || options.AUID == options.BUID || options.AGID == 0 || options.BGID == 0 {
 		return errors.New("readback identities must be distinct non-root A and B identities")
 	}
-	if options.MaxRequests < 0 {
-		return errors.New("readback request budget must not be negative")
-	}
 	return nil
 }
 
 func publishReadyFile(options ServeOptions) error {
-	path := options.readyPath()
+	path := filepath.Join(options.Channel, "ready")
 	_ = os.Remove(path)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o440)
 	if err != nil {
@@ -371,10 +349,10 @@ func readTarget(options ServeOptions, want Want) (Capture, *CaptureError) {
 	}
 	if len(want.Namespaces) != 0 {
 		capture.Namespaces = map[string]Namespace{}
-		if contains(want.Namespaces, "user") {
+		if slices.Contains(want.Namespaces, "user") {
 			capture.Namespaces["user"] = userStat
 		}
-		if contains(want.Namespaces, "net") {
+		if slices.Contains(want.Namespaces, "net") {
 			capture.Namespaces["net"] = networkStat
 		}
 	}
@@ -463,12 +441,12 @@ func readNamespaceIdentities(pid int, names []string) (Namespace, Namespace, uin
 	}
 	userStat := Namespace{}
 	networkStat := Namespace{}
-	if contains(names, "user") {
+	if slices.Contains(names, "user") {
 		if userStat, err = statNamespace(pid, "user"); err != nil {
 			return Namespace{}, Namespace{}, 0, err
 		}
 	}
-	if contains(names, "net") {
+	if slices.Contains(names, "net") {
 		if networkStat, err = statNamespace(pid, "net"); err != nil {
 			return Namespace{}, Namespace{}, 0, err
 		}
@@ -542,13 +520,4 @@ func readBootID() (string, error) {
 		return "", errors.New("kernel boot identity is empty or oversized")
 	}
 	return bootID, nil
-}
-
-func contains(values []string, wanted string) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
 }

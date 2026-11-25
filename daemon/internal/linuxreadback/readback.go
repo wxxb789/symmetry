@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	ChannelEnv = "SYMMETRY_LINUX_OWNER_READBACK_CHANNEL"
+	channelEnv = "SYMMETRY_LINUX_OWNER_READBACK_CHANNEL"
 
 	requestSuffix  = ".req.json"
 	responseSuffix = ".resp.json"
@@ -26,6 +26,7 @@ const (
 	maxResponseBytes = 1 << 20
 	maxEnvironBytes  = 256 << 10
 	maxDescriptors   = 4096
+	maxRequests      = 4096
 	defaultTimeout   = 30 * time.Second
 	pollInterval     = 10 * time.Millisecond
 )
@@ -43,22 +44,13 @@ const (
 	RefusalLimit         RefusalStage = "limit"
 )
 
-var ErrRefused = errors.New("linux readback refused")
-
 type CaptureError struct {
 	Stage  RefusalStage
 	Reason string
 }
 
 func (failure *CaptureError) Error() string {
-	if failure == nil {
-		return ErrRefused.Error()
-	}
-	return fmt.Sprintf("%v at stage %s: %s", ErrRefused, failure.Stage, failure.Reason)
-}
-
-func (failure *CaptureError) Is(target error) bool {
-	return target == ErrRefused
+	return fmt.Sprintf("linux readback refused at stage %s: %s", failure.Stage, failure.Reason)
 }
 
 func RefusalStageOf(err error) (RefusalStage, bool) {
@@ -107,16 +99,12 @@ type Capture struct {
 }
 
 type ServeOptions struct {
-	Channel     string
-	LeafRoot    string
-	AUID        uint32
-	AGID        uint32
-	BUID        uint32
-	BGID        uint32
-	MaxRequests int
-	ReadyFile   string
-	StopFile    string
-	Log         io.Writer
+	Channel  string
+	LeafRoot string
+	AUID     uint32
+	AGID     uint32
+	BUID     uint32
+	BGID     uint32
 }
 
 type responseBody struct {
@@ -139,9 +127,9 @@ type responseBody struct {
 // ChannelFromEnv returns the configured channel, or a typed error naming the
 // missing environment variable so a fixture-less run fails instead of skipping.
 func ChannelFromEnv() (string, error) {
-	channel := os.Getenv(ChannelEnv)
+	channel := os.Getenv(channelEnv)
 	if channel == "" {
-		return "", fmt.Errorf("%s is unset: the root readback reader must be started by the acceptance fixture", ChannelEnv)
+		return "", fmt.Errorf("%s is unset: the root readback reader must be started by the acceptance fixture", channelEnv)
 	}
 	if err := validateChannelPath(channel); err != nil {
 		return "", err
