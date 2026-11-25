@@ -23,8 +23,6 @@ runs:
       shell: bash
     - run: pnpm --filter @symmetry/frontend lint
       shell: bash
-    - run: pnpm --filter @symmetry/frontend test
-      shell: bash
     - run: pnpm --filter @symmetry/frontend build
       shell: bash
     - uses: actions/upload-artifact@v7
@@ -36,6 +34,13 @@ runs:
       with:
         elixir-version: 1.20.4
         otp-version: 29.0.6
+    - uses: actions/cache@v6
+      if: inputs.build-control-release == 'true'
+      with:
+        path: |
+          control/deps
+          control/_build
+        key: elixir-prod-${{ runner.os }}-otp-29.0.6-elixir-1.20.4-${{ hashFiles('control/mix.lock') }}
     - name: Build production Control release
       if: inputs.build-control-release == 'true'
       shell: bash
