@@ -22,16 +22,16 @@ Dispatch-head digests: `config.go` `da3976c5`, `config_test.go` `a8f50257`,
 
 | Contract anchor | Head bytes | Content | Disposition |
 | --- | --- | --- | --- |
-| `config.go:30` | `:29` | `StateDir string \`json:"state_dir"\``, no omitempty | untouched |
-| `config.go:150-177` `Load` | `:153-180` | open / strict decode / one-object check / `Validate` | converted to shared `load(path, installed)`; default resolved between decode and `Validate` |
+| `config.go:30` | `:30` | `StateDir string \`json:"state_dir"\``, no omitempty | untouched |
+| `config.go:150-177` `Load` | `:150-177` | open / strict decode / one-object check / `Validate` | converted to shared `load(path, installed)`; default resolved between decode and `Validate` |
 | `config.go:196` | `:196` | `requireNotEmpty("state_dir", …)` inside `Validate` | unchanged (programmatic `Config` and `app.Run` keep refusing) |
 | `config.go:484-489` helper | `:484-489` | `requireNotEmpty` | unchanged |
-| `main.go:131-157` `runPrintStateDirCommand` | `:131-156`, `Load` at `:147` | installer probe | `LoadInstalled`; normalization + symlink rejection `:159-217` unchanged |
-| `main.go:240-281` `runConfiguredOwnerCommand` | `:243-284`, `Load` at `:250` | three installed-owner commands | `LoadInstalled` |
+| `main.go:131-157` `runPrintStateDirCommand` | `:131-157`, `Load` at `:147` | installer probe | `LoadInstalled`; normalization + symlink rejection `:159-216` unchanged |
+| `main.go:240-281` `runConfiguredOwnerCommand` | `:240-281`, `Load` at `:250` | three installed-owner commands | `LoadInstalled` |
 | `main.go:26-32` dispatch | `:26-32`, `:71-84` | print / owner / plain start | untouched; plain start keeps `Load` |
 | `config_test.go:453-457` | `:453-457` | `state_dir=" "` refused | unchanged and still green |
 | `main_test.go:56-94` table, `""` `:70` | `:56-94`, `:70` | print rejection rows | unchanged; `""` now refuses at the loader with the explicit-requirement error |
-| `main_test.go:96-110` helper | `:96-110` | `writeStateDirCommandConfig` | reused by the new probes |
+| `main_test.go:96-110` helper | `:96-117` | `writeStateDirCommandConfig` | reused by the new probes |
 | runbook `:202-204` macOS deferral, `:216` example, `:245-248` | `:202-204`, `:216`, `:245-248` | deferral, explicit example, fixture note | unchanged; the new paragraph follows `:248` |
 
 `config.Load` production callers at the head: `main.go:82` (plain start, stays
@@ -57,7 +57,7 @@ tracked item). No TODO/CLOSED-TODO edit.
 2. **Windows acceptance shape** — the raw value is validated first
    (drive-absolute: ASCII letter + `:` + `\` or `/` at byte 2; UNC: `\\` prefix
    with content after it), then trailing separators are trimmed; so `C:`
-   (drive-relative) is refused while `C:\` trims to a root and joins clean.
+   (drive-relative) is refused while `path-sha256:28f709d79730058e2a461518e34126da18ceda07729e792c92f7ca1251e730bf` trims to a root and joins clean.
    The join uses a literal `\` so every windows row is testable off-Windows.
 3. **Shared body** — `Load`/`LoadInstalled` delegate to unexported
    `load(path string, installed bool)`; the only divergence is the empty
@@ -76,13 +76,13 @@ tracked item). No TODO/CLOSED-TODO edit.
 ## 3. Baseline observed before the change (scratch copy of the head)
 
 Probe configs omit `state_dir` (or set `""` / `" "` / explicit) with
-`HOME=/home/u XDG_STATE_HOME=/srv/state` in the process env; base bytes:
+`HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350`, `XDG_STATE_HOME=/srv/state` in the process env; base bytes:
 
-- `Load` explicit → `Load state_dir: "/var/lib/symmetry"`.
+- `Load` explicit → `Load state_dir: "path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716"`.
 - `Load` absent / `""` / `" "` → `Load error: state_dir must not be empty`.
 - `-print-state-dir` absent → exit 1, 0 stdout bytes,
   stderr `-print-state-dir: load daemon config: state_dir must not be empty`.
-- `-print-state-dir` explicit → exit 0, stdout `/var/lib/symmetry`.
+- `-print-state-dir` explicit → exit 0, stdout `path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716`.
 
 After the change: `Load` absent/`""` resolves the per-user default; `" "` and
 explicit stay byte-identical; both `-print-state-dir` rows refuse an absent

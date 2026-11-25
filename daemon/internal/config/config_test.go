@@ -508,6 +508,7 @@ func TestDefaultStateDirResolvesPerGOOS(t *testing.T) {
 		wantErr string
 	}{
 		{name: "linux absolute XDG state home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "/srv/state", "HOME": "/home/u"}, want: "/srv/state/symmetry"},
+		{name: "linux absolute XDG state home without home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "/srv/state"}, want: "/srv/state/symmetry"},
 		{name: "linux trailing separator in XDG state home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "/srv/state/", "HOME": "/home/u"}, want: "/srv/state/symmetry"},
 		{name: "linux relative XDG state home falls back to home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "state", "HOME": "/home/u"}, want: "/home/u/.local/state/symmetry"},
 		{name: "linux empty XDG state home falls back to home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "", "HOME": "/home/u"}, want: "/home/u/.local/state/symmetry"},
@@ -519,8 +520,10 @@ func TestDefaultStateDirResolvesPerGOOS(t *testing.T) {
 		{name: "darwin relative home is refused", goos: "darwin", env: map[string]string{"HOME": "Users/u"}, wantErr: "$HOME"},
 		{name: "darwin missing home is refused", goos: "darwin", wantErr: "$HOME"},
 		{name: "windows drive-absolute local app data", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}, want: `C:\Users\u\AppData\Local\Symmetry`},
+		{name: "windows lowercase drive letter", goos: "windows", env: map[string]string{"LOCALAPPDATA": `c:\Users\u\AppData\Local`}, want: `c:\Users\u\AppData\Local\Symmetry`},
 		{name: "windows trailing separator is trimmed", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local\`}, want: `C:\Users\u\AppData\Local\Symmetry`},
 		{name: "windows drive root", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\`}, want: `C:\Symmetry`},
+		{name: "windows forward-slash drive root", goos: "windows", env: map[string]string{"LOCALAPPDATA": "C:/"}, want: `C:\Symmetry`},
 		{name: "windows UNC share", goos: "windows", env: map[string]string{"LOCALAPPDATA": `\\server\share`}, want: `\\server\share\Symmetry`},
 		{name: "windows missing local app data is refused", goos: "windows", wantErr: "%LOCALAPPDATA%"},
 		{name: "windows blank local app data is refused", goos: "windows", env: map[string]string{"LOCALAPPDATA": "  "}, wantErr: "%LOCALAPPDATA%"},

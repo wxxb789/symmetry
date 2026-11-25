@@ -7,7 +7,7 @@ a revision. Rulings: Q-A strict (`-print-state-dir` loads via `config.LoadInstal
 script stays byte-identical), Q-B confirmed (no extra `app.Run` guard keyed on harness kind), Q-C
 confirmed (darwin row logic-only, never host-verified, never "supported").
 Plan: `docs/plans/2026-11-25-rf-daemon-state-dir-default-plan.md`, sha256
-`6c00964374183e0c2922a5866419bdeb1d64e1aac737aa2512d20f51e57a6852`.
+`0685fced552eaa48d135bd34595d90f3048b9c770ecd8bffb162182f45e6c594`.
 
 Line numbers below are at the delivered bytes.
 
@@ -16,7 +16,7 @@ Line numbers below are at the delivered bytes.
 | File | Dispatch head | Delivered |
 | --- | --- | --- |
 | `daemon/internal/config/config.go` | `da3976c5f0e24477f7b530fde55d08c4b7098d324e1f7ebea85870ab94191f6b` | `e1521e6e8895fa8cac8bc6d365bd49ff84dc0ec9afb9f60915e6d24fcf56c856` |
-| `daemon/internal/config/config_test.go` | `a8f50257c27377af2cf1d9bf4a4fdfc09a88bf70f079b9b5db22352fddf60321` | `2002fc67321ab4e066466998448ad6c23a3d6b5fe661adc4d8ab20c3ff1dac0b` |
+| `daemon/internal/config/config_test.go` | `a8f50257c27377af2cf1d9bf4a4fdfc09a88bf70f079b9b5db22352fddf60321` | `558c1b8346e778708310cb67614d8cc351de33fb23938b797a151ee3f25d3949` |
 | `daemon/cmd/symmetry-daemon/main.go` | `80a7a7ff32fffc9aad3fe1d6272d25660ef664f3157de498b8d9bb133423147b` | `651124f2f942daf2b25055ade25fd936a9395e3693f2362ba93c4d5f5a803659` |
 | `daemon/cmd/symmetry-daemon/main_test.go` | `37124bf55d6b7156da7851339f110f4f7376058b959c918ae8a510322aae0499` | `5ad1ffc041c551f584186ef7e385602440defd30dc34e6ff6e65e1703b5744ef` |
 | `docs/runbooks/control-plane-and-daemon.md` | `f29b013f62dd69ea0e0fe1729a4799f897c8ad45ee404320b9a69024f9eb907c` | `efd66e1f98e29970615673a17415d7ef69ef8976faa0babf4dbd060dbcfcd042` |
@@ -32,57 +32,60 @@ and this record. No other path changed; no path was added and later removed.
 
 | Contract anchor (head) | Delivered bytes | Disposition |
 | --- | --- | --- |
-| `config.go:30` `StateDir` | `config.go:29` `json:"state_dir"` (no omitempty) | untouched |
-| `config.go:150-177` `Load` | `:206-244` private `load`; thin `Load` at `:196`, `LoadInstalled` at `:202`, resolver at `:151-177` | default resolved between decode and `Validate` |
+| `config.go:30` `StateDir` | `config.go:31` `json:"state_dir"` (no omitempty) | untouched |
+| `config.go:150-177` `Load` | `:206-243` private `load`; thin `Load` at `:196`, `LoadInstalled` at `:202`, resolver at `:151-175` | default resolved between decode and `Validate` |
 | `config.go:196` `requireNotEmpty("state_dir", …)` | `:262` | unchanged: explicit `" "` and programmatic values still refused |
 | `config.go:484-489` helper | `:550-555` | unchanged |
 | `main.go:131-157` print | `:131-157`; loader swap at `:147` | `config.LoadInstalled`; `:159-216` normalization + symlink rejection unchanged |
 | `main.go:240-281` owner commands | `:240-281`; loader swap at `:250` | `config.LoadInstalled` |
 | `main.go:70-93` plain start | `:82` `config.Load` | unchanged: default-aware |
 | `config_test.go:453-457` `" "` row | `:453-457` | unchanged, still green |
-| `main_test.go:56-94` print rejection table (`""` at `:70`) | `:56-94` | unchanged and green; `""` now refuses at the loader |
+| `main_test.go:56-94` print rejection table (`""` at `:70`) | `:58-96` | unchanged and green; `""` now refuses at the loader |
 | runbook `:202-204`, `:216`, `:245-248` | `:202-204`, `:216`, `:245-248` | unchanged; new paragraph `:250-262` |
 
 ## 3. Resolver table (P1-P3, P8) — inputs, outputs, errors
 
 `defaultStateDir(goos, getenv)` rows, all green in `TestDefaultStateDirResolvesPerGOOS`
-(`config_test.go:502-552`), WSL Ubuntu-24.04 (Go 1.27.0) and the Windows host (Go 1.27.4):
+(`config_test.go:502-555`), WSL Ubuntu-24.04 (Go 1.27.0) and the Windows host (Go 1.27.4):
 
 | GOOS | env | result |
 | --- | --- | --- |
-| linux | `XDG_STATE_HOME=/srv/state`, `HOME=/home/u` | `/srv/state/symmetry` |
-| linux | `XDG_STATE_HOME=/srv/state/`, `HOME=/home/u` | `/srv/state/symmetry` |
-| linux | `XDG_STATE_HOME=state` (relative), `HOME=/home/u` | `/home/u/.local/state/symmetry` |
-| linux | `XDG_STATE_HOME=""`, `HOME=/home/u` | `/home/u/.local/state/symmetry` |
-| linux | `HOME=/home/u` | `/home/u/.local/state/symmetry` |
+| linux | `XDG_STATE_HOME=/srv/state`, `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | `/srv/state/symmetry` |
+| linux | `XDG_STATE_HOME=/srv/state` | `/srv/state/symmetry` |
+| linux | `XDG_STATE_HOME=/srv/state/`, `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | `/srv/state/symmetry` |
+| linux | `XDG_STATE_HOME=state` (relative), `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | `path-sha256:3d36a489214da59c872a9e533701793d85420ed081ad7b597b31773850fc4d83` |
+| linux | `XDG_STATE_HOME=""`, `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | `path-sha256:3d36a489214da59c872a9e533701793d85420ed081ad7b597b31773850fc4d83` |
+| linux | `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | `path-sha256:3d36a489214da59c872a9e533701793d85420ed081ad7b597b31773850fc4d83` |
 | linux | `XDG_STATE_HOME=state`, `HOME=home/u` (relative) | error naming `$HOME` |
 | linux | `HOME="  "` (blank) | error naming `$HOME` |
 | linux | (both unset) | error naming `$HOME` |
-| darwin | `HOME=/Users/u` | `/Users/u/Library/Application Support/Symmetry` |
+| darwin | `HOME=path-sha256:1a76067a3053a7affbd59fa9898bc14352ec2cf557f1d624cfa2788e984bbcf8` | `path-sha256:078360d99ee56f79906cd569bf3a2990fa87c9368620711ee7d408cb0245dcbf` |
 | darwin | `HOME=Users/u` (relative) | error naming `$HOME` |
 | darwin | (unset) | error naming `$HOME` |
-| windows | `LOCALAPPDATA=C:\Users\u\AppData\Local` | `C:\Users\u\AppData\Local\Symmetry` |
-| windows | `LOCALAPPDATA=C:\Users\u\AppData\Local\` | `C:\Users\u\AppData\Local\Symmetry` |
-| windows | `LOCALAPPDATA=C:\` | `C:\Symmetry` |
-| windows | `LOCALAPPDATA=\\server\share` | `\\server\share\Symmetry` |
+| windows | `LOCALAPPDATA=path-sha256:dcc742e9c2353fd8b26e137dc579cddf0ff14d143b865e03d4f0a0b21fdc4889` | `path-sha256:dfb8e52beeff3744d1192b58c7631dbdc20e7e0f84461ef46293ef2547d5d5ef` |
+| windows | `LOCALAPPDATA=path-sha256:05b7c4e1686fc3427ea63c74239099865d0bcd47a138cd193a31cbc6a4202016` | `path-sha256:effe3f1a2d35155c84a24391b5100444361b6e73e66fef9ee51d7aeede71a308` |
+| windows | `LOCALAPPDATA=path-sha256:b3d53b4021875233634c0908a3fb47a40e8c5ffeed55abe6e694c74e9902c1b9` | `path-sha256:dfb8e52beeff3744d1192b58c7631dbdc20e7e0f84461ef46293ef2547d5d5ef` |
+| windows | `LOCALAPPDATA=path-sha256:28f709d79730058e2a461518e34126da18ceda07729e792c92f7ca1251e730bf` | `path-sha256:2a240c1fbd1b54538c56c7b7bb1266ebd0aca653796b3f34fd135318f7729bf6` |
+| windows | `LOCALAPPDATA=path-sha256:8545a81f99f36eda523c5e88e45567d21aaf5ea733e5595596cb07dd7364e8e4` | `path-sha256:2a240c1fbd1b54538c56c7b7bb1266ebd0aca653796b3f34fd135318f7729bf6` |
+| windows | `LOCALAPPDATA=path-sha256:05e24481d49af5ff4b88980216126fdaa1506fb0e7dcdbc60d64e5bcc5a61312` | `path-sha256:c4ce953140e2e022cc32b6ea7e94c3caf71187a882821ebab8e87f3ee1441311` |
 | windows | `LOCALAPPDATA` unset | error naming `%LOCALAPPDATA%` |
 | windows | `LOCALAPPDATA="  "` | error naming `%LOCALAPPDATA%` |
 | windows | `APPDATA`, `USERPROFILE` set, `LOCALAPPDATA` unset | error naming `%LOCALAPPDATA%` (never `%AppData%`) |
 | windows | `LOCALAPPDATA=Local\AppData` | error naming `%LOCALAPPDATA%` |
 | windows | `LOCALAPPDATA=C:Local` (drive-relative) | error naming `%LOCALAPPDATA%` |
 | windows | `LOCALAPPDATA=\\` (bare prefix) | error naming `%LOCALAPPDATA%` |
-| freebsd | `HOME=/home/u` | error naming GOOS `freebsd`, no path |
+| freebsd | `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350` | error naming GOOS `freebsd`, no path |
 
 Every non-windows success row additionally asserts `path.IsAbs(result)`; every failure row asserts
 the error text, so no probe output can carry a relative or cwd-derived path.
 
-`Load`-level rows (`TestLoadDefaultsAndRefusesStateDir`, `:554-610`):
-explicit `/var/lib/symmetry` with `HOME`/`XDG_STATE_HOME`/`LOCALAPPDATA` all cleared loads verbatim
+`Load`-level rows (`TestLoadDefaultsAndRefusesStateDir`, `:557-613`):
+explicit `path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716` with `HOME`/`XDG_STATE_HOME`/`LOCALAPPDATA` all cleared loads verbatim
 (P4 positive); an absent key with the same cleared env fails `resolve default state_dir: …` naming
 the host component, `$HOME` or `%LOCALAPPDATA%` (P4 negative); an absent key with the host
 component present resolves the host default (P7 first half).
 
-`LoadInstalled` rows (`TestLoadInstalledRequiresAnExplicitStateDir`, `:612-654`): explicit loads;
+`LoadInstalled` rows (`TestLoadInstalledRequiresAnExplicitStateDir`, `:615-657`): explicit loads;
 `absent` and `""` both return exactly
 `state_dir must be explicitly configured for the installed owner path` even with a resolvable
 default in the environment; `" "` stays explicit and is refused by validation
@@ -90,28 +93,28 @@ default in the environment; `" "` stays explicit and is refused by validation
 
 ## 4. Characterization baseline and before/after transcripts
 
-Baseline on a scratch copy of the dispatch head, `HOME=/home/u XDG_STATE_HOME=/srv/state` in the
-process env, configs with `state_dir` absent / `""` / `" "` / `/var/lib/symmetry`:
+Baseline on a scratch copy of the dispatch head, `HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350`, `XDG_STATE_HOME=/srv/state` in the
+process env, configs with `state_dir` absent / `""` / `" "` / `path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716`:
 
 ```
-explicit: Load state_dir: "/var/lib/symmetry"
+explicit: Load state_dir: "path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716"
 absent: Load error: state_dir must not be empty
 empty: Load error: state_dir must not be empty
 space: Load error: state_dir must not be empty
 absent print: exit=1 stdout bytes=0 stderr=[-print-state-dir: load daemon config: state_dir must not be empty]
-explicit print: exit=0 stdout=[/var/lib/symmetry] stderr=[]
+explicit print: exit=0 stdout=[path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716] stderr=[]
 owner -verify-linux-owner-install absent: exit=1 stdout=[] stderr=[-verify-linux-owner-install: load config: state_dir must not be empty]
 owner -verify-legacy-owner-drained absent: exit=1 stdout=[] stderr=[-verify-legacy-owner-drained: load config: state_dir must not be empty]
 owner -recover-containment-only absent: exit=1 stdout=[] stderr=[-recover-containment-only: load config: state_dir must not be empty]
 ```
 
 Delivered bytes, same probe configs, binary built from the worktree (WSL `-u accept`, env
-`HOME=/home/u XDG_STATE_HOME=/srv/state`):
+`HOME=path-sha256:f9e409c5c16ecfdd5883da4f3ad045b4af5677740c9e703ad2d47ba231718350`, `XDG_STATE_HOME=/srv/state`):
 
 ```
 print absent: exit=1 stdout-bytes=0 stderr=[-print-state-dir: load daemon config: state_dir must be explicitly configured for the installed owner path]
 print explicit-empty: exit=1 stdout-bytes=0 stderr=[-print-state-dir: load daemon config: state_dir must be explicitly configured for the installed owner path]
-print explicit: exit=0 stdout-bytes=17 stdout=[/var/lib/symmetry] stderr=[]
+print explicit: exit=0 stdout-bytes=17 stdout=[path-sha256:cc65a3cf01d383c4c711ecb8654f50a81c4734aa094917dbd23ddcc0def09716] stderr=[]
 owner -verify-linux-owner-install absent: exit=1 stdout=[] stderr=[-verify-linux-owner-install: load config: state_dir must be explicitly configured for the installed owner path]
 owner -verify-legacy-owner-drained absent: exit=1 stdout=[] stderr=[-verify-legacy-owner-drained: load config: state_dir must be explicitly configured for the installed owner path]
 owner -recover-containment-only absent: exit=1 stdout=[] stderr=[-recover-containment-only: load config: state_dir must be explicitly configured for the installed owner path]
@@ -129,10 +132,10 @@ P6 rows re-ran unchanged: `TestPrintStateDirResolvesAgainstRootWithoutCreatingSt
 the full `TestPrintStateDirRejectsTraversalAndSymlinkWithoutOutput` table (exit 0, zero stdout on
 every row, including `""` and the symlinked-component row).
 
-Verbatim per-row probe output (final bytes, WSL): 22/22 `defaultStateDir` rows PASS, 3/3 `Load`
+Verbatim per-row probe output (final bytes, WSL): 25/25 `defaultStateDir` rows PASS, 3/3 `Load`
 rows PASS, 4/4 `LoadInstalled` rows PASS, 5/5 print/store rows PASS
 (`go test -v -count=1 -run 'TestDefaultStateDirResolvesPerGOOS|TestLoadDefaultsAndRefusesStateDir|TestLoadInstalledRequiresAnExplicitStateDir' ./internal/config/`
-→ `ok 0.059s`; `-run 'TestPrintStateDir|TestLoadDefaultStateDir' ./cmd/symmetry-daemon/` → `ok 0.142s`).
+→ `ok 0.045s`; `-run 'TestPrintStateDir|TestLoadDefaultStateDir' ./cmd/symmetry-daemon/` → `ok 0.127s`).
 
 ## 5. Host gates (final bytes)
 
@@ -142,7 +145,7 @@ Windows host (this workstation, Go 1.27.4 windows/amd64), working directory `dae
 | --- | --- | --- | --- |
 | format | `test -z "$(gofmt -l .)"` | 0 | no file listed |
 | vet | `go vet ./...` | 0 | clean |
-| focused suites | `go test -count=1 ./internal/config/ ./cmd/...` | 0 | `ok config 1.234s`, `ok cmd/symmetry-daemon 0.693s`, `ok cmd/symmetry-fake-agent 12.057s` |
+| focused suites | `go test -count=1 ./internal/config/ ./cmd/...` | 0 | `ok config 1.309s`, `ok cmd/symmetry-daemon 0.432s`, `ok cmd/symmetry-fake-agent 11.353s` |
 
 WSL Ubuntu-24.04 (`-u accept`, Go 1.27.0 linux/amd64), gate as the contract writes it from the
 repository root:
@@ -150,7 +153,7 @@ repository root:
 | Gate | Command | Exit | Result |
 | --- | --- | --- | --- |
 | linux vet | `(cd daemon && GOOS=linux go vet ./...)` | 0 | clean |
-| focused suites (real Linux print + Store rows) | `(cd daemon && go test -count=1 ./internal/config/ ./cmd/...)` | 0 | `ok config 0.450s`, `ok cmd/symmetry-daemon 0.151s`, `ok cmd/symmetry-fake-agent 6.400s`, `? cmd/symmetry-linux-clone-bootstrap [no test files]`, `ok cmd/symmetry-linux-launcher 0.039s` |
+| focused suites (real Linux print + Store rows) | `(cd daemon && go test -count=1 ./internal/config/ ./cmd/...)` | 0 | `ok config 0.475s`, `ok cmd/symmetry-daemon 0.159s`, `ok cmd/symmetry-fake-agent 3.765s`, `? cmd/symmetry-linux-clone-bootstrap [no test files]`, `ok cmd/symmetry-linux-launcher 0.054s` |
 
 No scratch branch, no credentialed run, no e2e suite; the `daemon` and `daemon-windows` CI jobs
 remain the merge gates.
@@ -165,7 +168,7 @@ semantics); M7 ran on the Windows host (`daemon-windows` job semantics).
 | id | mutation | probe (red) | observed red (verbatim) | restored digest |
 | --- | --- | --- | --- | --- |
 | M1 | resolve the default unconditionally (override an explicit `state_dir`) | `go test -run TestLoadDefaultsAndRefusesStateDir ./internal/config/` | `config_test.go:567: Load() explicit state_dir error = resolve default state_dir: state_dir default requires $HOME to be set to an absolute path` | `config.go e1521e6e…` |
-| M2 | accept a relative `XDG_STATE_HOME` | `go test -run TestDefaultStateDirResolvesPerGOOS ./internal/config/` | `config_test.go:545: defaultStateDir("linux") = "state/symmetry", want "/home/u/.local/state/symmetry"` (plus the relative-home row: `:537: error = <nil>, want one naming "$HOME"`) | `config.go e1521e6e…` |
+| M2 | accept a relative `XDG_STATE_HOME` | `go test -run TestDefaultStateDirResolvesPerGOOS ./internal/config/` | `config_test.go:545: defaultStateDir("linux") = "state/symmetry", want "path-sha256:3d36a489214da59c872a9e533701793d85420ed081ad7b597b31773850fc4d83"` (plus the relative-home row: `:537: error = <nil>, want one naming "$HOME"`) | `config.go e1521e6e…` |
 | M3 | fall back to cwd when `HOME` is missing | `go test -run TestDefaultStateDirResolvesPerGOOS ./internal/config/` | `config_test.go:537: defaultStateDir("linux") error = <nil>, want one naming "$HOME"` ×3 (relative, blank, missing home) | `config.go e1521e6e…` |
 | M4 | installed commands load through default-aware `Load` | `go test -run TestPrintStateDirRefusesAnAbsentStateDirWithoutOutput ./cmd/symmetry-daemon/` | `main_test.go:107: print command error = <nil>, want the installed-owner explicit requirement` | `main.go 651124f2…` |
 | M5 | `-print-state-dir` skips `rejectLinuxStateDirSymlinks` | `go test -run TestPrintStateDirRejectsTraversalAndSymlinkWithoutOutput ./cmd/symmetry-daemon/` | `main_test.go:89: unsafe StateDir was printed` (the symlinked-component row) | `main.go 651124f2…` |
@@ -201,7 +204,7 @@ Candidates added by this diff and their disposition:
   Splitting it into two wrappers would duplicate the decode block.
 - `windowsStateDirBase` + `isASCIILetter` — retained: the helper owns the windows acceptance shape
   (validate raw, then trim) and the ASCII-only drive-letter rule; inlining would spread that
-  predicate over two branches of the resolver switch. Both are exercised through the 11 windows
+  predicate over two branches of the resolver switch. Both are exercised through the 12 windows
   rows above.
 - `hostDefaultStateDir` / `resolvedHostDefault` test helpers — retained (one per test package,
   ~12 lines each): a shared test helper would need a new package outside this goal's owned files.
