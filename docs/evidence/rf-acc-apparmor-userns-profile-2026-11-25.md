@@ -12,7 +12,7 @@ the repository or to the GDD state root.
 | file | sha256 at the delivered bytes |
 | --- | --- |
 | `scripts/install-linux-owner.sh` | `4559df444e8bfcd0b00cfa21cc551e088baeb05df4aba53e9d090befed3a7e71` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `da7af1ea74d4167c4ac12bda16e80a872ca1c9b27b2cb2654f24cb2f9d910996` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `916aed4d2864ca433844ac5fb65bc0fb926edbe59912a85483766e571f7812cb` |
 | `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` |
 | `daemon/internal/linuxpreflight/preflight_linux.go` | `50f56f3f5b2190e186172fccd556c613037ae48617a3662f95fef6be9933aba9` |
 | `daemon/internal/linuxpreflight/preflight_linux_test.go` | `62a1bd7a9b37b3a48b91a3c5d5ddb938461407e86e1452e207a8cacb71276868` |
@@ -20,25 +20,30 @@ the repository or to the GDD state root.
 | `daemon/internal/linuxpreflight/preflight_unsupported_test.go` | `dfcb8084daa1edbcf68eee5800f78bb783bc4d6302327cff792398c68cf442ec` |
 | `daemon/internal/linuxpreflight/apparmor_userns.go` | `e53a5a81f89c34e09ccf694556a4325d4a7f4ddc91dfb104daa06f0acb0aba6f` |
 | `daemon/cmd/symmetry-daemon/main.go` | `ad8547f13c0c080eb674f08799ca881be142cb549e292c2fa2b685176af73890` |
-| `docs/runbooks/control-plane-and-daemon.md` | `d8f632135a79b4ad16c535bfff484302e603aad8544c6c2b0dde7a0a184500a3` |
+| `docs/runbooks/control-plane-and-daemon.md` | cited by content, not sha256 (the AppArmor userns section and the `getfacl` prerequisite) |
 | `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `5208bb95cbd10dca40ed39d733328e25ef5d60061a372c055cde848735b01938` (record revision; not run-bound) |
 
 Run 3's head `ce3c30b9` (the amendment plus the round-2 hardening commits) is bound to the
 run-3 code revisions by the §8 equality table; the apply-stage simplification (2026-11-26) and
 the review-fix stage (2026-11-26) then changed the files above, so the table carries the
-delivered post-fix revisions and the §8 delta tables record each change, its class and its
-re-run gates. The plan and this record carry post-run, record-only edits and are not run-bound
-code, and `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are deliberately not
-hashed anywhere.
+revisions at the bound head `2a13dca0` (see the bind statement below) and the §8 delta tables
+record each change, its class and its re-run gates. The plan and this record carry post-run,
+record-only edits and are not run-bound code, and `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`
+and this record are deliberately not hashed anywhere.
 
-The conductor's Bind run `45688173130` (2026-11-26, the single scratch run on the PR head)
-bound `2d423748`: its run head `3024fc34` is `2d423748` plus the three scratch-only files, and
-the binding report's sha256 equality table proves every delivered file byte-equal between the
-two. The round-1 fix stage (the reviews' R1-R6, 2026-11-26) then changed
+The conductor's first Bind run `45688173130` (2026-11-26, the single scratch run on the
+then-head) bound `2d423748`: its run head `3024fc34` is `2d423748` plus the three scratch-only
+files. The round-1 fix stage (the reviews' R1-R6, 2026-11-26) then changed
 `scripts/install-linux-owner.sh` and the runbook above, and the getfacl-dependency fix
-(2026-11-26) changed both again, so those two digests postdate the bind run and the conductor
-re-binds the delivered bytes with the next Bind; no row here claims a runner run on this
-round's installer or runbook bytes.
+(2026-11-26) changed both again, so those two digests postdate that bind run. The conductor's
+second Bind run `45696662454` (2026-11-26, the single scratch run on this head) bound
+`2a13dca0`: its run head `702f72b579dd912c3ee21f848f0c7cd973814f8b` is `2a13dca0` plus the
+three scratch-only files, the binding report's sha256 equality table proves every delivered file
+byte-equal between the two, and the §1 digests above are re-derived at `2a13dca0`. That run's
+corrected scratch probe measured the fixed, attachment-path-changed and name-changed profile
+compiles and showed them pairwise different (SPEC-A01 row `PASS`), so SPEC-A01's runner
+condition is carried by the probe row and by both sets' in-guest
+`TestLinuxAppArmorAttachmentSensitivePolicyHash` (`run=1 pass=1 skip=0`); §8 records the run.
 
 ## 2. Readback rule (amended after run 2; §2 of the plan carries the source evidence)
 
@@ -337,6 +342,7 @@ see, and R22 proves it end to end.
 | 2 `45651150146` | `af5804b9` (round-1 fix) | migration, shared | both exit 1 — fail-closed refusal at the readback; the probe measured the amendment's evidence | both sets: `install-linux-owner: the loaded AppArmor userns profile differs from the installed userns profile text` (log `gdd/native/run-45651150146.log`) |
 | 3 `45659523339` | `ce3c30b9` (the amended, review-hardened bytes) | migration, shared | both exit 1 — the installer and the preflight passed end-to-end (`apparmor_userns=per_program`) and the wall's named rows are cleared; the next stops are named in the last column | `migration`: `production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`, with the owner-witness command exiting 1 on `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn` (run 1's transport-start row `start native owner witness transport: resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: ... guest_stage=gate_drop_bounding_set errno=1` is cleared; the RunJournal grew 5988 → 6559 bytes with the same projection flags); `shared`: `clone_integration_linux_test.go:252: same-PID clone-native process is not exact B: open /proc/7171/environ: permission denied` and `launcher_integration_linux_test.go:451: native process did not retain the exact B-only boundary: open /proc/7197/environ: permission denied` (run 1's :240/:439 rows are cleared) |
 | 4 (bind) `45688173130` | `3024fc34` (bind run: PR head `2d423748` + the three scratch-only files; single push, branch deleted) | migration, shared | conclusion `failure`; both exit 1 — the same named stops as run 3 recur on the delivered bytes; both sets' in-guest root rows pass (`apparmor_userns=per_program`; `TestLinuxAppArmorAttachmentSensitivePolicyHash: run=1 pass=1 skip=0`), so SPEC-A01's runner condition is carried by the in-guest Go row; the scratch probe's fixed-text `-c0` row is a probe-script defect (missing file, parser exit=2) with the two altered rows measured and the limit rows printed, and the next Bind reruns the corrected probe; evidence artifact `linux-v2-native-evidence-45688173130-1` sha256 `4fed8e464b897b3970e413f44f6c99588cd3962eabf60ffb104042986008d1fc`, host prerequisite `linux-v2-host-prerequisite-45688173130-1` sha256 `b1277d0cff8716bd0527db04ea50cc17af671689f43da4afdecd9c6dc2a98502` | `migration`: `Go native acceptance event gate failed: bad=TestProductionLinuxV2MigrationDenialRetainsJournal=run:1,pass:0,skip:0, skipped=[], fail_events=2, invalid_json_lines=0`, then `production_linux_v2_native_witness_test.go:693: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage` with the owner-witness command exiting 1 on `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn`; `shared`: `Go native acceptance event gate failed: bad=TestInstalledLinuxOwnerBoundaryScratch=run:1,pass:0,skip:0; TestInstalledLinuxOwnerCloneCheckoutScratch=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`, then `clone_integration_linux_test.go:252: same-PID clone-native process is not exact B: open /proc/7654/environ: permission denied` and `launcher_integration_linux_test.go:451: native process did not retain the exact B-only boundary: open /proc/7680/environ: permission denied` |
+| 5 (bind 2) `45696662454` | `702f72b5` (bind run: PR head `2a13dca0` + the three scratch-only files; single push, branch deleted) | migration, shared | conclusion `failure`; both exit 1 — the same named stops as run 4 recur on the delivered bytes; both sets' in-guest root rows pass (`apparmor_userns=per_program`, 19 decision lines per set; `TestLinuxAppArmorAttachmentSensitivePolicyHash: run=1 pass=1 skip=0`); the corrected scratch probe's attachment-sensitivity row passes with all three rows measured and pairwise different (fixed whole `a6efb6b891b17a81520e30ebae246c729f267750b7ecf56a792bef2be2849401`, attachment-changed `98583273b15524b67a55e79ff421bad3bf4b20d90da3aad52461e162fa372b77`, name-changed `fe8b9f2d86a7f06229aa4977b83fd1270d0f4e71289bc07cf818506a6998d289`); evidence artifact `linux-v2-native-evidence-45696662454-1` sha256 `d0811fb344e5fad114ca5b2e4823d01d7ace40b9502320ac639cf8168bd6fa9f`, host prerequisite `linux-v2-host-prerequisite-45696662454-1` sha256 `7e3eda12b21c8541e8ae7f59228958a6acca40d6ad57d4822327aeedd18d828b` | `migration`: `Go native acceptance event gate failed: bad=TestProductionLinuxV2MigrationDenialRetainsJournal=run:1,pass:0,skip:0, skipped=[], fail_events=2, invalid_json_lines=0`, then `production_linux_v2_native_witness_test.go:728: wait for exact native_release boundary: owner-witness command did not reach its requested durable stage` with the owner-witness command exiting 1 on `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn`; `shared`: `Go native acceptance event gate failed: bad=TestInstalledLinuxOwnerBoundaryScratch=run:1,pass:0,skip:0; TestInstalledLinuxOwnerCloneCheckoutScratch=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`, then `clone_integration_linux_test.go:252: same-PID clone-native process is not exact B: open /proc/7589/environ: permission denied` and `launcher_integration_linux_test.go:451: native process did not retain the exact B-only boundary: open /proc/7615/environ: permission denied` |
 
 Artifacts (id, name, sha256 of each file that is goal evidence; `portal-assets` is the build
 artifact and carries no goal evidence):
