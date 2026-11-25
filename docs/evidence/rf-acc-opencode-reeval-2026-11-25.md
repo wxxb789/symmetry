@@ -469,3 +469,5 @@ changes).
   receipts (contract-frozen bytes, not edited) and the superseded pre-re-collection raw and
   pre-compaction artifacts (outside the repository, not edited; the committed superseded bytes
   carried a `<HOSTNAME>` token instead). The census in §12 counts 0 in the change itself.
+  Superseded 2026-11-26: the 2.3.0 receipts are redacted by goal `rf-opencode-230-hostname-redact`
+  (record: `docs/evidence/rf-opencode-230-hostname-redact-2026-11-25.md`).

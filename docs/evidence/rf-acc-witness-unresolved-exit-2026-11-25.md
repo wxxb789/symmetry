@@ -210,7 +210,7 @@ GH_TOKEN=gho_scratchdummy0000000000000000000000000000
 SYMMETRY_OPENAI_API_KEY=sk-scratch-dummy
 SYMMETRY_PI_MODEL=deepseek-v4.1-flash-fast
 SYMMETRY_OPENCODE_MODEL=deepseek-v4.1-flash-fast
-SYMMETRY_OPENAI_BASE_URL=https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1
+SYMMETRY_OPENAI_BASE_URL=https://<RELAY_HOST>/v1
 GITHUB_EVENT_NAME=workflow_dispatch
 ```
 

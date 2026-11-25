@@ -6,7 +6,7 @@ The executable identifies itself as
 
 | Platform | Executable | Bytes | SHA-256 |
 | --- | --- | ---: | --- |
-| Windows 11 / 10.0.26300 / AMD64 | `C:/Users/lhan/.local/bin/omo.exe` | 202352128 | `04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464` |
+| Windows 11 / 10.0.26300 / AMD64 | `C:/<HOST-PATH>/.local/bin/omo.exe` | 202352128 | `04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464` |
 | WSL Ubuntu-24.04 / Ubuntu 24.04.5 / x86_64 / kernel 6.18.58.1-microsoft-standard-WSL2 | `/root/.local/bin/omo` | 211998896 | `3a74aba613cf02e740073b302171c0fb9d9155f5ff6069f91bea23972ffa1444` |
 
 `windows.json` and `linux.json` retain original request objects and byte-preserved
