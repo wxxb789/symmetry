@@ -111,10 +111,8 @@ trap cleanup_native_services EXIT INT TERM
 source "$repo/scripts/ci/linux-v2-native-tools.sh"
 # OpenCode is production-unavailable; no executable or private transport is needed.
 linux_v2_fetch_pi "$native_root"
-# Pi resolves version metadata and runtime assets relative to its public release.
-# Only the digest-verified public tree is exposed; private fixture paths stay private.
-chmod -R a+rX "$pi_unpack/pi"
-chmod 0555 "$pi_executable"
+# Pi resolves version metadata and runtime assets relative to its public release; the fetch pins
+# the canonical root-owned tree and only it is exposed (private fixture paths stay private).
 
 source_tree_digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["tree_digest"])' <<< "$source_subject_json")
 
@@ -418,10 +416,11 @@ config = {
 pathlib.Path(config_path).write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
 chmod 0600 "$native_root/unprovisioned-config.json"
+# The OpenCode vehicle keeps its own refusal case; the generic stage_replay entry is the pi vehicle.
 python3 "$repo/scripts/ci/write-linux-v2-owner-request.py" \
-  stage_replay "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
+  stage_replay_unprovisioned_refusal "$owner_run_metadata" "$native_root/unprovisioned-config.json" \
   /opt/symmetry-owner-test/barriers/unprovisioned/request "$control_api_url" \
-  "$control_machine_token" "$owner_request_source" native_release
+  "$control_machine_token" "$owner_request_source"
 sudo install -o root -g 65532 -m 0640 "$native_root/unprovisioned-config.json" \
   "$owner_fixture/unprovisioned/config.json"
 sudo install -o root -g 65532 -m 0440 "$owner_request_source" \

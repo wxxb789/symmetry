@@ -1851,16 +1851,6 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
       goal with guest-side debugging; no fixture change is proposed without a named root.
 
-- [ ] Keep the twelve OpenCode-vehicle case sets as F2-excluded rows until `rf-acc-pi-durability-matrices`
-      retargets the durability matrices to pi under the D3 `harness.md` amendment (2026-11-24, owner
-      rulings A1/C1 in `decision-native-opencode-2026-11-24.md`): on the final bytes the App's own
-      witness gate refuses every OpenCode-family config — `owner witness config native harness
-      version differs from the tested release` observed 210 times in run `45402706492` — because the
-      fixture's frozen `opencode: "1.18.32"` pin differs from `opencode.TestedVersion = "2.3.0"`
-      (`daemon/internal/harness/opencode/adapter.go:28`). The pin, the opencode render tokens and
-      the frozen lines stay untouched by decision; the evidence record's per-set table records each
-      excluded row (§3.15).
-
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
       effective owner `Before` (systemd's reverse of the daemon's own required
@@ -1870,3 +1860,92 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       no refusal. Declared fragment/drop-in `Before=` edges to the daemon stay refused
       (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
       residual explicitly.
+
+## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
+
+- [ ] Record the credentialed `linux-native-v2-acceptance` rows for the retargeted durability sets
+      (2026-11-24, goal `rf-acc-pi-durability-matrices`; owner rulings Q3(a)/A1; plan
+      `docs/plans/2026-11-24-rf-acc-pi-durability-matrices-plan.md`, evidence record
+      `docs/evidence/rf-acc-pi-durability-matrices-2026-11-24.md`): the conductor dispatches the
+      credentialed run after merge (owner-approved Environment), and its run id plus per-set pi
+      turn count are the proof of record for the legs that hold strictly after `native_release`
+      (`shared`'s stage matrix at `stop_receipt_durable`/`leaf_removed`/`journal_cleared`, its ack
+      matrix at `stop_receipt_durable`/`journal_cleared`, `literal_pid_reuse` at `leaf_removed`,
+      `stale_leaf` at `stop_receipt_durable`, and the helper-response-loss legs whose run must
+      complete). The scratch runs' dummy credentials stop exactly at the pi turn; ruling Q3(a)
+      accepts those turns, one small turn per such leg.
+
+- [ ] The frozen `shared` OpenCode legs stay F2-excluded after the retarget (2026-11-24, same goal;
+      ruling Q1(a)): `opencode_native_health` keeps its bytes, its allowlist entry and its position
+      (now after every pi leg, so the pi witness files are published before it aborts the set), and
+      the OpenCode peer-negative leg after it is not reached. A non-zero `shared` exit caused only
+      by that row is expected; no report may read it as pi evidence. Its disposition belongs to the
+      D3 `harness.md` amendment (Q1(b)/Q1(c) readings are not implemented here).
+
+- [ ] rf-acc-witness-unresolved-exit: the App exits 0 on the `unresolved` stage-replay recovery while
+      its own e2e requires a deliberate non-zero exit (2026-11-25, goal `rf-acc-pi-durability-matrices`;
+      conductor ruling on implement `DECISION_NEEDED` #2; evidence record §4b, plan §3.10 class 1):
+      the App writes the expected `unresolved`/`containment_unproven` response and returns the summary
+      (`daemon/internal/app/linux_owner_witness_linux.go:501,:556,:596`) while
+      `requireLinuxV2RecoveryExitStatus` (`daemon/e2e/production_linux_v2_owner_cli_test.go:177-193`)
+      demands a deliberate non-zero process exit; the response-loss variant of the same outcome
+      already joins `execution.ErrLinuxV2MutationAckLost` (`:627`), so the App is the likely defect
+      side. Root cause first: which side is the contract? Then the smallest fix (return an error
+      after writing the summary in those three branches). Blocks the four `unresolved`-expected sets:
+      run `45481221551` (`stage_replay_create_started`) and run `45484692731`
+      (`stage_replay_leaf_bound`/`launcher_bound`/`ack_loss_launcher_bound`).
+
+- [ ] rf-acc-release-recovery-diagnostics: release/recovery errors drop their sub-step and errno, so
+      the retargeted post-release rows cannot be read (2026-11-25, same goal and ruling; evidence
+      record §4c, plan §3.10 class 2): the helper answers `release_outcome_unknown` for any release
+      error with the inner sub-step discarded
+      (`daemon/internal/platform/helper_v2_server.go:1183-1189`); the `handoff_committed` recovery
+      refuses with `recover existing owner witness RunJournal without launch` over a live unresolved
+      journal (`linux_owner_witness_linux.go:531-534`); `stale_leaf`'s recovery refuses its own
+      summary (`stage replay unresolved outcome lacks retained journal/owner uncertainty`). Lesson 72:
+      make the failure observable first — carry the failing sub-step and errno into the unresolved
+      response — then fix the root. Blocks `migration` (run `45481221551`), `stale_leaf`'s recovery
+      (run `45484692731`), the four stale-journal sets (run `45489336388`) and every `shared` leg
+      strictly after `native_release`; the credentialed pi turn counts ride on it.
+
+- [ ] rf-acc-owner-loss-semantics: F4 design question — owner-loss resolution versus the
+      unresolved-journal premise (2026-11-25, same goal and ruling; evidence record §4c): a parked
+      gate exits on owner loss by design (`daemon/native/linux-gate/c-gate/gate.c:731-757`) and the
+      un-released helper aborts the containment and exits
+      (`daemon/internal/platform/helper_v2_recovery.go:223-225`), so the same-RunKey recovery leg
+      refuses with `recover existing owner witness RunJournal without launch` where the test's
+      premise wants the unresolved journal to survive the SIGKILL. Either the product must let a
+      same-RunKey recovery consume the owner-loss receipt, or the test must assert the
+      resolved-by-owner-loss state; both change what the pre-existing product test proves. Needs a
+      consult before any change; the four stale-journal sets' guest-denial rows (run `45489336388`)
+      stay unproven until ruled.
+
+- [ ] Two retargeted case sets have an additional pre-existing stop of their own (2026-11-24, same
+      goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its
+      record; burndown entries above): `shared` aborts in its owner-leg
+      scratch group (`daemon/native/linux-gate/**`, three product-test stops) before any witness
+      runs, and `synthetic_goal_cleanup` stops at the release refusal `Linux v2 native release
+      requires an App admission check` (`daemon/internal/execution/linux_owner_v2_linux.go:340`).
+      Both are product-side and already tracked; their pi rows stay unreadable while those stops
+      remain (the clone reserve is no longer among them).
+
+- [ ] The pi durability witnesses bind `native_binary`/`native_binary_sha256`/`native_version_line`
+      from the e2e publisher, not from the daemon (2026-11-24, same goal): the daemon's
+      same-RunKey recovery path publishes no executable digest
+      (`daemon/internal/app/linux_owner_witness_linux.go:2906-2911` runs only in `runFresh`), and
+      `daemon/internal/**` is out of that goal's scope, so each retargeted e2e runner hashes the
+      staged executable (`linuxV2BindDurabilityNativeBinary`) and the exporter checks the value
+      against the pinned `pi_executable_sha`/`1.5.2`. If the recovery path ever records the digest,
+      drop the publisher-side hash and read the response fields instead.
+
+- [ ] `mix format --check-formatted` on `scripts/ci/provision-linux-v2-control-claims.exs` is red
+      under the CI-parity toolchain from pre-existing Styler drift (2026-11-25, same goal,
+      amendment F10(i); evidence record §6/§10.10): the CI-parity run (elixir 1.20.4 / OTP 29) is
+      red at the PR base `33ad88a9` (110 removed/138 added lines) and at the delivered bytes
+      (106/137); the drift is upstream Styler style over bytes this goal did not touch (alias
+      splitting, `unless` → `if !(...)`, `@cases` list re-indentation); the elixir 1.19.6/OTP 28
+      run is red at base and delivered alike (359 rejected lines at the delivered bytes, none on a
+      goal-hunk line — round-2 correction, record §12.3). Resolve in a separate maintenance change
+      (reformat the file under the CI-parity toolchain, or pin the formatter version); the gate
+      stays recorded as an amendment until then, and this goal's own hunks are formatter-clean
+      (hunk-scoped check, record §10.10).

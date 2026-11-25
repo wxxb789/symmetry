@@ -303,7 +303,7 @@ def main() -> int:
 
     run_metadata = {
         "version": 1,
-        "case": "stage_replay",
+        "case": "stage_replay_unprovisioned_refusal",
         "fixture_case": "rootless_compose_unprovisioned_owner_witness",
         "harness": "opencode",
         "run_id": execution["run_id"],

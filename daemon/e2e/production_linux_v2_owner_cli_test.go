@@ -20,6 +20,7 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
@@ -258,9 +259,8 @@ func linuxV2ReadOwnerWitnessResponse(path string, request linuxV2OwnerWitnessReq
 	return response, nil
 }
 
-func linuxV2NativeWitnessOutputPath(t *testing.T, fixture linuxV2NativeFixture) string {
+func linuxV2NativeWitnessOutputDirectory(t *testing.T, fixture linuxV2NativeFixture) string {
 	t.Helper()
-	name := strings.NewReplacer(string(filepath.Separator), "_").Replace(t.Name())
 	if output := strings.TrimSpace(os.Getenv(linuxV2NativeWitnessOutputEnvironment)); output != "" {
 		if !filepath.IsAbs(output) || filepath.Clean(output) != output {
 			t.Fatalf("%s must be a canonical absolute path", linuxV2NativeWitnessOutputEnvironment)
@@ -271,9 +271,41 @@ func linuxV2NativeWitnessOutputPath(t *testing.T, fixture linuxV2NativeFixture) 
 		if err := os.Chmod(output, 0o700); err != nil {
 			t.Fatalf("secure redacted v2 witness output directory: %v", err)
 		}
-		return filepath.Join(output, name+".json")
+		return output
 	}
-	return filepath.Join(fixture.artifactDir, "witness.json")
+	return fixture.artifactDir
+}
+
+func linuxV2NativeWitnessOutputPath(t *testing.T, fixture linuxV2NativeFixture) string {
+	t.Helper()
+	name := strings.NewReplacer(string(filepath.Separator), "_").Replace(t.Name())
+	return filepath.Join(linuxV2NativeWitnessOutputDirectory(t, fixture), name+".json")
+}
+
+// The daemon's same-RunKey recovery path publishes no executable digest, so a provider-free pi
+// durability witness binds the staged binary itself; the exporter pins that digest.
+func linuxV2BindDurabilityNativeBinary(witness *linuxV2NativeWitness, fixture linuxV2NativeFixture) error {
+	if fixture.value.Runtime.HarnessKind != "pi" || fixture.request.Claim.ProviderAccess != nil {
+		return nil
+	}
+	digest, err := harness.HashExecutableFile(context.Background(), fixture.profile.Command)
+	if err != nil {
+		return err
+	}
+	witness.NativeBinary = fixture.profile.Command
+	witness.NativeBinarySHA256 = digest
+	_, witness.NativeVersionLine = linuxV2PinnedNativeVersions(fixture.value.Runtime.HarnessKind)
+	return nil
+}
+
+func linuxV2WriteDurabilityWitness(t *testing.T, fixture *linuxV2NativeFixture, witness *linuxV2NativeWitness, label string) {
+	t.Helper()
+	if err := linuxV2BindDurabilityNativeBinary(witness, *fixture); err != nil {
+		t.Errorf("bind the staged provider-free pi executable: %v", err)
+	}
+	if err := writeLinuxV2NativeWitness(fixture.outputPath, *witness, fixture.request.Claim.LeaseToken); err != nil {
+		t.Errorf("write redacted %s witness: %v", label, err)
+	}
 }
 
 func waitLinuxV2OwnerWitnessStage(request linuxV2OwnerWitnessRequest, timeout time.Duration) error {
@@ -1711,7 +1743,7 @@ func linuxV2VerifyStageReplayCheckout(fixture linuxV2NativeFixture, receipt auth
 func runProductionLinuxV2StageCrashReplay(t *testing.T, stage string) (linuxV2NativeFixture, string) {
 	t.Helper()
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: stage, markerDirectory: "stage-replay-" + stage,
 	}
@@ -1733,12 +1765,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted stage-replay witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "stage-replay")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("stage replay requires the active A systemd owner anchor: %v", err)
 	}
@@ -2283,7 +2310,7 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 		t.Fatalf("literal PID-reuse request/config paths do not bind the exact fixture beneath %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "leaf_removed", markerDirectory: "literal-pid-reuse",
 	}
@@ -2296,12 +2323,7 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted literal PID-reuse witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "literal PID-reuse")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("literal PID-reuse witness requires the active A systemd owner anchor: %v", err)
 	}
@@ -3345,7 +3367,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 		t.Fatalf("ACK-loss fixture config/request paths do not bind the exact case under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: stage, markerDirectory: "ack-loss-" + stage, ackLossReplay: true,
 	}
@@ -3358,12 +3380,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted ACK-loss replay witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "ACK-loss replay")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("ACK-loss replay requires the active A systemd owner anchor: %v", err)
 	}
@@ -3520,7 +3537,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		t.Fatalf("helper response-loss paths do not bind the exact fixture beneath %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: responseLoss.hold, markerDirectory: responseLoss.markerDirectory,
 		helperResponseDrop: responseLoss.operation,
@@ -3537,12 +3554,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted helper response-loss witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "helper response-loss")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("helper response-loss witness requires the active A systemd owner anchor: %v", err)
 	}
@@ -3773,7 +3785,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 		t.Fatalf("migration request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "native_release", markerDirectory: "migration",
 	}
@@ -3786,12 +3798,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted migration-denial witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "migration-denial")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("migration witness requires the active A systemd owner anchor: %v", err)
 	}
@@ -3802,7 +3809,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
 	if err := waitLinuxV2OwnerWitnessStage(fixture.request, time.Duration(fixture.request.Barrier.TimeoutSeconds)*time.Second); err != nil {
 		linuxV2ReportOwnerWitnessFailure(t, fixture, command)
-		t.Fatalf("wait for exact OpenCode native_release boundary: %v", err)
+		t.Fatalf("wait for exact native_release boundary: %v", err)
 	}
 	marker, err := linuxV2ReadOwnerWitnessStageMarker(fixture, "native_release")
 	if err != nil {
@@ -3939,7 +3946,7 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 		t.Fatalf("stale-leaf request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "stop_receipt_durable", markerDirectory: "stale-leaf",
 	}
@@ -3952,12 +3959,7 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted stale-leaf witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "stale-leaf")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("stale-leaf witness requires the active A systemd owner anchor: %v", err)
 	}
@@ -4098,7 +4100,7 @@ func linuxV2VerifyStageReplayEmptyLeaf(path string) error {
 func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot string) {
 	t.Helper()
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "native_release", markerDirectory: "receipt-persist-failure",
 	}
@@ -4111,12 +4113,7 @@ func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot st
 		Subject:          linuxV2SubjectSnapshotFromRequest(fixture.request),
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted receipt-persistence witness: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "receipt-persistence")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("receipt-persistence witness requires the active A systemd owner anchor: %v", err)
 	}
@@ -4245,7 +4242,7 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 		t.Fatalf("alternate-mount request/config paths do not bind the exact case fixture under %s", caseRoot)
 	}
 	testCase := linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
 		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
 		barrierStage: "reservation_durable", markerDirectory: "alternate-mount",
 	}
@@ -4280,12 +4277,7 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 		Notes:            []string{"the hidden production command rejected an alternate cgroup-v2 mount before native release"},
 	}
 	fixture.outputPath = linuxV2NativeWitnessOutputPath(t, fixture)
-	leaseToken := fixture.request.Claim.LeaseToken
-	defer func() {
-		if err := writeLinuxV2NativeWitness(fixture.outputPath, witness, leaseToken); err != nil {
-			t.Errorf("write redacted alternate-mount refusal evidence: %v", err)
-		}
-	}()
+	defer linuxV2WriteDurabilityWitness(t, &fixture, &witness, "alternate-mount refusal evidence")
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("alternate mount refusal requires the installed A owner service: %v", err)
 	}
