@@ -41,10 +41,27 @@ func linuxV2ReleasedCloneStateSafe(journal RunJournal) bool {
 			linuxCloneCleanupIntentMatchesJournal(journal, *journal.LinuxCloneCleanupIntent) &&
 			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace
 	}
+	if LinuxV2ReleasedCloneRetainedAfterRelease(journal) {
+		return true
+	}
 	return journal.LinuxCloneCleanupIntent == nil && journal.LinuxCloneTargetRemovalProof == nil &&
 		journal.LinuxCloneCheckoutReceipt != nil && journal.LinuxCloneCheckoutReceipt.Validate() == nil &&
 		journal.LinuxCloneCheckoutReceipt.Target == journal.LinuxCloneIntent.Target &&
 		journal.WorkspacePath == journal.LinuxCloneIntent.Target && journal.WorkspaceRecoveryRequired && journal.RetainWorkspace
+}
+
+// LinuxV2ReleasedCloneRetainedAfterRelease reports the exact pre-checkout shape a normal
+// release retains; every term is required and every other shape keeps blocking.
+func LinuxV2ReleasedCloneRetainedAfterRelease(journal RunJournal) bool {
+	intent := journal.LinuxCloneIntent
+	return intent != nil && intent.ValidateForJournal() == nil && journal.LinuxCloneSeedReceipt != nil &&
+		journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionIntent == nil &&
+		journal.LinuxClonePromotionReceipt == nil && !journal.LinuxCloneAbortPending &&
+		journal.LinuxCloneAbortProof == nil && !journal.LinuxCloneCleanupPending &&
+		journal.LinuxCloneCleanupIntent == nil && journal.LinuxCloneTargetRemovalProof == nil &&
+		journal.LinuxCloneCleanupProof == nil && journal.LinuxCloneReuseGrant == nil &&
+		!journal.NativeUsageRecoveryRequired && journal.WorkspacePath == intent.Target &&
+		journal.WorkspaceBindingKey == intent.BindingKey && journal.WorkspaceRecoveryRequired
 }
 
 func (journal RunCloneState) linuxCloneStageCanAdvance(localState string) bool {
