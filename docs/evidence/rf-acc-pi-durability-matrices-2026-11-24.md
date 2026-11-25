@@ -18,27 +18,28 @@ runner's temp directory, `<STATE_DIR>` = the fixture-provided Linux v2 StateDir.
 
 | File | sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `99c0506947523053e85eef4a71beec422c5b023bb6c2ab53b3818792594983e2` |
-| `scripts/ci/linux-v2-native-tools.sh` | `b590f9e577f8028c8f190971ec945be1f15f7622a94db752c14653eef49d813e` |
-| `scripts/ci/provision-linux-v2-control-claims.exs` | `60bbaea2b699ad2651ac437bc7d21b3e25246a90f5ead47b5ed186d1dd3afb2f` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `38e8edd22a3599e2e6eb8309c9c84b3d8af983b18680f3edeead78c2f2952f67` |
+| `scripts/ci/linux-v2-native-tools.sh` | `727c2c25a3fc7162f3e86f0dbc97586d85d5a532fb97ca85c7a0818737c12422` |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `e997de0272d105418402a99c1540f2ce6c7ba151c8a7f0cefe24afb156128591` |
 | `scripts/ci/write-linux-v2-owner-request.py` | `9b5ce15b067bd22db50a800e005d3335e0f0bf94b9d91debf86e82e2aac44a42` |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `6fd8be109e4c4382186cef17f2c7dd9eb67a89c4890cd6cba6f4aa565d4372b7` |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `a9da8a94f351df786fabef3e528503d7fb4511dcbb18bd105530e4f922946724` |
-| `scripts/ci/test-linux-v2-evidence.py` | `6e7070210b2d72b490d8e4eaff319cd0510f00114bdadedfe484e102aa7f3dc8` |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `550be6556da9bb6aa8a966e5c27dc76c75f694f906056ca5c168684fd5eb9874` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `5e3a4b29f5b996362a996fca3eab5d2306dfc3e1035fa6cd602075b3a39bb426` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `1ad70323d712c6b35019eeb0b0404e3f67f86bbdfbfe8f5cde14c28aa2ffaf74` |
+| `scripts/ci/test-linux-v2-evidence.py` | `5b701b8787e5960cf9661a5093cfb9892d298decc17abe61ec71351a97a4833d` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `74a648da2712a18bbf23fde2657ffe0db82bfbff0904466f2ff8d2962a3ec4f5` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `22938a28cf1fd1b00a7802cc6567cd0d96046e2912dd6153142fd1a2def8fd61` |
 | `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `f11a77ad67a0eef7f14d52cece1592456fae71e548de2b435af2efa88b7492f1` |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` |
+| `scripts/ci/rootless-compose-native-acceptance.sh` | `e0cf3191c5f7f4e9a9f51a3ce116356654138dd01186431583f0ad976bfffb69` |
+| `scripts/ci/prepare-rootless-compose-owner-claim.py` | `79f1b154730ae4bc13fbe95763027be1002def85a89b89c87c12ff295fb7e0f9` |
 | this record | no self-referential hash |
 
-Finalization binding (2026-11-25, fix stage): the ten values above are the delivered tree's sha256
-table, and no scratch run executed these bytes. Run `45489336388` (the last scratch run, §3 row
-13) executed the implement stage's final bytes; the apply stage (§9) and the fix stage (§10)
-changed nine of the ten files afterwards (`register-linux-v2-claim-machine.py` alone still equals
-the bytes run 13 executed). The apply deltas carry the §8b probes P1/P2 for the
-exporter membership table and the two line filters only; the F3 delta (where witnesses and the
-diagnostic log are written) had no probe, review found it behavior-changing (F01, §10.1), and the
-fix restores the configured directory. The literal all-12 re-run on the delivered bytes is carried
-to the conductor (§10.11): both stages forbid a push, so no scratch run could be re-dispatched.
+Finalization binding (2026-11-25, round-1 + merge): the thirteen values above are the delivered
+tree's sha256 table. The merge commit `6b9151c4` (main `01c0d4cf`, #280) brought the main-side
+changes into nine of these files; the round-1 review fixes are §11. The binding all-12 run
+`45516749453` executed exactly these code bytes (scratch head `6db50a7e` = merge + scratch-only
+workflow/shim, §11.6), and its equality table is all-EQ. The earlier run `45509829783` bound the
+pre-merge round-1 bytes and `45489336388` the implement-stage bytes (§3 row 13, §10.11) — both are
+historical.
 
 The admission campaign (2026-11-25) changed exactly, against the round-3 record's head
 `f1f80fb6`: `scripts/ci/linux-v2-native-acceptance.sh` (+51),
@@ -1049,7 +1050,7 @@ nine of the ten subject files, so the equality table between the run head and th
 
 | File | Run 13 bytes (implement stage) | Post-apply (`cc725d50`) | Delivered (§1) | Equal to run 13? |
 | --- | --- | --- | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `143d78ea6b29e1cf8b76a16f0929634c11c932e396ab64120125dd36bf22961e` | `d1bca15691216c6ed703348c8d9d08736d35a26c4f4f674f364d2a9fea771ec1` | `92c795f6…` (§1) | no |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `143d78ea6b29e1cf8b76a16f0929634c11c932e396ab64120125dd36bf22961e` | `d1bca15691216c6ed703348c8d9d08736d35a26c4f4f674f364d2a9fea771ec1` | `99c0506947523053e85eef4a71beec422c5b023bb6c2ab53b3818792594983e2` (fix stage §1) | no |
 | `scripts/ci/linux-v2-native-tools.sh` | `185f4ff085f3a3a47e4f46d4727ded89fd78b14c0ba6c9ea822e413c42b5f1d2` | `185f4ff085f3a3a47e4f46d4727ded89fd78b14c0ba6c9ea822e413c42b5f1d2` | `b590f9e5…` (§1) | no |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `18001a824062f94e470fae3655b00cbb85dc866048148a57ce8afb437f8d06fa` | `18001a824062f94e470fae3655b00cbb85dc866048148a57ce8afb437f8d06fa` | `60bbaea2…` (§1) | no |
 | `scripts/ci/write-linux-v2-owner-request.py` | `47cb012ba516dcf1f85fdd65b709d620ddbf77b7a4b398c4dfcbfeda831c03a9` | `47cb012ba516dcf1f85fdd65b709d620ddbf77b7a4b398c4dfcbfeda831c03a9` | `9b5ce15b…` (§1) | no |
@@ -1060,11 +1061,9 @@ nine of the ten subject files, so the equality table between the run head and th
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `5b3bf2f3db0ba6352f1dca79a2bc845a20e88f56748b0636ac3657537cfd6d62` | `f71556913ff515843cb8555b66baa6811af862df06de2e7d8104181a75b89c51` | `5e3a4b29…` (§1) | no |
 | `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `25d5ee972acf2e11994751526ed3dab8308d3488fe380bc29221bd35b04f96f5` | `f11a77ad67a0eef7f14d52cece1592456fae71e548de2b435af2efa88b7492f1` | `f11a77ad…` (§1) | no |
 
-The literal all-12 run on the delivered bytes is therefore **not yet dispatched**: this stage
-forbids a push, and the conductor's DS ruling schedules it as the last code-affecting action
-(`docs/TODO.md`, "The literal all-12 scratch run on the delivered bytes"). Its rows supersede §4e
-for the delivered bytes; until then §4e's verdicts bind run 13's own bytes only, and the delivered
-bytes' behavioral evidence is the local gates (§6), the probes above and the mutant rows (§10.9).
+This table is history: the pre-merge stage could not push, and the delivered bytes were bound
+afterwards by the round-1 scratch run `45509829783` and the post-merge binding run `45516749453`
+(§11.6). §4e's verdicts bind run 13's own bytes only.
 
 ## 11. Round-1 review fixes (2026-11-25, PR #281 Sol + DS + Sec reconciled)
 
@@ -1232,3 +1231,89 @@ from the pre-admission run `45461719002`.
 The Conductor's item-5 ratification makes `docs/plans/2026-11-24-rf-acc-pi-durability-matrices-plan.md`
 a standard GDD artifact of the owned set; plan §7c records this round. No other `docs/**` file
 enters the owned set.
+
+### 11.6 Item 6 — the merge with main (`01c0d4cf`) and the binding all-12 run
+
+The conductor's post-review instruction merged `origin/main` (`01c0d4cf`, #280) into the round-1
+branch before the binding run. Merge commit `6b9151c4`; conflicts and resolutions:
+
+| Conflict | Sides | Resolution |
+| --- | --- | --- |
+| `linux-v2-native-acceptance.sh` `B_HOME` comment | mine vs #280 | #280's wording (both describe the same refusal; the assignment is identical) |
+| `linux-v2-native-acceptance.sh` `machine_run_as` HOME | my per-account `case` block vs #280's passwd capture | #280's `getent passwd` capture plus its absolute-home check; my `case` block deleted — both derive the same A/B homes, and #280's provisioning already asserts B's passwd home equals `$B_HOME` |
+| `linux-v2-native-acceptance.sh` `print_witness_failure_context` comment | mine vs #280 | merged wording: the fixture state plus the bounded private stderr log |
+| `production_linux_v2_owner_cli_test.go` stderr sink | my `os.OpenFile(linuxV2OwnerWitnessDiagnosticPath)` vs #280's hardened `unix.Open(linuxV2OwnerWitnessStderrPath, O_NOFOLLOW/O_CLOEXEC)` | #280's hardened open; `linuxV2OwnerWitnessStderrPath` now prefers the configured witness output directory (one-line body change) so both #280's reporter and the acceptance tail printer read the same `owner-witness.stderr`; my dead `linuxV2OwnerWitnessDiagnosticPath` helper deleted (F01's document routing is untouched) |
+| `production_linux_v2_owner_cli_test.go` migration wait | my harness-neutral message vs #280's `linuxV2ReportOwnerWitnessFailure` call | both: the report call before `t.Fatalf("wait for exact native_release boundary: %v", err)` |
+
+No other file conflicted; `docs/TODO.md`/`CLOSED-TODO.md`, the exporter,
+`test-linux-v2-evidence.py`, `production_linux_v2_native_witness_test.go`,
+`production_linux_v2_cleanup_witness_test.go` and the two Compose files auto-merged. The merged
+mechanism is verified live in the binding run: #280's reporter (`owner-witness stderr: …` lines)
+and the acceptance-side `print_witness_stderr_tail` both printed the same captured file for the
+`stale_leaf` first-run row.
+
+Binding run **`45516749453`** — the literal all-12 on the merged code bytes (scratch head
+`6db50a7e` = `6b9151c4` + the scratch-only workflow/shim; branch deleted, `git ls-remote
+origin scratch/rf-acc-pi-durability-matrices` prints nothing). The first all-12 on the same code
+tree (`45514038331`, head `c3dda0bd`) is recorded: its only anomalous row was `stale_leaf`, which
+hit the F2-release race (`… one-use Linux v2 RELEASE result is unresolved: Linux owner helper
+rejected operation (release_outcome_unknown)`) instead of its boundary; the repeat reproduced the
+expected stop, so that row is the run's flake. Support jobs green in the round-1 pre-merge run
+`45509829783` and in both merged runs: `compose` (the P0 clean cutover), `contracts`,
+`record-cleanliness`, `citation-existence`.
+
+Per-set rows (binding run; every set exit 1; `:NNN` = `daemon/e2e/production_linux_v2_native_witness_test.go`):
+
+| Set | Boundary reached / first failing check |
+| --- | --- |
+| `stage_replay_create_started` | `create_started` hold; `:178` `unresolved production recovery exit = <nil>, want deliberate nonzero process exit` (F1-exit) |
+| `stage_replay_leaf_bound` | same `:178` (F1-exit) |
+| `stage_replay_launcher_bound` | same `:178` (F1-exit) |
+| `ack_loss_launcher_bound` | `:217` same check (F1-exit) |
+| `migration` | `:613` `wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`; App stderr `… one-use Linux v2 RELEASE result is unresolved: Linux owner helper rejected operation (release_outcome_unknown)` (F2-release) |
+| `stale_journal_run_key` | `:531` `A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` + the recovery decode (F4-semantics) |
+| `stale_journal_run_key_legacy` | `:269` `read stage-replay recovery response: decode redacted production owner-witness response` (F4-semantics) |
+| `stale_journal_fence` | same `:269` (F4-semantics) |
+| `stale_journal_subject` | same `:269` (F4-semantics) |
+| `stale_leaf` | the `stop_receipt_durable` hold with a durable stop receipt on the pi vehicle (dummy-credential turn stops the containment); `:627` `read stale-leaf recovery response: decode redacted production owner-witness response` (F2-release in its recovery) |
+| `synthetic_goal_cleanup` | out of scope (containment-witness): `production_linux_v2_cleanup_witness_test.go:499` `… resume process "/bin/sh": one-use Linux v2 RELEASE result is unresolved: Linux owner helper rejected` after #280's admission-check fix moved it past the old refusal; export refused |
+| `shared` | out of scope (containment-witness): owner-leg scratch group (`clone_cleanup_linux_test.go:259`, `clone_integration_linux_test.go:240`, `launcher_integration_linux_test.go:439`) before any pi witness; export refused (`ack-loss-replay-checkout_ready.json`) |
+
+Ten sets published a manifest (artifact `linux-v2-native-evidence-45516749453-1`), each carrying
+the pi `native_binary` block (`path /usr/local/lib/symmetry-pi/pi`, `sha256:6a2ac1c5…`, version
+`1.5.2`, `archive_sha256 811c6f2c…`) and `source_commit 6db50a7e…`; the ten witness documents bind
+`harness: "pi"`, `installed_owner_verified: true` and the exact Subject. No manifest, log or record
+carries a secret value. The credentialed pi turn counts remain the Q3(a) rows the owner dispatches.
+
+sha256 equality table, run head `6db50a7e` vs the delivered worktree (all EQ, computed from both
+trees): the thirteen files of §1 — `linux-v2-native-acceptance.sh`, `linux-v2-native-tools.sh`,
+`provision-linux-v2-control-claims.exs`, `write-linux-v2-owner-request.py`,
+`register-linux-v2-claim-machine.py`, `export-linux-v2-redacted-evidence.py`,
+`test-linux-v2-evidence.py`, the three durability e2e files plus the cleanup e2e file, and the two
+Compose fixture files; `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` also EQ. This record and
+the plan gained their §11.6/§11.7 texts after the run (documentation only; no code byte changed
+after `6db50a7e`).
+
+### 11.7 Round-1 and merged-tree gates (commands and exit codes)
+
+Round-1 (pre-merge, worktree bytes): `bash -n` on the changed scripts — 0/0; `shellcheck -S
+warning -f gcc` delta 0 on the eight-file census against `0557536f` (acceptance 16/16, tools 0/0,
+exs 22/22, compose 4/4, prepare 1/1, writer/exporter/register 1/1 each); `python3
+scripts/ci/test-linux-v2-evidence.py` + the four sibling `test-linux-v2-*.py` suites and the
+Compose prepare suite — all OK (49-test exporter suite unchanged); `jscpd-changed --base 0557536f`
+and `--base 33ad88a9` — exit 0, "none new"; record-cleanliness and citation-existence — exit 0;
+Elixir parse OK and the hunk-scoped formatter diff touches none of the new lines; `git diff
+--check` — 0. Item probes: the writer probe (`probe-writer.py`, sha256
+`7400af11b4ce65b6b257a11d0e787a679ccbe4f17a963f3641283468d6263bd5`) positive rc 0 / old argv rc 1
+`per-harness daemon profile is absent`; the `Map.merge` equality probe (`probe-goal-policy.exs`,
+sha256 `4e28aae1239435f800edd200cb73e532aefa16da298e5fc6fd6ad9b5e772597c`) `MAP_EQUAL`, 13 keys;
+the pi digest probe (`probe-pi-digest.sh`, sha256
+`1b28e316b8231ed562d20bbccef2ceaeb4e279ec94a957d58b81654a7b937a79`) fetch rc 0, staging MATCH,
+four metadata/content mutants all changed.
+
+Merged tree (`6b9151c4`): `gofmt -l` clean; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...`
+and `go build ./...` in `daemon/` — 0/0; `bash -n` on the three acceptance scripts — 0/0;
+`shellcheck` delta 0 versus main `01c0d4cf` and versus `0557536f` (same histograms as above);
+the six Python suites — OK; `jscpd-changed --base 0557536f` and `--base 01c0d4cf` — exit 0,
+"none new"; record-cleanliness and citation-existence versus both bases — exit 0. The binding run's
+support jobs (compose, contracts, record-cleanliness, citation-existence) all succeeded (§11.6).

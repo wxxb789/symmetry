@@ -363,3 +363,11 @@ at the staging site where that tree is canonicalized (fetch keeps archive/execut
 ratified as owned. Item 6 is the literal all-12 scratch run on the round-1 bytes (evidence §11.6),
 the last code-affecting action; the delivered code bytes carry an all-equal sha256 table against
 that run head.
+
+Post-review instruction (same day): the round-1 fixes were committed (`1b1ce775`), `origin/main`
+(`01c0d4cf`, #280) was merged as `6b9151c4` keeping both sides' intent (evidence §11.6 lists every
+conflict and its resolution), the fast gates were re-run on the merged tree, and the binding
+all-12 run `45516749453` executed the merged code bytes (scratch head `6db50a7e`; all-equal sha256
+table, evidence §11.6). Compose and contracts are green in the scratch CI, so the two required
+jobs the Sol/DS reviews found red are fixed on the merged bytes; the PR branch is not pushed by
+this stage (the conductor pushes).
