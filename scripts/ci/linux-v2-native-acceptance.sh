@@ -1641,9 +1641,8 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-owner.servi
 sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.service.in" \
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-daemon.service.in"
 
-# The installer loads its policy through the guest's kernel security filesystem; an already
-# present mount must not be remounted (the mount syscall fails EBUSY and aborts the fixture).
-# The glob keeps the module name out of this file: the fixture's policy census must stay empty.
+# The installer loads its policy through the guest's kernel security filesystem: never remount an
+# already present mount (EBUSY aborts the fixture); the glob keeps the module name from the policy census.
 userns_restriction=$(machine_run /bin/sh -c 'cat /proc/sys/kernel/*_restrict_unprivileged_userns') ||
   fail 'cannot read the AppArmor unprivileged user-namespace restriction for this acceptance'
 userns_restriction=$(printf '%s' "$userns_restriction" | /usr/bin/tr -d '[:space:]')
