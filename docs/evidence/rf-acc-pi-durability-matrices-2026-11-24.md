@@ -18,8 +18,8 @@ runner's temp directory, `<STATE_DIR>` = the fixture-provided Linux v2 StateDir.
 
 | File | sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `38e8edd22a3599e2e6eb8309c9c84b3d8af983b18680f3edeead78c2f2952f67` |
-| `scripts/ci/linux-v2-native-tools.sh` | `727c2c25a3fc7162f3e86f0dbc97586d85d5a532fb97ca85c7a0818737c12422` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `cf5dd5cd749782d019732871563fba4d5db8279f0718ea2764b18f258ad906b9` |
+| `scripts/ci/linux-v2-native-tools.sh` | `1d73ea8db5d367aa346f0ddd6637182014e571ffdffad35cdc3c882b297fb1f7` |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `e997de0272d105418402a99c1540f2ce6c7ba151c8a7f0cefe24afb156128591` |
 | `scripts/ci/write-linux-v2-owner-request.py` | `9b5ce15b067bd22db50a800e005d3335e0f0bf94b9d91debf86e82e2aac44a42` |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `6fd8be109e4c4382186cef17f2c7dd9eb67a89c4890cd6cba6f4aa565d4372b7` |
@@ -29,17 +29,19 @@ runner's temp directory, `<STATE_DIR>` = the fixture-provided Linux v2 StateDir.
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `22938a28cf1fd1b00a7802cc6567cd0d96046e2912dd6153142fd1a2def8fd61` |
 | `daemon/e2e/production_linux_v2_helper_exit_witness_test.go` | `f11a77ad67a0eef7f14d52cece1592456fae71e548de2b435af2efa88b7492f1` |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` |
-| `scripts/ci/rootless-compose-native-acceptance.sh` | `e0cf3191c5f7f4e9a9f51a3ce116356654138dd01186431583f0ad976bfffb69` |
+| `scripts/ci/rootless-compose-native-acceptance.sh` | `5c68cd7a8277d03dee4c4405c00f9f0dfbf96971cabe11bf7a6264269656e0f8` |
 | `scripts/ci/prepare-rootless-compose-owner-claim.py` | `79f1b154730ae4bc13fbe95763027be1002def85a89b89c87c12ff295fb7e0f9` |
 | this record | no self-referential hash |
 
-Finalization binding (2026-11-25, round-1 + merge): the thirteen values above are the delivered
-tree's sha256 table. The merge commit `6b9151c4` (main `01c0d4cf`, #280) brought the main-side
-changes into nine of these files; the round-1 review fixes are §11. The binding all-12 run
-`45516749453` executed exactly these code bytes (scratch head `6db50a7e` = merge + scratch-only
-workflow/shim, §11.6), and its equality table is all-EQ. The earlier run `45509829783` bound the
-pre-merge round-1 bytes and `45489336388` the implement-stage bytes (§3 row 13, §10.11) — both are
-historical.
+Finalization binding (2026-11-25, round-2): the thirteen values above are the delivered tree's
+sha256 table; the round-2 fixes (`machine_run_as` unit names, the fetch-time pi tree pin) changed
+exactly the first two files and the Compose fixture (§12.1/§12.2). The merge commit `6b9151c4`
+(main `01c0d4cf`, #280) brought the main-side changes into nine of these files; the round-1 review
+fixes are §11. The round-2 binding all-12 run `45525645545` executed exactly these code bytes
+(scratch head `b19848895` = round-2 commit + scratch-only workflow/shim, §12.6), and its equality
+table is all-EQ. The round-1 binding run `45516749453` executed the round-1 code bytes (scratch
+head `6db50a7e`, §11.6); the runs `45509829783` (pre-merge round-1), `45489336388`
+(implement-stage, §3 row 13, §10.11) and the earlier campaign runs are historical.
 
 The admission campaign (2026-11-25) changed exactly, against the round-3 record's head
 `f1f80fb6`: `scripts/ci/linux-v2-native-acceptance.sh` (+51),
@@ -404,7 +406,7 @@ values.
 | gofmt | `gofmt -l .` in `daemon/` (WSL, go1.27.0) | 0 | no files listed |
 | go vet | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...` in `daemon/` (WSL) | 0 | clean |
 | go build | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` in `daemon/` (WSL) | 0 | clean |
-| elixir formatter | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` | 1 (1.20.4) / 0 (1.19.6) | **Amendment (F10(i), §10.9/§10.10)**: the CI-parity 1.20.4/OTP 29 run is red at base and delivered alike — pre-existing Styler drift on bytes this goal did not touch (base `33ad88a9` 110 removed/138 added lines, delivered 106/137; 240 at the `9d113eb6` copy). At every goal-touched rejected line the base counterpart is rejected too, and the one new-layout rejection the hunk-scoped check found was rewritten to the formatter's own layout. `symmetry-race` elixir 1.19.6: rc 0, clean. Ubuntu's elixir 1.14.0 cannot run the project (`mix.exs` declares `~> 1.17`). |
+| elixir formatter | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` | 1 (1.20.4) / 1 (1.19.6) | **Amendment (F10(i), §10.9/§10.10)**: the CI-parity 1.20.4/OTP 29 run is red at base and delivered alike — pre-existing Styler drift on bytes this goal did not touch (base `33ad88a9` 110 removed/138 added lines, delivered 106/137; 240 at the `9d113eb6` copy). At every goal-touched rejected line the base counterpart is rejected too, and the one new-layout rejection the hunk-scoped check found was rewritten to the formatter's own layout. `symmetry-race` elixir 1.19.6/OTP 27: rc 1, 359 rejected lines at the delivered bytes (round-2 correction, §12.3: the earlier "rc 0, clean" reading was wrong; the rejection diff holds no goal-hunk line). Ubuntu's elixir 1.14.0 cannot run the project (`mix.exs` declares `~> 1.17`). |
 | actionlint | not run | — | exempt: no workflow file changes in the goal tree (the throwaway workflow is scratch-only and deleted with the branch; the `git ls-remote` proof is in §3) |
 | frozen paths | `git diff 9d113eb6 -- daemon/internal/harness/opencode daemon/internal/harness/testdata/opencode .github/workflows/ci.yml docs/design/harness.md docs/goals/README.md docs/goals/0010-refactor-program.md` | 0 | empty (0 bytes) at the delivered bytes |
 | frozen regions | a region checker over the `9d113eb6` copy (regions `:21`, `:665`, `:894-895`, `:1002-1003`, `:1081-1097`, `:1116-1125`) that matches each verbatim in the delivered file, plus the 20 frozen OpenCode-pattern lines extracted from the `cc725d50` copy | 0 | `MISSING_TOTAL= 0` |
@@ -481,7 +483,9 @@ values.
   as an amendment with a `docs/TODO.md` entry; the hunk-scoped check (§10.10) shows every
   goal-touched rejected line has a rejected base counterpart and the one new-layout rejection it
   found was rewritten to the formatter's own layout. The closest available toolchain (elixir
-  1.19.6) passes clean (§6).
+  1.19.6/OTP 27) reports the same red — round-2 correction, §12.3: rc 1 with 359 rejected lines
+  at the delivered bytes, none on a goal-hunk line (the earlier "passes clean" reading misread
+  the run's exit code).
 - **`owner-witness-stderr.log` is still never published**: the exporter reads only allowlisted
   sources and refuses unexpected files in its own output directory; the admission-campaign runs
   publish the witness documents and manifests (run 9 artifact above) and the export still fails
@@ -1048,7 +1052,7 @@ every remaining goal-touched rejection is pre-existing (the `@cases` list indent
 Run 13 (`45489336388`) executed the implement stage's bytes; the delivered bytes (§1) differ in
 nine of the ten subject files, so the equality table between the run head and the delivery is:
 
-| File | Run 13 bytes (implement stage) | Post-apply (`cc725d50`) | Delivered (§1) | Equal to run 13? |
+| File | Run 13 bytes (implement stage) | Post-apply (`cc725d50`) | fix-stage §1 | Equal to run 13? |
 | --- | --- | --- | --- | --- |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `143d78ea6b29e1cf8b76a16f0929634c11c932e396ab64120125dd36bf22961e` | `d1bca15691216c6ed703348c8d9d08736d35a26c4f4f674f364d2a9fea771ec1` | `99c0506947523053e85eef4a71beec422c5b023bb6c2ab53b3818792594983e2` (fix stage §1) | no |
 | `scripts/ci/linux-v2-native-tools.sh` | `185f4ff085f3a3a47e4f46d4727ded89fd78b14c0ba6c9ea822e413c42b5f1d2` | `185f4ff085f3a3a47e4f46d4727ded89fd78b14c0ba6c9ea822e413c42b5f1d2` | `b590f9e5…` (§1) | no |
@@ -1190,6 +1194,9 @@ and equivalent to in-guest verification because `systemd-nspawn --directory` sha
 root-owned tree (this records F10(ii)'s verification honestly and amends its wording). The fetch
 still pins the archive sha (`811c6f2c…`), the executable sha (`6a2ac1c5…`) and the `1.5.2` version
 line; `export pi_tree_sha` keeps the global visible to the acceptance script (shellcheck delta 0).
+**Round-2 supersession (§12.2):** `linux_v2_fetch_pi` canonicalizes the extraction in place and
+checks the pin there again, so both callers — including the Compose fixture — verify the tree;
+the staging-site check above stays as a second, guest-facing verification.
 
 Probe (`<scratch>/probe-pi-digest.sh`, sha256
 `1b28e316b8231ed562d20bbccef2ceaeb4e279ec94a957d58b81654a7b937a79`, root, WSL Ubuntu-24.04):
@@ -1256,9 +1263,18 @@ Binding run **`45516749453`** — the literal all-12 on the merged code bytes (s
 `6db50a7e` = `6b9151c4` + the scratch-only workflow/shim; branch deleted, `git ls-remote
 origin scratch/rf-acc-pi-durability-matrices` prints nothing). The first all-12 on the same code
 tree (`45514038331`, head `c3dda0bd`) is recorded: its only anomalous row was `stale_leaf`, which
-hit the F2-release race (`… one-use Linux v2 RELEASE result is unresolved: Linux owner helper
-rejected operation (release_outcome_unknown)`) instead of its boundary; the repeat reproduced the
-expected stop, so that row is the run's flake. Support jobs green in the round-1 pre-merge run
+stopped before its boundary with the two lines below (the round-1 record's earlier quote was
+`migration`'s `release_outcome_unknown` line — corrected here per the round-2 ruling, §12.3):
+
+```
+production_linux_v2_native_witness_test.go:627: owner-witness stderr: Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket: connect: connection refused
+production_linux_v2_native_witness_test.go:627: wait for exact durable stop receipt: owner-witness command did not reach its requested durable stage
+```
+
+That is the same unowned containment class (helper transport / leaf-stop proof) as the
+`release_outcome_unknown` signature recorded beside it in the parallel goal's record, and not the
+RELEASE handshake itself; the repeat (`45516749453`) reproduced the expected stop, so the row is
+an observed flake candidate with the verbatim line (§12.5). Support jobs green in the round-1 pre-merge run
 `45509829783` and in both merged runs: `compose` (the P0 clean cutover), `contracts`,
 `record-cleanliness`, `citation-existence`.
 
@@ -1302,8 +1318,10 @@ exs 22/22, compose 4/4, prepare 1/1, writer/exporter/register 1/1 each); `python
 scripts/ci/test-linux-v2-evidence.py` + the four sibling `test-linux-v2-*.py` suites and the
 Compose prepare suite — all OK (49-test exporter suite unchanged); `jscpd-changed --base 0557536f`
 and `--base 33ad88a9` — exit 0, "none new"; record-cleanliness and citation-existence — exit 0;
-Elixir parse OK and the hunk-scoped formatter diff touches none of the new lines; `git diff
---check` — 0. Item probes: the writer probe (`probe-writer.py`, sha256
+Elixir parse OK; the formatter check is red at base and delivered alike under the available
+toolchains and its rejection diff touches no goal-hunk line (round-2 correction, §12.3: 359
+rejected lines at the delivered bytes under elixir 1.19.6, rc 1); `git diff --check` — 0. Item
+probes: the writer probe (`probe-writer.py`, sha256
 `7400af11b4ce65b6b257a11d0e787a679ccbe4f17a963f3641283468d6263bd5`) positive rc 0 / old argv rc 1
 `per-harness daemon profile is absent`; the `Map.merge` equality probe (`probe-goal-policy.exs`,
 sha256 `4e28aae1239435f800edd200cb73e532aefa16da298e5fc6fd6ad9b5e772597c`) `MAP_EQUAL`, 13 keys;
@@ -1317,3 +1335,445 @@ and `go build ./...` in `daemon/` — 0/0; `bash -n` on the three acceptance scr
 the six Python suites — OK; `jscpd-changed --base 0557536f` and `--base 01c0d4cf` — exit 0,
 "none new"; record-cleanliness and citation-existence versus both bases — exit 0. The binding run's
 support jobs (compose, contracts, record-cleanliness, citation-existence) all succeeded (§11.6).
+
+## 12. Round-2 review fixes (2026-11-25, PR #281 Sol r2 + DS r2 + Sec r2)
+
+The conductor's round-2 ruling (contract tail, 2026-11-25) carries three fix items and one
+binding: (1) `machine_run_as`'s unit name carries `BASHPID` like `machine_run` (DS P3-2); (2) the
+Compose path keeps a pi-tree verification (DS P3-3); (3) record corrections (DS P3-1/P3-4, Sol
+P3 ×2); (4) one all-12 scratch run on the exact final bytes, the last code-affecting action
+(§12.6). Sources: `findings/281-opus-review-2.md` and `findings/281-ds-audit-2.md` — all six
+round-1 items pass in both reviews; the only diff-external red was the `integration` job's
+namespace-permission failure (§12.5). Supersessions: §1's sha256 table and binding paragraph,
+§4e, §6, §10.11's column label, §11.3's fetch-time statement, §11.6's run-A quote and §11.7's
+formatter sentence.
+
+### 12.1 Item 1 — the `machine_run_as` unit name carries `BASHPID` (DS P3-2)
+
+Round-2 diff against the round-1 bytes, verbatim:
+
+```diff
+@@ -988,7 +988,8 @@ machine_run_as() {
+   home=$(cut -d: -f6 <"$passwd_log")
+   [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
+   machine_run_count=$((machine_run_count + 1))
+-  local unit="${machine}-step-${machine_run_count}"
++  # A pipeline runs this in a subshell and loses the increment there, so the suffix keeps the name unique.
++  local unit="${machine}-step-${machine_run_count}-${BASHPID}"
+   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
+     --unit="$unit" --uid="$user" --gid="$group" \
+```
+
+The class the fix closes: the one shipped pipeline call form (`:1754`, the A-owned Git-metadata
+line in `print_witness_failure_context`, `… | sort | head -n 40 >&2 || true`) runs the function
+in a pipeline subshell, so its `machine_run_count` increment dies there and the next parent-level
+`machine_run_as` would reuse the same unit name — `--collect` keeps the reuse benign unless the
+pipeline's unit is still winding down. The suffix makes every call form's name unique whichever
+shell runs it, exactly as `machine_run`'s comment records for its own `$()` sites.
+
+Probe (conductor lesson 74), extracted-function form: `<scratch>/unit-name-probe.sh` (sha256
+`8aff2969b22cab57075b20e717e579a16effaac451a99bd3acf754bd435a43f3`) evals `machine_run`/
+`machine_run_as` verbatim from the script under test and stubs the guest transport;
+`<scratch>/run-unit-probe.sh` (sha256
+`aac4efdfe42a672b8f5fa9a76f6af1fac8a850d0cbdd68f411b245cad13b2562`) derives the mutant and runs
+both. The sequence interleaves parent calls, three pipelines and a shared `machine_run`
+parent/substitution pair. Delivered bytes (`scripts/ci/linux-v2-native-acceptance.sh`, sha256
+`cf5dd5cd…`), exit 0:
+
+```text
+--- unit sequence (creation order)
+symmetry-test-machine-step-1-89284
+symmetry-test-machine-step-2-89284
+symmetry-test-machine-step-3-89289
+symmetry-test-machine-step-4-89289
+symmetry-test-machine-step-3-89294
+symmetry-test-machine-step-4-89294
+symmetry-test-machine-step-3-89284
+symmetry-test-machine-step-4-89299
+symmetry-test-machine-step-5-89299
+symmetry-test-machine-step-4-89284
+symmetry-test-machine-step-5-89284
+symmetry-test-machine-step-6-89306
+symmetry-test-machine-step-6-89284
+symmetry-test-machine-step-7-89284
+units=14 duplicates=0 parent_steps=7 subshell_units=7 parent_monotonic=1
+PROBE-PASS: all transient unit names unique; parent step names strictly increasing
+```
+
+Mutant (sha256 `bcc0510062c983ea7efe7ed5ad4d20ccf1beb472939382046b36a88ffde24100`, the single
+`-${BASHPID}` removed from the `machine_run_as` block only; the driver asserts the needle count),
+exit 3:
+
+```text
+--- unit sequence (creation order)
+symmetry-test-machine-step-1-89317
+symmetry-test-machine-step-2
+symmetry-test-machine-step-3-89322
+symmetry-test-machine-step-4
+symmetry-test-machine-step-3-89327
+symmetry-test-machine-step-4
+symmetry-test-machine-step-3-89317
+symmetry-test-machine-step-4-89332
+symmetry-test-machine-step-5
+symmetry-test-machine-step-4-89317
+symmetry-test-machine-step-5
+symmetry-test-machine-step-6-89339
+symmetry-test-machine-step-6-89317
+symmetry-test-machine-step-7
+units=14 duplicates=2 parent_steps=4 subshell_units=10 parent_monotonic=1
+PROBE-FAIL: unit names are not unique and parent-monotonic
+```
+
+Both runs also assert the B call received the passwd home (`--setenv=HOME=/synthetic-guest-home/symmetry-b`);
+the mutant's two duplicates are the two adjacent-pipeline collisions (`step-4`, `step-5`).
+
+Census of every `machine_run_as` call form (`<scratch>/machine-run-as-census.py`, sha256
+`363fa6805a9f57990601c846322e7b678ddf633e013e5f9fce6cec085d9b4fdd`; run with the script path as
+its argument, and it joins `\`-continuations before classifying so the multi-line
+`find … | sort | head` call counts as a pipeline): 40 call sites — 23 plain, 8 `if` conditions,
+8 `||` chains, 0 substitutions, 1 pipeline (`:1754`); definition `:980`. Every substitution site
+in the script is `machine_run`; the pipeline site is the only `machine_run_as` call whose counter
+increment dies in a subshell, and it is the call form this goal introduced (round 1, `:1753`
+then). Fix and census cover the same class.
+
+### 12.2 Item 2 — the pi tree pin is checked at fetch time (DS P3-3)
+
+The smaller of the ruling's two alternatives: keep the check inside `linux_v2_fetch_pi` (one
+shared canonicalize-and-pin function, both callers covered) instead of re-implementing the
+staging verification inside the Compose fixture. Round-2 diff, verbatim:
+
+```diff
+@@ -25,6 +25,17 @@ linux_v2_pi_tree_digest() {
+   ' _ "$tree"
+ }
+ 
++linux_v2_pin_pi_tree() {
++  local tree=$1 runner=${2:-}
++  # The pin binds the normalized release tree (root:root; dirs 0755; files 0644 / u+x 0755), and a
++  # raw extraction's modes and ownership follow the caller's umask and uid, so normalize in place.
++  $runner chown -R root:root "$tree"
++  $runner find "$tree" -type d -exec chmod 0755 {} +
++  $runner find "$tree" -type f ! -perm -u+x -exec chmod 0644 {} +
++  $runner find "$tree" -type f -perm -u+x -exec chmod 0755 {} +
++  test "$(linux_v2_pi_tree_digest "$tree" "$runner")" = "${pi_tree_sha:-}"
++}
++
+ linux_v2_fetch_pi() {
+@@ -42,8 +53,8 @@ linux_v2_fetch_pi() {
+   mkdir "$pi_unpack"
+   tar --extract --file "$pi_archive" --directory "$pi_unpack"
+   test -x "$pi_executable"
+-  # The whole-tree pin is checked at the staging site (linux-v2-native-acceptance.sh:459-460),
+-  # where ownership and modes are canonicalized for the guest; raw extraction is caller-dependent.
++  # Every caller exposes or copies this tree, so the pin is checked on the canonicalized bytes.
++  linux_v2_pin_pi_tree "$pi_unpack/pi" sudo
+   test "$(sha256sum "$pi_executable" | cut -d' ' -f1)" = "$pi_executable_sha"
+   test "$(timeout 30s "$pi_executable" --version)" = "$pi_version_line"
+ }
+```
+
+```diff
+@@ -111,10 +111,8 @@ trap cleanup_native_services EXIT INT TERM
+ source "$repo/scripts/ci/linux-v2-native-tools.sh"
+ # OpenCode is production-unavailable; no executable or private transport is needed.
+ linux_v2_fetch_pi "$native_root"
+-# Pi resolves version metadata and runtime assets relative to its public release.
+-# Only the digest-verified public tree is exposed; private fixture paths stay private.
+-chmod -R a+rX "$pi_unpack/pi"
+-chmod 0555 "$pi_executable"
++# Pi resolves version metadata and runtime assets relative to its public release; the fetch pins
++# the canonical root-owned tree and only it is exposed (private fixture paths stay private).
+```
+
+The fetch now normalizes the extraction exactly as the acceptance staging site does (root:root;
+dirs 0755; files 0644 / u+x 0755) and compares the metadata-binding digest against
+`pi_tree_sha`, so a raw extraction whose modes and ownership follow the caller's umask and uid is
+verified and exposed in its canonical form; the staging site keeps its own re-check. The Compose
+fixture's two chmod lines are deleted: the pinned tree is already world-readable/executable for
+the bound container users, pi sits at mode 0755 (the 0555 was fixture hardening that the
+read-only bind already provides — no assertion in the tree depends on it), and a chmod after the
+pin would make the exposed tree differ from the verified one.
+
+Probe (real fetch plus extracted function, root, WSL Ubuntu-24.04; `<scratch>/probe-pi-pin.sh`,
+sha256 `b8e51b575aed86ed8818e09b161f22cf45a7df10bf339955dd5e578b11350100`): the delivered
+`linux_v2_fetch_pi` exits 0, reproduces the archive/executable/tree/version pins, and the digest
+is deterministic across runs and the `sudo` runner:
+
+```text
+fetch rc=0
+pins: archive=811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5 executable=6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57 tree=f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68 version=1.5.2
+archive sha256:  811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5
+executable sha256: 6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57
+digest run 1: f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68
+digest run 2: f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68
+counts: dirs=25 files=208 links=0
+root root:root 755
+pi root:root 755
+pin pristine rc=0
+```
+
+The negative probes run the same `linux_v2_pin_pi_tree` the fetch and the Compose path call, on
+tampered copies of the fetched tree (each tamper applied to a `cp -a` copy):
+
+| Mutant | pin rc | digest vs pin |
+| --- | --- | --- |
+| append `x` to `package.json` | 1 | `54c78146839f7f1d32df134073586d189b63610571ce3420bfaf7928446ac301` changed |
+| added symlink `evil-link -> /etc/passwd` | 1 | `c60e5af039bf3bd4cccd88dafa0411ad93000f3997132ec2b76c0f535bfe3efe` changed |
+| removed `package.json` | 1 | `0c8346b4004f4a593dedd0edffebc15c2159b83d45e01aba3ab9b61c8610c9d7` changed |
+| `chmod 0644` on the executable `pi` (clears the exec class) | 1 | `c181915656512b2e2722407b18b12fefc471eee75db4166d2ede589439381d4a` changed |
+| `chmod 0700 package.json` (enters the exec class) | 1 | `2495c6450bda5bc2f05e0d54d28bc6b694a0eb19d8539dbdaba29987996d2592` changed |
+| `chmod 0640 package.json` (non-exec mode drift) | 0 | equals the pin — normalization restores 0644 |
+| `chown 1001:1001 package.json` (ownership drift) | 0 | equals the pin — normalization restores root:root |
+
+So the pin binds exactly the tree the Compose container receives: content, path set, entry
+types, link targets and each file's exec class. Mode/ownership drift that normalization erases
+cannot survive into the exposed tree; every change to the canonical form is refused. The Compose
+CI job on the binding run (`compose`, job `138908147080`) succeeded, so the changed path ran end
+to end on the delivered bytes and published `rootless-compose-native-evidence-45525645545-1`.
+
+### 12.3 Item 3 — record corrections
+
+- **DS P3-1 (the stale TODO entry).** The `docs/TODO.md` "literal all-12 scratch run on the
+  delivered bytes" item moved to `docs/archive/CLOSED-TODO.md` under its own heading with the
+  closure statement naming run `45516749453` (round-1 bytes, §11.6) and run `45525645545`
+  (round-2 bytes, §12.6) plus both artifacts; the open residual (the credentialed dispatch and
+  the Q3(a) turn counts) stays in `docs/TODO.md` under
+  `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`, which keeps its other
+  entries. `docs/TODO.md` now holds only undone items in that section.
+- **DS P3-4 (the elixir wording).** Corrected in §4e, §6, §11.7 and the F10(i) TODO entry: the
+  elixir 1.19.6/OTP 27 run is rc 1, not clean — 359 rejected lines at the delivered bytes (370 at
+  `01c0d4cf`), re-measured with a direct exit-code capture (the earlier reading misread the exit
+  code); the rejection diff greps clean for every goal-hunk marker (`Map.merge`,
+  `execution_policy`, `provider_access`, the policy keys). The CI-parity 1.20.4/OTP 29 numbers are
+  unchanged, and the amendment's premise holds: the drift is red at base and delivered alike
+  under both measured toolchains, so no goal hunk is implicated.
+- **Sol P3 (the run-A quote).** §11.6 now quotes run `45514038331`'s own two `:627` lines and
+  keeps the class attribution (helper transport / leaf-stop proof, not the RELEASE handshake);
+  §12.5 records the row as an observed flake candidate.
+- **Sol P3 (the §10.11 column).** Relabeled `fix-stage §1`; the table's own paragraph already
+  declares it history and points at §11.6/§12.6.
+
+### 12.4 Round-2 gates (commands and exit codes)
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| bash syntax | `bash -n` on `linux-v2-native-acceptance.sh`, `linux-v2-native-tools.sh`, `rootless-compose-native-acceptance.sh` (WSL) | 0/0/0 | ok |
+| shellcheck delta | `shellcheck -S warning -f gcc` on the three scripts vs the `01c0d4cf` copies (shellcheck 0.9.0, WSL) | 1/1/1 both sides | no new findings: acceptance 16/16 (identical code histogram), tools 0/0, compose 4/3 (the deleted line's pre-existing SC2154 `pi_executable` reference disappears; no other delta) |
+| python suites | `python3 scripts/ci/test-linux-v2-{evidence,control-receipt,go-events,host-prerequisite-probe,source-subject}.py` plus `test-check-record-cleanliness.py` and `test-check-citation-existence.py` (WSL) | 0 ×7 | `OK` each |
+| jscpd-changed | `python3 scripts/ci/jscpd-changed.py --base 01c0d4cf --head 5ba0dd0b`, and again on the delivered record head (clone with the pinned jscpd 4.3.0) | 0 / 0 | 16 changed file(s), 1728 scanned source(s), 1263 clone(s), 7 tolerated, none new both times. The first post-record attempt refused one clone — §12.7 had repeated the containment record's §15.5 probe/census listing — and the elision cleared it, not a threshold or scope change. |
+| whitespace | `git diff --check` | 0 | clean |
+| record cleanliness | `python3 scripts/ci/check-record-cleanliness.py --base 01c0d4cf --head 5ba0dd0b`, and again on the delivered record head | 0 / 0 | `1 changed record(s) pass the root-only check` |
+| citations | `python3 scripts/ci/check-citation-existence.py --base 01c0d4cf --head 5ba0dd0b`, and again on the delivered record head | 0 / 0 | `1 changed document(s) pass the path and symbol check` (604 then 606 path citation(s)); the three pre-existing CLOSED-TODO ignore notes unchanged |
+| elixir formatter (fact) | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` (`symmetry-race`, elixir 1.19.6/OTP 27) | 1 | red at base and delivered alike; 359 rejected lines at the delivered bytes, none on a goal-hunk line |
+| unit-name probe / census | §12.1 artifacts | 0 / 0 | delivered `PROBE-PASS` (`duplicates=0`); the BASHPID-removed mutant exits 3 (`duplicates=2`); the census lists 40 call sites, one pipeline |
+| pi pin probe | §12.2 artifact | 0 | fetch rc 0 and pin MATCH; five canonical-form tamper mutants refused, two normalization-erased mutants accepted |
+
+The binding run's support jobs are green on the same bytes (§12.6): `compose`, `contracts`,
+`record-cleanliness`, `citation-existence`. `gofmt`/`go vet`/`go build` are not re-run: no
+`daemon/**` byte changed in this round.
+
+### 12.5 Flake rows (observed, verbatim)
+
+- **`stale_leaf` in run `45514038331`** (round-1 bytes, the first all-12 on the merged tree): the
+  row stopped before its boundary with
+  `production_linux_v2_native_witness_test.go:627: owner-witness stderr: Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket: connect: connection refused`
+  and
+  `production_linux_v2_native_witness_test.go:627: wait for exact durable stop receipt: owner-witness command did not reach its requested durable stage`.
+  The same `dial unixpacket: connect: connection refused` signature is recorded beside
+  `release_outcome_unknown` in `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md`;
+  the repeat run `45516749453` reached the hold and failed only at the expected `:627 read
+  stale-leaf recovery response`, and run `45525645545` reproduced that exact expected stop — so
+  the row is a nondeterminism candidate in the unowned helper transport / leaf-stop class, not a
+  fixture defect of this goal.
+- **`integration` on run `45520568685` (PR head `c257886f`, Sol r2 P2):**
+  `TestProductionLinuxContainmentNegativeWitness/wrong_hello_session_rejected_before_resume_owner_sigkill`
+  failed with `production_linux_containment_negative_witness_test.go:1619: helper did not stop
+  exact precommit target after owner SIGKILL: read process 4565 PID namespace: stat namespace
+  link: permission denied`. Not diff-attributable: the failing test and its helpers live in files
+  this PR does not touch, the step's `-run` filter excludes every changed file, and the same
+  class previously failed main's `integration` at `9d113eb6`; the conductor reran the head and
+  run `45520568685` now concludes `success`.
+
+### 12.6 Item 4 — the round-2 binding all-12 run `45525645545`
+
+Scratch head `b19848895` (parent `5ba0dd0b`, the round-2 fix commit) = the delivered code bytes
+plus the scratch-only workflow (sha256
+`48301bb8a680322d608e1aaf4ba82e786b944a9148fd66346eb885add86cb85a`) and the `gh` shim (sha256
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`, installed mode 0755; the
+committed blob mode matches round 1's). The branch is deleted and the deletion proven:
+`git ls-remote origin scratch/rf-acc-pi-durability-matrices` prints nothing. Job results: `compose`
+✓ (job `138908147080`), `contracts` ✓, `record-cleanliness` ✓, `citation-existence` ✓,
+`linux-native-v2-acceptance` ✗ 17m16s — the twelve sets exited 1 as the classifier expects, ten
+published manifests (`allowlisted redacted evidence: 1 files; missing=0`) and the two
+out-of-scope sets refused export. The run's job-level red is the expected reclassification: the
+verdict is read per set and per published witness file.
+
+Per-set rows (`:NNN` = `daemon/e2e/production_linux_v2_native_witness_test.go`):
+
+| Set | Boundary reached / first failing check |
+| --- | --- |
+| `stage_replay_create_started` | `create_started` hold; `:178` `unresolved production recovery exit = <nil>, want deliberate nonzero process exit` (F1-exit) |
+| `stage_replay_leaf_bound` | same `:178` (F1-exit) |
+| `stage_replay_launcher_bound` | same `:178` (F1-exit) |
+| `ack_loss_launcher_bound` | `:217` same check (F1-exit) |
+| `migration` | `:613` `wait for exact native_release boundary: owner-witness command did not reach its requested durable stage`; App stderr `… resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown)` (F2-release) |
+| `stale_journal_run_key` | `:531` `A anchor/helper was not live before fresh request: exact native process pidfd reports an exited target` + the recovery decode (F4-semantics) |
+| `stale_journal_run_key_legacy` | `:269` `read stage-replay recovery response: decode redacted production owner-witness response` (F4-semantics) |
+| `stale_journal_fence` | same `:269` (F4-semantics) |
+| `stale_journal_subject` | same `:269` (F4-semantics) |
+| `stale_leaf` | the `stop_receipt_durable` hold with a durable stop receipt on the pi vehicle (dummy-credential turn stops the containment); `:627` `read stale-leaf recovery response: decode redacted production owner-witness response` (F2-release in its recovery) |
+| `synthetic_goal_cleanup` | out of scope (containment-witness): `production_linux_v2_cleanup_witness_test.go:499` `… resume process "/bin/sh": one-use Linux v2 RELEASE result is unresolved: Linux owner helper rejected operation (release_outcome_unknown)` and `:488` cleanup line; export refused |
+| `shared` | out of scope (containment-witness): the owner-leg scratch group (`clone_cleanup_linux_test.go:259`, `clone_integration_linux_test.go:240`/`:113`, `launcher_integration_linux_test.go:439`) aborts before any pi durability witness; export refused |
+
+Ten sets published a manifest (artifact `linux-v2-native-evidence-45525645545-1`, 18,483 B), each
+carrying the pi `native_binary` block (`path /usr/local/lib/symmetry-pi/pi`, `sha256:6a2ac1c5…`,
+version `1.5.2`, `archive_sha256 811c6f2c…`) and its subject at `b19848895`; the ten witness
+summaries carry `harness: "pi"`, `installed_owner_verified: true`, `native_version "1.5.2"` and
+`native_binary /usr/local/lib/symmetry-pi/pi`. The two out-of-scope sets refused export with
+`pi durability witness is unavailable: ack-loss-replay-checkout_ready.json` and `…
+synthetic-goal-cleanup.json`. No manifest, log or record carries a secret value. The credentialed
+rows and the Q3(a) pi turn counts remain the owner's dispatch.
+
+sha256 equality table, run head `b19848895` vs the delivered worktree (all EQ, computed from both
+trees): the thirteen files of §1 — `linux-v2-native-acceptance.sh` (`cf5dd5cd…`),
+`linux-v2-native-tools.sh` (`1d73ea8d…`), `provision-linux-v2-control-claims.exs` (`e997de02…`),
+`write-linux-v2-owner-request.py` (`9b5ce15b…`), `register-linux-v2-claim-machine.py`
+(`6fd8be10…`), `export-linux-v2-redacted-evidence.py` (`1ad70323…`), `test-linux-v2-evidence.py`
+(`5b701b87…`), the three durability e2e files (`74a648da…`, `22938a28…`, `f11a77ad…`),
+`production_linux_v2_cleanup_witness_test.go` (`d120677d…`) and the two Compose fixture files
+(`5c68cd7a…`, `79f1b154…`); the full 13-row values are §1's table. `docs/TODO.md` and
+`docs/archive/CLOSED-TODO.md` changed after the run with this round's §12.3 move, and this record
+and the plan gained their §12/§7d texts afterwards — documentation only; no code byte changed
+after `b19848895`.
+
+### 12.7 Appendix — round-2 probe artifacts, verbatim (elisions marked)
+
+Host locations inside the pasted code read `<scratch>`/`<worktree>`, as in §10.10; the sha256
+values anchor the artifacts as they ran.
+
+`unit-name-probe.sh`, sha256
+`8aff2969b22cab57075b20e717e579a16effaac451a99bd3acf754bd435a43f3`: an extracted-function probe
+(conductor lesson 74) that evals `machine_run`/`machine_run_as` verbatim from the script under
+test, stubs the guest transport, and drives the call sequence below. Its preamble and transport
+stub are the containment record §15.5 probe's pattern (cited there, not repeated here), and the
+sha256 pins the full file. The round-2 deltas are the pipeline-capable call sequence below and
+the classification: parent names carry the probe's own `BASHPID`, pipeline names their
+subshell's, and duplicates or a non-monotonic parent counter fail the run; the recorded outputs
+are §12.1's. Listing, call sequence only (the two markers elide pattern text):
+
+```bash
+# [elision marker, not artifact text: lines 1-31, the preamble, log paths and transport stub]
+machine_run_count=0
+eval "$(sed -n '/^machine_run() {/,/^}/p' "$script")"
+eval "$(sed -n '/^machine_run_as() {/,/^}/p' "$script")"
+
+printf 'machine_run_as  A A parent first\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true >/dev/null
+printf 'machine_run_as  A A pipeline first\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true | sort | head -n 40 >/dev/null || true
+printf 'machine_run_as  A A pipeline second\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true | sort | head -n 40 >/dev/null || true
+printf 'machine_run     parent plain (shares the counter)\n'
+machine_run /usr/bin/true >/dev/null
+printf 'machine_run_as  A A pipeline third\n'
+machine_run_as symmetry-a symmetry-a /usr/bin/true | sort | head -n 40 >/dev/null || true
+printf 'machine_run_as  B B parent second\n'
+machine_run_as symmetry-b symmetry-b /usr/bin/true >/dev/null
+printf 'machine_run     substitution assignment (shares the counter)\n'
+substituted=$(machine_run /usr/bin/true)
+[[ -n "$substituted" ]] || fail 'substitution returned nothing'
+printf 'machine_run_as  B B parent third\n'
+machine_run_as symmetry-b symmetry-b /usr/bin/true >/dev/null
+
+# [elision marker, not artifact text: the unit/HOME printout and the duplicate/parent-counter
+# analysis, the containment record §15.5 probe's pattern; the outputs it printed are §12.1's]
+```
+
+`run-unit-probe.sh` (sha256
+`aac4efdfe42a672b8f5fa9a76f6af1fac8a850d0cbdd68f411b245cad13b2562`) derives the mutant — it
+locates the `machine_run_as` block, asserts exactly one `-${BASHPID}` inside it, and removes that
+substring — then runs the probe against the script and the mutant and captures both exit codes;
+the outputs are §12.1's.
+
+`machine-run-as-census.py`, sha256
+`363fa6805a9f57990601c846322e7b678ddf633e013e5f9fce6cec085d9b4fdd`, run as
+`python3 machine-run-as-census.py scripts/ci/linux-v2-native-acceptance.sh` from the worktree; it
+classifies every call site, joining `\`-continuations first so the multi-line
+`find … | sort | head` call counts as a pipeline (a single `|`, not `||`). Output, verbatim:
+
+```text
+plain: 23
+  :1017, :1036, :1038, :1039, :1041, :1043, :1045, :1046, :1393, :1394, :1441, :1575, :1581, :1704, :1719, :1903, :1931, :1941, :1951, :2081, :2202, :2279, :3066
+condition: 8
+  :1018, :1021, :1395, :1398, :1442, :1576, :2082, :2203
+or-chain: 8
+  :1028, :1030, :1032, :1667, :1761, :1763, :1783, :1789
+substitution: 0
+pipeline: 1
+  :1754
+definitions: :980
+call sites total: 40
+```
+
+`probe-pi-pin.sh`, sha256
+`b8e51b575aed86ed8818e09b161f22cf45a7df10bf339955dd5e578b11350100`, root, WSL Ubuntu-24.04:
+
+```bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
+work=<scratch>/pi
+repo=<worktree>
+rm -rf "$work"
+mkdir -p "$work"
+source "$repo/scripts/ci/linux-v2-native-tools.sh"
+
+set +e
+linux_v2_fetch_pi "$work" > "$work/fetch.log" 2>&1
+fetch_rc=$?
+set -e
+echo "fetch rc=$fetch_rc"
+sed -n '1,20p' "$work/fetch.log"
+(( fetch_rc == 0 )) || exit 1
+
+tree="$work/pi-release/pi"
+echo "pins: archive=$pi_archive_sha executable=$pi_executable_sha tree=$pi_tree_sha version=$pi_version_line"
+echo "archive sha256:  $(sha256sum "$work/pi-linux-x64.tar.gz" | cut -d' ' -f1)"
+echo "executable sha256: $(sha256sum "$tree/pi" | cut -d' ' -f1)"
+echo "digest run 1: $(linux_v2_pi_tree_digest "$tree" sudo)"
+echo "digest run 2: $(linux_v2_pi_tree_digest "$tree" sudo)"
+echo "counts: dirs=$(sudo find "$tree" -mindepth 1 -type d | wc -l) files=$(sudo find "$tree" -mindepth 1 -type f | wc -l) links=$(sudo find "$tree" -mindepth 1 -type l | wc -l)"
+sudo stat -c 'root %U:%G %a' "$tree"
+sudo stat -c 'pi %U:%G %a' "$tree/pi"
+
+set +e
+linux_v2_pin_pi_tree "$tree" sudo
+pristine_rc=$?
+set -e
+echo "pin pristine rc=$pristine_rc"
+
+mutate_dir="$work/mutants"
+mkdir -p "$mutate_dir"
+cp -a "$tree" "$mutate_dir/content"
+printf 'x' >> "$mutate_dir/content/package.json"
+cp -a "$tree" "$mutate_dir/symlink"
+ln -s /etc/passwd "$mutate_dir/symlink/evil-link"
+cp -a "$tree" "$mutate_dir/removed"
+rm "$mutate_dir/removed/package.json"
+cp -a "$tree" "$mutate_dir/noexec"
+chmod 0644 "$mutate_dir/noexec/pi"
+cp -a "$tree" "$mutate_dir/chmod"
+chmod 0700 "$mutate_dir/chmod/package.json"
+cp -a "$tree" "$mutate_dir/mode-noncanonical"
+chmod 0640 "$mutate_dir/mode-noncanonical/package.json"
+cp -a "$tree" "$mutate_dir/chown"
+chown 1001:1001 "$mutate_dir/chown/package.json"
+
+for name in content symlink removed noexec chmod mode-noncanonical chown; do
+  copy="$mutate_dir/$name"
+  set +e
+  linux_v2_pin_pi_tree "$copy" sudo
+  rc=$?
+  set -e
+  echo "mutant $name: pin rc=$rc digest=$(linux_v2_pi_tree_digest "$copy" sudo)"
+done
+```

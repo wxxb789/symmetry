@@ -5038,3 +5038,20 @@ decision as open while this entry and the goal record carry the closure.
       `rf-acc-owner-loss-semantics`) — plus the frozen `shared` OpenCode leg and the credential-gated
       pi turns. The residual moved back to `docs/TODO.md` under
       `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`.
+
+## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
+
+Moved 2026-11-25 from branch `refactor/rf-acc-pi-durability-matrices` (PR #281, round-2 fix); the
+still-open residual stays in `docs/TODO.md` under the same heading.
+
+- [ ] The literal all-12 scratch run on the delivered bytes (2026-11-25, goal
+      `rf-acc-pi-durability-matrices`; DS-review ruling F02; evidence record §11.6/§12.6).
+      **Closed (2026-11-25)**: the round-1 delivered-bytes run `45516749453` executed the merged
+      code bytes (scratch head `6db50a7e`, all-equal sha256 table, artifact
+      `linux-v2-native-evidence-45516749453-1`, record §11.6), and the round-2 fixes' binding run
+      `45525645545` executed the round-2 final code bytes as the last code-affecting action
+      (scratch head `b19848895`, all-equal sha256 table, artifact
+      `linux-v2-native-evidence-45525645545-1`, record §12.6). Each scratch branch was deleted and
+      the deletion proven (`git ls-remote origin scratch/rf-acc-pi-durability-matrices` prints
+      nothing). The credentialed dispatch and the Q3(a) pi turn counts stay open in `docs/TODO.md`
+      under the heading above, as do the three carried follow-up goals.

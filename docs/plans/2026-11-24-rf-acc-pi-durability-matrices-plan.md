@@ -371,3 +371,26 @@ all-12 run `45516749453` executed the merged code bytes (scratch head `6db50a7e`
 table, evidence §11.6). Compose and contracts are green in the scratch CI, so the two required
 jobs the Sol/DS reviews found red are fixed on the merged bytes; the PR branch is not pushed by
 this stage (the conductor pushes).
+
+### 7d. Round-2 review fixes (2026-11-25, PR #281 Sol r2 + DS r2 + Sec r2)
+
+The conductor's round-2 ruling items 1-3, implemented and recorded in evidence §12: (1)
+`machine_run_as`'s unit name carries `BASHPID` like `machine_run`, closing the pipeline-subshell
+name-reuse class by construction — the one pipeline call site is
+`scripts/ci/linux-v2-native-acceptance.sh:1754`, the extracted-function probe is unique on the
+final bytes (14 units, 0 duplicates) and produces two duplicates on the BASHPID-removed mutant,
+and the census lists all 40 `machine_run_as` call forms (23 plain, 8 conditions, 8 `||` chains,
+0 substitutions, 1 pipeline); (2) `linux_v2_pin_pi_tree` moves the pi tree pin to fetch time
+(normalize in place, then the metadata-binding digest), so the Compose path — which bind-mounts
+the raw extraction — verifies the exposed tree again; the Compose fixture's own chmod lines are
+deleted (the pinned tree is already world-readable root:root 0755/0644, and a chmod after the pin
+would make the exposed tree differ from the verified one), and the negative probes refuse every
+tamper that survives normalization (content, symlink, removal, exec-class changes) while
+normalization erases mode/ownership drift into the pinned form; (3) the records are corrected
+(the elixir 1.19.6 reading, §11.6's run-A `:627` quote, §10.11's label, and the closed all-12
+`docs/TODO.md` entry moved to `docs/archive/CLOSED-TODO.md`). Item 4 is the literal all-12
+scratch run `45525645545` on the round-2 bytes (scratch head `b19848895`, parent `5ba0dd0b`), the
+last code-affecting action: the compose/contracts/record/citation support jobs are green, the
+twelve sets exit 1 with the expected per-set stops (ten pi manifests, the two out-of-scope
+export refusals), and the run head is all-EQ to the thirteen subject files (evidence §12.6). The
+PR branch is not pushed by this stage (the conductor pushes).
