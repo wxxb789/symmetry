@@ -234,6 +234,53 @@ func wireTestAppendOversizedRelease() func([]byte) []byte {
 	}
 }
 
+func TestWireLinuxCommandStringBoundary(t *testing.T) {
+	pipes := newScratchNativePipes(t)
+	guard, _ := newScratchReleaseGuard(t, time.Minute)
+	descriptors := [releaseFDCount]*os.File{pipes.stdinRead, pipes.stdoutWrite, pipes.stderrWrite, guard.OwnerPipe}
+	token := wireTestToken()
+	atCap := strings.Repeat("c", maxCommandString)
+	beyondCap := strings.Repeat("c", maxCommandString+1)
+	atCapCommand := NativeCommand{
+		Path: "/bin/true", Args: []string{"/bin/true", atCap}, Env: []string{"LANG=C"}, Dir: "/",
+		Stdin: pipes.stdinRead, Stdout: pipes.stdoutWrite, Stderr: pipes.stderrWrite,
+	}
+	beyondCapCommand := atCapCommand
+	beyondCapCommand.Args = []string{"/bin/true", beyondCap}
+
+	t.Run("validate accepts the exact cap and refuses the cap plus one", func(t *testing.T) {
+		if err := atCapCommand.Validate(); err != nil {
+			t.Fatalf("native command with a %d-byte argv element was refused: %v", maxCommandString, err)
+		}
+		if err := beyondCapCommand.Validate(); err == nil ||
+			!strings.Contains(err.Error(), "argv contains an empty, oversized, or NUL value") {
+			t.Fatalf("native command with a %d-byte argv element refusal = %v", maxCommandString+1, err)
+		}
+	})
+
+	t.Run("decode accepts the exact cap and refuses the cap plus one", func(t *testing.T) {
+		packet, err := EncodeRelease(token, atCapCommand, guard)
+		if err != nil {
+			t.Fatalf("encode the exact-cap RELEASE: %v", err)
+		}
+		decoded, _, err := DecodeRelease(packet, token, descriptors)
+		if err != nil {
+			t.Fatalf("decode the exact-cap RELEASE: %v", err)
+		}
+		if len(decoded.Args) != 2 || decoded.Args[1] != atCap {
+			t.Fatalf("exact-cap RELEASE round trip = %d args", len(decoded.Args))
+		}
+		beyondPacket, err := encodeGuardedRelease(token, beyondCapCommand, wireTestReleaseGoldenDeadlineNS)
+		if err != nil {
+			t.Fatalf("encode the cap-plus-one RELEASE body: %v", err)
+		}
+		if _, _, err := DecodeRelease(beyondPacket, token, descriptors); err == nil ||
+			!strings.Contains(err.Error(), "length-prefixed command string is oversized or truncated") {
+			t.Fatalf("decode the cap-plus-one RELEASE refusal = %v", err)
+		}
+	})
+}
+
 func TestWireLinuxReleaseRefusals(t *testing.T) {
 	pipes := newScratchNativePipes(t)
 	guard, _ := newScratchReleaseGuard(t, time.Minute)
