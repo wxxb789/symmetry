@@ -93,8 +93,19 @@ func TestNewHarnessRegistryBindsNativeAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lookup(opencode) error = %v", err)
 	}
-	if _, ok := openCodeAdapter.(*opencode.Adapter); !ok {
-		t.Fatalf("OpenCode adapter type = %T, want *opencode.Adapter", openCodeAdapter)
+	// The composition root registers the native OpenCode adapter only on Windows; every
+	// other platform keeps the byte-identical unavailable seam with no native probe I/O.
+	switch openCodeAdapter.(type) {
+	case *opencode.Adapter:
+		if runtime.GOOS != "windows" {
+			t.Fatalf("OpenCode adapter type = %T off windows, want the unavailable seam", openCodeAdapter)
+		}
+	case *harness.UnavailableAdapter:
+		if runtime.GOOS == "windows" {
+			t.Fatalf("OpenCode adapter type = %T on windows, want the composed native adapter", openCodeAdapter)
+		}
+	default:
+		t.Fatalf("OpenCode adapter type = %T, want a composed adapter", openCodeAdapter)
 	}
 }
 
@@ -596,6 +607,34 @@ func TestStartupProbeRejectsUnexpectedJoinedProbeError(t *testing.T) {
 	}
 }
 
+type expiredOpenCodeProbeRunner struct{}
+
+func (expiredOpenCodeProbeRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, context.DeadlineExceeded
+}
+
+// A canceled or expired OpenCode probe is tolerated as an unavailable projection instead
+// of aborting daemon startup on a raw context error.
+func TestStartupProbeToleratesAnExpiredOpenCodeProbe(t *testing.T) {
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+	value.Runtime.HarnessVersion = opencode.TestedVersion
+	value.Runtime.AdapterVersion = "configured-adapter"
+	value.Runtime.AdapterProtocolVersion = 1
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner("opencode-fixture", expiredOpenCodeProbeRunner{})); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: value, harnessRegistry: registry}
+	if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+		t.Fatalf("ensureHarnessProbe() error = %v, want the tolerated unavailable projection", err)
+	}
+	capabilities := daemon.harnessCapabilities
+	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume {
+		t.Fatalf("capabilities = %+v, want the fail-closed projection after an expired probe", capabilities)
+	}
+}
+
 func TestStartupProbeRejectsMismatchedKnownNativeVersion(t *testing.T) {
 	value := testConfig(t)
 	value.Runtime.HarnessKind = config.RuntimeHarnessCodex
@@ -982,8 +1021,17 @@ func TestComposedOpenCodeProbeStaysFailClosedThroughTheRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := adapter.(*opencode.Adapter); !ok {
-		t.Fatalf("OpenCode adapter = %T, want the composed native adapter", adapter)
+	switch adapter.(type) {
+	case *opencode.Adapter:
+		if runtime.GOOS != "windows" {
+			t.Fatalf("OpenCode adapter = %T off windows, want the unavailable seam", adapter)
+		}
+	case *harness.UnavailableAdapter:
+		if runtime.GOOS == "windows" {
+			t.Fatalf("OpenCode adapter = %T on windows, want the composed native adapter", adapter)
+		}
+	default:
+		t.Fatalf("OpenCode adapter = %T, want a composed adapter", adapter)
 	}
 	registration, _, err := buildRuntimeRegistration(daemon.config.Runtime, daemon.config.AgentProfiles[daemon.config.Runtime.AgentProfile], capabilities)
 	if err != nil {
@@ -996,15 +1044,11 @@ func TestComposedOpenCodeProbeStaysFailClosedThroughTheRegistry(t *testing.T) {
 }
 
 // openCodePromotedAdapterVersion is the implementation identity a promoted OpenCode runtime
-// selects through adapter_version. It is the cross-package contract string the harness
-// projection reports, so the daemon test pins it literally.
+// selects through adapter_version; the daemon test pins the contract string literally.
 const openCodePromotedAdapterVersion = "opencode-http-v2"
 
-// TestComposedOpenCodeProbePromotesOnlyTheTestedBlobOnWindows pins the daemon-level
-// projection: the composed OpenCode adapter reaches the promotion gate, the probed version
-// and implementation identity become the registration metadata, and only start/events/cancel
-// are advertised. Windows is the platform the 2.4.1 exact-blob evidence covers, so the
-// promotion branch is asserted there and the fail-closed branch on every other platform.
+// TestComposedOpenCodeProbePromotesOnlyTheTestedBlobOnWindows pins the daemon-level projection:
+// only start/events/cancel are advertised, promoted on Windows and fail-closed elsewhere.
 func TestComposedOpenCodeProbePromotesOnlyTheTestedBlobOnWindows(t *testing.T) {
 	for _, test := range []struct {
 		name   string

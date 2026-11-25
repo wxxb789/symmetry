@@ -1042,12 +1042,12 @@ jobs:
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/pi \
               TestProviderBridgeCloseReleasesBoundPeerFD \
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
-              TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest \
-              TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest/mismatched_retained_pidfd \
-              TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest/closed_retained_pidfd \
+              TestOpenCodeReadinessRejectsWrongLinuxV2PeerBindingsBeforeRequest \
+              TestOpenCodeReadinessRejectsWrongLinuxV2PeerBindingsBeforeRequest/mismatched_retained_pidfd \
+              TestOpenCodeReadinessRejectsWrongLinuxV2PeerBindingsBeforeRequest/closed_retained_pidfd \
               TestOpenCodeV2VerifierRejectsReleasedPeer \
               TestOpenCodePeerCloseWaitsForActiveVerification \
-              TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest \
+              TestOpenCodeAdapterWithoutV2OwnerFailsBeforeReadinessRequest \
             -- "$(command -v go)" test -count=1 -timeout 300s -json \
               ./internal/harness/pi ./internal/harness/opencode
       # `-json` is what feeds the duration summary below; without it no per-test elapsed time reaches the log.
@@ -1122,7 +1122,7 @@ jobs:
             printf 'version_actual=%s\n' "$actual_version"
             printf 'executable=%s\n' "$executable"
           } >> "$provenance"
-      - name: Require Linux legacy OpenCode refusal before health request
+      - name: Require Linux legacy OpenCode refusal before readiness request
         id: opencode_native_refusal
         if: always()
         working-directory: daemon
@@ -1137,10 +1137,10 @@ jobs:
             --exit-status-key e2e_exit_status \
             --gate-status-key gate_status \
             --assert github.com/wxxb789/symmetry/daemon/internal/harness/opencode \
-              TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest \
+              TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest \
             -- "$(command -v go)" test -count=1 -timeout 180s -json \
               ./internal/harness/opencode \
-              -run '^TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest$'
+              -run '^TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest$'
       - name: Upload OpenCode synthetic provenance
         id: opencode_native_upload
         if: always()

@@ -2974,8 +2974,8 @@ case "$fixture_case_set" in
     # Legacy Linux owners must fail before effects; installed-v2 positives run separately below.
     run_go_test "$pi_legacy_refusal_events" ./internal/harness/pi '^TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction$' \
       pi-baseline '' '' '' -- TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction
-    run_go_test "$opencode_legacy_refusal_events" ./internal/harness/opencode '^TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest$' \
-      opencode-baseline '' '' '' -- TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest
+    run_go_test "$opencode_legacy_refusal_events" ./internal/harness/opencode '^TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest$' \
+      opencode-baseline '' '' '' -- TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest
     run_go_test "$v2_b_cleanup_denial_events" ./cmd/symmetry-linux-launcher \
       '^TestInstalledLinuxOwnerCleanupRejectsBCallerScratch$' cleanup-root \
       '' '' '' -- TestInstalledLinuxOwnerCleanupRejectsBCallerScratch

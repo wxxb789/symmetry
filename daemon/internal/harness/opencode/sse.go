@@ -200,12 +200,9 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 	if err != nil {
 		return DecodedSessionEvent{}, err
 	}
-	sessionID, ok := requiredString(data, "sessionID")
-	if !ok || !isID(sessionID, "ses_") {
-		return DecodedSessionEvent{}, fmt.Errorf("%w: event sessionID", ErrMalformedEvent)
-	}
-	if event.Durable.AggregateID != sessionID {
-		return DecodedSessionEvent{}, fmt.Errorf("%w: durable aggregate %q, data session %q", ErrIdentityMismatch, event.Durable.AggregateID, sessionID)
+	sessionID, err := durableSessionIdentity(event, data)
+	if err != nil {
+		return DecodedSessionEvent{}, err
 	}
 
 	decoded := DecodedSessionEvent{Event: event, Kind: SessionEventUnknown, SessionID: sessionID}
@@ -280,12 +277,48 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 	return decoded, nil
 }
 
+// durableSessionIdentity binds one durable session event to the session its own
+// data and cursor name, so both the strict decoder and the global-stream filter
+// refuse an event whose identity fields disagree.
+func durableSessionIdentity(event Event, data map[string]json.RawMessage) (string, error) {
+	sessionID, ok := requiredString(data, "sessionID")
+	if !ok || !isID(sessionID, "ses_") {
+		return "", fmt.Errorf("%w: event sessionID", ErrMalformedEvent)
+	}
+	if event.Durable.AggregateID != sessionID {
+		return "", fmt.Errorf("%w: durable aggregate %q, data session %q", ErrIdentityMismatch, event.Durable.AggregateID, sessionID)
+	}
+	return sessionID, nil
+}
+
+// GlobalFrameSessionID reports the durable session identity one global
+// /api/event frame carries. Frames that are not session events report ok=false
+// so a watcher on the shared stream can skip them without failing its session.
+func GlobalFrameSessionID(frame Frame) (string, bool, error) {
+	event, object, err := decodeEvent(frame)
+	if err != nil {
+		return "", false, err
+	}
+	if event.Durable == nil || !strings.HasPrefix(event.Type, "session.") {
+		return "", false, nil
+	}
+	data, err := strictEventObject(object["data"])
+	if err != nil {
+		return "", false, err
+	}
+	sessionID, err := durableSessionIdentity(event, data)
+	if err != nil {
+		return "", false, err
+	}
+	return sessionID, true, nil
+}
+
 func decodeEvent(frame Frame) (Event, map[string]json.RawMessage, error) {
 	object, err := strictObject(frame.Data)
 	if err != nil {
 		return Event{}, nil, fmt.Errorf("%w: %v", ErrMalformedEvent, err)
 	}
-	if err := rejectUnknownFields(object, "id", "type", "data", "durable", "location", "metadata"); err != nil {
+	if err := rejectUnknownFields(object, "id", "type", "created", "data", "durable", "location", "metadata"); err != nil {
 		return Event{}, nil, err
 	}
 	event := Event{}
@@ -331,6 +364,12 @@ func decodeEvent(frame Frame) (Event, map[string]json.RawMessage, error) {
 			return Event{}, nil, err
 		}
 		event.Durable = &durable
+	}
+	if raw, exists := object["created"]; exists {
+		var created int64
+		if json.Unmarshal(raw, &created) != nil || created <= 0 {
+			return Event{}, nil, fmt.Errorf("%w: created timestamp", ErrMalformedEvent)
+		}
 	}
 	event.Data = append(json.RawMessage(nil), object["data"]...)
 	return event, object, nil
@@ -1168,9 +1207,8 @@ func isJSONObject(raw json.RawMessage) bool {
 	return err == nil
 }
 
-// SessionEventValidator binds replay events to one retained OpenCode session
-// and makes duplicate, stale, or cross-session events terminal transport
-// failures. It is deliberately not concurrent-safe.
+// SessionEventValidator binds durable session events to one retained OpenCode session;
+// duplicate, stale or cross-session events are terminal transport failures.
 type SessionEventValidator struct {
 	sessionID string
 	after     uint64

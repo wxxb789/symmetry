@@ -109,6 +109,38 @@ func TestEventDecodersFailClosed(t *testing.T) {
 	}
 }
 
+func TestGlobalFrameSessionIDFiltersAndFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		input   string
+		wantID  string
+		wantOK  bool
+		wantErr error
+	}{
+		{name: "2.4.1 non-session global event", input: `{"id":"evt_1","type":"integration.updated","created":1795614933128,"location":{"directory":"Q:\\repo"},"data":{}}`, wantOK: false},
+		{name: "server connected", input: `{"id":"evt_1","type":"server.connected","data":{}}`, wantOK: false},
+		{name: "session event", input: `{"id":"evt_2","type":"session.step.started","created":1,"durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantID: "ses_capture", wantOK: true},
+		{name: "foreign session event", input: `{"id":"evt_3","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_other"}}`, wantID: "ses_other", wantOK: true},
+		{name: "durable non-session event", input: `{"id":"evt_4","type":"project.updated","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantOK: false},
+		{name: "session frame without durable", input: `{"id":"evt_5","type":"session.step.started","data":{"sessionID":"ses_capture"}}`, wantOK: false},
+		{name: "identity mismatch", input: `{"id":"evt_6","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantErr: ErrIdentityMismatch},
+		{name: "missing session id", input: `{"id":"evt_7","type":"session.step.started","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{}}`, wantErr: ErrMalformedEvent},
+		{name: "invalid created", input: `{"id":"evt_8","type":"integration.updated","created":0,"data":{}}`, wantErr: ErrMalformedEvent},
+		{name: "unknown envelope field", input: `{"id":"evt_9","type":"session.step.started","extra":true,"durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantErr: ErrMalformedEvent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frames, err := NewDecoder(1024).Feed([]byte("data: " + test.input + "\n\n"))
+			if err != nil || len(frames) != 1 {
+				t.Fatalf("Feed() = %#v, %v", frames, err)
+			}
+			sessionID, ok, err := GlobalFrameSessionID(frames[0])
+			if !errors.Is(err, test.wantErr) || ok != test.wantOK || sessionID != test.wantID {
+				t.Fatalf("GlobalFrameSessionID() = %q, %t, %v; want %q, %t, %v", sessionID, ok, err, test.wantID, test.wantOK, test.wantErr)
+			}
+		})
+	}
+}
+
 func TestSessionEventValidatorBindsIdentityAndStrictCursor(t *testing.T) {
 	validator, err := NewSessionEventValidator("ses_native_1", 0)
 	if err != nil {

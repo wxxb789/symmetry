@@ -98,7 +98,7 @@ func (listener openCodePeerObservedListener) Accept() (net.Conn, error) {
 // production owner acceptance.
 func TestOpenCodeKernelPeerServerProcess(t *testing.T) {
 	if os.Getenv(openCodePeerServerEnv) != "1" {
-		t.Skip("child mode only: the parent OpenCode peer tests (TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest, TestOpenCodeQualifiedStartNamespacePeerDenials, TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP, TestOpenCodeV2VerifierRejectsReleasedPeer, TestOpenCodePeerCloseWaitsForActiveVerification) spawn this binary through startOpenCodeKernelPeerServer with " + openCodePeerServerEnv + "=1")
+		t.Skip("child mode only: the parent OpenCode peer tests (TestOpenCodeReadinessRejectsWrongLinuxV2PeerBindingsBeforeRequest, TestOpenCodeQualifiedStartNamespacePeerDenials, TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP, TestOpenCodeV2VerifierRejectsReleasedPeer, TestOpenCodePeerCloseWaitsForActiveVerification) spawn this binary through startOpenCodeKernelPeerServer with " + openCodePeerServerEnv + "=1")
 	}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -270,7 +270,7 @@ func (process *openCodeKernelPeerProcess) terminate() {
 	})
 }
 
-func TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest(t *testing.T) {
+func TestOpenCodeReadinessRejectsWrongLinuxV2PeerBindingsBeforeRequest(t *testing.T) {
 	process, peer, output, endpoint := startOpenCodeKernelPeerServer(t)
 	_, wrongProcessPeer, _, _ := startOpenCodeKernelPeerServer(t)
 	if wrongProcessPeer.PID <= 0 || wrongProcessPeer.PID == peer.PID || wrongProcessPeer.Identity == peer.Identity {
@@ -312,12 +312,12 @@ func TestOpenCodeHealthRejectsWrongLinuxV2PeerBindingsBeforeRequest(t *testing.T
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			err = client.Health(ctx)
+			err = client.Readiness(ctx, test.peer.PID)
 			if !errors.Is(err, ErrPeerOwnership) {
-				t.Fatalf("Health() error = %v, want peer ownership rejection", err)
+				t.Fatalf("Readiness() error = %v, want peer ownership rejection", err)
 			}
 			if test.wantPIDFDMismatchError && !errors.Is(err, platform.ErrLinuxPeerPIDFDMismatch) {
-				t.Fatalf("Health() error = %v, want typed retained PIDFD/process mismatch", err)
+				t.Fatalf("Readiness() error = %v, want typed retained PIDFD/process mismatch", err)
 			}
 			client.httpClient.CloseIdleConnections()
 		})
@@ -365,8 +365,8 @@ func TestOpenCodeQualifiedStartNamespacePeerDenials(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := client.Health(ctx); !errors.Is(err, ErrPeerOwnership) {
-				t.Fatalf("Health() error = %v, want peer ownership rejection", err)
+			if err := client.Readiness(ctx, test.peer.PID); !errors.Is(err, ErrPeerOwnership) {
+				t.Fatalf("Readiness() error = %v, want peer ownership rejection", err)
 			}
 			client.httpClient.CloseIdleConnections()
 		})
@@ -396,11 +396,11 @@ func TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err = client.Health(ctx)
+	err = client.Readiness(ctx, peerClone.PID)
 	client.httpClient.CloseIdleConnections()
 	permissionDenied := errors.Is(err, unix.EPERM) || errors.Is(err, unix.EACCES)
 	if !errors.Is(err, ErrPeerOwnership) || !permissionDenied {
-		t.Fatalf("Health() error = %v, want fail-closed peer ownership with kernel permission denial", err)
+		t.Fatalf("Readiness() error = %v, want fail-closed peer ownership with kernel permission denial", err)
 	}
 	ownedPIDFD, sourcePIDFD := peerClone.PIDFD, peer.PIDFD
 	if closeErr := owner.Close(); closeErr != nil {
@@ -424,7 +424,7 @@ func TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP(t *testing.T) {
 	}
 }
 
-func TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest(t *testing.T) {
+func TestOpenCodeAdapterWithoutV2OwnerFailsBeforeReadinessRequest(t *testing.T) {
 	requests := make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		requests <- struct{}{}
@@ -456,7 +456,7 @@ func TestOpenCodeAdapterWithoutV2OwnerFailsBeforeHealthRequest(t *testing.T) {
 	}
 	select {
 	case <-requests:
-		t.Fatal("OpenCode health request bytes reached the server without a v2 process owner")
+		t.Fatal("OpenCode readiness request bytes reached the server without a v2 process owner")
 	default:
 	}
 }

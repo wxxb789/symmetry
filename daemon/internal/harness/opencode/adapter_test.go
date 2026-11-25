@@ -108,9 +108,9 @@ func TestProbeRejectsWrongBlobDigest(t *testing.T) {
 	}
 }
 
-// The pinned 2.4.1 bytes print the bare readiness line; the prefixed 1.18.x spelling stays
-// accepted for the frozen fixtures. Both forms must bind the loopback port.
-func TestReadinessAcceptsBothRecordedListeningLines(t *testing.T) {
+// The pinned 2.4.1 bytes print the bare readiness line; the prefixed spelling exists only
+// in the frozen synthetic fixtures. Both forms must bind the loopback port.
+func TestReadinessAcceptsTheRecordedLineAndTheFrozenFixturePrefix(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		line string
@@ -211,13 +211,13 @@ func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
 	}
 }
 
-// A cancelled or expired probe must keep the seeded projection so a caller sees the
-// real cause instead of an empty capability map (record section 8).
+// A cancelled or expired probe must keep the seeded projection and stay inside the
+// tolerated ErrHarnessUnavailable class, so a slow probe cannot abort daemon startup.
 func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T) {
 	for _, test := range []struct {
 		name                  string
 		newAdapter            func(cancel context.CancelFunc) *Adapter
-		want                  error
+		wantMessage           string
 		wantVersionKnown      bool
 		wantTransportVerified bool
 	}{
@@ -228,7 +228,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 					"--version": fmt.Errorf("fixture probe: %w", context.DeadlineExceeded),
 				}})
 			},
-			want: context.DeadlineExceeded,
+			wantMessage: "context deadline exceeded",
 		},
 		{
 			name: "help probe cancellation",
@@ -238,7 +238,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 					errors:    map[string]error{"serve --help": fmt.Errorf("fixture probe: %w", context.Canceled)},
 				})
 			},
-			want:             context.Canceled,
+			wantMessage:      "context canceled",
 			wantVersionKnown: true,
 		},
 		{
@@ -249,7 +249,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 					cancel:               cancel,
 				})
 			},
-			want:                  context.Canceled,
+			wantMessage:           "context canceled",
 			wantVersionKnown:      true,
 			wantTransportVerified: true,
 		},
@@ -258,8 +258,8 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			capabilities, err := test.newAdapter(cancel).Probe(ctx)
-			if !errors.Is(err, test.want) {
-				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			if !errors.Is(err, harness.ErrHarnessUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("Probe() error = %v, want the tolerated unavailable class with %q", err, test.wantMessage)
 			}
 			if err := capabilities.Validate(); err != nil {
 				t.Fatalf("cancelled probe returned an invalid projection: %v", err)
@@ -426,8 +426,8 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	}
 	staged := session.(harness.StagedSession)
 	handle, err := staged.Open(context.Background())
-	if err != nil || !isID(handle.ID, "ses_") || api.healthCalls != 1 || api.createCalls != 1 {
-		t.Fatalf("Open() = %+v, %v; health=%d create=%d", handle, err, api.healthCalls, api.createCalls)
+	if err != nil || !isID(handle.ID, "ses_") || api.readinessCalls != 1 || api.createCalls != 1 {
+		t.Fatalf("Open() = %+v, %v; readiness=%d create=%d", handle, err, api.readinessCalls, api.createCalls)
 	}
 	turn := harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{"key":"value"}`)}
 	if err := staged.StartTurn(context.Background(), turn); err != nil {
@@ -456,56 +456,31 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	}
 }
 
-func TestStartTurnAdmitsPromptBeforeOpeningDurableReplay(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnOpensTheGlobalStreamBeforeAdmission(t *testing.T) {
 	stream := newBlockingReadCloser()
 	api := &fakeAPI{stream: stream}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	if prompt := api.lastPromptRequest(); !prompt.Resume {
 		t.Fatalf("StartTurn() prompt = %+v, want explicit Resume:true work request", prompt)
 	}
-	if got, want := api.callOrder(), []string{"prompt", "events"}; !reflect.DeepEqual(got, want) {
+	if got, want := api.callOrder(), []string{"events", "prompt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("call order = %#v, want %#v", got, want)
 	}
-	if after := api.eventCursors(); len(after) != 1 || after[0] != 0 {
-		t.Fatalf("event cursors = %#v, want [0]", after)
-	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnKeepsDurableReplayOwnedBySession(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnKeepsTheGlobalStreamOwnedBySession(t *testing.T) {
 	var stream *contextBlockingReadCloser
-	api := &fakeAPI{streamFactory: func(ctx context.Context, _ string, _ uint64) io.ReadCloser {
+	api := &fakeAPI{streamFactory: func(ctx context.Context) io.ReadCloser {
 		stream = newContextBlockingReadCloser(ctx)
 		return stream
 	}}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	defer cancelCaller()
 	if err := staged.StartTurn(callerContext, harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
@@ -519,26 +494,15 @@ func TestStartTurnKeepsDurableReplayOwnedBySession(t *testing.T) {
 	if stream.contextCancelled() {
 		t.Fatal("caller turn context cancelled the session-owned durable replay stream")
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
 func TestStartTurnCancelsInFlightPromptWhenCallerCancels(t *testing.T) {
-	process := newFakeProcess()
 	promptStarted := make(chan struct{})
 	api := &fakeAPI{promptStarted: promptStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	turnDone := make(chan error, 1)
 	go func() {
@@ -549,28 +513,17 @@ func TestStartTurnCancelsInFlightPromptWhenCallerCancels(t *testing.T) {
 	if err := <-turnDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("StartTurn() error = %v, want caller cancellation", err)
 	}
-	if api.openEventCalls != 0 || process.terminateCalls != 1 {
-		t.Fatalf("events=%d terminate=%d, want no replay and one cleanup", api.openEventCalls, process.terminateCalls)
+	if api.openEventCalls != 1 || api.promptCalls != 1 || process.terminateCalls != 1 {
+		t.Fatalf("events=%d prompt=%d terminate=%d, want one stream open, one admission attempt and one cleanup", api.openEventCalls, api.promptCalls, process.terminateCalls)
 	}
 }
 
-func TestStartTurnKeepsReplayOpenWhenCallerCancelsAfterAdmission(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnKeepsTheGlobalStreamOpenWhenCallerCancels(t *testing.T) {
 	openStarted := make(chan struct{})
 	openRelease := make(chan struct{})
 	stream := newBlockingReadCloser()
 	api := &fakeAPI{stream: stream, openEventStarted: openStarted, openEventRelease: openRelease}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	defer cancelCaller()
 	turnDone := make(chan error, 1)
@@ -580,32 +533,21 @@ func TestStartTurnKeepsReplayOpenWhenCallerCancelsAfterAdmission(t *testing.T) {
 	<-openStarted
 	cancelCaller()
 	if api.openEventContextCancelled() {
-		t.Fatal("caller cancellation interrupted durable replay opening after admission")
+		t.Fatal("caller cancellation interrupted global stream opening")
 	}
 	close(openRelease)
-	if err := <-turnDone; err != nil {
-		t.Fatalf("StartTurn() error = %v", err)
+	if err := <-turnDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartTurn() error = %v, want caller cancellation after the stream opened", err)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnObservesPromptAdmissionFromDurableReplay(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnObservesPromptAdmissionFromTheGlobalStream(t *testing.T) {
 	api := &fakeAPI{replayPromptAdmission: true}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
 	sink := &recordingSink{expectedCode: "opencode_session_event", expectedCodeSeen: make(chan struct{})}
-	session, err := adapter.Start(context.Background(), startRequest(t), sink)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, sink)
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
@@ -613,71 +555,74 @@ func TestStartTurnObservesPromptAdmissionFromDurableReplay(t *testing.T) {
 	if !sink.hasCode("opencode_session_event") {
 		t.Fatalf("events = %+v, want replayed prompt admission native frame", sink.events)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnClosesCommittedPromptWhenReplayCannotOpen(t *testing.T) {
-	process := newFakeProcess()
-	openErr := errors.New("durable replay unavailable")
-	api := &fakeAPI{openEventErr: openErr}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+// The shared global stream carries other sessions' events; the watcher must skip them and
+// keep observing this session's own durable frames instead of failing the turn.
+func TestStartTurnSkipsForeignSessionFramesOnTheGlobalStream(t *testing.T) {
+	api := &fakeAPI{}
+	sink := &recordingSink{expectedCode: "opencode_unknown_session_event", expectedCodeSeen: make(chan struct{})}
+	staged, _ := startStagedTestSession(t, api, sink)
+	api.mu.Lock()
+	api.streamFactory = func(context.Context) io.ReadCloser { return &foreignFirstGlobalStream{api: api} }
+	api.mu.Unlock()
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
 	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
+	select {
+	case <-sink.expectedCodeSeen:
+	case <-time.After(testHangGuard):
+		t.Fatalf("foreign frames suppressed this session's own event: %+v", sink.events)
 	}
-	first := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
-	if !errors.Is(first, openErr) {
-		t.Fatalf("StartTurn() error = %v, want durable replay failure", first)
+	if !sink.hasCode("opencode_unknown_session_event") {
+		t.Fatalf("events = %+v, want this session's unknown frame after the foreign frame", sink.events)
 	}
-	second := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "again", Context: json.RawMessage(`{}`)})
-	if !errors.Is(second, openErr) || api.promptCalls != 1 || process.terminateCalls != 1 {
-		t.Fatalf("second StartTurn() error = %v promptCalls=%d terminate=%d; want sticky replay failure and one cleanup", second, api.promptCalls, process.terminateCalls)
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestCloseCancelsInFlightDurableReplayOpenAfterPromptAdmission(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnFailsClosedWhenTheGlobalStreamCannotOpen(t *testing.T) {
+	openErr := errors.New("global event stream unavailable")
+	api := &fakeAPI{openEventErr: openErr}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
+	first := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	if !errors.Is(first, openErr) {
+		t.Fatalf("StartTurn() error = %v, want global stream failure", first)
+	}
+	second := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "again", Context: json.RawMessage(`{}`)})
+	if !errors.Is(second, openErr) || api.promptCalls != 0 || process.terminateCalls != 1 {
+		t.Fatalf("second StartTurn() error = %v promptCalls=%d terminate=%d; want sticky stream failure before admission and one cleanup", second, api.promptCalls, process.terminateCalls)
+	}
+}
+
+func TestCloseCancelsInFlightGlobalStreamOpen(t *testing.T) {
 	openStarted := make(chan struct{})
 	api := &fakeAPI{openEventStarted: openStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	turnDone := make(chan error, 1)
 	go func() {
 		turnDone <- staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
 	}()
 	<-openStarted
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := <-turnDone; err == nil || api.promptCalls != 1 || process.terminateCalls != 1 {
-		t.Fatalf("StartTurn() error = %v promptCalls=%d terminate=%d; want cancelled committed turn cleanup", err, api.promptCalls, process.terminateCalls)
+	if err := <-turnDone; err == nil || api.promptCalls != 0 || process.terminateCalls != 1 {
+		t.Fatalf("StartTurn() error = %v promptCalls=%d terminate=%d; want cancelled stream-open cleanup", err, api.promptCalls, process.terminateCalls)
 	}
 }
 
 func TestOpenFailureClosesAndBecomesSticky(t *testing.T) {
 	process := newFakeProcess()
-	api := &fakeAPI{healthErr: errors.New("not listening")}
+	api := &fakeAPI{readinessErr: errors.New("not listening")}
 	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
 		return process, nil
 	}, api)
-	adapter.healthRetryWait = time.Millisecond
+	adapter.readinessRetryWait = time.Millisecond
 	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -694,9 +639,9 @@ func TestOpenFailureClosesAndBecomesSticky(t *testing.T) {
 	}
 }
 
-func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
+func TestOpenPeerOwnershipFailureDoesNotRetryReadiness(t *testing.T) {
 	process := newFakeProcess()
-	api := &fakeAPI{healthErr: fmt.Errorf("verify socket: %w", ErrPeerOwnership)}
+	api := &fakeAPI{readinessErr: fmt.Errorf("verify socket: %w", ErrPeerOwnership)}
 	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
 		return process, nil
 	}, api)
@@ -708,42 +653,56 @@ func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	_, err = session.(harness.StagedSession).Open(ctx)
-	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.healthCalls != 1 || api.createCalls != 0 {
-		t.Fatalf("Open() = %v; context=%v health=%d create=%d", err, ctx.Err(), api.healthCalls, api.createCalls)
+	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.readinessCalls != 1 || api.createCalls != 0 {
+		t.Fatalf("Open() = %v; context=%v readiness=%d create=%d", err, ctx.Err(), api.readinessCalls, api.createCalls)
 	}
 	if process.terminateCalls != 1 {
 		t.Fatalf("ownership rejection terminated process %d times, want 1", process.terminateCalls)
 	}
 }
 
-func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
+// A readiness identity that does not name the launched server process must fail the
+// session before any session-create request is issued.
+func TestOpenRejectsReadinessIdentityMismatchBeforeSessionCreate(t *testing.T) {
 	process := newFakeProcess()
+	api := &fakeAPI{readinessPID: 456}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	adapter.readinessRetryWait = time.Millisecond
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(context.Background())
+	openContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancel()
+	_, err = session.(harness.StagedSession).Open(openContext)
+	if !errors.Is(err, ErrInvalidIdentity) || api.readinessCalls != 1 || api.createCalls != 0 {
+		t.Fatalf("Open() = %v; readiness=%d create=%d, want the identity refusal before session create", err, api.readinessCalls, api.createCalls)
+	}
+	if process.terminateCalls != 1 {
+		t.Fatalf("identity rejection terminated process %d times, want 1", process.terminateCalls)
+	}
+}
+
+func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
 	stream := newBlockingReadCloser()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	api := &fakeAPI{stream: stream, interruptStarted: started, interruptRelease: release}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	controlDone := make(chan error, 1)
 	go func() {
-		_, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "cmd_1", Kind: harness.ControlCancel})
+		_, err := staged.Control(context.Background(), harness.ControlRequest{CommandID: "cmd_1", Kind: harness.ControlCancel})
 		controlDone <- err
 	}()
 	<-started
 	closeDone := make(chan error, 1)
-	go func() { closeDone <- session.Close(context.Background()) }()
+	go func() { closeDone <- staged.Close(context.Background()) }()
 	close(release)
 	if err := <-controlDone; err != nil {
 		t.Fatalf("Control() error = %v", err)
@@ -757,27 +716,16 @@ func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
 }
 
 func TestCloseCancelsInFlightPromptAndPreventsSecondAdmission(t *testing.T) {
-	process := newFakeProcess()
 	stream := newBlockingReadCloser()
 	promptStarted := make(chan struct{})
 	api := &fakeAPI{stream: stream, promptStarted: promptStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	turnDone := make(chan error, 1)
 	go func() {
 		turnDone <- staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
 	}()
 	<-promptStarted
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if err := <-turnDone; err == nil {
@@ -1022,14 +970,14 @@ func (runner errorCommandRunner) Run(_ context.Context, _ string, args ...string
 
 type fakeAPI struct {
 	mu                    sync.Mutex
-	healthCalls           int
+	readinessCalls        int
 	createCalls           int
 	promptCalls           int
 	openEventCalls        int
 	interruptCalls        int
 	callSequence          []string
-	eventAfter            []uint64
-	healthErr             error
+	readinessPID          int
+	readinessErr          error
 	createErr             error
 	promptErr             error
 	promptStarted         chan struct{}
@@ -1041,18 +989,21 @@ type fakeAPI struct {
 	openEventStarted      chan struct{}
 	openEventRelease      <-chan struct{}
 	openEventContext      context.Context
-	streamFactory         func(context.Context, string, uint64) io.ReadCloser
+	streamFactory         func(context.Context) io.ReadCloser
 	interruptErr          error
 	stream                io.ReadCloser
 	interruptStarted      chan struct{}
 	interruptRelease      <-chan struct{}
 }
 
-func (api *fakeAPI) Health(context.Context) error {
+func (api *fakeAPI) Readiness(_ context.Context, serverPID int) error {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	api.healthCalls++
-	return api.healthErr
+	api.readinessCalls++
+	if api.readinessPID != 0 && api.readinessPID != serverPID {
+		return fmt.Errorf("%w: fixture pid %d, server pid %d", ErrInvalidIdentity, api.readinessPID, serverPID)
+	}
+	return api.readinessErr
 }
 
 func (api *fakeAPI) CreateSession(_ context.Context, request CreateSessionRequest) (SessionInfo, error) {
@@ -1066,6 +1017,9 @@ func (api *fakeAPI) CreateSession(_ context.Context, request CreateSessionReques
 }
 
 func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request PromptRequest) (PromptAdmission, error) {
+	if err := ctx.Err(); err != nil {
+		return PromptAdmission{}, err
+	}
 	api.mu.Lock()
 	api.promptCalls++
 	api.callSequence = append(api.callSequence, "prompt")
@@ -1091,7 +1045,7 @@ func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request Prompt
 	api.lastPrompt = request
 	api.lastPromptSession = sessionID
 	api.mu.Unlock()
-	return PromptAdmission{AdmittedSeq: 1, ID: request.ID, SessionID: sessionID, Text: request.Text, Delivery: request.Delivery, TimeCreated: 1}, nil
+	return PromptAdmission{ID: request.ID, SessionID: sessionID, Text: request.Text, Delivery: request.Delivery, TimeCreated: 1}, nil
 }
 
 func (api *fakeAPI) Interrupt(context.Context, string) error {
@@ -1108,14 +1062,13 @@ func (api *fakeAPI) Interrupt(context.Context, string) error {
 	return err
 }
 
-func (api *fakeAPI) OpenSessionEvents(ctx context.Context, sessionID string, after uint64) (io.ReadCloser, error) {
+func (api *fakeAPI) OpenGlobalEvents(ctx context.Context) (io.ReadCloser, error) {
 	api.mu.Lock()
 	api.openEventCalls++
 	api.callSequence = append(api.callSequence, "events")
-	api.eventAfter = append(api.eventAfter, after)
 	started, release, err := api.openEventStarted, api.openEventRelease, api.openEventErr
 	stream, streamFactory := api.stream, api.streamFactory
-	replayPromptAdmission, prompt, promptSession := api.replayPromptAdmission, api.lastPrompt, api.lastPromptSession
+	replayPromptAdmission := api.replayPromptAdmission
 	api.openEventContext = ctx
 	api.mu.Unlock()
 	if started != nil {
@@ -1135,13 +1088,10 @@ func (api *fakeAPI) OpenSessionEvents(ctx context.Context, sessionID string, aft
 		return nil, err
 	}
 	if streamFactory != nil {
-		return streamFactory(ctx, sessionID, after), nil
+		return streamFactory(ctx), nil
 	}
 	if replayPromptAdmission {
-		if promptSession != sessionID {
-			return nil, ErrIdentityMismatch
-		}
-		return promptAdmissionReplayStream(sessionID, prompt), nil
+		return &lazyPromptAdmissionReplayStream{api: api}, nil
 	}
 	if stream == nil {
 		return io.NopCloser(strings.NewReader("")), nil
@@ -1167,10 +1117,56 @@ func (api *fakeAPI) callOrder() []string {
 	return append([]string(nil), api.callSequence...)
 }
 
-func (api *fakeAPI) eventCursors() []uint64 {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return append([]uint64(nil), api.eventAfter...)
+// The global stream opens before admission, so a fixture that must carry the admission
+// frame resolves the session and prompt when the watcher first reads, not when it opens.
+type lazyPromptAdmissionReplayStream struct {
+	api    *fakeAPI
+	once   sync.Once
+	stream io.ReadCloser
+}
+
+func (stream *lazyPromptAdmissionReplayStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		stream.api.mu.Lock()
+		sessionID, prompt := stream.api.lastPromptSession, stream.api.lastPrompt
+		stream.api.mu.Unlock()
+		stream.stream = promptAdmissionReplayStream(sessionID, prompt)
+	})
+	return stream.stream.Read(data)
+}
+
+func (stream *lazyPromptAdmissionReplayStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
+}
+
+// foreignFirstGlobalStream serves one other session's durable frame before this session's
+// own unknown frame, pinning that the watcher skips cross-session traffic on /api/event.
+type foreignFirstGlobalStream struct {
+	api    *fakeAPI
+	once   sync.Once
+	stream io.ReadCloser
+}
+
+func (stream *foreignFirstGlobalStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		stream.api.mu.Lock()
+		sessionID := stream.api.lastPromptSession
+		stream.api.mu.Unlock()
+		foreign := `{"id":"evt_foreign_1","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_other"}}`
+		own := fmt.Sprintf(`{"id":"evt_own_1","type":"session.step.started","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q}}`, sessionID, sessionID)
+		stream.stream = io.NopCloser(strings.NewReader("data: " + foreign + "\n\ndata: " + own + "\n\n"))
+	})
+	return stream.stream.Read(data)
+}
+
+func (stream *foreignFirstGlobalStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
 }
 
 func promptAdmissionReplayStream(sessionID string, prompt PromptRequest) *replayBlockingReadCloser {
@@ -1421,9 +1417,28 @@ func newTestAdapter(start processStarter, fake api) *Adapter {
 	adapter := newAdapter("opencode-test", nil, readyStart, func(Config) (api, error) { return fake, nil }, func() (string, string, error) { return "opencode", "test-secret", nil }, func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
 		return func(context.Context, net.Conn) error { return nil }
 	})
-	adapter.healthRetryWait = time.Millisecond
+	adapter.readinessRetryWait = time.Millisecond
 	adapter.terminationWait = time.Second
 	return adapter
+}
+
+// startStagedTestSession is the shared lifecycle preamble: one fake process, the
+// injected API, a successful Start and the first Open.
+func startStagedTestSession(t *testing.T, api *fakeAPI, sink harness.EventSink) (harness.StagedSession, *fakeProcess) {
+	t.Helper()
+	process := newFakeProcess()
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	return staged, process
 }
 
 func startRequest(t *testing.T) harness.StartRequest {

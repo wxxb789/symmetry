@@ -4,6 +4,7 @@ package opencode
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -20,7 +21,7 @@ func TestLegacyWindowsPeerVerifierAllowsOwnedHTTPConnection(t *testing.T) {
 	}
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		assertAuth(t, request)
-		_, _ = io.WriteString(writer, `{"healthy":true}`)
+		_, _ = io.WriteString(writer, fmt.Sprintf(`{"pid":%d,"version":%q,"status":200}`, os.Getpid(), TestedVersion))
 	})
 	identity, err := platform.ProcessIdentity(os.Getpid())
 	if err != nil {
@@ -37,7 +38,7 @@ func TestLegacyWindowsPeerVerifierAllowsOwnedHTTPConnection(t *testing.T) {
 		defer client.httpClient.CloseIdleConnections()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if err := client.Health(ctx); err != nil {
+		if err := client.Readiness(ctx, os.Getpid()); err != nil {
 			t.Fatalf("production peer verifier rejected its owned HTTP connection: %v", err)
 		}
 	}
