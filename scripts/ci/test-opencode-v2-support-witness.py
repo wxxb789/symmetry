@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Keep failed native executions and no-op interrupts out of success evidence."""
+"""Keep failed native executions, no-op interrupts and unapproved tool continuations out of success evidence."""
 
 import copy
 import hashlib
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -103,13 +104,35 @@ class ClassificationTests(unittest.TestCase):
             return {"type": kind, "data": {"sessionID": "ses_native"}}
 
         steps = [event(kind) for kind in ("session.tool.success", "session.step.ended", "session.step.started")]
-        receipt["classes"]["continuation_after_step"] = {"event_start": 0, "terminal": terminal}
+        receipt["classes"]["continuation_after_step"] = {
+            "event_start": 0,
+            "terminal": terminal,
+            "reply": {"status": 204, "body": {"decision": "once"}},
+        }
         receipt["events"] = [*steps, terminal]
         self.assertEqual(
             witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
         )
         receipt["events"] = [*steps[:2], terminal, steps[2]]
         self.assertEqual(witness.classify(receipt)["classes"]["continuation_after_step"]["status"], "run and failed")
+
+    def test_continuation_requires_a_recorded_accepted_reply(self):
+        receipt = self.receipt("session.execution.succeeded")
+        terminal = receipt["events"][0]
+
+        def event(kind):
+            return {"type": kind, "data": {"sessionID": "ses_native"}}
+
+        steps = [event(kind) for kind in ("session.tool.success", "session.step.ended", "session.step.started")]
+        receipt["events"] = [*steps, terminal]
+        receipt["classes"]["continuation_after_step"] = {"event_start": 0, "terminal": terminal}
+        self.assertEqual(witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "run and failed")
+        rejected = copy.deepcopy(receipt)
+        rejected["classes"]["continuation_after_step"]["reply"] = {"status": 403, "body": {"decision": "once"}}
+        self.assertEqual(witness.classify(rejected)["classes"]["continuation_after_step"]["status"], "run and failed")
+        accepted = copy.deepcopy(receipt)
+        accepted["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": {"decision": "once"}}
+        self.assertEqual(witness.classify(accepted)["classes"]["continuation_after_step"]["status"], "observed")
 
     def test_cleanup_requires_tree_and_reader_barriers(self):
         receipt = self.receipt("session.execution.failed")
@@ -127,6 +150,7 @@ class ClassificationTests(unittest.TestCase):
                 failed["classes"]["cleanup"][name] = value
                 self.assertEqual(witness.classify(failed)["classes"]["cleanup"]["status"], "run and failed")
 
+    @unittest.skipUnless(os.name == "nt", "the Windows tree-kill arm")
     def test_tree_kill_timeout_still_closes_real_process_socket_and_readers(self):
         child = subprocess.Popen(
             [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
@@ -171,6 +195,84 @@ class ClassificationTests(unittest.TestCase):
             child.stderr.close()
 
 
+@unittest.skipUnless(os.name == "posix", "the POSIX signal arm")
+class PosixCleanupTests(unittest.TestCase):
+    """The POSIX arm signals the process group and still reaches every barrier."""
+
+    def child(self, code, **kwargs):
+        child = subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={name: value for name, value in os.environ.items() if name.upper() in {"PATH", "LANG"}},
+            **kwargs,
+        )
+        self.addCleanup(self.reap, child)
+        return child
+
+    def reap(self, child):
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        child.stdout.close()
+        child.stderr.close()
+
+    def classify_row(self, cleanup):
+        receipt = ClassificationTests.receipt(self, "session.execution.failed")
+        receipt["classes"]["cleanup"] = cleanup
+        return receipt
+
+    def test_posix_cleanup_terminates_the_group_without_escalation(self):
+        child = self.child("import time\ntime.sleep(60)\n", start_new_session=True)
+        cleanup = witness.close_native(child, None, None, [])
+        self.assertEqual(cleanup["exit_code"], 0)
+        self.assertNotIn("escalated", cleanup)
+        self.assertEqual(cleanup["server_exit_code"], -15)
+        self.assertTrue(cleanup["output_readers_stopped"])
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
+
+    def test_posix_cleanup_escalates_once_when_sigterm_is_ignored(self):
+        child = self.child(
+            "import signal,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('armed', flush=True)\ntime.sleep(60)\n",
+            start_new_session=True,
+        )
+        self.assertEqual(child.stdout.readline(), b"armed\n")
+        with (
+            mock.patch.object(witness, "POSIX_SIGTERM_SECONDS", 1),
+            mock.patch.object(witness, "POSIX_SIGKILL_SECONDS", 1),
+        ):
+            cleanup = witness.close_native(child, None, None, [])
+        self.assertEqual(cleanup["exit_code"], 0)
+        self.assertTrue(cleanup.get("escalated"))
+        self.assertIn("SIGKILL", cleanup["command"])
+        self.assertEqual(cleanup["server_exit_code"], -9)
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
+
+    def test_posix_cleanup_reports_a_live_reader_as_not_stopped(self):
+        child = self.child("import time\ntime.sleep(60)\n", start_new_session=True)
+        reader = threading.Thread(target=lambda: time.sleep(30), daemon=True)
+        reader.start()
+        cleanup = witness.close_native(child, None, None, [reader])
+        self.assertFalse(cleanup["output_readers_stopped"])
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "run and failed")
+
+    def test_posix_cleanup_joins_a_reader_blocked_on_the_stream(self):
+        child = self.child("import time\ntime.sleep(60)\n", start_new_session=True)
+        local, peer = socket.socketpair()
+        self.addCleanup(peer.close)
+        connection = http.client.HTTPConnection("127.0.0.1")
+        connection.sock = local
+        # The reader lingers past the shutdown, so only the join can settle its barrier.
+        stream_reader = threading.Thread(target=lambda: (peer.recv(1), time.sleep(2)))
+        stream_reader.start()
+        self.addCleanup(stream_reader.join, 5)
+        self.addCleanup(connection.close)
+        cleanup = witness.close_native(child, connection, stream_reader, [])
+        self.assertTrue(cleanup["stream_reader_stopped"])
+        self.assertTrue(cleanup["output_readers_stopped"])
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
+
+
 class ChunkedSSETests(unittest.TestCase):
     def capture(self, chunks):
         local, peer = socket.socketpair()
@@ -205,23 +307,204 @@ class ChunkedSSETests(unittest.TestCase):
         self.assertEqual(self.capture([b": keepalive\n\n", body]), [event])
 
 
-class PinnedBlobTest(unittest.TestCase):
-    """The blob path is operator-supplied; an unset variable or a changed blob is refused."""
+class ReadinessTests(unittest.TestCase):
+    """The readiness route must report this server's own pid and the pinned version exactly."""
+
+    def test_exact_pid_and_version_is_the_only_accepted_identity(self):
+        self.assertTrue(witness.readiness_identity({"pid": 42, "version": "2.4.1"}, 42))
+        for info, pid in (
+            ({"pid": 42, "version": "2.4"}, 42),
+            ({"pid": 42, "version": "2.4.10"}, 42),
+            ({"pid": 42, "version": "2.4.1 "}, 42),
+            ({"pid": 41, "version": "2.4.1"}, 42),
+            ({"version": "2.4.1"}, 42),
+            (None, 42),
+        ):
+            with self.subTest(info=info, pid=pid):
+                self.assertFalse(witness.readiness_identity(info, pid))
+
+
+class RedactionTests(unittest.TestCase):
+    """The credential and the relay origin never reach a record, whatever the carrier."""
+
+    def test_relay_base_url_and_host_are_replaced_with_counts(self):
+        replacements = witness.relay_replacements("https://relay.example.invalid/v1")
+        text = "base https://relay.example.invalid/v1 host relay.example.invalid twice relay.example.invalid"
+        redacted, counts = witness.redact(text, replacements)
+        self.assertNotIn("relay.example.invalid", redacted)
+        self.assertEqual(counts[witness.RELAY_BASE_TOKEN], 1)
+        self.assertEqual(counts[witness.RELAY_HOST_TOKEN], 2)
+
+    def test_credential_is_replaced_inside_a_route_body(self):
+        body = json.dumps({"data": {"apiKey": "fixture-credential-value"}, "location": {"directory": "/run"}})
+        redacted, counts = witness.redact(body, {"fixture-credential-value": witness.CREDENTIAL_TOKEN})
+        self.assertNotIn("fixture-credential-value", redacted)
+        self.assertIn(witness.CREDENTIAL_TOKEN, redacted)
+        self.assertEqual(counts[witness.CREDENTIAL_TOKEN], 1)
+
+    def test_an_unset_credential_matches_nothing(self):
+        self.assertFalse(witness.carries_credential(b'{"text": "reply with PROBE"}', ""))
+        self.assertFalse(witness.carries_credential('{"text": "reply with PROBE"}', ""))
+        self.assertTrue(witness.carries_credential(b"carrier fixture-secret", "fixture-secret"))
+        self.assertFalse(witness.carries_credential(b"carrier fixture-secret", "fixture-other"))
+
+
+class SchemaTests(unittest.TestCase):
+    """The truncation attempt is decided from the live prompt schema, never guessed."""
+
+    def operation(self, properties, required=("text",)):
+        return {
+            "paths": {
+                "/api/session/{sessionID}/prompt": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {"properties": {name: {"type": "string"} for name in properties}, "required": list(required)}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+    def test_a_bounding_property_is_found_whatever_its_spelling(self):
+        self.assertEqual(witness.bounding_field(["text", "maxOutputTokens", "id"]), "maxOutputTokens")
+        self.assertEqual(witness.bounding_field(["text", "max_tokens"]), "max_tokens")
+        self.assertIsNone(witness.bounding_field(["id", "text", "delivery", "resume"]))
+
+    def test_resolve_prompt_schema_reads_the_live_shape(self):
+        bound = witness.resolve_prompt_schema(self.operation(["id", "text", "maxOutputTokens"]))
+        self.assertEqual(bound["properties"], ["id", "maxOutputTokens", "text"])
+        self.assertEqual(bound["required"], ["text"])
+        self.assertEqual(bound["bounding_field"], "maxOutputTokens")
+        unbound = witness.resolve_prompt_schema(self.operation(["id", "text", "delivery", "resume"]))
+        self.assertEqual(unbound["properties"], ["delivery", "id", "resume", "text"])
+        self.assertIsNone(unbound["bounding_field"])
+
+    def test_resolve_prompt_schema_survives_an_absent_operation(self):
+        resolved = witness.resolve_prompt_schema({})
+        self.assertEqual(resolved, {"properties": [], "required": [], "bounding_field": None})
+
+    def test_a_truncated_response_needs_a_native_bound(self):
+        self.assertTrue(witness.truncation_marker([{"data": {"metadata": {"truncated": True}}}]))
+        self.assertTrue(witness.truncation_marker([{"data": {"finish_reason": "length"}}]))
+        self.assertFalse(witness.truncation_marker([{"data": {"metadata": {"truncated": False}}}]))
+        self.assertFalse(witness.truncation_marker([{"type": "session.execution.succeeded", "data": {"sessionID": "s"}}]))
+        self.assertFalse(witness.truncation_marker([]))
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    """The child environment keeps its shape per platform and drops everything else."""
 
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
-        self.blob = pathlib.Path(directory.name) / "opencode.exe"
-        self.content = b"owner-pinned opencode blob stand-in\n"
+        self.root = pathlib.Path(directory.name)
+
+    def test_windows_shape_keeps_the_allowlist_and_redirects_private_roots(self):
+        environment = witness.child_environment(
+            self.root,
+            "nt",
+            {
+                "PATH": "C:\\bin",
+                "SystemRoot": "C:\\Windows",
+                "WINDIR": "C:\\W",
+                "COMSPEC": "C:\\cmd.exe",
+                "PATHEXT": ".EXE",
+                "SYSTEMDRIVE": "C:",
+                "TENCENT_GLM_API_KEY": "fixture-credential-value",
+                "SESSIONNAME": "Console",
+                "HOME": "C:\\Users\\operator",
+                "USERPROFILE": "C:\\Users\\operator",
+                "APPDATA": "C:\\Users\\operator\\AppData",
+                "LOCALAPPDATA": "C:\\Users\\operator\\Local",
+                "TMP": "C:\\Temp",
+                "TEMP": "C:\\Temp",
+                "XDG_CONFIG_HOME": "C:\\xdg\\config",
+                "XDG_CACHE_HOME": "C:\\xdg\\cache",
+                "XDG_DATA_HOME": "C:\\xdg\\data",
+                "XDG_STATE_HOME": "C:\\xdg\\state",
+            },
+        )
+        self.assertEqual(
+            sorted(environment),
+            sorted(
+                [
+                    "PATH",
+                    "SystemRoot",
+                    "WINDIR",
+                    "COMSPEC",
+                    "PATHEXT",
+                    "SYSTEMDRIVE",
+                    "HOME",
+                    "USERPROFILE",
+                    "APPDATA",
+                    "LOCALAPPDATA",
+                    "TMP",
+                    "TEMP",
+                    "XDG_CONFIG_HOME",
+                    "XDG_CACHE_HOME",
+                    "XDG_DATA_HOME",
+                    "XDG_STATE_HOME",
+                ]
+            ),
+        )
+        for name in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TMP", "TEMP", "XDG_CONFIG_HOME"):
+            self.assertTrue(environment[name].startswith(str(self.root)), name)
+        self.assertEqual(environment["HOME"], environment["USERPROFILE"])
+        self.assertEqual(environment["TMP"], environment["TEMP"])
+
+    def test_posix_shape_keeps_the_allowlist_and_redirects_private_roots(self):
+        environment = witness.child_environment(
+            self.root,
+            "posix",
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/root",
+                "TMPDIR": "/tmp",
+                "XDG_CONFIG_HOME": "/root/.config",
+                "XDG_CACHE_HOME": "/root/.cache",
+                "XDG_DATA_HOME": "/root/.local/share",
+                "XDG_STATE_HOME": "/root/.local/state",
+                "TENCENT_GLM_API_KEY": "fixture-credential-value",
+                "GIT_DIR": "/mnt/q/repos/symmetry/.git/worktrees/symmetry4",
+                "WSLENV": "TENCENT_GLM_API_KEY",
+            },
+        )
+        self.assertEqual(
+            sorted(environment),
+            sorted(["PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]),
+        )
+        for name in ("HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"):
+            self.assertTrue(environment[name].startswith(str(self.root)), name)
+
+
+class PinnedBlobTest(unittest.TestCase):
+    """The blob path is operator-supplied; an unset variable, a changed blob or a wrong magic is refused."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.blob = pathlib.Path(directory.name) / "opencode"
+        self.content = b"MZ" + b"owner-pinned opencode blob stand-in\n"
         self.blob.write_bytes(self.content)
         self.digest = hashlib.sha256(self.content).hexdigest()
+        self.pin = {
+            "label": "Windows PE",
+            "asset": "opencode-windows-x64.zip",
+            "magic": b"MZ",
+            "size": len(self.content),
+            "sha256": self.digest,
+        }
 
-    def resolve(self, configured=None, size=None, digest=None):
+    def resolve(self, configured=None, pins=None, platform_key="nt"):
         environment = {} if configured is None else {witness.BINARY_ENVIRONMENT: configured}
         with (
             mock.patch.dict(os.environ),
-            mock.patch.object(witness, "SIZE", len(self.content) if size is None else size),
-            mock.patch.object(witness, "DIGEST", self.digest if digest is None else digest),
+            mock.patch.dict(witness.PINS, pins or {"nt": self.pin}),
+            mock.patch.object(witness, "running_platform", return_value=platform_key),
         ):
             os.environ.pop(witness.BINARY_ENVIRONMENT, None)
             os.environ.update(environment)
@@ -229,7 +512,8 @@ class PinnedBlobTest(unittest.TestCase):
 
     def test_unset_environment_is_refused_by_name(self):
         with self.assertRaisesRegex(
-            RuntimeError, "SYMMETRY_OPENCODE_BINARY must name the owner-pinned Windows executable"
+            RuntimeError,
+            "SYMMETRY_OPENCODE_BINARY must name the owner-pinned Windows PE executable for platform nt",
         ):
             self.resolve()
 
@@ -238,15 +522,44 @@ class PinnedBlobTest(unittest.TestCase):
             self.resolve(str(pathlib.Path(self.blob.parent) / "absent.exe"))
 
     def test_wrong_digest_is_refused_at_the_pinned_size(self):
-        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch"):
-            self.resolve(str(self.blob), digest="0" * 64)
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch for platform nt"):
+            self.resolve(str(self.blob), pins={"nt": {**self.pin, "sha256": "0" * 64}})
 
     def test_wrong_size_is_refused_at_the_pinned_digest(self):
-        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch"):
-            self.resolve(str(self.blob), size=len(self.content) + 1)
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable identity mismatch for platform nt"):
+            self.resolve(str(self.blob), pins={"nt": {**self.pin, "size": len(self.content) + 1}})
 
     def test_matching_pin_returns_the_declared_blob(self):
         self.assertEqual(self.resolve(str(self.blob)), self.blob.resolve())
+
+    def test_wrong_magic_is_refused_before_launch(self):
+        elf_pin = {**self.pin, "label": "Linux ELF", "magic": b"\x7fELF"}
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable magic mismatch for platform nt"):
+            self.resolve(str(self.blob), pins={"nt": elf_pin})
+
+    def test_the_running_platform_selects_its_own_pin(self):
+        elf = b"\x7fELF" + b"owner-pinned opencode blob stand-in\n"
+        elf_path = pathlib.Path(self.blob.parent) / "elf-opencode"
+        elf_path.write_bytes(elf)
+        elf_pin = {
+            "label": "Linux ELF",
+            "asset": "opencode-linux-x64.tar.gz",
+            "magic": b"\x7fELF",
+            "size": len(elf),
+            "sha256": hashlib.sha256(elf).hexdigest(),
+        }
+        self.assertEqual(
+            self.resolve(str(elf_path), pins={"posix": elf_pin}, platform_key="posix"), elf_path.resolve()
+        )
+        with self.assertRaisesRegex(
+            RuntimeError, "must name the owner-pinned Linux ELF executable for platform posix"
+        ):
+            self.resolve(pins={"posix": elf_pin}, platform_key="posix")
+
+    def test_posix_pin_refuses_a_pe_magic(self):
+        elf_pin = {**self.pin, "label": "Linux ELF", "magic": b"\x7fELF"}
+        with self.assertRaisesRegex(RuntimeError, "owner-pinned executable magic mismatch for platform posix"):
+            self.resolve(str(self.blob), pins={"posix": elf_pin}, platform_key="posix")
 
 
 class BindingTest(FixtureRepo, unittest.TestCase):
