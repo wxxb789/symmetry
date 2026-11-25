@@ -694,11 +694,38 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         insert_goal_task!(%{goal_id: goal_id})
       end
 
+      # PostgreSQL reports the first failing RI check trigger, and those triggers are named
+      # `RI_ConstraintTrigger_c_<oid>` and fire in name order, so a row violating several foreign keys
+      # reports a different one per database. The random snapshot also breaks the ownership FK, which
+      # this assertion does not name and which cannot be satisfied while the work item is unknown
+      # (`context_snapshots_work_item_ownership_fkey` demands the very pair the row misses). Deferring
+      # the ownership constraint inside this rolled-back transaction leaves only the two work-item
+      # foreign keys able to report; the deferral and the inserting row both vanish with the rollback.
       assert_raise Postgrex.Error, ~r/tasks_(work_item_id|goal_work_item_membership)_fkey/i, fn ->
+        Repo.transaction(fn ->
+          Repo.query!(
+            "ALTER TABLE tasks ALTER CONSTRAINT tasks_context_snapshot_ownership_fkey DEFERRABLE INITIALLY DEFERRED"
+          )
+
+          insert_goal_task!(%{
+            goal_id: goal_id,
+            work_item_id: Ecto.UUID.bingenerate(),
+            context_snapshot_id: Ecto.UUID.bingenerate()
+          })
+        end)
+      end
+
+      # The ownership FK keeps a deterministic assertion of its own: this row violates only that
+      # constraint, because the fixture work item and the goal revision are valid while the snapshot
+      # belongs to a sibling work item.
+      sibling_item_id = insert_goal_work_item!(project_id, goal_id)
+      sibling_snapshot_id = insert_context_snapshot!(goal_id, sibling_item_id)
+
+      assert_raise Postgrex.Error, ~r/tasks_context_snapshot_ownership_fkey/i, fn ->
         insert_goal_task!(%{
           goal_id: goal_id,
-          work_item_id: Ecto.UUID.bingenerate(),
-          context_snapshot_id: Ecto.UUID.bingenerate()
+          work_item_id: work_item_id,
+          context_snapshot_id: sibling_snapshot_id
         })
       end
 
