@@ -816,12 +816,6 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps(t *testing.T) {
 				t.Fatalf("release detail = %+v, want stage=%q arm=%q wait_class=%q guest_stage=%q errno=%d reason=%q",
 					*detail, test.wantStage, test.wantArm, test.wantWait, test.wantGuest, test.wantErrno, test.wantReason)
 			}
-			if test.wantStage == "clone_checkout" && detail.Stage == linuxgate.ReleaseSubStepNativeExec {
-				t.Fatal("checkout-receipt failure was mislabeled as native_exec")
-			}
-			if test.wantArm == "" && (detail.Arm != "" || detail.WaitClass != "" || detail.GuestStage != "") {
-				t.Fatalf("armless failure carried arm detail: %+v", *detail)
-			}
 			if err := detail.Validate(); err != nil {
 				t.Fatalf("classified release detail is not closed-vocabulary: %v", err)
 			}
@@ -1218,6 +1212,23 @@ func TestLinuxOwnerHelperV2ReleaseDetailSurvivesTheWire(t *testing.T) {
 	}
 	if got := decoded.ReleaseErrorDetail.String(); got != "stage=native_exec arm=clone_exec_proof wait_class=other guest_stage=exec errno=1" {
 		t.Fatalf("wire release detail = %q, want the bounded detail unchanged", got)
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseDetailIsWrittenThroughTheResponseWriter(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
+	helper := &linuxOwnerHelperV2{}
+	detail := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await_result", WaitClass: "other"}
+	if err := helper.writeResponseWithDetail(server, detail, "release", "unresolved", nil, nil, nil, nil, nil, 0, nil, "release_outcome_unknown"); err != nil {
+		t.Fatalf("write unresolved release response with a bounded detail: %v", err)
+	}
+	decoded, rights, err := readLinuxOwnerHelperV2Response(client)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		t.Fatalf("read helper response written through writeResponseWithDetail: %v", err)
+	}
+	if got := decoded.ReleaseErrorDetail.String(); got != "stage=native_exec arm=await_result wait_class=other" {
+		t.Fatalf("writeResponseWithDetail release detail = %q, want the bounded detail on the wire", got)
 	}
 }
 

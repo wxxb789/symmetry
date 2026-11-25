@@ -773,30 +773,30 @@ func TestLinuxV2NativeWitnessRefusalDocumentIsIdentityOnly(t *testing.T) {
 	for field, value := range authorityFields {
 		mutated := genericDocument(decoded)
 		mutated[field] = value
-		bytes, err := json.Marshal(mutated)
+		mutatedJSON, err := json.Marshal(mutated)
 		if err != nil {
 			t.Fatalf("encode mutated refusal document: %v", err)
 		}
-		if err := validateLinuxV2NativeWitnessRefusalDocument(bytes); err == nil {
+		if err := validateLinuxV2NativeWitnessRefusalDocument(mutatedJSON); err == nil {
 			t.Fatalf("refusal document with %q authority was accepted", field)
 		}
 	}
 	missing := genericDocument(decoded)
 	delete(missing, "recovery_refusal")
-	bytes, err := json.Marshal(missing)
+	missingJSON, err := json.Marshal(missing)
 	if err != nil {
 		t.Fatalf("encode refusal document without its refusal code: %v", err)
 	}
-	if err := validateLinuxV2NativeWitnessRefusalDocument(bytes); err == nil {
+	if err := validateLinuxV2NativeWitnessRefusalDocument(missingJSON); err == nil {
 		t.Fatal("refusal document without its refusal code was accepted")
 	}
 	freeForm := genericDocument(decoded)
 	freeForm["recovery_refusal"] = map[string]any{"guard": "journal_without_unresolved_authority", "reason": "/opt/symmetry-owner-test/leaf"}
-	bytes, err = json.Marshal(freeForm)
+	freeFormJSON, err := json.Marshal(freeForm)
 	if err != nil {
 		t.Fatalf("encode free-form refusal: %v", err)
 	}
-	if err := validateLinuxV2NativeWitnessRefusalDocument(bytes); err == nil {
+	if err := validateLinuxV2NativeWitnessRefusalDocument(freeFormJSON); err == nil {
 		t.Fatal("free-form refusal reason was accepted")
 	}
 }

@@ -62,7 +62,7 @@ its only site), every `validateFinalSummary` refusal.
    wire is rejected, not carried).
 3. **Additive response field**: `ReleaseErrorDetail *… json:"release_error_detail,omitempty"`. The
    write path is a new `writeResponseWithDetail` in `helper_v2_stop.go`; `writeResponse` delegates to
-   it with `nil`, so the 160+ existing call sites in the unowned files keep their signature.
+   it with `nil`, so the 60 existing call sites, all in the two owned files, keep their signature.
 4. **Carry-through**: `LinuxOwnerHelperV2ReleaseUnresolvedError` gains `Detail`; `Error()` renders
    the existing text plus `(<code>; <detail>)`; `linuxOwnerHelperV2ResponseError` builds it for every
    `release`/`unresolved` response (evidence pointer stays nil when the helper could not measure it).

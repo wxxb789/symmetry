@@ -49,7 +49,7 @@ Line numbers below are the dispatch head `48ef0982` unless a section says otherw
    (`:591`), so a free-form field from the wire is refused, never carried.
 3. **Additive response field** `release_error_detail` (`:126`), written only by
    `writeResponseWithDetail` (`helper_v2_stop.go:296-323`); `writeResponse` delegates with nil, so
-   the 160+ call sites in unowned files keep their signature.
+   the 60 call sites, all in the two owned files, keep their signature.
 4. **Carry-through**: `LinuxOwnerHelperV2ReleaseUnresolvedError.Detail`
    (`linux_owner_helper_v2_linux.go:301-322`); `linuxOwnerHelperV2ResponseError` builds the typed
    error for every `release`/`unresolved` response (`helper_v2_protocol.go:598-609`). New stderr
@@ -100,8 +100,8 @@ Command (repository root): `grep -rn "<pattern>" daemon/ scripts/ --include=*.go
 
 | Pattern | Sites | Disposition |
 | --- | --- | --- |
-| `release_outcome_unknown` | `helper_v2_server.go:1195` (writer) | converted: the response now carries the bounded detail beside the unchanged code |
-| | `linux_owner_helper_v2_linux_test.go:702,708` (evidence pin), `:846,849,853,854,889,904` (new detail pins) | tests; the code-only rendering assertion pins byte-identical backward compatibility |
+| `release_outcome_unknown` | `helper_v2_server.go:1200` (writer) | converted: the response now carries the bounded detail beside the unchanged code |
+| | `linux_owner_helper_v2_linux_test.go:702,708` (evidence pins), `:1098,1101,1105,1106,1143,1181,1200,1222` (detail pins; `:1222` is the apply-stage writer probe) | tests; the code-only rendering assertion pins byte-identical backward compatibility |
 | `recover existing owner witness RunJournal` | `linux_owner_witness_linux.go:538` | converted: `refusal=<guard> reason=<term> recovery_error_class=<class>: <recoveryErr chain>`; the document names the same codes |
 | `validateFinalSummary` refusals | `:741-746` (`unresolved` case) | converted: names every tripped predicate |
 | | `:739,:744` (release tri-state / nativeReleased) | exempt: single named property each, already in the message |
@@ -127,16 +127,17 @@ and validator of the witness response"); command
 | `linuxOwnerHelperV2Response.matches` (`:128-131`) | unchanged: identity-only (version/RunKey/fence/launch token/helper); the additive field cannot satisfy or break it |
 | literal response constructors (`helper_v2_server.go:935,:960`; `helper_v2_stop.go:288-323`) | unchanged: no detail (nil, omitted) — only the unresolved release writer sets it |
 | test literals (`linux_owner_helper_v2_linux_test.go` × 4) | unchanged |
-| `ErrLinuxOwnerHelperV2ReleaseUnresolved` consumers | tests only (`containment_errors_test.go:252`, `linux_owner_helper_v2_linux_test.go:701`); no production caller keys off the type, so the extra typed case (evidence-less unresolved responses) changes no decision |
+| `ErrLinuxOwnerHelperV2ReleaseUnresolved` consumers | tests only (`containment_errors_test.go:252`, `linux_owner_helper_v2_linux_test.go:707,1131`); no production caller keys off the type, so the extra typed case (evidence-less unresolved responses) changes no decision |
 | App-side witness summary readers (`linuxV2OwnerWitnessResponse` in `daemon/e2e/**`, the App's `writeLinuxV2NativeWitnessSummary`) | different protocol, untouched; the helper field never crosses it |
 
 Stage-3 addition to the same census (ruling: "update every reader and validator of the witness
 response, and grep-census them"): the arm/wait/guest fields are validated on the read path by
 `readLinuxOwnerHelperV2Response` → `ReleaseErrorDetail.Validate()`
 (`helper_v2_protocol.go:510-568`), which is the *only* validator of the release detail (the helper's
-own write path re-validates through the same method via `writeResponseWithDetail`, and the probe file
-exercises both directions). `LookupReleaseArmShape` has exactly one non-test consumer
-(`helper_v2_protocol.go:540`), `ReleaseWaitErrorClass` and `ReleaseGuestStageName` exactly one each
+own write path assigns the classifier-built field; `Validate()` runs only after decode, and the
+probe file covers both the write and the read direction). `LookupReleaseArmShape` has exactly one
+non-test consumer (`helper_v2_protocol.go:540`), `ReleaseWaitErrorClass` and
+`ReleaseGuestStageName` exactly one each
 (`NewReleaseSubStepError`, `gate_lifecycle_linux.go:786,:791`), and `NewReleaseSubStepError` 21 call
 sites — 16 in `gate_lifecycle_linux.go`, 5 in `helper_v2_server.go`, all owned; command
 `grep -rn "NewReleaseSubStepError(\|LookupReleaseArmShape(\|ReleaseWaitErrorClass(\|ReleaseGuestStageName(" daemon/ --include=*.go`.
@@ -196,6 +197,7 @@ Stage-3 rows (all `go test -count=1 -run '<name>' ./internal/platform/` in WSL `
 | closed-vocabulary validator: 5 accepted shapes and 13 refused shapes (free-form/cross-stage arm, arm without a sub-step, missing wait class, wait class on a non-waiting arm, free-form wait class, guest stage on a non-reading arm, free-form guest stage, errno without a sub-step, …) | `TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary` | 18 |
 | the wire refuses a free-form sub-step, a free-form arm and a cross-stage arm | `TestLinuxOwnerHelperV2ResponseRejectsAFreeFormReleaseDetail` | 3 |
 | the classifier still names the arm on every classified row (10 rows) and never labels a checkout failure `native_exec` | `TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps` | 16 |
+| (apply stage) the writer helper's field assignment reaches the wire | `TestLinuxOwnerHelperV2ReleaseDetailIsWrittenThroughTheResponseWriter` | 1 |
 
 The characterization baseline for each changed check is the base tree's own behaviour, captured before
 any edit: the base six-set run (§7.1) holds the release line without a sub-step
@@ -209,19 +211,21 @@ pin of the untouched shape is `TestLinuxV2NativeWitnessStageReplayRequiresExactU
 Each mutant is applied inside a detached worktree at `48ef0982` carrying the final bytes (outside the
 goal worktree, so the delivered files are never mutated) and restored byte-identical (`cp` + `cmp`,
 digest re-verified after every row). The restored digest is the file's delivered digest (§7.4). All
-seven rows below were re-run on the final bytes after the stage-3 extension; the `daemon` CI job
+seven rows below were re-run on the final bytes of their byte set: M2, M6 and M7 after the apply-stage
+test-only delta (§7.4a), M1 and M3-M5 on the stage-3 final bytes (the apply-stage delta moves none of
+the lines or messages they cite); the `daemon` CI job
 (`daemon/`, `go test -race -count=1 -timeout 600s -json ./...` with the stdio-only caller boundary) is
 the job that must redden; the local focused run is the pinned red.
 
 | id | mutation | expected red | observed red (verbatim) | restored digest |
 | --- | --- | --- | --- | --- |
 | M1 | `linuxOwnerHelperV2ReleaseErrorDetailFor` drops the `errors.As` classification (no sub-step, arm or errno) | classifier table test, positive rows | `linux_owner_helper_v2_linux_test.go:816: release detail = {Stage:none Arm: WaitClass: GuestStage: Errno:0 Reason:}, want stage="gate_authorize" arm="missing_gate_identity" wait_class="" guest_stage="" errno=0 reason=""` (all 10 classified rows) | `a9e255e0…` (`helper_v2_protocol.go`) |
-| M2 | classifier mislabels a `clone_checkout` failure as `native_exec` | classifier table test, negative case | `:816: release detail = {Stage:native_exec Arm:checkout_receipt WaitClass:other GuestStage:exec Errno:1 Reason:}, want stage="clone_checkout" …`; `:870: arm "checkout_receipt" classified as stage="native_exec" arm="checkout_receipt"` | `a9e255e0…` |
+| M2 | classifier mislabels a `clone_checkout` failure as `native_exec` | classifier table test, negative case | `:816: release detail = {Stage:native_exec Arm:checkout_receipt WaitClass:other GuestStage:exec Errno:1 Reason:}, want stage="clone_checkout" …`; `:864: arm "checkout_receipt" classified as stage="native_exec" arm="checkout_receipt"` | `a9e255e0…` |
 | M3 | refusal formatter reverted to the single generic string (guard, reason and class dropped) | refusal-probe test, every refusing row | `linux_owner_witness_linux_test.go:668: refusal = refusal=, want guard="journal_without_unresolved_authority" reason="release_proof_present"` | `91e83974…` (`linux_owner_witness_linux.go`) |
 | M4 | accept an unversioned/inexact stop receipt in the `unresolved` branch (the stage-2 predicate dropped) | stale-leaf validator negative cases | `:904: tripped predicates = [], want [stop.receipt_version]` ×3 rows (`versioned_receipt_without_physical_proof`, `unversioned_stop_receipt`, `versioned_receipt_without_its_physical_flags`); `:921: unresolved summary refusal = <nil>, want the named tripped predicate` | `91e83974…` |
 | M5 | writer emits `Outcome` in the refusal document | refusal-authority-shape test | `:733: write owner witness refusal document: owner witness refusal document exposed a non-identity field "outcome"` | `91e83974…` |
-| M6 | bounded arm replaced by free-form `err.Error()` | closed-vocabulary test + the record host-path gate | `:987: release detail rendered "stage=native_exec arm=/home/some-profile-user/secret\npid=4242 exec --lease-token=abcd1234 errno=1", want the closed sub-step, arm and errno only`; `:938: … unknown arm "receive same-PID native exec proof: Linux B clone bootstrap failed at stage 1 (errno=13)"` | `a9e255e0…` |
-| M7 | two arm codes swapped (`ReleaseArmNativeNoAttempt` ↔ `ReleaseArmNativeImage` values, same sub-step, so the shape table stays valid) | classifier table test, literal wire values | `:876: arm "image_mismatch" rendered "stage=native_exec arm=image_mismatch", want the literal "stage=native_exec arm=no_exec_attempt"` (both swapped rows; `:816` also red) | `cd803b8a…` (`gate_lifecycle_linux.go`) |
+| M6 | bounded arm replaced by free-form `err.Error()` | closed-vocabulary test + the record host-path gate | `:981: release detail rendered "stage=native_exec arm=/home/some-profile-user/secret\npid=4242 exec --lease-token=abcd1234 errno=1", want the closed sub-step, arm and errno only`; `:932: … unknown arm "receive same-PID native exec proof: Linux B clone bootstrap failed at stage 1 (errno=13)"` | `a9e255e0…` |
+| M7 | two arm codes swapped (`ReleaseArmNativeNoAttempt` ↔ `ReleaseArmNativeImage` values, same sub-step, so the shape table stays valid) | classifier test, literal wire values | `:870: arm "image_mismatch" rendered "stage=native_exec arm=image_mismatch", want the literal "stage=native_exec arm=no_exec_attempt"` (both swapped rows; `:816` also red) | `cd803b8a…` (`gate_lifecycle_linux.go`) |
 
 ## 7. Scratch runs
 
@@ -362,18 +366,19 @@ The `stale_leaf` manifest carries `status=passed`, `source_commit=116114d327580f
 
 Run `45557621798` was head `116114d3` (stage-2 bytes) and run `45564071868` is head `f32d47d9` (the
 stage-3 final bytes); both heads are the eight code files plus the two scratch-only files
-(`git diff a4293de4 <head>` = 10 paths), and the delivered bytes are the goal worktree's,
-byte-for-byte. Final-byte table (the run-`f32d47d9` column is the binding one):
+(`git diff 48ef0982 <head>` = 10 paths), and the delivered bytes are the goal worktree's,
+byte-for-byte except the two unit-test files carrying the apply-stage delta (§7.4a). Final-byte table
+(the run-`f32d47d9` column is the binding one; Δ rows carry both byte sets):
 
 | File | Run head `f32d47d9` / delivered (goal worktree, `cmp` + sha256) | Eq |
 | --- | --- | --- |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `91e83974c871bac0675619fff58afe6a56d8df963d57ee307c202f4140f6c79d` | EQ |
-| `daemon/internal/app/linux_owner_witness_linux_test.go` | `aef98fd56448157b69a45090d3e15816377c7e4595756428fd127cd47ee37a90` | EQ |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | run `aef98fd56448157b69a45090d3e15816377c7e4595756428fd127cd47ee37a90` → delivered `8968341e0fcab1855af3abe60c260e3cbce381b1a59cdae49b86aad335d93ed3` | Δ |
 | `daemon/internal/platform/helper_v2_protocol.go` | `a9e255e045c78b2b985085a15c9d85bd722137e06d33568e8371290d741c02f1` | EQ |
 | `daemon/internal/platform/helper_v2_server.go` | `a00c6606f9da60b12322d93835f6d3f9d549cbce6b662dd5aefa1b8982c2da6b` | EQ |
 | `daemon/internal/platform/helper_v2_stop.go` | `d216fd1d3ed719a78e4ef9ebd83c33a671601e687669ffec3c3639b037e3773e` | EQ |
 | `daemon/internal/platform/linux_owner_helper_v2_linux.go` | `b55b1768bc413517b0aab719087498139ea4ffbba9495326273709e512da1831` | EQ |
-| `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | `7dd9b57e2678339823abb3668e0fd919a0d040484c949044d9985eadeede4c19` | EQ |
+| `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | run `7dd9b57e2678339823abb3668e0fd919a0d040484c949044d9985eadeede4c19` → delivered `3ba872ca0ee1e63453d0950b8429620a6467f79373a49fb7db3dc069da7344c4` | Δ |
 | `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` | `cd803b8aa004fae929dd0a6e290555a78ea71ccfb983bd89f275694b0b3c6075` | EQ |
 
 The stage-3 scratch workflow bytes: `scripts/ci/scratch-gh-shim`
@@ -386,6 +391,20 @@ the scratch tree carried the base copies, so no doc row is claimed). The scratch
 after the stage-3 run (`git push origin --delete scratch/rf-acc-release-recovery-diagnostics`) and
 `git ls-remote origin scratch/rf-acc-release-recovery-diagnostics` prints nothing (exit 0), with
 `git ls-remote origin 'refs/heads/scratch/*'` printing nothing too.
+
+### 7.4a Apply-stage delta (test-only)
+
+The apply stage applied accepted simplify findings 1-3 (2026-11-25) and changed only the two
+unit-test files after every run; the six product files and both scripts stay byte-identical to the
+run bytes. Neither run set compiles unit-test files (the harness builds `./cmd/...`, and the guest
+runs `go test ./e2e` / `./native/linux-gate/protocol` with `-run` patterns), so the executed subject
+of every run is unchanged; the local gates and probes were re-run on the delivered bytes with the
+commands of §4 and §5, and the M2/M6/M7 rows were re-derived on them (§6).
+
+| File | Run-bytes sha256 | Delivered sha256 | Delta (`git diff --numstat`) |
+| --- | --- | --- | --- |
+| `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | `7dd9b57e2678339823abb3668e0fd919a0d040484c949044d9985eadeede4c19` | `3ba872ca0ee1e63453d0950b8429620a6467f79373a49fb7db3dc069da7344c4` | 17 added / 6 removed: two unreachable assertions removed from the classifier loop (finding 1); the `writeResponseWithDetail` wire probe added (finding 3) |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `aef98fd56448157b69a45090d3e15816377c7e4595756428fd127cd47ee37a90` | `8968341e0fcab1855af3abe60c260e3cbce381b1a59cdae49b86aad335d93ed3` | 6 added / 6 removed: three `bytes`-shadowing locals renamed in `TestLinuxV2NativeWitnessRefusalDocumentIsIdentityOnly` (finding 2) |
 
 ### 7.5 Stage-3 run `45564071868` (migration only — the arm is named)
 
