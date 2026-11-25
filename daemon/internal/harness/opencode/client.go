@@ -111,9 +111,8 @@ func parseLoopbackURL(value string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// Readiness performs the authenticated readiness-identity boundary the pinned 2.4.1
-// bytes answer on GET /api/info: the API must report the server process pid and
-// exactly TestedVersion. The response is host metadata and is never logged.
+// Readiness performs the authenticated readiness-identity boundary the pinned 2.4.1 bytes
+// answer on GET /api/info: server process pid and exactly TestedVersion; host metadata, never logged.
 func (client *Client) Readiness(ctx context.Context, serverPID int) error {
 	if serverPID <= 0 {
 		return fmt.Errorf("%w: server pid must be positive", ErrInvalidConfig)
@@ -206,9 +205,8 @@ func (client *Client) Prompt(ctx context.Context, sessionID string, request Prom
 	return admission, nil
 }
 
-// Interrupt issues the recorded 2.4.1 cancellation control: POST
-// /api/session/{id}/interrupt?resume=false answers 200 {"interrupted":bool};
-// a false answer refuses as unapplied instead of reporting a delivered control.
+// Interrupt issues the recorded 2.4.1 cancellation control: POST /api/session/{id}/interrupt
+// with resume=false answers 200 {"interrupted":bool}; a false answer refuses as unapplied, not delivered.
 func (client *Client) Interrupt(ctx context.Context, sessionID string) error {
 	if !isID(sessionID, "ses_") {
 		return fmt.Errorf("%w: session id must start with ses_", ErrInvalidSession)

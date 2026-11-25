@@ -233,11 +233,8 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 	}
 }
 
-// TestNativePromptAdmissionPublishesTheRecordedInboxEvent is deliberately opt-in. It uses
-// the production Start/Open path, posts one Resume:false prompt through the re-anchored
-// client, and proves the recorded 2.4.1 admission surface: the global stream carries the
-// session's durable session.inbox.enqueued frame bound to the posted message id. It never
-// starts a model loop or claims task evidence.
+// TestNativePromptAdmissionPublishesTheRecordedInboxEvent is deliberately opt-in: the global stream
+// carries the recorded 2.4.1 session.inbox.enqueued frame bound to the posted message id.
 func TestNativePromptAdmissionPublishesTheRecordedInboxEvent(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("native OpenCode admission inbox observation supports Linux and Windows only")

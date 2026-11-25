@@ -277,9 +277,8 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 	return decoded, nil
 }
 
-// durableSessionIdentity binds one durable session event to the session its own
-// data and cursor name, so both the strict decoder and the global-stream filter
-// refuse an event whose identity fields disagree.
+// durableSessionIdentity binds one durable session event to the session its own data and
+// cursor name; the strict decoder and global-stream filter refuse disagreeing identity fields.
 func durableSessionIdentity(event Event, data map[string]json.RawMessage) (string, error) {
 	sessionID, ok := requiredString(data, "sessionID")
 	if !ok || !isID(sessionID, "ses_") {
@@ -291,9 +290,8 @@ func durableSessionIdentity(event Event, data map[string]json.RawMessage) (strin
 	return sessionID, nil
 }
 
-// GlobalFrameSessionID reports the durable session identity one global
-// /api/event frame carries. Frames that are not session events report ok=false
-// so a watcher on the shared stream can skip them without failing its session.
+// GlobalFrameSessionID reports the durable session identity a global /api/event frame carries;
+// non-session frames report ok=false so a watcher on the shared stream can skip them.
 func GlobalFrameSessionID(frame Frame) (string, bool, error) {
 	event, object, err := decodeEvent(frame)
 	if err != nil {

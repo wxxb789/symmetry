@@ -305,8 +305,7 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 }
 
 // openCodeProbeDidNotFinish keeps a canceled or expired probe inside the tolerated
-// ErrHarnessUnavailable class, so a slow probe cannot abort daemon startup; the
-// context error stays in the message and is never a wrapped cause.
+// ErrHarnessUnavailable class so a slow probe cannot abort startup; the context error is never wrapped.
 func openCodeProbeDidNotFinish(capabilities harness.Capabilities, step string, err error) (harness.Capabilities, error) {
 	return capabilities, fmt.Errorf("%w: opencode %s probe did not finish: %v", harness.ErrHarnessUnavailable, step, err)
 }
