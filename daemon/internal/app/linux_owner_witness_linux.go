@@ -350,9 +350,6 @@ type linuxV2NativeWitnessRun struct {
 	nativeEnvironment    []string
 	runnerBarrierRestore func()
 	runnerBarrierErr     error
-	// Codex and Claude stage native_release from daemon.start; every other
-	// adapter owns its Runner and needs the release-ACK callback to stage it.
-	startProcessStagesRelease bool
 }
 
 // RunLinuxV2NativeOwnerWitness is an opt-in production-boundary test path. It
@@ -3601,8 +3598,7 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()
 	}
-	witness.startProcessStagesRelease = linuxV2NativeWitnessStagesReleaseFromStartProcess(kind)
-	if witness.startProcessStagesRelease {
+	if linuxV2NativeWitnessStagesReleaseFromStartProcess(kind) {
 		startRequest.StartProcess = func(startContext context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
 			process, startErr := daemon.start(startContext, invocation, sink)
 			if process == nil {
@@ -4022,7 +4018,14 @@ func (witness *linuxV2NativeWitnessRun) wrapLinuxV2Callbacks(
 			return nil
 		}
 		selected := witness.request.DropAckAfter == stage
-		runnerRelease := stage == linuxV2NativeWitnessReleaseStage && !witness.startProcessStagesRelease
+		runnerRelease := false
+		if stage == linuxV2NativeWitnessReleaseStage {
+			kind, err := harness.ParseKind(witness.request.Harness)
+			if err != nil {
+				return fmt.Errorf("derive the owner witness release seam from its request harness: %w", err)
+			}
+			runnerRelease = !linuxV2NativeWitnessStagesReleaseFromStartProcess(kind)
+		}
 		if (!selected && !runnerRelease) || ownerEffectAlreadyAckedOnEntry {
 			return nil
 		}

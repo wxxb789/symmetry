@@ -38,7 +38,7 @@ implementation choices those leave open, the per-clause baseline, and what is ou
   `linuxV2MarkerHasNativePeerProof` (`production_linux_v2_owner_cli_test.go:1083-1089`) requires
   `Target.PID/Identity` equal to `Owners.Gate`, `PIDFDVerified`, `HostUID == owner.BUID`,
   `SamePIDExec`, and nonzero user/network namespace device+inode; the replay leg restores the
-  evidence from the durable marker (`restoreStageMarkers`, `linux_owner_witness_linux.go:2336`;
+  evidence from the durable marker (`restoreStageMarkers`, `linux_owner_witness_linux.go:2333`;
   `linuxV2ValidateStageReplayResponseState`, `production_linux_v2_owner_cli_test.go:1162`, released-evidence check at `:1229-1233`).
 
 ## 2. Public/API shape
@@ -48,8 +48,9 @@ All changes stay inside the two owned sources; no e2e, fixture-script or `pi/**`
 e2e already validates the marker exactly).
 
 1. `daemon/internal/app/linux_owner_witness_linux.go`
-   - `linuxV2NativeWitnessRun` gains one boolean recording that the launch path observes the
-     release through `daemon.start` (codex/claude) instead of the runner callback.
+   - No launch-time release-seam store: the `DropAckAfter` wrapper derives the launched kind from
+     `witness.request.Harness` through `linuxV2NativeWitnessStagesReleaseFromStartProcess`, the
+     same predicate that wires `startRequest.StartProcess` (fix-stage refresh, STD-A02).
    - New `captureReleasedNativeTarget(store journalStore) error`: binds the committed
      RunJournal target (`ContainmentAuthority` + `ContainmentCgroup.Gate` + process marker, all
      equal), verifies the live same-PID process identity before and after `PidfdOpen`, requires
@@ -91,6 +92,10 @@ can never drift. Consequence, recorded rather than hidden: the OpenCode health l
 fixed `native_release` hold) would now also stage a release hold if it ever reached its release; it
 aborts earlier on its own pinned-version gate today, so no observed row changes, and the alternative
 (a Pi-only special case) would encode the defect's shape instead of the launch-path fact.
+The callback's kind is re-derived from `witness.request.Harness`, which request validation pins
+equal to the configured `Runtime.HarnessKind` — the same string `runFresh` parses into the launch
+kind — so the decision needs no launch-time store and the release fixture pins it (fix-stage
+refresh, STD-A02).
 
 ### 3.3 The released target's namespace evidence is A's own nsfs observation
 
@@ -119,7 +124,8 @@ runner path once the hold is wired.
 
 The contract's owned list names the witness source, not `daemon/internal/app/linux_owner_witness_linux_test.go`,
 while the same contract requires that "mutants pin the new wiring". No e2e file can carry a runnable
-pin (the guest is the conductor's), so the three new tests and their fixture join the edit set for
+pin (the guest is the conductor's), so the new tests and their fixture — the hold/exclusion pins and,
+from the fix-stage refresh, the seam-derivation and harness-equality pins — join the edit set for
 exactly that purpose; no other test file is touched, and the production seam grows no test hook.
 
 ## 4. Per-clause baseline and proof plan
@@ -127,7 +133,7 @@ exactly that purpose; no other test file is touched, and the production seam gro
 | Contract clause | Base behavior (before) | Clause test / proof |
 | --- | --- | --- |
 | 1 root cause named with source + log evidence | the diagnosis's wiring claim; the inner turn error is discarded by `errors.New` at `:3633-3636` (not in the retained log) | the wrap makes the retained bounded stderr name it; the code path is pinned by the two unit tests and cited verbatim in the record |
-| 2 the fix reaches the hold on the production path | no `native_release.json` on the pi path (`run-45696662454` §4) | `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget` (marker + hold + exact evidence); the guest Bind is the conductor's |
+| 2 the fix reaches the hold on the production path | no `native_release.json` on the pi path (`run-45696662454` §4) | `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget` (marker + hold + exact evidence); the seam decision re-derived from the validated request harness is pinned by `TestLinuxV2NativeWitnessReleaseSeamRequiresTheRequestHarness` and `TestLinuxV2NativeWitnessRequestHarnessMustMatchTheConfiguredKind`; the guest Bind is the conductor's |
 | 2 no `pi/**` change, no new provider access, no second authority | — | `git diff` scope; the tests exercise the existing seam only; the provider-free claim binding is untouched |
 | 3 records name the root cause verbatim | — | evidence record §1/§4 |
 | Invariants (no weakened denial/retention assertions, ≤2-line comments, `go vet`) | — | untouched e2e validators; comment audit; gate rows |
@@ -136,8 +142,9 @@ exactly that purpose; no other test file is touched, and the production seam gro
 ## 5. Local gates
 
 `gofmt -l` (daemon), `go vet ./...` and `go test ./internal/app/` with `GOOS=linux`/in WSL
-(`GOFLAGS=-mod=mod`, `CGO_ENABLED=0`), the e2e compile gate (`go vet ./e2e/`), and the mutant row
-(revert the callback wiring → the new test reddens). Never run the measurement harness beside the
+(`GOFLAGS=-mod=mod`, `CGO_ENABLED=0`), the e2e compile gate (`go vet ./e2e/`), and the mutant rows
+M1–M5 (callback wiring reverted; peer publication dropped; the seam predicate true/inverted; the
+validation equality deleted — each named row reddens). Never run the measurement harness beside the
 suite.
 
 ## 6. Out of scope (with reasons)

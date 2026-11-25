@@ -102,6 +102,18 @@ func TestLinuxV2NativeOwnerWitnessRejectsMismatchedClaimFenceAndSubject(t *testi
 	}
 }
 
+func TestLinuxV2NativeWitnessRequestHarnessMustMatchTheConfiguredKind(t *testing.T) {
+	value, owner, request := validLinuxV2NativeWitnessFixture()
+	request = stageReplayWitnessRequest(t, request)
+	if err := validateLinuxV2NativeWitnessRequest(request, value, owner); err != nil {
+		t.Fatalf("valid stage-replay fixture rejected: %v", err)
+	}
+	request.Harness = config.RuntimeHarnessCodex
+	if err := validateLinuxV2NativeWitnessRequest(request, value, owner); err == nil {
+		t.Fatal("a stage-replay request whose harness differs from the configured launch kind was accepted")
+	}
+}
+
 func TestLinuxV2NativeOwnerWitnessReplayRequiredIsRestrictive(t *testing.T) {
 	value, owner, request := validLinuxV2NativeWitnessFixture()
 	request = stageReplayWitnessRequest(t, request)
@@ -1843,8 +1855,9 @@ func newLinuxV2WitnessReleaseFixtureWithJournal(t *testing.T, hold string, mutat
 	}
 	key := state.RunKey{RunID: "witness-release-run", Generation: fence.Generation}
 	request := linuxV2NativeWitnessRequest{
-		Case: "stage_replay", RunKey: linuxV2NativeWitnessRunKey{RunID: key.RunID, Generation: key.Generation},
-		Fence: fence,
+		Case: "stage_replay", Harness: config.RuntimeHarnessPi,
+		RunKey: linuxV2NativeWitnessRunKey{RunID: key.RunID, Generation: key.Generation},
+		Fence:  fence,
 		Barrier: linuxV2NativeWitnessBarrier{
 			Directory: t.TempDir(), TimeoutSeconds: 30, HoldAfter: hold,
 		},
@@ -1970,7 +1983,7 @@ func TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget(t *testing.T) {
 
 func TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage(t *testing.T) {
 	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
-	fixture.witness.startProcessStagesRelease = true
+	fixture.witness.request.Harness = config.RuntimeHarnessCodex
 	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err != nil {
 		t.Fatalf("daemon.start release path callback: %v", err)
 	}
@@ -2051,5 +2064,22 @@ func TestLinuxV2NativeWitnessRunnerReleaseReplaySkipsWithoutStaging(t *testing.T
 	}
 	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("replay release staged its held marker: %v", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessReleaseSeamRequiresTheRequestHarness(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	fixture.witness.request.Harness = ""
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err == nil {
+		t.Fatal("release callback accepted a request without a configured harness")
+	}
+	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unparsable request harness staged its held marker: %v", err)
+	}
+	fixture.witness.mu.Lock()
+	peer := fixture.witness.peer
+	fixture.witness.mu.Unlock()
+	if peer != nil {
+		t.Fatalf("unparsable request harness published witness evidence: %#v", peer)
 	}
 }

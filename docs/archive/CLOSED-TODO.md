@@ -5348,7 +5348,7 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       user and host network namespaces) as its marker evidence; the hold engaging and the evidence
       shape are pinned locally by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`,
       `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` and
-      `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with three mutant rows. No e2e
+      `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with five mutant rows. No e2e
       validator, fixture byte or `pi/**` file changed. Carried, not closed: the guest row, which the
       goal's acceptance assigns to the conductor's Bind (one `migration` run on the PR head, its
       next stop recorded verbatim or green). The entry's intermittent aborted-release stop measurement
