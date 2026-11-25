@@ -362,6 +362,104 @@ func TestLinuxV2NativeWitnessStageReplayRequiresExactUnresolvedCategory(t *testi
 	}
 }
 
+type linuxV2NativeWitnessFailingWriter struct{ err error }
+
+func (writer linuxV2NativeWitnessFailingWriter) Write([]byte) (int, error) { return 0, writer.err }
+
+func TestLinuxV2NativeWitnessUnresolvedOutcomeFailsTheCommand(t *testing.T) {
+	summary := linuxV2NativeWitnessSummary{
+		Version: 1, Case: "stage_replay", Harness: "pi", NativeVersion: "1.5.2",
+		InstalledOwnerVerified: true,
+		NativeReleaseState:     linuxV2NativeWitnessNativeReleaseUnknown,
+		Outcome:                "unresolved",
+		RecoveryState:          "unresolved",
+		JournalUnproven:        true,
+		FailureCategory:        "containment_unproven",
+		RunKey:                 linuxV2NativeWitnessRunKey{RunID: "8f6a0c62-7a14-4d1f-9a2d-0c2b5e7f41aa", Generation: 3},
+		Fence: linuxV2NativeWitnessFenceSummary{
+			RuntimeID: "owner-witness-control-pi-durability-generic", RuntimeEpoch: 7, Generation: 3,
+			ClaimID: "2f9b6d54-1c3a-4e08-8b71-6d5a4c3b2f19",
+		},
+		Subject: protocol.Subject{
+			ResourceID: "b4fa8387-6c2e-4b1a-9f3d-2a7c8e5d0b64",
+			Commit:     "3b23dead6c7825d19ae547d66cdc87eaca06ae12",
+			TreeDigest: "sha256:c4ef64c9e0e2b8a1d7f3c6b0a9e4d2c8f1b7a3e5d9c0f2a4b6d8e0c2a4f6b8d1",
+		},
+	}
+	want := "{\"version\":1,\"case\":\"stage_replay\",\"harness\":\"pi\",\"native_version\":\"1.5.2\",\"installed_owner_verified\":true," +
+		"\"native_release_state\":\"unknown\",\"outcome\":\"unresolved\",\"recovery_state\":\"unresolved\",\"helper_drop_observed\":false," +
+		"\"journal_unproven\":true,\"workspace_recovery_required\":false,\"workspace_journal_cleared\":false,\"no_target_abort\":false," +
+		"\"failure_category\":\"containment_unproven\",\"run_key\":{\"run_id\":\"8f6a0c62-7a14-4d1f-9a2d-0c2b5e7f41aa\",\"generation\":3}," +
+		"\"fence\":{\"runtime_id\":\"owner-witness-control-pi-durability-generic\",\"runtime_epoch\":7,\"generation\":3," +
+		"\"claim_id\":\"2f9b6d54-1c3a-4e08-8b71-6d5a4c3b2f19\"},\"subject\":{\"resource_id\":\"b4fa8387-6c2e-4b1a-9f3d-2a7c8e5d0b64\"," +
+		"\"commit\":\"3b23dead6c7825d19ae547d66cdc87eaca06ae12\"," +
+		"\"tree_digest\":\"sha256:c4ef64c9e0e2b8a1d7f3c6b0a9e4d2c8f1b7a3e5d9c0f2a4b6d8e0c2a4f6b8d1\"}," +
+		"\"stages\":{\"reservation_durable\":false,\"create_started\":false,\"leaf_bound\":false,\"helper_bound\":false," +
+		"\"launcher_bound\":false,\"gate_bound\":false,\"handoff_prepared\":false,\"handoff_committed\":false," +
+		"\"initial_lease_acked\":false,\"checkout_ready\":false,\"native_released\":false,\"native_turn_started\":false," +
+		"\"stop_receipt_durable\":false,\"leaf_removed\":false,\"journal_cleared\":false,\"detached_child_live\":false}," +
+		"\"target\":{\"pidfd_verified\":false,\"user_namespace\":{\"device\":0,\"inode\":0},\"network_namespace\":{\"device\":0,\"inode\":0}," +
+		"\"same_pid_exec\":false},\"owners\":{\"anchor\":{},\"helper\":{},\"launcher\":{},\"gate\":{},\"reaper\":{}}," +
+		"\"leaf\":{\"removed\":false},\"clone\":{\"checkout_ready\":false},\"stop\":{\"issuer\":{},\"reaper\":{},\"kill_acknowledged\":false," +
+		"\"populated_zero\":false,\"no_migration_observed\":false,\"producer_fenced\":false,\"descendants_reaped\":false," +
+		"\"launcher_exit\":{\"waited\":false,\"reaped\":false},\"gate_exit\":{\"waited\":false,\"reaped\":false}}," +
+		"\"release\":{\"opaque_platform_release\":false,\"leaf_removed\":false,\"clear_persisted\":false,\"anchor_retired\":false}," +
+		"\"provider_action\":{\"attempted\":false,\"completed_count\":0},\"health\":{\"attempted\":false,\"healthy\":false," +
+		"\"peer_verified\":false,\"network_namespace_verified\":false,\"network_namespace\":{\"device\":0,\"inode\":0}}}\n"
+
+	var output bytes.Buffer
+	err := writeLinuxV2NativeWitnessSummaryAndExit(&output, summary)
+	if !errors.Is(err, errLinuxV2NativeWitnessContainmentUnproven) {
+		t.Fatalf("unresolved owner witness error = %v, want the deliberate containment-unproven exit", err)
+	}
+	if output.String() != want {
+		t.Fatalf("unresolved owner witness response = %q, want %q", output.String(), want)
+	}
+
+	writeErr := errors.New("owner witness output is closed")
+	err = writeLinuxV2NativeWitnessSummaryAndExit(linuxV2NativeWitnessFailingWriter{err: writeErr}, summary)
+	if errors.Is(err, errLinuxV2NativeWitnessContainmentUnproven) || !errors.Is(err, writeErr) {
+		t.Fatalf("closed owner witness output error = %v, want the write error without the sentinel", err)
+	}
+
+	for _, proven := range []struct {
+		outcome string
+		adjust  func(*linuxV2NativeWitnessSummary)
+	}{
+		{outcome: "no_native_effects", adjust: func(summary *linuxV2NativeWitnessSummary) {
+			summary.RecoveryState = "no_native_effects"
+			summary.JournalUnproven = false
+			summary.FailureCategory = ""
+			summary.NativeReleaseState = linuxV2NativeWitnessNativeReleaseNotReleased
+		}},
+		{outcome: "aborted_no_target", adjust: func(summary *linuxV2NativeWitnessSummary) {
+			summary.RecoveryState = "aborted_no_target"
+			summary.JournalUnproven = false
+			summary.NoTargetAbort = true
+			summary.FailureCategory = ""
+			summary.NativeReleaseState = linuxV2NativeWitnessNativeReleaseNotReleased
+		}},
+		{outcome: "recovered", adjust: func(summary *linuxV2NativeWitnessSummary) {
+			summary.RecoveryState = "released"
+			summary.JournalUnproven = false
+			summary.FailureCategory = ""
+			summary.NativeReleaseState = linuxV2NativeWitnessNativeReleaseReleased
+			summary.Stages.NativeReleased = true
+		}},
+	} {
+		provenSummary := summary
+		provenSummary.Outcome = proven.outcome
+		proven.adjust(&provenSummary)
+		var provenOutput bytes.Buffer
+		if err := writeLinuxV2NativeWitnessSummaryAndExit(&provenOutput, provenSummary); err != nil {
+			t.Errorf("%s owner witness error = %v, want exit 0", proven.outcome, err)
+		}
+		if provenOutput.Len() == 0 {
+			t.Errorf("%s owner witness wrote no response bytes", proven.outcome)
+		}
+	}
+}
+
 func TestLinuxV2NativeWitnessReportsOnlyExactAuthenticatedHelperDrop(t *testing.T) {
 	store, key := claimedStore(t)
 	defer store.Close()

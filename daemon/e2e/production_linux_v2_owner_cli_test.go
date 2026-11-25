@@ -1631,7 +1631,7 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 }
 
 func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwners) error {
-	for _, pair := range []struct {
+	pairs := []struct {
 		name     string
 		expected *linuxV2OwnerWitnessProcess
 		actual   *linuxV2OwnerWitnessProcess
@@ -1640,15 +1640,23 @@ func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwner
 		{name: "helper", expected: expected.Helper, actual: actual.Helper},
 		{name: "launcher", expected: expected.Launcher, actual: actual.Launcher},
 		{name: "gate", expected: expected.Gate, actual: actual.Gate},
-	} {
+	}
+	for _, pair := range pairs {
 		if pair.expected != nil && (pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
 			return fmt.Errorf("same-RunKey replay changed exact %s PID/creation identity", pair.name)
 		}
 	}
 	seenPIDs := make(map[int]struct{}, 4)
 	seenIdentities := make(map[string]struct{}, 4)
-	for _, process := range []*linuxV2OwnerWitnessProcess{actual.Anchor, actual.Helper, actual.Launcher, actual.Gate} {
+	for _, pair := range pairs {
+		process := pair.actual
 		if process == nil {
+			continue
+		}
+		// The witness emits an unbound owner slot as the same zero object on both
+		// sides; only that placeholder pair escapes the completeness check.
+		if pair.expected != nil && pair.expected.PID <= 1 && pair.expected.Identity == "" &&
+			process.PID <= 1 && process.Identity == "" {
 			continue
 		}
 		if process.PID <= 1 || process.Identity == "" {
