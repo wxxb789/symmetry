@@ -52,47 +52,47 @@ group, no `wsl.exe` interop for the run itself).
 `scripts/ci/opencode-v2-support-witness.py` takes `--mode probe|full|provider-failure|truncation`.
 Every mode refuses a blob whose size, sha256 or file magic differs from the running platform's
 pin, checks the readiness identity (`GET /api/info` must answer 200 with `pid == server pid`
-and `version == "2.4.1"` exactly), records the route rows verbatim (the `/api/info` body
-narrowed to `pid`/`version`/`status`), replaces the credential, the relay base URL and the
-relay host in memory before any write, bounds the SSE capture at 8 MiB and reaches the
-process/socket/reader cleanup barriers.
+and `version == "2.4.1"` exactly), records the route rows verbatim (the `/api/info` 200 body
+narrowed to `pid`/`version`/`status`, the 401 row's `UnauthorizedError` body kept), replaces
+the credential, the relay base URL and the relay host in memory before any write, bounds the
+SSE capture at 8 MiB and reaches the process/socket/reader cleanup barriers.
 
 | receipt | mode | raw sha256 (uncommitted) | pre-compaction sha256 (uncommitted) | committed sha256 |
 | --- | --- | --- | --- | --- |
-| `probe-windows.json` | probe | `71516a99bf1fda1038e988e0a23850566531d7eca36335b535fa1406702f3213` | `93e3d1954a4ab1745c6d65b049e889f0057db5fbb467e1002fa12b4a626b1543` | `7044a470874be4deb8e4ccc0843e0a17b6a1fd2bc45cedb4e4fb355bdeb09258` |
-| `probe-linux.json` | probe | `78aa649fbad114e8165485cf463a3527522ce4687868dc7a61368699fd4066c6` | `07cacda5706e344e86e1313f3176b70ee2a9d6782fe4d282e38928ad88668ab6` | `a78a4289e2bd8b4f32a2398aa090493cd541168c33175f426875668a5dae97c4` |
-| `windows-2026-11-25-r2.json` | full | `35d89994cea6129f9fcc450f231c0480095371f043aa3425b7b229e5cba210f7` | `c1d9d7713581de4da656344871964079853e338762c56d05f0f2f12f34946895` | `0670b3d3581c9ee8bf8d73d13d53f3f1db762e2cc0ef3ff4ff793ad3e84a96b2` |
-| `linux-2026-11-25.json` | full | `6ab27bde8ea7556808bf841860c715ec4410e1336aa72d6a034a0009f2b4777e` | `2ede51de419d98f77e8ab38cacb5280072121b9c0f0200781c09e2683dbfee87` | `c4a4fb6ff96fc7c562a4edd6679ad963050c59ffaa6947f3c45eb3e35e0b31b2` |
-| `windows-2026-11-25-provider-failure.json` | provider-failure | `88d8c109576f8ced6d8a8848bb613dcb955273bfd119e4d62538ec056321488b` | `958dcb32c7ecf5fdbfe1f3ce96cabc26a80a04810022ed4d6e74cd7572928ec7` | `1e576b5b12a62a1098c25a297ff4aa38da6e221cf7962b1251736c40d42ca7fe` |
-| `linux-2026-11-25-provider-failure.json` | provider-failure | `6b2b7807360a5fdff20ff6277b1d245388671a188b044d09c96668349ea4cd71` | `e3e5d2c9a5a3bab69d74b4633d00c45d8f059d5290191fc36e52c050a01b2d00` | `8351173c402755873dcd9d77de564633f600d2a5b004a35a420d0bfc88b7d772` |
-| `windows-2026-11-25-truncation.json` | truncation | `02ab07840acb0329e3f7c1a63e9ecc5119c98df44388802940259142df77e20e` | `f4855a31e1f92cf21085f599ffdeb5cb02f7330e5966f13e62cbbe95e3963a33` | `2c74bfd31c3d4a711a7aae744145fc8ad3e3dc7d19dea9d4f2dd9ce5a6dc5e14` |
-| `linux-2026-11-25-truncation.json` | truncation | `9489fb6d5e520e62fe03c833898258ef2af9ea5d9d1d9534060c6136aa571423` | `40e85d111afcc059043cafe451aeedba71c76280a82a52a9f514a5652c4179ae` | `361cb4ffb23df5a3c628887a2df281ab12b57d509e5c55da902d0d0407bb7a68` |
+| `probe-windows.json` | probe | `46ccd7defac6e919787e285152c364bfc0507b7fa695d902698b8766b0b524e2` | `a0aeefdd5f2305a2716ddb68a5354ff898db6c458f705664237fb8c057045aef` | `59bd994351169af914338e8cd782709d6b6653d73a9f3fd5c14471230071f0fd` |
+| `probe-linux.json` | probe | `2cd317b974168cb2a41ac019e6f9a9b8a3de679909bbf90c397e8e776a836785` | `06f2faabb264c340999e1be16096bfb55a3d1510734ede07a11dd6533c9bdb41` | `5171768c1fe3ca54e768025c88500d9c3281fff303e896cd7b00891c643dad04` |
+| `windows-2026-11-25-r2.json` | full | `f4adc37ccc1887c34370b7e3d757d0cdf4532fa6f00182b400d938255d95b3a5` | `34e8950cc440d54ace7c3710ee1fcfd76beb6adfde2b84b349386467bfb51b34` | `8ab89807eed4bc1b9fdf50daff6fbb1998400062d0f5137e247d0cb5d406bfe2` |
+| `linux-2026-11-25.json` | full | `e67298fb5e7d338b020430c443629c8d14b859c811d952f987392cb5b3749e4a` | `71da755a60d1eef9d7ebf6f61bad921bdb7a52c84503b5ed617d8fa78b4f1c6b` | `5a12a07d800cb800302688a45a17cfc78797ec787d2035d57f6d317f1ad79c50` |
+| `windows-2026-11-25-provider-failure.json` | provider-failure | `48a8253d971b5cf15548125ea3e1b89cb2be3408633c17a41d3bedb0a92bafa8` | `859ffbbcdef9a626244168c227974f20ecc44111b8054cf6f2875498cfc5e66a` | `6acf9c2b54db1f9db8af69a01e062542e7f801391c103dcefb2fb9817df6f34c` |
+| `linux-2026-11-25-provider-failure.json` | provider-failure | `5c0362fd4d608b4bb2655fb984d564421852d574c4f0d96bfacc386b63a20f85` | `7d8ce6209f6738bd7333de8466441b675623b507f98233e3565bcc643f2184cd` | `f839166934b5f886d5f48ebd4d988dd7ffe311be8f8c2e7d4d3bda78493816b4` |
+| `windows-2026-11-25-truncation.json` | truncation | `e4cf7818f081016efa4395a3d82826168a1e5400b9ae1029892c647da0ced525` | `fc95bee7a7bf6b46fa84ee49d5f2e8a40649764fc8f7afafd417026b2c0ca9ab` | `dc20b422ed299e188a739831f5b778070e497eac7154a945faefc3920fd23d16` |
+| `linux-2026-11-25-truncation.json` | truncation | `69b875d7bb82b30d67ed789c2fd572a95f3f22b2a86feaeaa6aad708f8eeddf1` | `dc3daf72b0556c85b90d83695c04cd49d53d946d9f2b8093c013ba50075c00b4` | `795b6aafb013e71ee172ccba86b22a401e5a53e6b8f2f7f4311bf76c95a50f6f` |
 
-**Fix pass (2026-11-25, PRE-2 — public-repo hostname ruling).** The collector narrows the
-recorded `/api/info` body to `pid`/`version`/`status`, so no host metadata is recorded in
-future; the eight records committed before that ruling had the machine hostname value in that
-body replaced with the constant token `<HOSTNAME>`, a recorded post-render substitution over
-the renderer's output. The committed digests above are re-derived from the substituted bytes;
-the old→new pair per file and the `classify()` re-grade (identical verdicts on all eight) are
-in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4 and §12. The raw and pre-compaction
-columns are unchanged: those uncommitted artifacts are outside the repository and still carry
-the original value. The frozen 2.3.0 receipts keep their `hostname` field verbatim — not
-edited, recorded as a residual.
+**Re-collection (2026-11-25, PR #288 round 1).** All eight records are re-collected machine
+output of the final collector and suite, so each receipt's `binding_sha256` is the collector
+bytes this change delivers. The earlier bytes (an apply pass, a fix pass and the PRE-2
+hostname edit of the eight then-committed records) are superseded; their per-file committed
+digests before this re-collection, the re-collected raw/pre-compaction/committed triples and
+the `classify()` re-grade comparison (identical verdicts and identical reasons on all eight)
+are in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4. No committed record carries a
+post-render substitution: the collector narrows the recorded `/api/info` 200 body to
+`pid`/`version`/`status` and keeps the 401 row's `UnauthorizedError` body verbatim, so no host
+metadata reaches it at capture time. The frozen 2.3.0 receipts keep their `hostname` field
+verbatim — not edited, recorded as a residual.
 
 Every committed receipt carries the collector binding
-`56d6e602631fdd8d0c3baa34dd3821df3cc0d332ee0d33aecc59afed0b126bea` for
+`087e07a8acaab7c9d07c169acdbd70342e651112e66d0d2a4bdfb3d00c98b0f5` for
 `scripts/ci/opencode-v2-support-witness.py` and
 `8df46499b267f97b0e309f456bbbf2eec5c5ce98ceef92685d7a49bd798a2f93` for
 `scripts/ci/source_subject.py` in its own `binding_sha256` field, and records
-`source_head 6b2d4f8f195a…` (the base commit; the collector changes are uncommitted at
-collection time, which is why the binding, not the head, is the byte identity of the tool).
-A later apply pass, a fix pass and the PRE-2 fix pass changed the collector and its suite
-after collection (deltas in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every
-receipt here keeps its collecting revision in `binding_sha256`, and none was re-collected.
+`source_head 49a606dd346f…`, the branch head at re-collection time; the binding is the byte
+identity of the tool that wrote each receipt, and the collector and suite bytes this change
+delivers are exactly those bound bytes (the collector/suite diff slots in
+`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §3).
 
 Each committed record is produced from its raw receipt by two recorded steps (Q-RENDER a) —
-the repository renderer's root-only pass, then a one-line JSON pass — and the eight pre-PRE-2
-records additionally carry the recorded hostname-token substitution described above.
+the repository renderer's root-only pass, then a one-line JSON pass; no further step touches
+the bytes.
 
 ```text
 python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>.json > <render>/<record>.json
@@ -108,27 +108,26 @@ reads machine-generated records as duplication, because the same collector write
 receipt and they share their structural blocks by construction. A record committed as a single
 JSON object on one line is below that threshold; the gate reports it as a notice rather than
 silently skipping it, and no record can embed a run of another record's lines. The parsed
-equality check above proves the compaction changed whitespace only; apart from the recorded
-`<HOSTNAME>` substitution the data is exactly the renderer's output, and the raw and
-pre-compaction sha256 values stay in the table so both earlier forms can be reproduced
-byte-for-byte. `.gitattributes` pins `*.json text eol=lf`, so
+equality check above proves the compaction changed whitespace only, so the data is exactly
+the renderer's output, and the raw and pre-compaction sha256 values stay in the table so
+both earlier forms can be reproduced byte-for-byte. `.gitattributes` pins `*.json text eol=lf`, so
 that step writes bytes (LF) instead of letting the platform translate newlines; a CRLF spelling
 would be refused by `git add` under the pin.
 
-**Pass accounting.** Three pass roles per platform: `full` (Pass 1), `provider-failure`
-(Pass 2), `truncation` (Pass 3). The `truncation` role resolved to a schema-grounded
-`unavailable` on both platforms, so the spare slot was never needed for a class gap. The
-readiness loop first shipped with a startup-race defect: the Linux server answers `503` from
-its listening socket before the API is ready, which the first revision treated as an identity
-mismatch instead of a readiness wait. The Windows roles were therefore re-run once under the
-final revision (binding `56d6e602…`); their first Revision-A receipts (binding
+**Pass accounting.** Per platform, one `probe` run plus three pass roles — `full` (Pass 1),
+`provider-failure` (Pass 2), `truncation` (Pass 3): eight runs in all for the 2026-11-25
+re-collection, each foreground and bounded, and no fourth pass role on either platform. The
+`truncation` role resolved to a schema-grounded `unavailable` on both platforms, so the spare
+slot was never needed for a class gap. The readiness loop first shipped with a startup-race
+defect: the Linux server answers `503` from its listening socket before the API is ready,
+which the first revision treated as an identity mismatch instead of a readiness wait; the
+first Revision-A receipts (binding
 `3598d6a1afe62305c571047e9ca9bf6028732802bac5b7fbf976ae9816ee600f`) are retained
 uncommitted in the operator's scratch directory and are labelled here as superseded, not as
 current evidence: `probe-windows.json 45630f8e…`, `windows-2026-11-25.json 80151a58…`,
 `windows-2026-11-25-provider-failure.json 11338717…`, `windows-2026-11-25-truncation.json
 394d5702…`, `probe-linux.json 9300275d…` (the last one is the failed Linux preflight probe,
-which recorded a `503` readiness row and no receipt of record). No fourth pass role was run on
-either platform, and no pass was left pending.
+which recorded a `503` readiness row and no receipt of record).
 
 ## 3. Per-platform class matrix
 
@@ -140,16 +139,17 @@ containment caveat of §1.
 | Success | observed — native `session.execution.succeeded` terminal and `outcome: succeeded` readback (`windows-2026-11-25-r2.json`) | observed — same terminal and readback (`linux-2026-11-25.json`) |
 | Provider failure | observed — genuine relay 401 with the native `provider.auth` terminal and `outcome: failed` readback (`windows-2026-11-25-provider-failure.json`) | observed (`linux-2026-11-25-provider-failure.json`) |
 | Interruption | observed — first token, `interrupt?resume=false` → `{"interrupted": true}`, native `session.execution.interrupted`, `outcome: interrupted` (`windows-2026-11-25-r2.json`) | observed (`linux-2026-11-25.json`) |
-| Continuation after step | observed — permission request on the read tool, `{"decision": "once"}` reply 204, `permission.replied`, tool success carrying the file's content, a later `session.step.started`, succeeded terminal (`windows-2026-11-25-r2.json`) | observed (`linux-2026-11-25.json`) |
+| Continuation after step | observed — permission request on the read tool, the `{"decision": "once"}` reply request answered 204 (recorded response body empty), `permission.replied`, tool success carrying the file's content, a later `session.step.started`, succeeded terminal (`windows-2026-11-25-r2.json`) | observed (`linux-2026-11-25.json`) |
 | Truncated provider response | unavailable — the live prompt request schema exposes no output-length bound; properties `['agents','delivery','files','id','metadata','resume','skills','text']`, document sha256 `6e23e77072e41a75ec55b8da91d3abb32e5c66fc4e234763ed5a02f8f28ecbbb` (`windows-2026-11-25-truncation.json`) | unavailable — same reason (`linux-2026-11-25-truncation.json`) |
-| Cleanup | observed — `taskkill` exit 0, server exit code captured, both reader barriers stopped (all Windows receipts) | observed — SIGTERM on the process group, `exit_code 0`, server exit 143, both reader barriers stopped (all Linux receipts) |
+| Cleanup | observed — `taskkill` exit 0, server exit code captured, both reader barriers stopped (all Windows receipts) | observed — SIGTERM on the process group, `group_gone` proved by ESRCH on the group, `exit_code 0`, server exit 143, both reader barriers stopped (all Linux receipts) |
 | Usage | observed — nonzero native `tokens`/`cost` counters in the readbacks (`windows-2026-11-25-r2.json`, and zero-cost failure counters in the provider-failure receipt); not reconciled against provider billing | observed — same limitation (`linux-2026-11-25.json`, `linux-2026-11-25-provider-failure.json`) |
 
 `HTTP 200`, idle, `Step.Ended`, SSE EOF and files still do not establish success; the
-classifier that decides each row is unchanged in that respect and still refuses a failed
-provider turn, a no-op interrupt and an unapproved tool continuation. The PRE-2 substitution
-was re-graded: `classify()` over the eight edited records returns the pre-edit `classes`
-mapping for every one of them, so no verdict above moves (evidence record §12).
+classifier that decides each row still refuses a failed provider turn, a no-op interrupt, an
+unapproved tool continuation and a cleanup whose process group was not proved gone. The
+re-collection was re-graded: `classify()` over the eight re-collected records reproduces every
+stored `classes` mapping, and the per-class verdicts and reasons are identical to the
+pre-re-collection records (evidence record §4), so no verdict above moves.
 
 ## 4. Route table (live statuses, never normalized)
 
@@ -165,20 +165,23 @@ mapping for every one of them, so no verdict above moves (evidence record §12).
 | `POST /api/session/{id}/prompt` | 200 | 200 | body `{id,text,files,agents,skills,metadata,delivery,resume}`; no output bound |
 | `GET /api/session/{id}` | 200 | 200 | readback carries `outcome`, `tokens`, `cost` |
 | `GET /api/session/{id}/permission` | 200 `{"data":[Permission.Request]}` | 200 | request `{id, action, resources, save, source}` |
-| `POST /api/session/{id}/permission/{requestID}/reply` | 204 (`{"decision":"once"}`) | 204 | reply enum `once\|always\|reject`; only `once` is ever sent |
+| `POST /api/session/{id}/permission/{requestID}/reply` | 204, response body empty as received | 204 | request body `{"decision":"once"}`; reply enum `once\|always\|reject`, only `once` is ever sent |
 | `POST /api/session/{id}/interrupt?resume=false` | 200 `{"interrupted":true}` | 200 | query flag and top-level body are 2.4.1 spellings |
 | `DELETE /api/session/{id}` + readback | 204, readback 404 | 204, readback 404 | unchanged |
 
 Every status above is the live one; each row's body is recorded verbatim except the
-`/api/info` rows, whose body is narrowed to `pid`/`version`/`status` (§2, PRE-2).
+`/api/info` 200 row, whose body is narrowed to `pid`/`version`/`status`; the `/api/info` 401
+row keeps the server's `UnauthorizedError` body verbatim (§2).
 
 ## 5. Decisive observations
 
 - **The continuation leg finally has the reply path.** The session is created with `deny *`
   plus `read * → ask`; the prompt drives the `read` tool; `session.tool.called` (pre-approval,
   `executed:false`) is followed by a permission request (`action: read`, `resources:
-  ["baseline.txt"]` or the absolute path), the receipt's reply row is `POST …/reply` with
-  `{"decision":"once"}` → **204**, `permission.replied` follows, then `session.tool.success`
+  ["baseline.txt"]` or the absolute path), the receipt records the reply operation as the
+  server's own response — `POST …/reply` with request body `{"decision":"once"}`, answered
+  **204** with the empty body a 204 carries (the collector no longer substitutes its own
+  request constant for the response) — then `permission.replied` follows, then `session.tool.success`
   carries the file's own bytes (`Read file baseline.txt, lines 1-1 / 1: native continuation
   witness`), then `session.step.ended` and a later `session.step.started`, then
   `session.execution.succeeded`. The class is `observed` only when the recorded `204` reply is
@@ -204,20 +207,20 @@ Every status above is the live one; each row's body is recorded verbatim except 
   gateway.
 - **Readiness identity is exact.** Every receipt records `pid == server pid` and
   `version == "2.4.1"`; a `503` row precedes the `200` only in
-  `linux-2026-11-25-provider-failure.json` and `linux-2026-11-25-truncation.json`, because the
-  server answers from its listening socket before the API is ready and the readiness race may
-  resolve before the first recorded attempt.
+  `linux-2026-11-25-truncation.json` in the re-collected set, because the server answers from
+  its listening socket before the API is ready and the readiness race may resolve before the
+  first recorded attempt.
 - **Usage counters are native only.** They are nonzero in the successful readbacks and
   zero-cost in the failure receipt; successful/billable usage and failed-turn accounting stay
   unreconciled against the provider.
 - **Deleted sessions read back.** `DELETE` answers 204 and the following `GET` answers 404
   `SessionNotFoundError` on both platforms, so session removal is observed rather than
   assumed.
-- The recorded `/api/info` body keeps only `pid`/`version`/`status` after the PRE-2 fix (the
-  collector narrows it in memory before any write), so no host metadata is recorded in future;
-  the eight edited records carry the constant token `<HOSTNAME>` where the collector of the
-  day wrote the machine hostname value. The frozen 2.3.0 receipts keep their `hostname` field
-  verbatim — not edited, recorded as a residual in the evidence record §10.
+- The recorded `/api/info` 200 body keeps only `pid`/`version`/`status` (the collector narrows
+  it in memory before any write), so no host metadata reaches a record, and the 401 row keeps
+  the server's `UnauthorizedError` body verbatim. No committed record carries the machine
+  hostname value (census in the evidence record §12). The frozen 2.3.0 receipts keep their
+  `hostname` field verbatim — not edited, recorded as a residual in the evidence record §10.
 
 ## 6. Credential and record locality
 
@@ -229,7 +232,7 @@ The receipts keep `credential_scan` (`files_scanned`, `matches: []`), the in-mem
 credential/relay-origin replacement with its counts, and the config/payload/event refusals.
 The literal relay origin is replaced before any write (Q-URL b: `provider.base_url` is
 `<RELAY-BASE-URL>`, the host is `<RELAY-HOST>`), and the repository renderer then removes every
-host absolute path. The credential/key census and the PRE-2 hostname census over the change
+host absolute path. The credential/key census and the hostname census over the change
 (0 occurrences) and the renderer's root-only gate are reported with their exact commands in
 `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`.
 

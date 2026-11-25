@@ -19,7 +19,8 @@ per-pass receipts) plus the collector's own suite. Receipts and probes:
   allowlist (`PATH` plus private `HOME`/`TMPDIR`/XDG roots redirected into the run root). No
   `wsl.exe` interop was used to execute the ELF.
 - The linked worktree needed `GIT_DIR`/`GIT_WORK_TREE` for the collector's `source_head` read
-  (its `.git` file names a Windows gitdir); every receipt records `source_head 6b2d4f8f195a…`.
+  (its `.git` file names a Windows gitdir); every re-collected receipt records
+  `source_head 49a606dd346f…` (the branch head at re-collection time).
 - Every pass ran foreground and bounded; no pass was left pending. The collector and its suite
   are pure Python with no third-party dependency; the jscpd gate's toolchain came from the
   repository's pinned devDependencies.
@@ -64,9 +65,9 @@ tokens.
 
 | file | change |
 | --- | --- |
-| `scripts/ci/opencode-v2-support-witness.py` | per-platform pins (size/sha256/magic/asset) keyed by the running platform with refusals that name the platform; readiness identity extracted as an exact predicate and the startup race fixed; the route set re-anchored; the recorded `/api/info` body narrowed to `pid`/`version`/`status` (PRE-2); the continuation leg now awaits the permission request and replies `{"decision":"once"}`; POSIX launch/cleanup with signals on the process group; platform-aware child environment; in-memory credential/relay-origin replacement with counts; `--mode` probe/full/provider-failure/truncation; the live prompt schema resolved by digest for the truncation verdict |
-| `scripts/ci/test-opencode-v2-support-witness.py` | 48 tests (was 18): per-platform pin and magic rows, readiness-equality rows, the `/api/info` narrowing row, redaction/credential-locality rows including the written-receipt envelope, plain/escaped secret rows and the four-carrier refusal row, the write-tail scan/refuse/write rows, reply-bearing continuation rows including the non-`once` decision and the ordered-`permission.replied` rows, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, poll-reaped group, live-reader barrier, stream-reader join), and the committed-receipt replay row. No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
-| `daemon/internal/harness/testdata/opencode/2.4.1/**` | this evidence's records: README, two probe files, three pass receipts per platform; the eight pre-PRE-2 records carry the constant `<HOSTNAME>` token in the recorded `/api/info` body, a recorded post-render substitution whose committed digests are re-derived in the README §2 |
+| `scripts/ci/opencode-v2-support-witness.py` | per-platform pins (size/sha256/magic/asset) keyed by the running platform with refusals that name the platform; readiness identity extracted as an exact predicate and the startup race fixed; the route set re-anchored; the recorded `/api/info` **200** body narrowed to `pid`/`version`/`status` (the 401 row keeps the server's `UnauthorizedError` body); the continuation leg now awaits the permission request, replies `{"decision":"once"}` and records the server's own response (`{"status", "body"}`, never the collector's constant); POSIX launch/cleanup with signals on the process group, proving the group gone by ESRCH after the bounded SIGTERM grace and a SIGKILL escalation (`group_gone`); platform-aware child environment; in-memory credential/relay-origin replacement with counts; `--mode` probe/full/provider-failure/truncation; the live prompt schema resolved by digest for the truncation verdict; the `/prompt` and `/interrupt` guards match the recorded route with its query string stripped; restating docstrings removed (PR #288 round 1) |
+| `scripts/ci/test-opencode-v2-support-witness.py` | 50 tests (was 18): per-platform pin and magic rows, readiness-equality rows, the `/api/info` narrowing/401-passthrough row, redaction/credential-locality rows including the written-receipt envelope, plain/escaped secret rows and the four-carrier refusal row, the write-tail scan/refuse/write rows, reply-bearing continuation rows including the non-`once` decision, the recorded-server-response row and the ordered-`permission.replied` rows, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, poll-reaped group, SIGTERM-ignoring descendant with closed pipes, live-reader barrier, stream-reader join), a query-bearing route row, the group-gone cleanup grade row and the committed-receipt replay row. No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
+| `daemon/internal/harness/testdata/opencode/2.4.1/**` | this evidence's records: README, two probe files, three pass receipts per platform — all eight re-collected 2026-11-25 under the final collector/suite bytes (§4), no post-render substitution, no host metadata (§10/§12) |
 | `docs/plans/2026-11-25-rf-acc-opencode-reeval-plan.md` | the plan (protocol, route probe list, preflight, implementation choices, Phase 1 expectation) |
 | `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` | this record |
 
@@ -84,16 +85,54 @@ the final revision for that reason (§4).
 
 ## 4. Pass accounting and collector binding
 
-Three pass roles per platform: `full` (Pass 1), `provider-failure` (Pass 2), `truncation`
-(Pass 3). The `truncation` role resolved to a schema-grounded `unavailable` on both platforms,
-so the spare slot was never needed for a class gap. Every committed receipt binds collector
-`scripts/ci/opencode-v2-support-witness.py` sha256
-`56d6e602631fdd8d0c3baa34dd3821df3cc0d332ee0d33aecc59afed0b126bea` and
+**Re-collection (2026-11-25, PR #288 round 1).** The eight committed receipts are re-collected
+machine output of the final collector `scripts/ci/opencode-v2-support-witness.py` sha256
+`087e07a8acaab7c9d07c169acdbd70342e651112e66d0d2a4bdfb3d00c98b0f5`, the final suite
+`scripts/ci/test-opencode-v2-support-witness.py` sha256
+`946b0f36584457d03fe3ebcf3c8cb24edab106375d4e565c6e19650f8e01d8f4` (50 rows), and
 `scripts/ci/source_subject.py` sha256
-`8df46499b267f97b0e309f456bbbf2eec5c5ce98ceef92685d7a49bd798a2f93` — the bytes that produced
-it, recorded per receipt in `binding_sha256`.
+`8df46499b267f97b0e309f456bbbf2eec5c5ce98ceef92685d7a49bd798a2f93`. Per platform: one
+`probe` run plus the three pass roles `full` (Pass 1), `provider-failure` (Pass 2) and
+`truncation` (Pass 3) — eight runs in all, each foreground and bounded, no pass left pending
+and no fourth pass role; the `truncation` role resolved to a schema-grounded `unavailable` on
+both platforms, so the spare slot was never needed for a class gap. Every receipt binds the
+collector bytes above in `binding_sha256` and records `source_head 49a606dd346f…` (the branch
+head at re-collection time); the raw/pre-compaction/committed sha256 triple per record is in
+the 2.4.1 README §2.
 
-The four Windows records produced by the pre-fix revision (binding
+| run | receipt | mode | collector exit |
+| --- | --- | --- | --- |
+| Windows probe | `probe-windows.json` | `probe` | 0 |
+| Windows Pass 1 | `windows-2026-11-25-r2.json` | `full` | 0 |
+| Windows Pass 2 | `windows-2026-11-25-provider-failure.json` | `provider-failure` | 0 |
+| Windows Pass 3 | `windows-2026-11-25-truncation.json` | `truncation` | 0 |
+| Linux probe | `probe-linux.json` | `probe` | 0 |
+| Linux Pass 1 | `linux-2026-11-25.json` | `full` | 0 |
+| Linux Pass 2 | `linux-2026-11-25-provider-failure.json` | `provider-failure` | 0 |
+| Linux Pass 3 | `linux-2026-11-25-truncation.json` | `truncation` | 0 |
+
+The pass command per run is `python3 scripts/ci/opencode-v2-support-witness.py --mode <mode>
+--out <raw>/<record>.json` with the operator credential read at run time from the OMP provider
+entry into the collector's environment only (never argv), the pinned blob named by
+`SYMMETRY_OPENCODE_BINARY`, and, inside WSL, `GIT_DIR`/`GIT_WORK_TREE` set for the linked
+worktree. Every per-class status and every `blocker` string of the re-collected records is
+identical to the delivered `classify()` grading of the superseded committed bytes
+(`git show 49a606dd:<record>`), so no verdict changed and there is no verdict change to quote;
+the raw receipts re-grade to their own stored statuses. Superseded committed digest →
+re-collected committed digest:
+
+| record | superseded committed sha256 (bytes at `49a606dd`) | re-collected committed sha256 |
+| --- | --- | --- |
+| `probe-windows.json` | `7044a470874be4deb8e4ccc0843e0a17b6a1fd2bc45cedb4e4fb355bdeb09258` | `59bd994351169af914338e8cd782709d6b6653d73a9f3fd5c14471230071f0fd` |
+| `probe-linux.json` | `a78a4289e2bd8b4f32a2398aa090493cd541168c33175f426875668a5dae97c4` | `5171768c1fe3ca54e768025c88500d9c3281fff303e896cd7b00891c643dad04` |
+| `windows-2026-11-25-r2.json` | `0670b3d3581c9ee8bf8d73d13d53f3f1db762e2cc0ef3ff4ff793ad3e84a96b2` | `8ab89807eed4bc1b9fdf50daff6fbb1998400062d0f5137e247d0cb5d406bfe2` |
+| `linux-2026-11-25.json` | `c4a4fb6ff96fc7c562a4edd6679ad963050c59ffaa6947f3c45eb3e35e0b31b2` | `5a12a07d800cb800302688a45a17cfc78797ec787d2035d57f6d317f1ad79c50` |
+| `windows-2026-11-25-provider-failure.json` | `1e576b5b12a62a1098c25a297ff4aa38da6e221cf7962b1251736c40d42ca7fe` | `6acf9c2b54db1f9db8af69a01e062542e7f801391c103dcefb2fb9817df6f34c` |
+| `linux-2026-11-25-provider-failure.json` | `8351173c402755873dcd9d77de564633f600d2a5b004a35a420d0bfc88b7d772` | `f839166934b5f886d5f48ebd4d988dd7ffe311be8f8c2e7d4d3bda78493816b4` |
+| `windows-2026-11-25-truncation.json` | `2c74bfd31c3d4a711a7aae744145fc8ad3e3dc7d19dea9d4f2dd9ce5a6dc5e14` | `dc20b422ed299e188a739831f5b778070e497eac7154a945faefc3920fd23d16` |
+| `linux-2026-11-25-truncation.json` | `361cb4ffb23df5a3c628887a2df281ab12b57d509e5c55da902d0d0407bb7a68` | `795b6aafb013e71ee172ccba86b22a401e5a53e6b8f2f7f4311bf76c95a50f6f` |
+
+**Superseded rounds (custody history).** The four Windows records produced by the pre-fix revision (binding
 `3598d6a1afe62305c571047e9ca9bf6028732802bac5b7fbf976ae9816ee600f`) are retained uncommitted in
 the operator's scratch directory and are labelled superseded, not current evidence:
 `probe-windows.json 45630f8e0645f5efcd1accc06edb6fc0781581c5fba38d36f608be29b8bcdacb`,
@@ -105,8 +144,8 @@ plus the failed Linux preflight probe `probe-linux.json 9300275de27f20be5e106daa
 run on either platform. The committed file names and their raw/rendered sha256 pairs are in the
 2.4.1 README §2.
 
-**Apply pass (2026-11-25, after collection).** The simplification review accepted the
-post-collection edits now in the tree: the unused `deny_all` constant and the unread
+**Apply pass (2026-11-25, after collection — superseded by the re-collection).** The
+simplification review accepted the post-collection edits of that round: the unused `deny_all` constant and the unread
 `api_document` route parameter were deleted, the structurally-null `tool_outcome.name` key was
 dropped (the tool name stays in the captured `session.tool.input.started` event), the
 continuation predicate now also requires the `{"decision":"once"}` reply body, and the written
@@ -115,28 +154,30 @@ un-replaced serialization; every committed receipt's `redaction.occurrences` is 
 carrier held the origin, so no recorded byte changes). The apply-stage collector sha256 is
 `d987448b227e01a18b6001fe230ce961609c761792263aaccda82fb5ea145b4a` (suite
 `28c7bc1a866b4fe804f072db7b502ddfb88e7a32ec58b2bfe8fc262a2237eae9`); the receipts'
-`binding_sha256` (`56d6e602…`) remains the collecting revision, no receipt was re-rendered, and
-all eight committed records are unchanged. The refreshed gate numbers are in §12.
+`binding_sha256` (`56d6e602…`) remained the collecting revision, no receipt was re-rendered,
+and all eight committed records of that round were unchanged.
 
-**Fix pass (2026-11-25, review r1).** The review's six confirmed findings were fixed after the
-apply pass; no receipt was re-collected or re-rendered. The POSIX cleanup arm signals
+**Fix pass (2026-11-25, review r1 — superseded by the re-collection).** The review's six
+confirmed findings were fixed after the apply pass; no receipt was re-collected or re-rendered
+in that round. The POSIX cleanup arm signals
 `os.killpg(process.pid, …)` directly and grades an already-reaped child as `group_gone` with
 `exit_code 0`, and a recorded failure name survives the cleanup grade (`setdefault`). The
 continuation predicate now requires, inside the terminal-bounded window, a `permission.replied`
 event carrying the recorded request id and `reply: "once"` ahead of the tool success; the
-reply record itself now stores `{"status": <POST status>, "sent": <request body>}` and no
-longer stands in for server evidence. The write tail is the named `write_receipt` (run-root
+reply record of that round stored `{"status": <POST status>, "sent": <request body>}` and no
+longer stood in for server evidence (PR #288 round 1 replaced that with the server's own
+response). The write tail is the named `write_receipt` (run-root
 scan, replacement counts, refusal) called by `main()`. Both the plain and the JSON-escaped
 spelling of every secret are refused and replaced across the receipt bytes, the payload/event
-carriers, the configuration check and the run-root scan. The delivered collector sha256 is
+carriers, the configuration check and the run-root scan. The collector sha256 of that round was
 `1b7cda409b42deaefd0ccfd896824a0c686da5e7b90095b7e96211d329d64d74` (suite
 `eb7548c799ab7bfe9fdb930b684177bdb90573a78d3edad4c62975f3bb9a4164`, 47 rows); the receipts'
 `binding_sha256` (`56d6e602…`) remains the collecting revision. Gate numbers are in §12 and the
 fix-pass mutants in §11.
 
-**PRE-2 fix pass (2026-11-25, conductor pre-review of `f04e8b48`).** The conductor found the
+**PRE-2 fix pass (2026-11-25, conductor pre-review of `f04e8b48` — superseded by the re-collection).** The conductor found the
 machine hostname in all eight committed records (one occurrence each, inside the recorded
-`/api/info` body) and ruled it out of this public repository. The collector now narrows the
+`/api/info` body) and ruled it out of this public repository. The collector of that round narrowed the
 recorded `/api/info` body to `pid`/`version`/`status` (`recorded_info_body()`, pinned by
 `InfoRecordTests.test_the_recorded_info_body_drops_host_metadata`), and the eight committed
 records were edited by a byte-level substitution of the value with the constant token
@@ -153,8 +194,8 @@ records were edited by a byte-level substitution of the value with the constant 
 | `windows-2026-11-25-truncation.json` | `64b04b4d73677c1c5d405d5ff6d76a4bc49e917a7470888b7d85068ef9be01f0` | `2c74bfd31c3d4a711a7aae744145fc8ad3e3dc7d19dea9d4f2dd9ce5a6dc5e14` |
 | `linux-2026-11-25-truncation.json` | `ebcb186a1dd89e5597120060731c498460dead9912caba38ebf2e4aa29e2fef5` | `361cb4ffb23df5a3c628887a2df281ab12b57d509e5c55da902d0d0407bb7a68` |
 
-The raw and pre-compaction digests in the 2.4.1 README §2 do not move: those uncommitted
-artifacts were not edited and still carry the pre-fix value inside the `/api/info` body.
+The raw and pre-compaction digests published for that round did not move: those uncommitted
+artifacts were not edited and still carried the pre-fix value inside the `/api/info` body.
 `classify()` over each edited record returns the identical `classes` mapping as over its
 pre-edit blob (`git show f04e8b48:<record>` — command and result in §12), so no verdict
 changed and no receipt was re-collected; every receipt's `binding_sha256` (`56d6e602…`)
@@ -174,7 +215,7 @@ reason strings are the receipts' own `blocker` values, verbatim.
 | Interruption | observed — first token, `{"interrupted": true}`, native interrupted terminal, `outcome: interrupted` readback | observed — same |
 | Continuation after step | observed — permission request, reply 204, `permission.replied`, tool success with the file's content, later step start, succeeded terminal | observed — same |
 | Truncated provider response | unavailable — `the live prompt request schema exposes no output-length bound; properties ['agents', 'delivery', 'files', 'id', 'metadata', 'resume', 'skills', 'text'], document sha256 6e23e77072e41a75ec55b8da91d3abb32e5c66fc4e234763ed5a02f8f28ecbbb` | unavailable — same reason |
-| Cleanup | observed — `taskkill` exit 0, server exit code captured, both reader barriers stopped | observed — SIGTERM on the process group, `exit_code 0`, server exit 143, both reader barriers stopped |
+| Cleanup | observed — `taskkill` exit 0, server exit code captured, both reader barriers stopped | observed — SIGTERM on the process group, `group_gone` proved by ESRCH on the group, `exit_code 0`, server exit 143, both reader barriers stopped |
 | Usage | observed — nonzero native `tokens`/`cost` counters; not reconciled against provider billing | observed — same limitation |
 
 Classes not exercised by a given pass are reported by that pass as `unavailable` (interruption
@@ -183,17 +224,18 @@ provider-failure receipts grade success `run and failed`, because a prompt was s
 terminal failed. The matrix above names the decisive receipt per class. `HTTP 200`, idle,
 `Step.Ended`, SSE EOF and files establish nothing: the classifier still refuses a failed
 provider turn as success, a no-op interrupt, and a tool continuation without the recorded
-`204` reply and the ordered `permission.replied` for the same request id. The PRE-2
-substitution was re-graded over the edited bytes: every record's `classes` mapping after
-`classify()` is identical to the pre-edit mapping (§4, command and result in §12), so no
-verdict in this matrix moves.
+`204` reply and the ordered `permission.replied` for the same request id, and a cleanup whose
+process group was not proved gone. The re-collection was re-graded: every re-collected
+record's `classes` mapping after `classify()` reproduces its stored statuses and is identical
+to the grading of the superseded committed bytes, reasons included (§4), so no verdict in this
+matrix moves.
 
 ## 6. Route table and 2.3.0 deltas
 
 Live statuses recorded verbatim in the receipts' `operations` rows
 (`method/path/status/body/credential_redacted_before_write`; the streaming row records status
-and content type instead of a body; the `/api/info` rows' bodies are narrowed to
-`pid`/`version`/`status` after PRE-2).
+and content type instead of a body; the `/api/info` **200** row's body is narrowed to
+`pid`/`version`/`status`, and the 401 row keeps the server's `UnauthorizedError` body).
 
 | Route | Windows | Linux | Delta vs 2.3.0 |
 | --- | --- | --- | --- |
@@ -207,7 +249,7 @@ and content type instead of a body; the `/api/info` rows' bodies are narrowed to
 | `POST /api/session/{id}/prompt` | 200 | 200 | `{id,text,files,agents,skills,metadata,delivery,resume}`; no output bound |
 | `GET /api/session/{id}` | 200 | 200 | readback carries `outcome`/`tokens`/`cost` |
 | `GET /api/session/{id}/permission` | 200 | 200 | pending request `{id, action, resources, save, source}` |
-| `POST /api/session/{id}/permission/{requestID}/reply` | 204 | 204 | body `{"decision":"once"}`; enum `once\|always\|reject`, only `once` ever sent |
+| `POST /api/session/{id}/permission/{requestID}/reply` | 204, empty response body as received | 204 | request body `{"decision":"once"}`; enum `once\|always\|reject`, only `once` ever sent |
 | `POST /api/session/{id}/interrupt?resume=false` | 200 `{"interrupted":true}` | 200 | query flag and top-level body are 2.4.1 spellings |
 | `DELETE /api/session/{id}` + readback | 204, readback 404 | 204, readback 404 | deletion observed, not assumed |
 
@@ -222,8 +264,10 @@ verbatim; prompt drives the `read` tool; `session.tool.input.started` (`name: re
 `session.tool.called` (`executed: false`, the pre-approval payload) → a permission request
 recorded through the authoritative `GET /api/session/{id}/permission` row (`action: read`,
 `resources: ["baseline.txt"]`, `source.type: tool`) → the receipt's reply row
-`POST /api/session/{id}/permission/{requestID}/reply` with body `{"decision": "once"}` →
-**204** → `permission.asked`/`permission.replied` on the stream → `session.tool.success` whose
+`POST /api/session/{id}/permission/{requestID}/reply` records the server's own response —
+request body `{"decision": "once"}`, status **204**, response body empty as received (a 204
+carries no readable body; the collector records the response instead of its own request
+constant, R3) — → `permission.asked`/`permission.replied` on the stream → `session.tool.success` whose
 content is the file's own bytes (`Read file baseline.txt, lines 1-1 / 1: native continuation
 witness`) → `session.step.ended` → a later `session.step.started` → `session.execution.succeeded`,
 with `outcome: succeeded` and nonzero counters in the readback.
@@ -275,11 +319,10 @@ evidence.
 - Every committed record is produced from its raw receipt by two recorded steps (Q-RENDER a):
   `python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>.json` and
   then a one-line JSON pass, after which `--check --root-only` over the committed bytes is a
-  no-op (§12); the eight pre-PRE-2 records carry one further recorded change, the
-  hostname-token substitution of §4. `binary.path`, `workspace`, `discovered_from`, the
-  `command` array and every event-carried directory are `path-sha256:` tokens; the raw and
-  pre-compaction receipts are uncommitted, and each of their sha256 values is recorded so
-  both can be reproduced (they were not edited, so they keep the pre-fix bytes).
+  no-op (§12); no further step touches the committed bytes. `binary.path`, `workspace`,
+  `discovered_from`, the `command` array and every event-carried directory are `path-sha256:`
+  tokens; the raw and pre-compaction receipts are uncommitted, and each of their sha256 values
+  is recorded so both can be reproduced (they were not edited).
 - The one-line form is format-only and deliberate, and it was chosen from an observed
   refusal, not in advance: over the pretty-printed form of these records the clone gate
   refused 47 new clones (20-31-line structural blocks shared between machine-generated
@@ -288,11 +331,12 @@ evidence.
   The same collector writes every receipt, so the shared structure is an artifact of the
   generator; the compaction changes whitespace only, which the parsed-equality row in §12
   proves. The 2.4.1 README §2 records the command, the raw and pre-compaction sha256 values.
-- The recorded `/api/info` body is narrowed to `pid`/`version`/`status` in the collector, so
-  the server's own `hostname` field never reaches a new record; the eight pre-PRE-2 committed
-  records carry the constant token `<HOSTNAME>` in its place (§4). The value was the only
-  host-identifying string in those records, one occurrence each; the frozen 2.3.0 receipts
-  still carry it verbatim and are not edited (residual, §14).
+- The recorded `/api/info` 200 body is narrowed to `pid`/`version`/`status` in the collector,
+  so the server's own `hostname` field never reaches a record, and the 401 row keeps the
+  server's `UnauthorizedError` body. No committed record carries the machine hostname value
+  (census in §12); inside the change the value appears nowhere, not even as a token (the
+  superseded pre-re-collection bytes carried a `<HOSTNAME>` token substitution instead), and
+  the frozen 2.3.0 receipts still carry the value verbatim and are not edited (residual, §14).
 
 ## 11. Mutants (scratch copies; the repository bytes were never mutated)
 
@@ -314,6 +358,12 @@ The PRE-2 row M17 was applied to a scratch copy of the PRE-2 collector (sha256
 under a scratch root outside the repository; the copy was restored byte-identical after the
 run, and the restored suite is green (48 tests, `OK (skipped=5)` on Windows).
 
+The round-1 rows M18-M21 were applied one per scratch copy of the final collector (`sha256
+087e07a8…`) and suite (`sha256 946b0f36…`) under the same scratch root, outside the
+repository; each copy was restored byte-identical after the run, and the restored suite is
+green at the final bytes (50 tests; `OK (skipped=6)` on Windows, `OK (skipped=1)` in WSL).
+M18-M20 ran on the Windows host, M21 in WSL Ubuntu-24.04 (the POSIX arm's oracle).
+
 | id | mutation (scratch copy) | observed red |
 | --- | --- | --- |
 | M1 | dropped the size/sha256 comparison in `pinned_binary` | `test_wrong_digest_is_refused_at_the_pinned_size`, `test_wrong_size_is_refused_at_the_pinned_digest` (2 failures) |
@@ -334,33 +384,37 @@ run, and the restored suite is green (48 tests, `OK (skipped=5)` on Windows).
 | M15 | the receipt refusal scans only the first secret carrier | `test_every_write_refusal_carrier_is_refused` (3 carriers), `test_the_write_tail_refuses_a_relay_origin_bearing_receipt` |
 | M16 | `write_receipt` drops the run-root scan refusal | `test_the_write_tail_refuses_a_run_root_scan_match` |
 | M17 | `recorded_info_body` guard inverted (`path == "/api/info"` returns the body unchanged) | `test_the_recorded_info_body_drops_host_metadata` (1 failure: the recorded body kept `hostname`/`urls`/`paths`) |
+| M18 | `operation_path` returns the recorded route with its query (the R1 revert) | `test_requests_without_terminals_are_failed_observations` (2 failures: the `prompt?resume=true` and `interrupt?resume=false` subcases) |
+| M19 | the `"body" in reply` acceptance requirement dropped (the R3 revert direction: the collector's old constant-only shape is accepted again) | `test_the_recorded_reply_is_the_server_response` (1 failure: the `sent` shape graded `observed`) |
+| M20 | `recorded_info_body` narrows every `/api/info` row again (the R7 revert) | `test_the_recorded_info_body_drops_host_metadata` (1 failure: the 401 body narrowed instead of kept verbatim) |
+| M21 | POSIX `close_native` back to the leader-only wait with `group_gone` assigned true unconditionally (the R2 revert) | `test_posix_cleanup_kills_a_sigterm_ignoring_descendant` (1 failure: `escalated` absent and the descendant never SIGKILLed) |
 
 ## 12. Gates
 
 | gate | command (from the repository root) | result |
 | --- | --- | --- |
-| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 48 tests`, `OK (skipped=5)` |
-| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` (the checkout at its `/mnt` path) | exit 0, `Ran 48 tests`, `OK (skipped=1)` |
+| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 50 tests`, `OK (skipped=6)` |
+| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` (the checkout at its `/mnt` path) | exit 0, `Ran 50 tests`, `OK (skipped=1)` |
 | render-then-check, every new record (8 files: 2 probes, 6 receipts) | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only < <record>` | exit 0 on all 8; also exit 0 on the three changed docs (the 2.4.1 README, this record, the plan) |
-| record cleanliness over the change | `python3 scripts/ci/check-record-cleanliness.py --base 30ed5ada --head <scratch>` | exit 0 — `1 changed record(s) pass the root-only check` |
-| clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 30ed5ada --head <scratch>` | exit 0 — `13 changed file(s), 1742 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`, with the eight one-line records reported as below-threshold notices. Before the one-line form the same command refused 47 new clones (§10) |
-| render pipeline over the raw and pre-compaction receipts (8 records) | `python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>`, then the README §2 one-line pass, compared by sha256 against the README §2 raw and pre-compaction columns | 8/8 raw, 8/8 pre-compaction, parsed equality 8/8; the committed column is re-derived after the PRE-2 substitution (next row) |
-| PRE-2 substitution over the committed records (8) | byte-level comparison of each committed record against its pre-fix blob (`git show f04e8b48:<record>`) with the hostname value replaced by `<HOSTNAME>`; the old→new sha256 pairs are §4's table | 8/8 byte-equal substitutions; `--check --root-only` exit 0 on all 8 |
-| PRE-2 classify re-grade (8 records) | `python3 - <<'PY'` (imports the collector via `citest.load_gate`, compares `classify()` over each record with `classify()` over `git show f04e8b48:<record>`) | 8/8 identical `classes` mappings; stored statuses equal the recomputation (the suite's committed-receipt replay row) |
-| frozen bytes | `git diff 30ed5ada -- daemon/internal/harness/opencode/ daemon/internal/harness/registry.go daemon/internal/app/ .github/workflows/ docs/design/harness.md docs/goals/ scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh daemon/internal/harness/testdata/opencode/2.3.0/` | empty |
-| credential census over added lines | `git diff --no-renames -U0 30ed5ada..<scratch> \| grep '^+'` over the added lines, fixed pattern `sk-[A-Za-z0-9_-]{16,}`, the bare prefix, the relay host and base URL derived at run time from the operator's provider entry (never hardcoded), and the credential value itself | key shape `0`; bare prefix `1` — the pattern's own occurrence in this row, justified as census methodology and permitted as the relay's prefix prose; **relay host `0`, relay base URL `0`** (Q-URL b); the credential value `0` |
-| PRE-2 hostname census over the change | `git diff $(git merge-base HEAD origin/main) <scratch> \| grep -ci <hostname>` (the hostname written abstractly), plus whole-diff and added-line occurrence counts | `0` |
+| record cleanliness over the change | `python3 scripts/ci/check-record-cleanliness.py --base 691eb424 --head <scratch>` | exit 0 — `1 changed record(s) pass the root-only check` |
+| clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 691eb424 --head <scratch>` | exit 0 — `13 changed file(s), 1744 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`, with the eight one-line records reported as below-threshold notices. Before the one-line form the same command refused 47 new clones (§10) |
+| render pipeline over the raw, pre-compaction and committed receipts (8 records) | `python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>`, then the README §2 one-line pass, compared by sha256 against the README §2 raw and pre-compaction columns and parsed against the committed column | 8/8 raw, 8/8 pre-compaction, 8/8 committed, parsed equality 8/8, `--check --root-only` exit 0 on the committed bytes |
+| re-collection classify re-grade (8 records) | `python3 - <<'PY'` (imports the collector via `citest.load_gate`; per record compares `classify()` over the re-collected bytes with the stored `classes` mapping and with `classify()` over the superseded blob `git show 49a606dd:<record>`) | 8/8 stored statuses reproduced; 8/8 identical `classes` mappings against the superseded bytes, blockers included — no verdict changed (§4) |
+| frozen bytes | `git diff 691eb424 -- daemon/internal/harness/opencode/ daemon/internal/harness/registry.go daemon/internal/app/ .github/workflows/ docs/design/harness.md docs/goals/ scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh daemon/internal/harness/testdata/opencode/2.3.0/` | empty |
+| credential census over added lines | `git diff --no-renames -U0 691eb424..<scratch> \| grep '^+'` over the added lines, fixed pattern `sk-[A-Za-z0-9_-]{16,}`, the bare prefix, the relay host and base URL derived at run time from the operator's provider entry (never hardcoded), and the credential value itself | key shape `0`; bare prefix `1` — the pattern's own occurrence in this row, justified as census methodology; **relay host `0`, relay base URL `0`** (Q-URL b); the credential value `0` |
+| hostname census over the change | `git diff $(git merge-base HEAD origin/main) <scratch> \| grep -ci <hostname>` (the hostname written abstractly), plus whole-diff and added-line occurrence counts over the eight records | `0` everywhere |
 | class-matrix derivation | `python3 - <<'PY' …` over `daemon/internal/harness/testdata/opencode/2.4.1/*.json` (the command in the plan §3) | the matrix in §5 |
-| line-anchor census over the three changed records | `grep -nE '[A-Za-z0-9_./-]+:[0-9]{1,5}'` over the 2.4.1 README, this record and the plan, excluding URLs, timestamps, ports and `sha256`/`path-sha256` tokens | `0` numeric line anchors; the digest citations were re-measured against the delivered bytes — collector `6b613221…`, suite `320a188c…`, `scripts/ci/source_subject.py` `8df46499…`, and the eight receipt digests equal the README §2 committed column |
+| line-anchor census over the three changed records | `grep -nE '[A-Za-z0-9_./-]+:[0-9]{1,5}'` over the 2.4.1 README, this record and the plan, excluding URLs, timestamps, ports and `sha256`/`path-sha256` tokens | `0` numeric line anchors; the digest citations were re-measured against the delivered bytes — collector `087e07a8…`, suite `946b0f36…`, `scripts/ci/source_subject.py` `8df46499…`, and the eight receipt digests equal the README §2 committed column |
 
 `<scratch>` is the change's tree read as a revision: the gates read the `--head` revision from
 Git, and the working tree is left uncommitted for verification, so the head was materialized
 with a temporary index (`GIT_INDEX_FILE` + `git write-tree` + `git commit-tree`) — no branch,
-ref, index or worktree state of the checkout was touched. The refreshed rows (suite,
-cleanliness, clone, frozen, census) are the fix-stage re-run over `--base 30ed5ada`
-(`origin/main` after the `#286` merge); the PRE-2 rows (suites, render-then-check,
-substitution, re-grade, frozen bytes, both censuses) are the PRE-2 re-run over the same base
-and the same scratch-head method. A reviewer re-runs the same commands with the pull request's
+ref, index or worktree state of the checkout was touched. Every row above is the round-1
+re-run at the delivered bytes over `--base 691eb424` (the merge-base with `origin/main` after
+the `#287` merge): the cleanliness and clone rows were re-run after the last documentation
+edit on the final scratch tree (this text included), the suites were re-run at the re-collected
+receipts on both platforms, and the render, re-grade, frozen byte and census rows were
+re-measured over the same tree. A reviewer re-runs the same commands with the pull request's
 own head commit.
 
 ## 13. Recommendation: partial — dispatch Phase 1, scoped
@@ -381,7 +435,9 @@ process models, and usage counters are native. Two limits keep this short of a f
 
 Recommendation: **partial — promote to one owner-approved Phase 1 amendment**, scoped to the
 Windows-native surface plus the dispatched Linux containment run, with the residual limits
-stated in the promoted documents. Phase 1 names (not edited here): `docs/design/harness.md`
+stated in the promoted documents. The recommendation is unchanged by the round-1 fix and
+re-collection: all eight receipts are re-collected under the delivered collector bytes and
+every class verdict and reason is identical (§4). Phase 1 names (not edited here): `docs/design/harness.md`
 (the OpenCode V2 row and its 2.3.0 citation at the cited lines),
 `daemon/internal/harness/opencode/adapter.go` (`TestedVersion` and the version gate),
 `daemon/internal/harness/registry.go` (the unavailable-adapter wiring), the
@@ -406,10 +462,10 @@ changes).
   collector retries to a bounded deadline and still refuses a wrong identity, so a future build
   that never answers 200 fails closed (`native server readiness unavailable`).
 - `usage` counters are native and unreconciled; `cost` is the server's own estimate.
-- The receipts are timestamped 2026-11-25 and bind `source_head 6b2d4f8f195a…` (the base
-  commit) plus the collector binding `56d6e602…`; the collector bytes are the tool identity here
-  because the tool change itself is uncommitted at collection time.
+- The receipts are timestamped 2026-11-25 and bind `source_head 49a606dd346f…` (the branch
+  head at re-collection time) plus the collector binding `087e07a8…`; the binding is the tool
+  identity of every receipt and equals the collector bytes this change delivers.
 - The machine hostname value survives in two places outside this change: the frozen 2.3.0
-  receipts (contract-frozen bytes, not edited) and the uncommitted pre-PRE-2 raw and
-  pre-compaction artifacts (outside the repository, not edited). The PRE-2 census in §12
-  counts 0 in the change itself.
+  receipts (contract-frozen bytes, not edited) and the superseded pre-re-collection raw and
+  pre-compaction artifacts (outside the repository, not edited; the committed superseded bytes
+  carried a `<HOSTNAME>` token instead). The census in §12 counts 0 in the change itself.

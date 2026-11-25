@@ -143,28 +143,33 @@ PY
 `POST /api/session/{id}/interrupt?resume=false`, `DELETE /api/session/{id}` with a `GET` readback.
 Each row keeps `method/path/status/body/credential_redacted_before_write`; the streaming row
 records status and content type instead of a body, and the `/api/info` rows' bodies are
-narrowed to `pid`/`version`/`status` (PRE-2, §5). A 404 or a delta is evidence for Phase 1,
+narrowed to `pid`/`version`/`status` on the 200 row, while the 401 row keeps the server's
+`UnauthorizedError` body (PRE-2; narrowed to the 200 row by PR #288 round 1, §5). A 404 or a delta is evidence for Phase 1,
 never a patch.
 
 ## 5. Implementation choices left open by the contract
 
 - **POSIX cleanup accounting.** `close_native` on POSIX signals the process group
-  (`start_new_session=True`) with a bounded SIGTERM→SIGKILL and reports `exit_code = 0` when the
-  process was reaped inside that bound (recording `escalated` when the kill needed SIGKILL) or
-  when the readiness loop had already reaped the child, leaving no group to signal (recording
-  `group_gone`), and `1` on a signal error; the Windows arm keeps `taskkill` unchanged. The four
-  keys `classify()` reads (`exit_code`, `server_exit_code`, `stream_reader_stopped`,
-  `output_readers_stopped`) and its three barriers are unchanged, so the class predicate is
-  identical on both platforms.
+  (`start_new_session=True`) with a bounded SIGTERM grace; a group still holding a process
+  after the grace is SIGKILLed once (`escalated`) and probed with `killpg(pgid, 0)` until ESRCH
+  (`group_gone`; `group_survived` if a process outlives even the SIGKILL), so a surviving
+  same-group descendant cannot be graded as cleanup. `exit_code = 0` records a completed arm
+  and `1` a signal error; an already-reaped child leaves no group to signal (`group_gone`), and
+  the Windows arm keeps `taskkill` unchanged. `classify()` keeps its four keys (`exit_code`,
+  `server_exit_code`, `stream_reader_stopped`, `output_readers_stopped`) and adds the
+  `group_gone` requirement where the POSIX arm records it, so a cleanup verdict cannot hide a
+  live group member.
 - **Probe mode is not a pass.** It produces the Stage 3 probe artifact and validates the
   platform launch/cleanup path before a receipt is spent; it collects no class and writes no
   receipt filename.
-- **Recorded `/api/info` body (PRE-2).** The collector narrows the recorded `/api/info` body to
+- **Recorded `/api/info` body (PRE-2).** The collector narrows the recorded `/api/info` 200 body to
   `pid`/`version`/`status` before any write, so the server's own host metadata never reaches a
   record; the eight receipts committed before the ruling were edited by a recorded byte-level
   substitution of the value with the constant token `<HOSTNAME>`, their committed sha256 values
   were re-derived, and the `classify()` verdicts were re-graded identical (evidence record §4,
-  §12).
+  §12). PR #288 round 1 re-collected all eight receipts under the final collector, so the
+  substitution now applies to the superseded bytes only and no committed record carries the
+  hostname or a token for it.
 - **Redaction split.** The collector refuses and replaces both the plain and the JSON-escaped
   spelling of every secret across the receipt bytes, the payload/event carriers, the
   configuration and the run-root scan, and removes the credential and the relay origin (Q-URL

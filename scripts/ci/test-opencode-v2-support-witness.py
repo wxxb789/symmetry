@@ -67,7 +67,12 @@ class ClassificationTests(unittest.TestCase):
                 self.assertEqual(classified["classes"][name], {"status": "unavailable", "blocker": "RuntimeError"})
 
     def test_requests_without_terminals_are_failed_observations(self):
-        for name, route in (("success", "prompt"), ("interruption", "interrupt")):
+        for name, route in (
+            ("success", "prompt"),
+            ("success", "prompt?resume=true"),
+            ("interruption", "interrupt"),
+            ("interruption", "interrupt?resume=false"),
+        ):
             with self.subTest(name=name):
                 receipt = {
                     "operations": [{"method": "POST", "path": "/api/session/ses_native/" + route}],
@@ -107,7 +112,7 @@ class ClassificationTests(unittest.TestCase):
                     "event_start": 0,
                     "request_id": "per_native",
                     "terminal": terminal,
-                    "reply": {"status": 204},
+                    "reply": {"status": 204, "body": {"decision": "once"}},
                 }
             },
         }
@@ -148,6 +153,21 @@ class ClassificationTests(unittest.TestCase):
             witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
         )
 
+    def test_the_recorded_reply_is_the_server_response(self):
+        receipt = self.continuation_receipt(self.continuation_steps())
+        continuation = receipt["classes"]["continuation_after_step"]
+        self.assertEqual(
+            witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
+        )
+        continuation["reply"] = {"status": 204, "sent": {"decision": "once"}}
+        self.assertEqual(
+            witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "run and failed"
+        )
+        continuation["reply"] = {"decision": "once"}
+        self.assertEqual(
+            witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "run and failed"
+        )
+
     def test_continuation_requires_the_ordered_permission_reply_event(self):
         steps = self.continuation_steps()
         receipt = self.continuation_receipt(steps)
@@ -183,6 +203,7 @@ class ClassificationTests(unittest.TestCase):
             ("stream_reader_stopped", False),
             ("output_readers_stopped", False),
             ("server_exit_code", None),
+            ("group_gone", False),
         ):
             with self.subTest(name=name):
                 failed = copy.deepcopy(receipt)
@@ -243,8 +264,6 @@ class ClassificationTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "the POSIX signal arm")
 class PosixCleanupTests(unittest.TestCase):
-    """The POSIX arm signals the process group and still reaches every barrier."""
-
     def child(self, code, **kwargs):
         child = subprocess.Popen(
             [sys.executable, "-c", code],
@@ -288,6 +307,50 @@ class PosixCleanupTests(unittest.TestCase):
         self.assertTrue(cleanup["group_gone"])
         self.assertNotIn("signal_error", cleanup)
         self.assertEqual(cleanup["server_exit_code"], 0)
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
+
+    def test_posix_cleanup_kills_a_sigterm_ignoring_descendant(self):
+        root = tempfile.TemporaryDirectory(prefix="posix-descendant-")
+        self.addCleanup(root.cleanup)
+        armed = pathlib.Path(root.name) / "armed"
+        descendant = (
+            "import pathlib,signal,time\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            f"pathlib.Path({str(armed)!r}).write_text('armed')\n"
+            "time.sleep(60)\n"
+        )
+        leader = (
+            "import subprocess,sys,time\n"
+            f"descendant = subprocess.Popen([sys.executable, '-c', {descendant!r}], "
+            "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "print(descendant.pid, flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        child = self.child(leader, start_new_session=True)
+        descendant_pid = int(child.stdout.readline().decode().strip())
+        deadline = time.monotonic() + 10
+        while not armed.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(armed.exists(), "the descendant never armed its SIGTERM handler")
+        with (
+            mock.patch.object(witness, "POSIX_SIGTERM_SECONDS", 1),
+            mock.patch.object(witness, "POSIX_SIGKILL_SECONDS", 1),
+        ):
+            cleanup = witness.close_native(child, None, None, [])
+        self.assertEqual(cleanup["exit_code"], 0)
+        self.assertTrue(cleanup.get("escalated"))
+        self.assertTrue(cleanup["group_gone"])
+        self.assertNotIn("group_survived", cleanup)
+        self.assertIn("SIGKILL", cleanup["command"])
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(descendant_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("the descendant survived the group SIGKILL")
         self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
 
     def test_posix_cleanup_escalates_once_when_sigterm_is_ignored(self):
@@ -367,8 +430,6 @@ class ChunkedSSETests(unittest.TestCase):
 
 
 class ReadinessTests(unittest.TestCase):
-    """The readiness route must report this server's own pid and the pinned version exactly."""
-
     def test_exact_pid_and_version_is_the_only_accepted_identity(self):
         self.assertTrue(witness.readiness_identity({"pid": 42, "version": "2.4.1"}, 42))
         for info, pid in (
@@ -384,8 +445,6 @@ class ReadinessTests(unittest.TestCase):
 
 
 class InfoRecordTests(unittest.TestCase):
-    """The recorded /api/info body keeps identity keys only; host metadata is never recorded."""
-
     def test_the_recorded_info_body_drops_host_metadata(self):
         raw = json.dumps(
             {
@@ -400,14 +459,12 @@ class InfoRecordTests(unittest.TestCase):
         self.assertEqual(json.loads(recorded), {"pid": 4242, "version": "2.4.1", "status": 200})
         self.assertNotIn("hostname", recorded)
         self.assertNotIn("fixture-host-name", recorded)
-        refusal = witness.recorded_info_body("/api/info", 401, '{"_tag":"UnauthorizedError","message":"Authentication required"}')
-        self.assertEqual(json.loads(refusal), {"pid": None, "version": None, "status": 401})
+        refusal_body = '{"_tag":"UnauthorizedError","message":"Authentication required"}'
+        self.assertEqual(witness.recorded_info_body("/api/info", 401, refusal_body), refusal_body)
         self.assertEqual(witness.recorded_info_body("/api/health", 404, raw), raw)
 
 
 class RedactionTests(unittest.TestCase):
-    """The credential and the relay origin never reach a record, whatever the carrier."""
-
     def test_relay_base_url_and_host_are_replaced_with_counts(self):
         replacements = witness.relay_replacements("https://relay.example.invalid/v1")
         text = "base https://relay.example.invalid/v1 host relay.example.invalid twice relay.example.invalid"
@@ -463,8 +520,6 @@ class RedactionTests(unittest.TestCase):
 
 
 class WriteReceiptTests(unittest.TestCase):
-    """The receipt's only write path: the run-root scan, the refusal and the replaced bytes."""
-
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -505,8 +560,6 @@ class WriteReceiptTests(unittest.TestCase):
 
 
 class SchemaTests(unittest.TestCase):
-    """The truncation attempt is decided from the live prompt schema, never guessed."""
-
     def operation(self, properties, required=("text",)):
         return {
             "paths": {
@@ -551,8 +604,6 @@ class SchemaTests(unittest.TestCase):
 
 
 class ChildEnvironmentTests(unittest.TestCase):
-    """The child environment keeps its shape per platform and drops everything else."""
-
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -624,7 +675,7 @@ class ChildEnvironmentTests(unittest.TestCase):
                 "XDG_DATA_HOME": "/root/.local/share",
                 "XDG_STATE_HOME": "/root/.local/state",
                 "TENCENT_GLM_API_KEY": "fixture-credential-value",
-                "GIT_DIR": "/mnt/q/repos/symmetry/.git/worktrees/symmetry4",
+                "GIT_DIR": "/fixture/checkout/.git/worktrees/fixture",
                 "WSLENV": "TENCENT_GLM_API_KEY",
             },
         )
@@ -637,8 +688,6 @@ class ChildEnvironmentTests(unittest.TestCase):
 
 
 class PinnedBlobTest(unittest.TestCase):
-    """The blob path is operator-supplied; an unset variable, a changed blob or a wrong magic is refused."""
-
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -718,8 +767,6 @@ class PinnedBlobTest(unittest.TestCase):
 
 
 class CommittedReceiptTests(unittest.TestCase):
-    """The shipped classifier reproduces every committed receipt's stored class verdicts; no re-render."""
-
     def test_committed_receipts_reproduce_their_stored_class_statuses(self):
         receipts = sorted((ROOT / "daemon/internal/harness/testdata/opencode/2.4.1").glob("*.json"))
         self.assertTrue(receipts)

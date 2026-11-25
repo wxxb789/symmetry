@@ -133,13 +133,11 @@ def pinned_binary():
 
 
 def readiness_identity(info, pid):
-    """Exact identity: the readiness route must report this server's pid and the pinned version."""
     return isinstance(info, dict) and info.get("pid") == pid and info.get("version") == VERSION
 
 
 def recorded_info_body(path, status, raw):
-    """The /api/info row keeps identity keys only; the server's host metadata never reaches a receipt."""
-    if path != "/api/info":
+    if path != "/api/info" or status != 200:
         return raw
     try:
         parsed = json.loads(raw)
@@ -153,12 +151,10 @@ def recorded_info_body(path, status, raw):
 
 
 def bounding_field(properties):
-    """The first prompt-schema property that bounds output length, or None."""
     return next((name for name in properties if name.lower() in BOUNDING_FIELDS), None)
 
 
 def resolve_prompt_schema(spec):
-    """The live prompt request schema: only a bounding property would enable a truncated-response attempt."""
     operation = spec.get("paths", {}).get("/api/session/{sessionID}/prompt", {}).get("post", {})
     body = (
         operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
@@ -174,7 +170,6 @@ def resolve_prompt_schema(spec):
 
 
 def truncation_marker(events):
-    """A native output bound in the recorded evidence; HTTP status, idle and EOF never count."""
     for event in events:
         text = json.dumps(event.get("data", {}))
         if '"truncated": true' in text or '"finish_reason": "length"' in text or '"finishReason": "length"' in text:
@@ -191,7 +186,6 @@ def relay_replacements(base_url):
 
 
 def secret_spellings(secret):
-    """A non-empty secret's plain and JSON-escaped spellings; an empty secret has none."""
     if not secret:
         return ()
     escaped = json.dumps(secret, ensure_ascii=True)[1:-1]
@@ -199,7 +193,6 @@ def secret_spellings(secret):
 
 
 def redact(text, replacements):
-    """Replace every non-empty secret spelling, plain or escaped; return the text and the removal counts."""
     counts = {}
     for value, token in replacements.items():
         for spelling in secret_spellings(value):
@@ -210,7 +203,6 @@ def redact(text, replacements):
 
 
 def receipt_bytes(receipt, replacements, secrets):
-    """The receipt's write bytes: a secret spelling stops the write, and the replacements apply to what is written."""
     text = json.dumps(receipt, ensure_ascii=True, indent=2) + "\n"
     data = text.encode()
     if any(spelling.encode() in data for secret in secrets for spelling in secret_spellings(secret)):
@@ -219,7 +211,6 @@ def receipt_bytes(receipt, replacements, secrets):
 
 
 def carries_credential(data, key):
-    """An unset credential matches nothing; a set one refuses any carrier that holds it."""
     if not key:
         return False
     text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
@@ -227,7 +218,6 @@ def carries_credential(data, key):
 
 
 def receipt_scan(root, credential):
-    """The run root's scan: every file counted, any file carrying a credential spelling named."""
     needles = [spelling.encode() for spelling in secret_spellings(credential)]
     files = 0
     matches = []
@@ -242,7 +232,6 @@ def receipt_scan(root, credential):
 
 
 def write_receipt(out, receipt, replacements, secrets, credential, root):
-    """The receipt's only write path: scan the run root, refuse a secret spelling, write the replaced bytes."""
     receipt["credential_scan"] = receipt_scan(root, credential)
     _, counts = redact(json.dumps(receipt, ensure_ascii=True, indent=2), replacements)
     receipt["redaction"] = {"occurrences": counts}
@@ -254,7 +243,6 @@ def write_receipt(out, receipt, replacements, secrets, credential, root):
 
 
 def child_environment(root, platform_key, environ):
-    """The allowlisted child environment; every private root redirects into the run root."""
     keep = WINDOWS_ENVIRONMENT if platform_key == "nt" else POSIX_ENVIRONMENT
     roots = WINDOWS_ROOTS if platform_key == "nt" else POSIX_ROOTS
     environment = {name: value for name, value in environ.items() if name.upper() in keep}
@@ -291,6 +279,11 @@ def binding_sha256(repository):
     }
 
 
+def operation_path(operation):
+    # The recorded route keeps its query string; classification matches the path alone.
+    return urllib.parse.urlsplit(operation["path"]).path
+
+
 def classify(receipt):
     """Interpret captured native facts, never HTTP admission or idle as success."""
     classes = receipt["classes"]
@@ -298,8 +291,8 @@ def classify(receipt):
     terminal = success.get("terminal")
     if terminal or any(
         operation["method"] == "POST"
-        and operation["path"].startswith("/api/session/")
-        and operation["path"].endswith("/prompt")
+        and operation_path(operation).startswith("/api/session/")
+        and operation_path(operation).endswith("/prompt")
         for operation in receipt["operations"]
     ):
         success["status"] = (
@@ -361,6 +354,7 @@ def classify(receipt):
         continuation["status"] = (
             "observed"
             if reply.get("status") == 204
+            and "body" in reply
             and approved
             and continued
             and terminal.get("type") == "session.execution.succeeded"
@@ -372,8 +366,8 @@ def classify(receipt):
     interruption = classes.get("interruption", {})
     if interruption.get("terminal") or any(
         operation["method"] == "POST"
-        and operation["path"].startswith("/api/session/")
-        and operation["path"].endswith("/interrupt")
+        and operation_path(operation).startswith("/api/session/")
+        and operation_path(operation).endswith("/interrupt")
         for operation in receipt["operations"]
     ):
         interrupted = interruption.get("response") or {}
@@ -415,6 +409,7 @@ def classify(receipt):
         and cleanup.get("server_exit_code") is not None
         and cleanup.get("stream_reader_stopped") is True
         and cleanup.get("output_readers_stopped") is True
+        and cleanup.get("group_gone", True) is not False
         else "run and failed"
     )
     classes["cleanup"] = cleanup
@@ -441,10 +436,24 @@ def cleanup_failure(receipt):
     return receipt
 
 
+def group_pending(process, seconds):
+    # ESRCH on the group is the only proof; reaping the leader keeps its zombie from counting.
+    deadline = time.monotonic() + seconds
+    while True:
+        process.poll()
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.05)
+
+
 def close_native(process, connection, stream_reader, output_readers):
     """Always reach process, socket and reader barriers, including kill failure."""
     if running_platform() == "posix":
-        result = {"command": ["SIGTERM", "process-group", str(process.pid)], "exit_code": None}
+        result = {"command": ["SIGTERM", "process-group", str(process.pid)], "exit_code": None, "group_gone": False}
         try:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -452,14 +461,17 @@ def close_native(process, connection, stream_reader, output_readers):
                 # start_new_session makes the pid the pgid; a reaped child leaves no group to signal.
                 result["group_gone"] = True
             else:
-                try:
-                    process.wait(timeout=POSIX_SIGTERM_SECONDS)
-                except subprocess.TimeoutExpired:
+                pending = group_pending(process, POSIX_SIGTERM_SECONDS)
+                if pending:
                     # A native server that ignores SIGTERM is escalated once, still bounded.
                     result["command"].append("SIGKILL")
                     result["escalated"] = True
                     os.killpg(process.pid, signal.SIGKILL)
-                    process.wait(timeout=POSIX_SIGKILL_SECONDS)
+                    pending = group_pending(process, POSIX_SIGKILL_SECONDS)
+                if pending:
+                    # The leader's exit does not empty a group a descendant still holds.
+                    result["group_survived"] = True
+                result["group_gone"] = not pending
             result["exit_code"] = 0
         except (OSError, subprocess.TimeoutExpired) as error:
             result["signal_error"] = type(error).__name__
@@ -852,12 +864,12 @@ def main():
                 continuation = {"event_start": start, "request": permission}
                 if permission:
                     continuation["request_id"] = permission.get("id")
-                    status, _ = request(
+                    status, body = request(
                         "POST",
                         "/api/session/" + continuation_id + "/permission/" + permission["id"] + "/reply",
                         dict(PERMISSION_REPLY),
                     )
-                    continuation["reply"] = {"status": status, "sent": dict(PERMISSION_REPLY)}
+                    continuation["reply"] = {"status": status, "body": body}
                 continuation["terminal"] = await_event(continuation_id, TERMINALS, start)
                 continuation["tool_outcome"] = tool_outcome(continuation_id, start)
                 request("GET", "/api/session/" + continuation_id)
