@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -214,6 +215,16 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	if _, err := unix.InotifyAddWatch(inotifyFD, targetPath, unix.IN_DELETE); err != nil {
 		t.Fatalf("watch exact B target directory before cleanup: %v", err)
 	}
+	// The orphaned root deleter reparents to this process while PR_SET_CHILD_SUBREAPER is set;
+	// without it init adopts the orphan and its waitid exit code is unrecoverable.
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+		t.Fatalf("become the reaper of the orphaned root cleanup worker: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0); err != nil {
+			t.Errorf("restore parent-death scratch subreaper state: %v", err)
+		}
+	})
 	command := exec.Command(os.Args[0], "-test.run=^TestLinuxOwnerCleanupParentDeathWorker$")
 	command.Env = append(os.Environ(), cleanupParentDeathWorkerEnv+"=1")
 	command.Stdout = io.Discard
@@ -223,10 +234,35 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	}
 	workerPID := command.Process.Pid
 	workerWaited := false
+	rootChildReaped := false
+	masksLine := "read_error=1"
+	if status, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/status", workerPID)); readErr == nil {
+		if sigCgt, sigBlk, sigIgn, parseErr := parseStatusSignalMasks(status); parseErr == nil {
+			masksLine = fmt.Sprintf("sigcgt=%s sigblk=%s sigign=%s", sigCgt, sigBlk, sigIgn)
+		} else {
+			masksLine = "parse_error=1"
+		}
+	}
 	t.Cleanup(func() {
 		if !workerWaited && command.Process != nil {
 			_ = command.Process.Kill()
 			_, _ = command.Process.Wait()
+		}
+		if rootChildReaped {
+			return
+		}
+		// Bounded reap of an adopted root deleter: once observed, the subreaper window makes
+		// it this process's child, and no failing path reaps it.
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			var info unix.Siginfo
+			if err := unix.Waitid(unix.P_ALL, 0, &info, unix.WEXITED|unix.WNOHANG, nil); err != nil {
+				return
+			}
+			if info.Signo != 0 {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	})
 	rootPID, err := waitForDirectCleanupChild(workerPID, 45*time.Second)
@@ -253,13 +289,35 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	if err := command.Process.Kill(); err != nil {
 		t.Fatalf("kill only the A parent of the root cleanup worker: %v", err)
 	}
-	_, waitErr := command.Process.Wait()
+	waitState, waitErr := command.Process.Wait()
 	workerWaited = true
-	if waitErr == nil {
-		t.Fatal("A cleanup caller exited without the requested parent-death signal")
+	signaled, signalCode, exitCode, coreDump := cleanupWaitStatusCodes(waitState)
+	rootExit, rootErr := waitidCleanupPidfdExit(rootPIDFD, 10*time.Second)
+	rootChildReaped = rootErr == nil
+	rootLine := "waitid_error=1"
+	switch {
+	case rootErr == nil:
+		rootLine = fmt.Sprintf("si_signo=%d si_code=%d si_status=%d", rootExit.Signo, rootExit.Code, rootExit.Status)
+	case errors.Is(rootErr, errCleanupPIDFDExitTimeout):
+		rootLine = "timeout=1"
 	}
-	if err := waitForPIDFDExit(rootPIDFD, 10*time.Second); err != nil {
-		t.Fatalf("root cleanup worker survived its exact A parent: %v", err)
+	t.Logf("cleanup caller signal masks: %s", masksLine)
+	t.Logf("cleanup caller wait status: signaled=%t signal=%d exit=%d core=%t wait_error=%t", signaled, signalCode, exitCode, coreDump, waitErr != nil)
+	t.Logf("root cleanup worker wait status: %s", rootLine)
+	if waitErr != nil {
+		t.Fatalf("reap the killed A cleanup caller at the parent-death boundary: %v", waitErr)
+	}
+	if !signaled || signalCode != int(unix.SIGKILL) {
+		t.Fatalf("A cleanup caller exited without the requested parent-death signal: signaled=%t signal=%d exit=%d core=%t", signaled, signalCode, exitCode, coreDump)
+	}
+	if errors.Is(rootErr, errCleanupPIDFDExitTimeout) {
+		t.Fatalf("root cleanup worker survived its exact A parent: %v", rootErr)
+	}
+	if rootErr != nil {
+		t.Fatalf("observe the exact root cleanup worker exit after the parent-death fence: %v", rootErr)
+	}
+	if rootExit.Signo != int32(unix.SIGCHLD) || rootExit.Code != int32(cleanupCLDKilled) || rootExit.Status != int32(unix.SIGKILL) {
+		t.Fatalf("root cleanup worker did not die by the armed parent-death signal: si_signo=%d si_code=%d si_status=%d", rootExit.Signo, rootExit.Code, rootExit.Status)
 	}
 	if _, err := os.Lstat(targetPath); err != nil {
 		t.Fatalf("parent-death fence removed or lost the exact B target unexpectedly: %v", err)
@@ -298,6 +356,100 @@ func TestLinuxOwnerCleanupParentDeathWorker(t *testing.T) {
 	t.Fatalf("parent test killed A cleanup owner but root call returned: %v", err)
 }
 
+func TestCleanupWaitStatusCodesClassifiesReapedChildren(t *testing.T) {
+	runProbeChild := func(program string) (*os.ProcessState, error) {
+		t.Helper()
+		command := exec.Command("/bin/sh", "-c", program)
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		return command.Process.Wait()
+	}
+	killed, err := runProbeChild("kill -9 $$")
+	if err != nil {
+		t.Fatalf("reap killed probe child (the wait error must be nil for a signal death): %v", err)
+	}
+	if signaled, signalCode, exitCode, coreDump := cleanupWaitStatusCodes(killed); !signaled || signalCode != int(unix.SIGKILL) || exitCode != -1 || coreDump {
+		t.Fatalf("killed probe child decoded wrong: signaled=%t signal=%d exit=%d core=%t", signaled, signalCode, exitCode, coreDump)
+	}
+	exited, err := runProbeChild("exit 0")
+	if err != nil {
+		t.Fatalf("reap exited probe child: %v", err)
+	}
+	if signaled, signalCode, exitCode, coreDump := cleanupWaitStatusCodes(exited); signaled || signalCode != -1 || exitCode != 0 || coreDump {
+		t.Fatalf("exited probe child decoded wrong: signaled=%t signal=%d exit=%d core=%t", signaled, signalCode, exitCode, coreDump)
+	}
+	if signaled, signalCode, exitCode, coreDump := cleanupWaitStatusCodes(nil); signaled || signalCode != 0 || exitCode != 0 || coreDump {
+		t.Fatalf("absent probe state decoded wrong: signaled=%t signal=%d exit=%d core=%t", signaled, signalCode, exitCode, coreDump)
+	}
+}
+
+func TestWaitidCleanupPidfdExitReportsReapedChildren(t *testing.T) {
+	startProbeChild := func(program string) int {
+		t.Helper()
+		command := exec.Command("/bin/sh", "-c", program)
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			_ = command.Process.Kill()
+			_, _ = command.Process.Wait()
+		})
+		pidfd, err := unix.PidfdOpen(command.Process.Pid, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = unix.Close(pidfd) })
+		return pidfd
+	}
+	killedPIDFD := startProbeChild("kill -9 $$")
+	killedExit, err := waitidCleanupPidfdExit(killedPIDFD, 30*time.Second)
+	if err != nil {
+		t.Fatalf("reap killed probe child by pidfd: %v", err)
+	}
+	if killedExit.Signo != int32(unix.SIGCHLD) || killedExit.Code != cleanupCLDKilled || killedExit.Status != int32(unix.SIGKILL) {
+		t.Fatalf("killed probe child waitid wrong: si_signo=%d si_code=%d si_status=%d", killedExit.Signo, killedExit.Code, killedExit.Status)
+	}
+	exitedPIDFD := startProbeChild("exit 0")
+	exitedExit, err := waitidCleanupPidfdExit(exitedPIDFD, 30*time.Second)
+	if err != nil {
+		t.Fatalf("reap exited probe child by pidfd: %v", err)
+	}
+	if exitedExit.Signo != int32(unix.SIGCHLD) || exitedExit.Code != cleanupCLDExited || exitedExit.Status != 0 {
+		t.Fatalf("exited probe child waitid wrong: si_signo=%d si_code=%d si_status=%d", exitedExit.Signo, exitedExit.Code, exitedExit.Status)
+	}
+	live := exec.Command("/bin/sleep", "30")
+	if err := live.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = live.Process.Kill()
+		_, _ = live.Process.Wait()
+	})
+	livePIDFD, err := unix.PidfdOpen(live.Process.Pid, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unix.Close(livePIDFD)
+	if _, err := waitidCleanupPidfdExit(livePIDFD, 100*time.Millisecond); !errors.Is(err, errCleanupPIDFDExitTimeout) {
+		t.Fatalf("live probe child did not time out exactly: %v", err)
+	}
+}
+
+func TestParseStatusSignalMasksGoldenText(t *testing.T) {
+	const golden = "Name:\tsh\nUmask:\t0022\nSigQ:\t0/15428\nSigPnd:\t0000000000000000\nSigBlk:\t0000000000010000\nSigIgn:\t0000000000000000\nSigCgt:\t00000001800044a2\n"
+	sigCgt, sigBlk, sigIgn, err := parseStatusSignalMasks([]byte(golden))
+	if err != nil || sigCgt != "00000001800044a2" || sigBlk != "0000000000010000" || sigIgn != "0000000000000000" {
+		t.Fatalf("golden status masks parsed wrong: sigcgt=%q sigblk=%q sigign=%q err=%v", sigCgt, sigBlk, sigIgn, err)
+	}
+	if _, _, _, err := parseStatusSignalMasks([]byte("Name:\tsh\nState:\tS (sleeping)\n")); err == nil {
+		t.Fatal("status without signal masks was accepted")
+	}
+	if _, _, _, err := parseStatusSignalMasks([]byte("SigCgt:\t12\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000000000\n")); err == nil {
+		t.Fatal("non-canonical SigCgt mask was accepted")
+	}
+}
+
 func waitForDirectCleanupChild(parentPID int, timeout time.Duration) (int, error) {
 	parentPIDFD, err := unix.PidfdOpen(parentPID, 0)
 	if err != nil {
@@ -333,7 +485,9 @@ func waitForDirectCleanupChild(parentPID int, timeout time.Duration) (int, error
 		if pollErr != nil && !errors.Is(pollErr, unix.EINTR) {
 			return 0, fmt.Errorf("wait for cleanup caller while locating root child: %w", pollErr)
 		}
-		if count != 0 {
+		// EINTR returns -1: only a positive count proves the caller exited, so a
+		// signal-interrupted poll cannot be read as the caller's death.
+		if count > 0 {
 			return 0, errors.New("A cleanup caller exited before root child was identified")
 		}
 	}
@@ -389,6 +543,8 @@ func pidfdReady(pidfd int) bool {
 	return err == nil && n != 0
 }
 
+var errCleanupPIDFDExitTimeout = errors.New("pidfd did not signal exact root cleanup worker exit")
+
 func waitForPIDFDExit(pidfd int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -399,16 +555,104 @@ func waitForPIDFDExit(pidfd int, timeout time.Duration) error {
 		if remaining > 100*time.Millisecond {
 			remaining = 100 * time.Millisecond
 		}
-		fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR}}
-		count, err := unix.Poll(fds, int((remaining+time.Millisecond-1)/time.Millisecond))
-		if err != nil && !errors.Is(err, unix.EINTR) {
-			return err
+		milliseconds := int((remaining + time.Millisecond - 1) / time.Millisecond)
+		if milliseconds < 1 {
+			milliseconds = 1
 		}
-		if count != 0 {
+		fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN | unix.POLLHUP | unix.POLLERR}}
+		count, err := unix.Poll(fds, milliseconds)
+		if err != nil && !errors.Is(err, unix.EINTR) {
+			return fmt.Errorf("wait for cleanup pidfd readiness: %w", err)
+		}
+		// EINTR returns -1: only a positive count is readiness, else the following waitid
+		// would block past the bound.
+		if count > 0 {
 			return nil
 		}
 	}
-	return errors.New("pidfd did not signal exact root cleanup worker exit")
+	return errCleanupPIDFDExitTimeout
+}
+
+// Linux amd64 waitid si_code values for a reaped child: CLD_EXITED and CLD_KILLED in
+// include/uapi/asm-generic/siginfo.h.
+const (
+	cleanupCLDExited = 1
+	cleanupCLDKilled = 2
+)
+
+type cleanupPidfdExit struct {
+	Signo  int32
+	Code   int32
+	Status int32
+}
+
+// waitidCleanupPidfdExit waits for the pidfd bound, then reaps through waitid(P_PIDFD);
+// waitid needs one of this process's own children, so an unreparented orphan gets ECHILD.
+func waitidCleanupPidfdExit(pidfd int, timeout time.Duration) (cleanupPidfdExit, error) {
+	if err := waitForPIDFDExit(pidfd, timeout); err != nil {
+		return cleanupPidfdExit{}, err
+	}
+	var info unix.Siginfo
+	for {
+		err := unix.Waitid(unix.P_PIDFD, pidfd, &info, unix.WEXITED, nil)
+		if errors.Is(err, unix.EINTR) {
+			continue
+		}
+		if err != nil {
+			return cleanupPidfdExit{}, fmt.Errorf("reap exact cleanup worker by pidfd: %w", err)
+		}
+		break
+	}
+	status, err := cleanupSiginfoStatus(&info)
+	if err != nil {
+		return cleanupPidfdExit{}, err
+	}
+	return cleanupPidfdExit{Signo: info.Signo, Code: info.Code, Status: status}, nil
+}
+
+// cleanupWaitStatusCodes decodes the reaped status into closed values; a signaled child carries
+// the signal and a -1 exit code, so the wait error alone cannot prove the requested SIGKILL.
+func cleanupWaitStatusCodes(state *os.ProcessState) (signaled bool, signalCode int, exitCode int, coreDump bool) {
+	if state == nil {
+		return false, 0, 0, false
+	}
+	status, ok := state.Sys().(syscall.WaitStatus)
+	if !ok {
+		return false, 0, 0, false
+	}
+	return status.Signaled(), int(status.Signal()), status.ExitStatus(), status.CoreDump()
+}
+
+// parseStatusSignalMasks reads the SigCgt/SigBlk/SigIgn masks as the amd64 kernel renders them:
+// exactly 16 lowercase hex digits per field (Linux render_sigset_t).
+func parseStatusSignalMasks(status []byte) (sigCgt string, sigBlk string, sigIgn string, err error) {
+	for _, line := range strings.Split(string(status), "\n") {
+		field, rest, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		var target *string
+		switch field {
+		case "SigCgt":
+			target = &sigCgt
+		case "SigBlk":
+			target = &sigBlk
+		case "SigIgn":
+			target = &sigIgn
+		}
+		if target == nil {
+			continue
+		}
+		value := strings.TrimSpace(rest)
+		if len(value) != 16 || strings.Trim(value, "0123456789abcdef") != "" {
+			return "", "", "", fmt.Errorf("status %s mask is not 16-digit lowercase hex", field)
+		}
+		*target = value
+	}
+	if sigCgt == "" || sigBlk == "" || sigIgn == "" {
+		return "", "", "", errors.New("status lacks the SigCgt/SigBlk/SigIgn masks")
+	}
+	return sigCgt, sigBlk, sigIgn, nil
 }
 
 func cleanupTestIntent(t *testing.T, root, runID string) authority.LinuxCloneIntent {
