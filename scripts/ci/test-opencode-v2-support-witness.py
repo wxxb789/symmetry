@@ -92,54 +92,86 @@ class ClassificationTests(unittest.TestCase):
         interruption["response"]["interrupted"] = False
         self.assertEqual(witness.classify(receipt)["classes"]["interruption"]["status"], "run and failed")
 
+    @staticmethod
+    def continuation_event(kind, **data):
+        return {"type": kind, "data": {"sessionID": "ses_native", **data}}
+
+    @classmethod
+    def continuation_receipt(cls, events):
+        terminal = {"id": "evt_terminal", "type": "session.execution.succeeded", "data": {"sessionID": "ses_native"}}
+        return {
+            "operations": [],
+            "events": [*events, terminal],
+            "classes": {
+                "continuation_after_step": {
+                    "event_start": 0,
+                    "request_id": "per_native",
+                    "terminal": terminal,
+                    "reply": {"status": 204},
+                }
+            },
+        }
+
+    def continuation_steps(self):
+        return [
+            self.continuation_event("permission.replied", requestID="per_native", reply="once"),
+            self.continuation_event("session.tool.success"),
+            self.continuation_event("session.step.ended"),
+            self.continuation_event("session.step.started"),
+        ]
+
     def test_successful_execution_without_tool_continuation_is_not_proof(self):
-        receipt = self.receipt("session.execution.succeeded")
-        receipt["classes"]["continuation_after_step"] = {"event_start": 0, "terminal": receipt["events"][0]}
+        receipt = self.continuation_receipt([])
         self.assertEqual(witness.classify(receipt)["classes"]["continuation_after_step"]["status"], "run and failed")
 
     def test_continuation_must_precede_the_selected_terminal(self):
-        receipt = self.receipt("session.execution.succeeded")
-        terminal = receipt["events"][0]
-
-        def event(kind):
-            return {"type": kind, "data": {"sessionID": "ses_native"}}
-
-        steps = [event(kind) for kind in ("session.tool.success", "session.step.ended", "session.step.started")]
-        receipt["classes"]["continuation_after_step"] = {
-            "event_start": 0,
-            "terminal": terminal,
-            "reply": {"status": 204, "body": {"decision": "once"}},
-        }
-        receipt["events"] = [*steps, terminal]
+        steps = self.continuation_steps()
+        receipt = self.continuation_receipt(steps)
         self.assertEqual(
             witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
         )
-        receipt["events"] = [*steps[:2], terminal, steps[2]]
-        self.assertEqual(witness.classify(receipt)["classes"]["continuation_after_step"]["status"], "run and failed")
+        reordered = copy.deepcopy(receipt)
+        reordered["events"] = [*steps[:3], reordered["events"][-1], steps[3]]
+        self.assertEqual(
+            witness.classify(reordered)["classes"]["continuation_after_step"]["status"], "run and failed"
+        )
 
     def test_continuation_requires_a_recorded_accepted_reply(self):
-        receipt = self.receipt("session.execution.succeeded")
-        terminal = receipt["events"][0]
-
-        def event(kind):
-            return {"type": kind, "data": {"sessionID": "ses_native"}}
-
-        steps = [event(kind) for kind in ("session.tool.success", "session.step.ended", "session.step.started")]
-        receipt["events"] = [*steps, terminal]
-        receipt["classes"]["continuation_after_step"] = {"event_start": 0, "terminal": terminal}
-        self.assertEqual(witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "run and failed")
+        receipt = self.continuation_receipt(self.continuation_steps())
+        unrecorded = copy.deepcopy(receipt)
+        del unrecorded["classes"]["continuation_after_step"]["reply"]
         rejected = copy.deepcopy(receipt)
-        rejected["classes"]["continuation_after_step"]["reply"] = {"status": 403, "body": {"decision": "once"}}
+        rejected["classes"]["continuation_after_step"]["reply"]["status"] = 403
+        self.assertEqual(witness.classify(unrecorded)["classes"]["continuation_after_step"]["status"], "run and failed")
         self.assertEqual(witness.classify(rejected)["classes"]["continuation_after_step"]["status"], "run and failed")
-        accepted = copy.deepcopy(receipt)
-        accepted["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": {"decision": "once"}}
-        self.assertEqual(witness.classify(accepted)["classes"]["continuation_after_step"]["status"], "observed")
-        non_once = copy.deepcopy(receipt)
-        non_once["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": {"decision": "always"}}
-        self.assertEqual(witness.classify(non_once)["classes"]["continuation_after_step"]["status"], "run and failed")
-        bodiless = copy.deepcopy(receipt)
-        bodiless["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": None}
-        self.assertEqual(witness.classify(bodiless)["classes"]["continuation_after_step"]["status"], "run and failed")
+        self.assertEqual(
+            witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
+        )
+
+    def test_continuation_requires_the_ordered_permission_reply_event(self):
+        steps = self.continuation_steps()
+        receipt = self.continuation_receipt(steps)
+        self.assertEqual(
+            witness.classify(copy.deepcopy(receipt))["classes"]["continuation_after_step"]["status"], "observed"
+        )
+        variants = {
+            "deleted": [event for event in steps if event["type"] != "permission.replied"],
+            "other_request": [
+                self.continuation_event("permission.replied", requestID="per_other", reply="once"),
+                *steps[1:],
+            ],
+            "not_once": [
+                self.continuation_event("permission.replied", requestID="per_native", reply="always"),
+                *steps[1:],
+            ],
+            "after_tool_success": [steps[1], steps[0], *steps[2:]],
+        }
+        for name, events in variants.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    witness.classify(self.continuation_receipt(events))["classes"]["continuation_after_step"]["status"],
+                    "run and failed",
+                )
 
     def test_cleanup_requires_tree_and_reader_barriers(self):
         receipt = self.receipt("session.execution.failed")
@@ -156,6 +188,13 @@ class ClassificationTests(unittest.TestCase):
                 failed = copy.deepcopy(receipt)
                 failed["classes"]["cleanup"][name] = value
                 self.assertEqual(witness.classify(failed)["classes"]["cleanup"]["status"], "run and failed")
+
+    def test_a_recorded_failure_survives_the_cleanup_grade(self):
+        recorded = {"classes": {"cleanup": {"status": "run and failed"}}, "failure": "RuntimeError"}
+        self.assertEqual(witness.cleanup_failure(recorded)["failure"], "RuntimeError")
+        unnamed = witness.cleanup_failure({"classes": {"cleanup": {"status": "run and failed"}}})
+        self.assertEqual(unnamed["failure"], "CleanupIncomplete")
+        self.assertNotIn("failure", witness.cleanup_failure({"classes": {"cleanup": {"status": "observed"}}}))
 
     @unittest.skipUnless(os.name == "nt", "the Windows tree-kill arm")
     def test_tree_kill_timeout_still_closes_real_process_socket_and_readers(self):
@@ -236,6 +275,19 @@ class PosixCleanupTests(unittest.TestCase):
         self.assertNotIn("escalated", cleanup)
         self.assertEqual(cleanup["server_exit_code"], -15)
         self.assertTrue(cleanup["output_readers_stopped"])
+        self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
+
+    def test_posix_cleanup_treats_a_poll_reaped_child_as_group_gone(self):
+        child = self.child("pass", start_new_session=True)
+        deadline = time.monotonic() + 5
+        while child.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(child.poll(), 0)
+        cleanup = witness.close_native(child, None, None, [])
+        self.assertEqual(cleanup["exit_code"], 0)
+        self.assertTrue(cleanup["group_gone"])
+        self.assertNotIn("signal_error", cleanup)
+        self.assertEqual(cleanup["server_exit_code"], 0)
         self.assertEqual(witness.classify(self.classify_row(cleanup))["classes"]["cleanup"]["status"], "observed")
 
     def test_posix_cleanup_escalates_once_when_sigterm_is_ignored(self):
@@ -369,6 +421,65 @@ class RedactionTests(unittest.TestCase):
                 replacements,
                 ("https://relay.example.invalid/v1",),
             )
+
+    def test_every_write_refusal_carrier_is_refused(self):
+        secrets = ("fixture-credential-value", "fixture-password-value", "Basic Zm...", "https://relay.example.invalid/v1")
+        for carrier in secrets:
+            with self.subTest(carrier=carrier):
+                with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+                    witness.receipt_bytes({"logs": {"stdout": carrier}}, {}, secrets)
+
+    def test_a_quote_or_non_ascii_secret_is_refused_and_replaced_in_its_escaped_spelling(self):
+        for secret in ('fixture-"quoted"-\\secret', "fixture-\u00e9\u20ac-secret"):
+            with self.subTest(secret=secret):
+                with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+                    witness.receipt_bytes({"logs": {"stdout": secret}}, {secret: witness.CREDENTIAL_TOKEN}, (secret,))
+                text, counts = witness.redact(json.dumps({"log": secret}), {secret: witness.CREDENTIAL_TOKEN})
+                self.assertEqual(counts[witness.CREDENTIAL_TOKEN], 1)
+                self.assertEqual(json.loads(text), {"log": witness.CREDENTIAL_TOKEN})
+                self.assertTrue(witness.carries_credential(json.dumps({"apiKey": secret}), secret))
+
+
+class WriteReceiptTests(unittest.TestCase):
+    """The receipt's only write path: the run-root scan, the refusal and the replaced bytes."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = pathlib.Path(directory.name)
+        self.out = self.root / "receipt.json"
+        self.credential = "fixture-credential-value"
+        self.replacements = witness.relay_replacements("https://relay.example.invalid/v1")
+        self.secrets = (self.credential, "fixture-password-value", "Basic Zm...", "https://relay.example.invalid/v1")
+
+    def write(self, receipt):
+        return witness.write_receipt(self.out, receipt, self.replacements, self.secrets, self.credential, self.root)
+
+    def test_the_write_tail_refuses_a_credential_bearing_receipt(self):
+        with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+            self.write({"logs": {"stdout": "carrier " + self.credential}})
+        self.assertFalse(self.out.exists())
+
+    def test_the_write_tail_refuses_a_relay_origin_bearing_receipt(self):
+        with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+            self.write({"logs": {"stdout": "origin https://relay.example.invalid/v1"}})
+        self.assertFalse(self.out.exists())
+
+    def test_the_write_tail_refuses_a_run_root_scan_match(self):
+        (self.root / "stray.txt").write_text("carrier " + self.credential)
+        with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+            self.write({"logs": {"stdout": "clean\n"}})
+        self.assertFalse(self.out.exists())
+
+    def test_the_write_tail_writes_the_replaced_bytes(self):
+        receipt = {"logs": {"stdout": "twice relay.example.invalid relay.example.invalid\n"}}
+        self.assertIs(self.write(receipt), receipt)
+        data = self.out.read_bytes()
+        self.assertNotIn(b"relay.example.invalid", data)
+        written = json.loads(self.out.read_text())
+        self.assertEqual(written["logs"]["stdout"].count(witness.RELAY_HOST_TOKEN), 2)
+        self.assertEqual(written["redaction"]["occurrences"], {witness.RELAY_HOST_TOKEN: 2})
+        self.assertEqual(written["credential_scan"], {"files_scanned": 0, "matches": []})
 
 
 class SchemaTests(unittest.TestCase):
@@ -582,6 +693,20 @@ class PinnedBlobTest(unittest.TestCase):
         elf_pin = {**self.pin, "label": "Linux ELF", "magic": b"\x7fELF"}
         with self.assertRaisesRegex(RuntimeError, "owner-pinned executable magic mismatch for platform posix"):
             self.resolve(str(self.blob), pins={"posix": elf_pin}, platform_key="posix")
+
+
+class CommittedReceiptTests(unittest.TestCase):
+    """The shipped classifier reproduces every committed receipt's stored class verdicts; no re-render."""
+
+    def test_committed_receipts_reproduce_their_stored_class_statuses(self):
+        receipts = sorted((ROOT / "daemon/internal/harness/testdata/opencode/2.4.1").glob("*.json"))
+        self.assertTrue(receipts)
+        for path in receipts:
+            with self.subTest(receipt=path.name):
+                stored = json.loads(path.read_text())["classes"]
+                recomputed = witness.classify(copy.deepcopy(json.loads(path.read_text())))["classes"]
+                for name, value in stored.items():
+                    self.assertEqual(recomputed[name]["status"], value["status"])
 
 
 class BindingTest(FixtureRepo, unittest.TestCase):

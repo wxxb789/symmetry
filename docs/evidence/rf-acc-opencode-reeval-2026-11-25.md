@@ -65,7 +65,7 @@ tokens.
 | file | change |
 | --- | --- |
 | `scripts/ci/opencode-v2-support-witness.py` | per-platform pins (size/sha256/magic/asset) keyed by the running platform with refusals that name the platform; readiness identity extracted as an exact predicate and the startup race fixed; the route set re-anchored; the continuation leg now awaits the permission request and replies `{"decision":"once"}`; POSIX launch/cleanup with signals on the process group; platform-aware child environment; in-memory credential/relay-origin replacement with counts; `--mode` probe/full/provider-failure/truncation; the live prompt schema resolved by digest for the truncation verdict |
-| `scripts/ci/test-opencode-v2-support-witness.py` | 37 tests (was 18): per-platform pin and magic rows, readiness-equality rows, redaction/credential-locality rows including the written-receipt envelope, reply-bearing continuation rows including the non-`once` decision, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, live-reader barrier, stream-reader join). No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
+| `scripts/ci/test-opencode-v2-support-witness.py` | 47 tests (was 18): per-platform pin and magic rows, readiness-equality rows, redaction/credential-locality rows including the written-receipt envelope, plain/escaped secret rows and the four-carrier refusal row, the write-tail scan/refuse/write rows, reply-bearing continuation rows including the non-`once` decision and the ordered-`permission.replied` rows, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, poll-reaped group, live-reader barrier, stream-reader join), and the committed-receipt replay row. No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
 | `daemon/internal/harness/testdata/opencode/2.4.1/**` | this evidence's records: README, two probe files, three pass receipts per platform |
 | `docs/plans/2026-11-25-rf-acc-opencode-reeval-plan.md` | the plan (protocol, route probe list, preflight, implementation choices, Phase 1 expectation) |
 | `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` | this record |
@@ -118,6 +118,22 @@ carrier held the origin, so no recorded byte changes). The apply-stage collector
 `binding_sha256` (`56d6e602…`) remains the collecting revision, no receipt was re-rendered, and
 all eight committed records are unchanged. The refreshed gate numbers are in §12.
 
+**Fix pass (2026-11-25, review r1).** The review's six confirmed findings were fixed after the
+apply pass; no receipt was re-collected or re-rendered. The POSIX cleanup arm signals
+`os.killpg(process.pid, …)` directly and grades an already-reaped child as `group_gone` with
+`exit_code 0`, and a recorded failure name survives the cleanup grade (`setdefault`). The
+continuation predicate now requires, inside the terminal-bounded window, a `permission.replied`
+event carrying the recorded request id and `reply: "once"` ahead of the tool success; the
+reply record itself now stores `{"status": <POST status>, "sent": <request body>}` and no
+longer stands in for server evidence. The write tail is the named `write_receipt` (run-root
+scan, replacement counts, refusal) called by `main()`. Both the plain and the JSON-escaped
+spelling of every secret are refused and replaced across the receipt bytes, the payload/event
+carriers, the configuration check and the run-root scan. The delivered collector sha256 is
+`1b7cda409b42deaefd0ccfd896824a0c686da5e7b90095b7e96211d329d64d74` (suite
+`eb7548c799ab7bfe9fdb930b684177bdb90573a78d3edad4c62975f3bb9a4164`, 47 rows); the receipts'
+`binding_sha256` (`56d6e602…`) remains the collecting revision. Gate numbers are in §12 and the
+fix-pass mutants in §11.
+
 ## 5. Class matrix
 
 Verdicts per class × platform from the committed receipts (derivation command in §12). The
@@ -133,11 +149,13 @@ reason strings are the receipts' own `blocker` values, verbatim.
 | Cleanup | observed — `taskkill` exit 0, server exit code captured, both reader barriers stopped | observed — SIGTERM on the process group, `exit_code 0`, server exit 143, both reader barriers stopped |
 | Usage | observed — nonzero native `tokens`/`cost` counters; not reconciled against provider billing | observed — same limitation |
 
-Classes not exercised by a given pass are reported by that pass as `unavailable` (success and
-interruption in the provider-failure and truncation receipts, and so on); the matrix above
-names the decisive receipt per class. `HTTP 200`, idle, `Step.Ended`, SSE EOF and files
-establish nothing: the classifier still refuses a failed provider turn as success, a no-op
-interrupt, and a tool continuation without a recorded reply.
+Classes not exercised by a given pass are reported by that pass as `unavailable` (interruption
+in the provider-failure and truncation receipts, success in the truncation receipts); the
+provider-failure receipts grade success `run and failed`, because a prompt was sent and its
+terminal failed. The matrix above names the decisive receipt per class. `HTTP 200`, idle,
+`Step.Ended`, SSE EOF and files establish nothing: the classifier still refuses a failed
+provider turn as success, a no-op interrupt, and a tool continuation without the recorded
+`204` reply and the ordered `permission.replied` for the same request id.
 
 ## 6. Route table and 2.3.0 deltas
 
@@ -183,8 +201,9 @@ with `outcome: succeeded` and nonzero counters in the readback.
 marker, so the 2.3.0 `permission.rejected (executed=false)` reading is not reused as evidence
 in either direction. Approval evidence is the recorded request → `once` reply → `permission.replied`
 → tool success order, plus the tool's returned content, plus the later step start. A receipt
-that carries the tool continuation without a recorded accepting reply classifies as
-`run and failed` (mutant M5 in §11).
+that carries the tool continuation without a recorded accepting reply, without the stream's
+`permission.replied` for the recorded request id, or with the permission events after the tool
+success, classifies as `run and failed` (mutants M5 and M11-M13 in §11).
 
 ## 8. Provider failure — a genuine relay rejection
 
@@ -242,11 +261,18 @@ evidence.
 
 ## 11. Mutants (scratch copies; the repository bytes were never mutated)
 
-Each mutant was applied to a scratch copy of the collector under a scratch root outside the
-repository, with a copy of the final suite; the repository's
-`scripts/ci/opencode-v2-support-witness.py` was verified byte-identical
-(`sha256 56d6e602…`) after the runs. M1-M6 and M8 redden suite rows; M7 is a gate-refusal row
-(the sanitizer is a separate program, so the receipt was fed to it on standard input).
+M1-M8 were applied to scratch copies of the implement-stage collector and suite under a scratch
+root outside the repository; the repository's collector was verified byte-identical at its
+then-`sha256 56d6e602…` after those runs. The fix-pass rows M9-M16 were applied to a scratch
+copy of the delivered collector (`sha256 1b7cda40…`) with a copy of the delivered suite
+(`sha256 eb7548c7…`), restored byte-identical after every run (each mutation reverts exactly
+the fixed hunk). M9 reddens only the POSIX arm, which the `daemon-windows` self-test step skips
+— an oracle gap outside a WSL run as root; every other new row reddens that step under the
+runner's non-root account. The `main()` call-site carrier assembly (dropping one of the four
+carriers from the write call) reddens no row on either platform, because no row drives
+`main()` — an oracle gap shared with the rest of `main()`'s glue. M1-M6 and M8 redden suite
+rows; M7 is a gate-refusal row (the sanitizer is a separate program, so the receipt was fed to
+it on standard input).
 
 | id | mutation (scratch copy) | observed red |
 | --- | --- | --- |
@@ -259,17 +285,25 @@ repository, with a copy of the final suite; the repository's
 | M6 | `classify()` accepted a failed provider terminal as success | `test_native_provider_auth_failure_is_not_success`, plus the idle/step-ended rows |
 | M7 | a receipt with a drive path restored in `workspace` | `model-routing-record-sanitize.py --check --root-only` → exit 1, `refused: a host absolute path is present` (the unmutated receipt exits 0) |
 | M8 | POSIX cleanup skipped the stream-reader join (WSL) | `test_posix_cleanup_joins_a_reader_blocked_on_the_stream` |
+| M9 | POSIX cleanup back to `os.getpgid(process.pid)` with no `ProcessLookupError` arm (WSL) | `test_posix_cleanup_treats_a_poll_reaped_child_as_group_gone` |
+| M10 | cleanup grade assigns `failure` instead of `setdefault` | `test_a_recorded_failure_survives_the_cleanup_grade` |
+| M11 | continuation `approved` forced true | `test_continuation_requires_the_ordered_permission_reply_event` (4 subcases) |
+| M12 | the `permission.replied` match drops the `reply: "once"` value | `test_continuation_requires_the_ordered_permission_reply_event` (`not_once`) |
+| M13 | the `permission.replied` match drops the tool-success ordering | `test_continuation_requires_the_ordered_permission_reply_event` (`after_tool_success`) |
+| M14 | `secret_spellings` returns only the plain spelling | `test_a_quote_or_non_ascii_secret_is_refused_and_replaced_in_its_escaped_spelling` (2 subcases) |
+| M15 | the receipt refusal scans only the first secret carrier | `test_every_write_refusal_carrier_is_refused` (3 carriers), `test_the_write_tail_refuses_a_relay_origin_bearing_receipt` |
+| M16 | `write_receipt` drops the run-root scan refusal | `test_the_write_tail_refuses_a_run_root_scan_match` |
 
 ## 12. Gates
 
 | gate | command (from the repository root) | result |
 | --- | --- | --- |
-| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 37 tests`, `OK (skipped=4)` |
-| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 37 tests`, `OK (skipped=1)` |
+| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 47 tests`, `OK (skipped=5)` |
+| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 47 tests`, `OK (skipped=1)`; 20 consecutive runs green |
 | render-then-check, every new record (8 files: 2 probes, 6 receipts) | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only < <record>` | exit 0 on all 8 |
 | record cleanliness over the change | `python3 scripts/ci/check-record-cleanliness.py --base 30ed5ada --head <scratch>` | exit 0 — `1 changed record(s) pass the root-only check` |
 | clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 30ed5ada --head <scratch>` | exit 0 — `13 changed file(s), 1742 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`, with the eight one-line records reported as below-threshold notices. Before the one-line form the same command refused 47 new clones (§10) |
-| parsed equality of each committed record against the renderer's output | `python3 -c "import json,sys; assert json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))" <render>/<record> daemon/internal/harness/testdata/opencode/2.4.1/<record>` | 8/8 equal |
+| render pipeline reproved from the scratch raw receipts (8 records) | `python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>`, then the README §2 one-line pass, both compared by sha256 against the README §2 raw/pre-compaction/committed columns, plus the parsed-equality assert above | 8/8 raw, 8/8 pre-compaction, 8/8 committed; parsed equality 8/8 |
 | frozen bytes | `git diff 30ed5ada -- daemon/internal/harness/opencode/ daemon/internal/harness/registry.go daemon/internal/app/ .github/workflows/ docs/design/harness.md docs/goals/ scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh daemon/internal/harness/testdata/opencode/2.3.0/` | empty |
 | credential census over added lines | `git diff --no-renames -U0 30ed5ada..<scratch> \| grep '^+'` over the added lines, fixed pattern `sk-[A-Za-z0-9_-]{16,}`, the bare prefix, the relay host derived at run time from the operator's provider entry (never hardcoded), and the credential value itself | key shape `0`; bare prefix `1` — the pattern's own occurrence in this row, justified as census methodology and permitted as the relay's prefix prose; **relay host `0`, relay base URL `0`** (Q-URL b); the credential value `0` |
 | class-matrix derivation | `python3 - <<'PY' …` over `daemon/internal/harness/testdata/opencode/2.4.1/*.json` (the command in the plan §3) | the matrix in §5 |
@@ -278,7 +312,7 @@ repository, with a copy of the final suite; the repository's
 Git, and the working tree is left uncommitted for verification, so the head was materialized
 with a temporary index (`GIT_INDEX_FILE` + `git write-tree` + `git commit-tree`) — no branch,
 ref, index or worktree state of the checkout was touched. The refreshed rows (suite,
-cleanliness, clone, frozen, census) are the apply-stage re-run over `--base 30ed5ada`
+cleanliness, clone, frozen, census) are the fix-stage re-run over `--base 30ed5ada`
 (`origin/main` after the `#286` merge); a reviewer re-runs the same commands with the pull
 request's own head commit.
 

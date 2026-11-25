@@ -74,8 +74,8 @@ Every committed receipt carries the collector binding
 `scripts/ci/source_subject.py` in its own `binding_sha256` field, and records
 `source_head 6b2d4f8f195a…` (the base commit; the collector changes are uncommitted at
 collection time, which is why the binding, not the head, is the byte identity of the tool).
-A later apply pass changed the collector and its suite after collection (deltas in
-`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every receipt here keeps its
+A later apply pass and a fix pass changed the collector and its suite after collection (deltas
+in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every receipt here keeps its
 collecting revision in `binding_sha256`, and none was re-rendered.
 
 Each committed record is produced from its raw receipt by two recorded steps (Q-RENDER a):
@@ -89,8 +89,8 @@ python3 -c "import json,sys; assert json.load(open(sys.argv[1])) == json.load(op
 ```
 
 The one-line form is deliberate and format-only: the changed-file clone gate
-(`scripts/ci/jscpd-changed.py` over the `--head` tree with `.jscpd.json`'s 10-line/50-token
-thresholds — the scope is read from the comparison base, so a change cannot exempt itself)
+(`scripts/ci/jscpd-changed.py` over the `--head` tree with its `--min-lines 10 --min-tokens 50`
+limits — the scope is read from the comparison base, so a change cannot exempt itself)
 reads machine-generated records as duplication, because the same collector writes every
 receipt and they share their structural blocks by construction. A record committed as a single
 JSON object on one line is below that threshold; the gate reports it as a notice rather than
@@ -162,8 +162,10 @@ provider turn, a no-op interrupt and an unapproved tool continuation.
   `{"decision":"once"}` → **204**, `permission.replied` follows, then `session.tool.success`
   carries the file's own bytes (`Read file baseline.txt, lines 1-1 / 1: native continuation
   witness`), then `session.step.ended` and a later `session.step.started`, then
-  `session.execution.succeeded`. The class is `observed` only with that recorded reply — a
-  tool call without the reply is `run and failed`.
+  `session.execution.succeeded`. The class is `observed` only when the recorded `204` reply is
+  joined by the stream's own `permission.replied` for the request id, carrying `reply: "once"`,
+  ahead of the tool success — a tool call without that ordered event, or with the permission
+  events removed or reordered, is `run and failed`.
 - `executed` is a **required payload field** of both `session.tool.called` and
   `session.tool.success` in the live schema and is `false` in both here; it does not mark
   approval. The approval evidence is the request→reply→`permission.replied`→success order and
@@ -182,8 +184,10 @@ provider turn, a no-op interrupt and an unapproved tool continuation.
   property list and the document digest. No synthetic SSE, no fault injection, no loopback
   gateway.
 - **Readiness identity is exact.** Every receipt records `pid == server pid` and
-  `version == "2.4.1"`; the Linux receipts additionally record the `503`-then-`200` startup
-  sequence, because the server answers from its listening socket before the API is ready.
+  `version == "2.4.1"`; a `503` row precedes the `200` only in
+  `linux-2026-11-25-provider-failure.json` and `linux-2026-11-25-truncation.json`, because the
+  server answers from its listening socket before the API is ready and the readiness race may
+  resolve before the first recorded attempt.
 - **Usage counters are native only.** They are nonzero in the successful readbacks and
   zero-cost in the failure receipt; successful/billable usage and failed-turn accounting stay
   unreconciled against the provider.

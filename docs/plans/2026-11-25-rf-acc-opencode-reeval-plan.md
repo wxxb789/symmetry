@@ -32,7 +32,7 @@ WSL distribution `Ubuntu-24.04` (PRETTY_NAME `Ubuntu 24.04.5 LTS`), kernel
 `6.18.58.1-microsoft-standard-WSL2`, Python 3.12.10 (Windows) / 3.12.3 (WSL), git 2.56.1.
 
 The WSL-side OpenCode configuration is staged by the operator at
-`/root/.config/opencode/opencode.json` as the same `tencent-litellm` provider entry (base URL,
+`<A_HOME>/.config/opencode/opencode.json` as the same `tencent-litellm` provider entry (base URL,
 model catalog) with `apiKey` as the environment reference `{env:TENCENT_GLM_API_KEY}`; the
 collector reads that path for `provider.tencent-litellm.options.baseURL` exactly as it reads the
 Windows-side config. Neither file is a record.
@@ -149,17 +149,21 @@ never a patch.
 
 - **POSIX cleanup accounting.** `close_native` on POSIX signals the process group
   (`start_new_session=True`) with a bounded SIGTERM→SIGKILL and reports `exit_code = 0` when the
-  process was reaped inside that bound (recording `escalated` when the kill needed SIGKILL),
-  `1` on a signal error; the Windows arm keeps `taskkill` unchanged. The four keys `classify()`
-  reads (`exit_code`, `server_exit_code`, `stream_reader_stopped`, `output_readers_stopped`) and
-  its three barriers are unchanged, so the class predicate is identical on both platforms.
+  process was reaped inside that bound (recording `escalated` when the kill needed SIGKILL) or
+  when the readiness loop had already reaped the child, leaving no group to signal (recording
+  `group_gone`), and `1` on a signal error; the Windows arm keeps `taskkill` unchanged. The four
+  keys `classify()` reads (`exit_code`, `server_exit_code`, `stream_reader_stopped`,
+  `output_readers_stopped`) and its three barriers are unchanged, so the class predicate is
+  identical on both platforms.
 - **Probe mode is not a pass.** It produces the Stage 3 probe artifact and validates the
   platform launch/cleanup path before a receipt is spent; it collects no class and writes no
   receipt filename.
-- **Redaction split.** The collector removes the credential and the relay origin (Q-URL b); the
-  repository renderer removes host absolute paths (Q-RENDER a), so `binary.path`, `workspace`,
-  `discovered_from` and `command` are tokens in the committed record and literal only in the raw
-  working copy.
+- **Redaction split.** The collector refuses and replaces both the plain and the JSON-escaped
+  spelling of every secret across the receipt bytes, the payload/event carriers, the
+  configuration and the run-root scan, and removes the credential and the relay origin (Q-URL
+  b); the repository renderer removes host absolute paths (Q-RENDER a), so `binary.path`,
+  `workspace`, `discovered_from` and `command` are tokens in the committed record and literal
+  only in the raw working copy.
 - **Truncation resolution.** The prompt schema is resolved from the live document; a
   `BOUNDING_FIELDS` match would start one bounded turn and require a native output bound for
   `observed`, otherwise the class is `unavailable` with the property list and the document

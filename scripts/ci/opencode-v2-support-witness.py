@@ -175,13 +175,22 @@ def relay_replacements(base_url):
     return replacements
 
 
+def secret_spellings(secret):
+    """A non-empty secret's plain and JSON-escaped spellings; an empty secret has none."""
+    if not secret:
+        return ()
+    escaped = json.dumps(secret, ensure_ascii=True)[1:-1]
+    return (secret,) if escaped == secret else (secret, escaped)
+
+
 def redact(text, replacements):
-    """Replace every non-empty secret spelling; return the redacted text and the removal counts."""
+    """Replace every non-empty secret spelling, plain or escaped; return the text and the removal counts."""
     counts = {}
     for value, token in replacements.items():
-        if value and value in text:
-            counts[token] = text.count(value)
-            text = text.replace(value, token)
+        for spelling in secret_spellings(value):
+            if spelling in text:
+                counts[token] = counts.get(token, 0) + text.count(spelling)
+                text = text.replace(spelling, token)
     return text, counts
 
 
@@ -189,7 +198,7 @@ def receipt_bytes(receipt, replacements, secrets):
     """The receipt's write bytes: a secret spelling stops the write, and the replacements apply to what is written."""
     text = json.dumps(receipt, ensure_ascii=True, indent=2) + "\n"
     data = text.encode()
-    if any(secret.encode() in data for secret in secrets if secret):
+    if any(spelling.encode() in data for secret in secrets for spelling in secret_spellings(secret)):
         raise RuntimeError("credential locality evidence refused")
     return redact(text, replacements)[0].encode()
 
@@ -198,7 +207,35 @@ def carries_credential(data, key):
     """An unset credential matches nothing; a set one refuses any carrier that holds it."""
     if not key:
         return False
-    return key in (data.decode("utf-8", "replace") if isinstance(data, bytes) else data)
+    text = data.decode("utf-8", "replace") if isinstance(data, bytes) else data
+    return any(spelling in text for spelling in secret_spellings(key))
+
+
+def receipt_scan(root, credential):
+    """The run root's scan: every file counted, any file carrying a credential spelling named."""
+    needles = [spelling.encode() for spelling in secret_spellings(credential)]
+    files = 0
+    matches = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        files += 1
+        data = path.read_bytes()
+        if any(needle in data for needle in needles):
+            matches.append(str(path.relative_to(root)))
+    return {"files_scanned": files, "matches": matches}
+
+
+def write_receipt(out, receipt, replacements, secrets, credential, root):
+    """The receipt's only write path: scan the run root, refuse a secret spelling, write the replaced bytes."""
+    receipt["credential_scan"] = receipt_scan(root, credential)
+    _, counts = redact(json.dumps(receipt, ensure_ascii=True, indent=2), replacements)
+    receipt["redaction"] = {"occurrences": counts}
+    if receipt["credential_scan"]["matches"]:
+        raise RuntimeError("credential locality evidence refused")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(receipt_bytes(receipt, replacements, secrets))
+    return receipt
 
 
 def child_environment(root, platform_key, environ):
@@ -277,20 +314,39 @@ def classify(receipt):
             (index for index, event in enumerate(window) if terminal.get("id") and event == terminal), None
         )
         window = window[:terminal_index] if terminal_index is not None else []
-        kinds = [
-            event.get("type")
+        events = [
+            event
             for event in window
             if event.get("data", {}).get("sessionID") == terminal.get("data", {}).get("sessionID")
         ]
+        kinds = [event.get("type") for event in events]
+        request_id = continuation.get("request_id")
+        replied_index = next(
+            (
+                index
+                for index, event in enumerate(events)
+                if event.get("type") == "permission.replied"
+                and event.get("data", {}).get("requestID") == request_id
+                and event.get("data", {}).get("reply") == PERMISSION_REPLY["decision"]
+            ),
+            None,
+        )
+        tool_index = next((index for index, kind in enumerate(kinds) if kind == "session.tool.success"), None)
         continued = any(
             "session.tool.success" in kinds[:index] and "session.step.started" in kinds[index + 1 :]
             for index, kind in enumerate(kinds)
             if kind == "session.step.ended"
         )
+        approved = (
+            bool(request_id)
+            and replied_index is not None
+            and tool_index is not None
+            and replied_index < tool_index
+        )
         continuation["status"] = (
             "observed"
             if reply.get("status") == 204
-            and (reply.get("body") or {}).get("decision") == "once"
+            and approved
             and continued
             and terminal.get("type") == "session.execution.succeeded"
             else "run and failed"
@@ -363,20 +419,32 @@ def native_kwargs(platform_key):
     return {"start_new_session": True} if platform_key == "posix" else {}
 
 
+def cleanup_failure(receipt):
+    """Name a cleanup failure only when no cause was recorded already."""
+    if receipt["classes"]["cleanup"]["status"] != "observed":
+        receipt.setdefault("failure", "CleanupIncomplete")
+    return receipt
+
+
 def close_native(process, connection, stream_reader, output_readers):
     """Always reach process, socket and reader barriers, including kill failure."""
     if running_platform() == "posix":
         result = {"command": ["SIGTERM", "process-group", str(process.pid)], "exit_code": None}
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             try:
-                process.wait(timeout=POSIX_SIGTERM_SECONDS)
-            except subprocess.TimeoutExpired:
-                # A native server that ignores SIGTERM is escalated once, still bounded.
-                result["command"].append("SIGKILL")
-                result["escalated"] = True
-                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                process.wait(timeout=POSIX_SIGKILL_SECONDS)
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                # start_new_session makes the pid the pgid; a reaped child leaves no group to signal.
+                result["group_gone"] = True
+            else:
+                try:
+                    process.wait(timeout=POSIX_SIGTERM_SECONDS)
+                except subprocess.TimeoutExpired:
+                    # A native server that ignores SIGTERM is escalated once, still bounded.
+                    result["command"].append("SIGKILL")
+                    result["escalated"] = True
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=POSIX_SIGKILL_SECONDS)
             result["exit_code"] = 0
         except (OSError, subprocess.TimeoutExpired) as error:
             result["signal_error"] = type(error).__name__
@@ -527,7 +595,7 @@ def main():
         "provider": {PROVIDER: provider},
     }
     encoded_config = json.dumps(config)
-    if key and key in encoded_config:
+    if any(spelling in encoded_config for spelling in secret_spellings(key)):
         raise RuntimeError("credential in configuration refused")
     config_path = root / "config/opencode.json"
     config_path.parent.mkdir(exist_ok=True)
@@ -774,7 +842,7 @@ def main():
                         "/api/session/" + continuation_id + "/permission/" + permission["id"] + "/reply",
                         dict(PERMISSION_REPLY),
                     )
-                    continuation["reply"] = {"status": status, "body": dict(PERMISSION_REPLY)}
+                    continuation["reply"] = {"status": status, "sent": dict(PERMISSION_REPLY)}
                 continuation["terminal"] = await_event(continuation_id, TERMINALS, start)
                 continuation["tool_outcome"] = tool_outcome(continuation_id, start)
                 request("GET", "/api/session/" + continuation_id)
@@ -878,17 +946,8 @@ def main():
                 },
             )
         classify(receipt)
-        if receipt["classes"]["cleanup"]["status"] != "observed":
-            receipt["failure"] = "CleanupIncomplete"
-        files = [p for p in root.rglob("*") if p.is_file()]
-        matches = [str(p.relative_to(root)) for p in files if key and key.encode() in p.read_bytes()]
-        receipt["credential_scan"] = {"files_scanned": len(files), "matches": matches}
-        _, counts = redact(json.dumps(receipt, ensure_ascii=True, indent=2), replacements)
-        receipt["redaction"] = {"occurrences": counts}
-        if matches:
-            raise RuntimeError("credential locality evidence refused")
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_bytes(receipt_bytes(receipt, replacements, (key, password, authorization, endpoint)))
+        cleanup_failure(receipt)
+        write_receipt(args.out, receipt, replacements, (key, password, authorization, endpoint), key, root)
         print(
             json.dumps(
                 {
