@@ -55,33 +55,33 @@ Run `45510612412`, head `01c0d4cf` (workflow run created 2026-11-24T23:31:02Z, f
     autonomous_test.go:308: reader goroutine is still alive when runAutonomous returned:
         goroutine 46 [running]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestAutonomousReturnReleasesItsInputReader(0xc00017c488)
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
         testing.tRunner(0xc00017c488, 0x11e9a50)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         created by testing.(*T).Run in goroutine 1
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2260 +0xb13
-        
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2260 +0xb13
+
         goroutine 1 [chan receive]:
         testing.(*T).Run(0xc0001aab48, {0xc82885, 0x2a}, 0x11e9a50)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2268 +0xb3e
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2268 +0xb3e
         testing.runTests.func1(0xc0001aab48)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2744 +0x85
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2744 +0x85
         testing.tRunner(0xc0001aab48, 0xc0002319f0)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         testing.runTests({0xc7b4c0, 0x22}, {0xc8e9ee, 0x3a}, 0xc0001a43d8, {0x124f050, 0x20, 0x20}, {0xc2b9a64bce9f3708, 0x8bb4442d73, ...})
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2742 +0x9ea
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2742 +0x9ea
         testing.(*M).Run(0xc0001f4320)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestMain(0xc0001f4320)
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
         main.main()
-        	_testmain.go:110 +0x172
-        
+	_testmain.go:110 +0x172
+
         goroutine 47 [runnable]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous.func1()
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
         created by github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous in goroutine 50
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
 --- FAIL: TestAutonomousReturnReleasesItsInputReader (0.00s)
 ```
 
@@ -92,33 +92,33 @@ Run `45430210878`, head `5c297c25`, verbatim (same shape, `goroutine 46 [runnabl
     autonomous_test.go:308: reader goroutine is still alive when runAutonomous returned:
         goroutine 44 [running]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestAutonomousReturnReleasesItsInputReader(0xc00028e008)
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous_test.go:306 +0x771
         testing.tRunner(0xc00028e008, 0x11e9a50)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         created by testing.(*T).Run in goroutine 1
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2260 +0xb13
-        
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2260 +0xb13
+
         goroutine 1 [chan receive]:
         testing.(*T).Run(0xc00028e248, {0xc82885, 0x2a}, 0x11e9a50)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2268 +0xb3e
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2268 +0xb3e
         testing.runTests.func1(0xc00028e248)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2744 +0x85
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2744 +0x85
         testing.tRunner(0xc00028e248, 0xc0001b19f0)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2195 +0x21d
         testing.runTests({0xc7b4c0, 0x22}, {0xc8e9ee, 0x3a}, 0xc000296108, {0x124f050, 0x20, 0x20}, {0xc2b98b42e863c4d9, 0x8bb3bd2e57, ...})
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2742 +0x9ea
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2742 +0x9ea
         testing.(*M).Run(0xc0002d40a0)
-        	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
+	/opt/hostedtoolcache/go/1.27.4/x64/src/testing/testing.go:2602 +0xf45
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.TestMain(0xc0002d40a0)
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/main_test.go:42 +0x39
         main.main()
-        	_testmain.go:110 +0x172
-        
+	_testmain.go:110 +0x172
+
         goroutine 46 [runnable]:
         github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous.func1()
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:111 +0x213
         created by github.com/wxxb789/symmetry/daemon/cmd/symmetry-fake-agent.runAutonomous in goroutine 45
-        	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
+	/home/runner/work/symmetry/symmetry/daemon/cmd/symmetry-fake-agent/autonomous.go:97 +0x233
 --- FAIL: TestAutonomousReturnReleasesItsInputReader (0.04s)
 ```
 
@@ -236,7 +236,7 @@ reshaped into the settle loop; the closed-pipe write check and the summary check
 (`autonomous_test.go:323-328` in the final file) and the sibling
 `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` are byte-identical. The diff against
 `01c0d4cf` touches only the owned files; `git hash-object
-daemon/cmd/symmetry-fake-agent/autonomous.go` is `d82b5991…`; `git diff --check` exits 0.
+daemon/cmd/symmetry-fake-agent/autonomous.go` is `d82b5991…`; `git diff --check 01c0d4cf` (frozen base → final bytes) exits 0.
 
 ## 7. Gates
 
@@ -250,7 +250,7 @@ daemon/cmd/symmetry-fake-agent/autonomous.go` is `d82b5991…`; `git diff --chec
 | package smoke | `go test -race -count=1 -timeout 600s ./cmd/symmetry-fake-agent/` (worktree, WSL) | 0 | `ok … 24.820s` |
 | calibration | `go test -race -count=200 -timeout 600s -run '^TestAutonomousReturnReleasesItsInputReader$' ./cmd/symmetry-fake-agent/` (worktree, WSL) | 0 | `ok … 3.140s` |
 | assertion census | §6 | — | 24/24 failure sites, 1/1 `runtime.Stack` site; product blob `d82b5991…` |
-| diff hygiene | `git diff --check` (worktree root); `gofmt -l daemon/cmd/symmetry-fake-agent/autonomous_test.go` | 0 | clean; empty |
+| diff hygiene | `git diff --check 01c0d4cf` (worktree root; frozen range base → final bytes; the implement-stage plain form ran while this record and the plan were untracked); `gofmt -l daemon/cmd/symmetry-fake-agent/autonomous_test.go` | 0 | clean; empty (the `space before tab in indent` lines the range form flags are re-indented) |
 | citation existence | emulation repo of the final tree: `python3 scripts/ci/check-citation-existence.py --repo . --base <BASE> --head HEAD` | 0 | `1 changed document(s) pass the path and symbol check (609 path citation(s))`; three pre-existing ignore-covered notices on `docs/archive/CLOSED-TODO.md:737,752,2512` |
 
 Not run here: CI `daemon` / `daemon-windows` on a PR head (the stage must not push; conductor-owned),

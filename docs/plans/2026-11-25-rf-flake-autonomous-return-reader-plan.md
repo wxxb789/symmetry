@@ -42,9 +42,9 @@ is present; otherwise re-dump every 1 ms until the frame vanishes or `readerExit
 passes; on persistence, fail with the dump. A released reader is dying and always vanishes; a
 parked or never-exiting reader never does, so persistence still reds deterministically. This is not
 a retry of the forbidden kind: nothing that leaked later passes; the accepted condition is "not
-persistent". `readerJoinTimeout` stays 50 ms. The 1 s bound is ~20× the join bound and ~10⁵× the
-observed death tail (two CI reds returned in 0.00 s and 0.04 s), so a starved host cannot turn a
-dying reader into a red while any reader that truly persists does. Comment policy: exactly the two
+persistent". `readerJoinTimeout` stays 50 ms. The 1 s bound is ~20× the join bound and ~80× the
+largest red `runElapsed` (12.4 ms; evidence record §4.1), so a starved host cannot
+turn a dying reader into a red while any reader that truly persists does. Comment policy: exactly the two
 lines beside `readerExitSettle` saying why persistence, not presence, is the condition.
 
 ## D2. P1: `runElapsed` makes any future red self-classifying
