@@ -1826,6 +1826,11 @@ The capture half of this section's first item and the `synthetic_goal_cleanup` c
 `docs/archive/CLOSED-TODO.md` under `## rf-acc-native-containment-witness: the containment
 witness's invisible App refusal (2026-11-24)`. What the capture named stays open as the item below.
 
+The parent-death stop of this section's second item closed on 2026-11-25 (goal
+`rf-acc-clone-cleanup-parent-death`, branch `refactor/rf-acc-clone-cleanup-parent-death`, base
+`6b2d4f8f`); its text is in `docs/archive/CLOSED-TODO.md` under
+`## rf-acc-clone-cleanup-parent-death: the installed-owner leg's parent-death stop (2026-11-25)`.
+
 - [ ] Decide the Linux v2 native owner witness's clone-admission contradiction (2026-11-24, goal
       `rf-acc-native-containment-witness`; evidence
       `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §7.2, runs `45452357027`,
@@ -1847,20 +1852,26 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       set by that harness block. The alternative, exempting the witness from the shared clone-v2
       admission guard, would weaken a production guard (`daemon/internal/**`).
 
-- [ ] Root-cause the product-test stops the installed-owner leg reaches (opened 2026-11-24, goal
-      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
-      `rf-acc-guest-native-exec`): `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259`
-      (`A cleanup caller exited without the requested parent-death signal`) still has no named root.
-      The sibling legs `clone_integration_linux_test.go:240` (`clone status frame magic or version is
-      invalid`) and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE:
-      errno=1`) are root-named to the same pre-clone guard consumer as `migration`'s arm — run
-      `45593856716` names the guard (`read_class=gate_v1_frame errno=1`) and runs `45601287283`/
-      `45602546196` name its unsatisfied credential fact
+- [ ] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
+      goal `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
+      `rf-acc-guest-native-exec`): `shared`'s leg
+      `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
+      passed `CloneCleanupScratch`; the parent-death clause closed on 2026-11-25 and moved to
+      `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death: the installed-owner
+      leg's parent-death stop (2026-11-25)`, and the other two remain —
+      `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
+      the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
+      and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`).
+      The two sibling legs are root-named to the same pre-clone guard consumer as `migration`'s
+      arm — run `45593856716` names the guard (`read_class=gate_v1_frame errno=1`) and runs
+      `45601287283`/`45602546196` name its unsatisfied credential fact
       (`guest_stage=gate_drop_bounding_set errno=1`) (the AppArmor-userns entry below) — but stay
       open as residuals: the `shared` set never ran on the fixed bytes, so neither leg's post-fix
-      line is observed. They close with the
-      AppArmor-userns fix (`rf-acc-apparmor-userns-profile`). No fixture change is proposed without
-      a named root.
+      line is observed. They close with the AppArmor-userns fix
+      (`rf-acc-apparmor-userns-profile`).
+      Both sit in `daemon/native/linux-gate/**` and were unreachable until the fifth leg's pin
+      was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
+      goal with guest-side debugging; no fixture change is proposed without a named root.
 
 - [ ] `migration`'s release now fails with a named cause inside the guest policy, not with an
       unnamed read (residual of the entry closed in `docs/archive/CLOSED-TODO.md` under goal
@@ -2003,8 +2014,9 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       no longer reproduces). Both case sets stay product-side and tracked; their pi rows stay
       unreadable while those stops remain — the two pre-clone-guard legs are residuals behind the
       AppArmor-userns entry above (follow-up goal `rf-acc-apparmor-userns-profile`), the
-      `clone_cleanup_linux_test.go:259` parent-death stop stays a separate open row above (the
-      clone reserve is no longer among them).
+      `clone_cleanup_linux_test.go:259` parent-death stop closed 2026-11-25; see
+      `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death` (the clone reserve
+      is no longer among them).
 
 - [ ] The pi durability witnesses bind `native_binary`/`native_binary_sha256`/`native_version_line`
       from the e2e publisher, not from the daemon (2026-11-24, same goal): the daemon's
