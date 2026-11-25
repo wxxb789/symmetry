@@ -294,6 +294,12 @@ func (helper *linuxOwnerHelperV2) baseResponse(operation, status string) linuxOw
 }
 
 func (helper *linuxOwnerHelperV2) writeResponse(connection *net.UnixConn, operation, status string, launcher *authority.LinuxCgroupProcessIdentity, gate *authority.LinuxCgroupGateIdentity, launcherExit *authority.LinuxCgroupExitProof, gateProcess *authority.LinuxCgroupProcessIdentity, gateOutcome *authority.LinuxCgroupGateProductionResult, leaseSequence uint64, evidence *LinuxOwnerHelperV2StopEvidence, errorCode string, fds ...int) error {
+	return helper.writeResponseWithDetail(connection, nil, operation, status, launcher, gate, launcherExit, gateProcess, gateOutcome, leaseSequence, evidence, errorCode, fds...)
+}
+
+// The unresolved release response is the only writer of the bounded release
+// error detail; every other response passes nil.
+func (helper *linuxOwnerHelperV2) writeResponseWithDetail(connection *net.UnixConn, releaseErrorDetail *LinuxOwnerHelperV2ReleaseErrorDetail, operation, status string, launcher *authority.LinuxCgroupProcessIdentity, gate *authority.LinuxCgroupGateIdentity, launcherExit *authority.LinuxCgroupExitProof, gateProcess *authority.LinuxCgroupProcessIdentity, gateOutcome *authority.LinuxCgroupGateProductionResult, leaseSequence uint64, evidence *LinuxOwnerHelperV2StopEvidence, errorCode string, fds ...int) error {
 	if helper.dropWitnessResponse(connection, operation, status, evidence) {
 		return nil
 	}
@@ -306,6 +312,7 @@ func (helper *linuxOwnerHelperV2) writeResponse(connection *net.UnixConn, operat
 	response.LeaseSequence = leaseSequence
 	response.StopEvidence = evidence
 	response.ErrorCode = errorCode
+	response.ReleaseErrorDetail = releaseErrorDetail
 	helper.stateMu.Lock()
 	response.OwnerLost = helper.ownerLost
 	response.CommitAcknowledged = helper.commitAcknowledged

@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"sync"
@@ -628,6 +629,190 @@ func (gate *PreparedGate) VerifyLeafMembership(leafFD int) error {
 	return gate.verifyIdentity(leafFD, !gate.released)
 }
 
+// Bounded release sub-step vocabulary for the helper's unresolved-response
+// detail; keep it closed, that field is redacted.
+const (
+	ReleaseSubStepGateAuthorize  = "gate_authorize"
+	ReleaseSubStepCloneBootstrap = "clone_bootstrap"
+	ReleaseSubStepCloneCheckout  = "clone_checkout"
+	ReleaseSubStepNativeExec     = "native_exec"
+	ReleaseSubStepRegister       = "register"
+)
+
+// Bounded release arm vocabulary: one code per failure site, so the helper's
+// unresolved-response detail can name the failing arm instead of the error text.
+const (
+	ReleaseArmGateMissingIdentity = "missing_gate_identity"
+	ReleaseArmGateAuthorize       = "anchor_authorize"
+	ReleaseArmGateIdentity        = "gate_identity"
+
+	ReleaseArmBootstrapInstalled = "installed_bootstrap"
+	ReleaseArmBootstrapAttempt   = "bootstrap_attempt"
+	ReleaseArmBootstrapImage     = "bootstrap_image"
+	ReleaseArmBootstrapProcess   = "bootstrap_process"
+	ReleaseArmLeafMembership     = "leaf_membership"
+
+	ReleaseArmCheckoutReceipt         = "checkout_receipt"
+	ReleaseArmCheckoutReceiptMismatch = "checkout_receipt_mismatch"
+	ReleaseArmCheckoutCallback        = "checkout_callback"
+	ReleaseArmCheckoutAckEncode       = "checkout_ack_encode"
+	ReleaseArmCheckoutAckSend         = "checkout_ack_send"
+
+	ReleaseArmNativeAwaitResult = "await_result"
+	ReleaseArmNativeErrno       = "exec_errno"
+	ReleaseArmNativeNoAttempt   = "no_exec_attempt"
+	ReleaseArmNativeImage       = "image_mismatch"
+	ReleaseArmNativeCloneProof  = "clone_exec_proof"
+
+	ReleaseArmRegisterProcess = "native_register"
+	ReleaseArmRegisterWaiter  = "gate_waiter"
+)
+
+// Bounded wait-error classes for the arms that read the exec-status channel.
+const (
+	ReleaseWaitClassDeadline   = "deadline"
+	ReleaseWaitClassPeerClosed = "peer_closed"
+	ReleaseWaitClassOther      = "other"
+)
+
+// Bounded guest stages of a decoded clone-bootstrap failure frame (the numbers
+// come from CloneBootstrapFailureStage in wire.go, sent by the C gate).
+const (
+	ReleaseGuestStageRequest     = "request"
+	ReleaseGuestStageSeed        = "seed"
+	ReleaseGuestStageTarget      = "target"
+	ReleaseGuestStageGit         = "git"
+	ReleaseGuestStageCheckout    = "checkout"
+	ReleaseGuestStageNativeImage = "native_image"
+	ReleaseGuestStageExec        = "exec"
+)
+
+// ReleaseArmShape is the bounded detail shape an arm can carry.
+type ReleaseArmShape struct {
+	SubStep        string
+	WaitClass      bool
+	GuestBootstrap bool
+}
+
+// ReleaseSubStepError labels the release sub-step and arm that failed so the
+// helper can report a bounded, redacted detail without re-parsing error text.
+type ReleaseSubStepError struct {
+	SubStep    string
+	Arm        string
+	WaitClass  string
+	GuestStage string
+	Errno      int
+	Err        error
+}
+
+// LookupReleaseArmShape resolves a closed arm code to its sub-step and the
+// detail fields the arm can legitimately carry.
+func LookupReleaseArmShape(arm string) (ReleaseArmShape, bool) {
+	switch arm {
+	case ReleaseArmGateMissingIdentity, ReleaseArmGateAuthorize, ReleaseArmGateIdentity:
+		return ReleaseArmShape{SubStep: ReleaseSubStepGateAuthorize}, true
+	case ReleaseArmBootstrapInstalled, ReleaseArmBootstrapImage, ReleaseArmBootstrapProcess, ReleaseArmLeafMembership:
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneBootstrap}, true
+	case ReleaseArmBootstrapAttempt:
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneBootstrap, WaitClass: true, GuestBootstrap: true}, true
+	case ReleaseArmCheckoutReceipt:
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout, WaitClass: true, GuestBootstrap: true}, true
+	case ReleaseArmCheckoutReceiptMismatch, ReleaseArmCheckoutCallback,
+		ReleaseArmCheckoutAckEncode, ReleaseArmCheckoutAckSend:
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout}, true
+	case ReleaseArmNativeAwaitResult:
+		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true}, true
+	case ReleaseArmNativeCloneProof:
+		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true, GuestBootstrap: true}, true
+	case ReleaseArmNativeErrno, ReleaseArmNativeNoAttempt, ReleaseArmNativeImage:
+		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec}, true
+	case ReleaseArmRegisterProcess, ReleaseArmRegisterWaiter:
+		return ReleaseArmShape{SubStep: ReleaseSubStepRegister}, true
+	default:
+		return ReleaseArmShape{}, false
+	}
+}
+
+// ReleaseWaitErrorClass reduces a failed exec-status read to its closed class;
+// the raw error stays out of the bounded detail.
+func ReleaseWaitErrorClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded):
+		return ReleaseWaitClassDeadline
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, unix.ENOTCONN), errors.Is(err, unix.EPIPE), errors.Is(err, unix.ECONNRESET):
+		return ReleaseWaitClassPeerClosed
+	default:
+		return ReleaseWaitClassOther
+	}
+}
+
+// ReleaseGuestStageName maps a decoded guest clone-bootstrap failure to its
+// closed stage name.
+func ReleaseGuestStageName(stage CloneBootstrapFailureStage) (string, bool) {
+	switch stage {
+	case CloneFailureRequest:
+		return ReleaseGuestStageRequest, true
+	case CloneFailureSeed:
+		return ReleaseGuestStageSeed, true
+	case CloneFailureTarget:
+		return ReleaseGuestStageTarget, true
+	case CloneFailureGit:
+		return ReleaseGuestStageGit, true
+	case CloneFailureCheckout:
+		return ReleaseGuestStageCheckout, true
+	case CloneFailureNativeImage:
+		return ReleaseGuestStageNativeImage, true
+	case CloneFailureExec:
+		return ReleaseGuestStageExec, true
+	default:
+		return "", false
+	}
+}
+
+// NewReleaseSubStepError bounds one failed release arm: the closed sub-step and
+// arm plus, when the arm reads the exec-status channel, the wait-error class and
+// any guest-reported clone-bootstrap stage/errno. Unknown arms stay untyped
+// detail so the wire validator refuses them instead of carrying free text.
+func NewReleaseSubStepError(subStep, arm string, errno int, err error) *ReleaseSubStepError {
+	failure := &ReleaseSubStepError{SubStep: subStep, Arm: arm, Errno: errno, Err: err}
+	shape, ok := LookupReleaseArmShape(arm)
+	if !ok {
+		return failure
+	}
+	if shape.WaitClass {
+		failure.WaitClass = ReleaseWaitErrorClass(err)
+	}
+	if shape.GuestBootstrap {
+		var guest *CloneBootstrapFailureError
+		if errors.As(err, &guest) {
+			if stage, found := ReleaseGuestStageName(guest.Stage); found {
+				failure.GuestStage = stage
+				if failure.Errno == 0 {
+					failure.Errno = int(guest.Errno)
+				}
+			}
+		}
+	}
+	return failure
+}
+
+func (failure *ReleaseSubStepError) Error() string {
+	if failure == nil || failure.Err == nil {
+		return "Linux owner RELEASE sub-step failed"
+	}
+	return failure.Err.Error()
+}
+
+func (failure *ReleaseSubStepError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
 // One guarded RELEASE: unknown send/ACK results are terminal and never resent,
 // and the checkout-ready callback runs without gate.mu held.
 func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command NativeCommand, guard ReleaseGuard,
@@ -661,7 +846,8 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 		image, bootstrapErr := verifyInstalledCloneBootstrap(gate.config)
 		if bootstrapErr != nil {
 			gate.mu.Unlock()
-			return fmt.Errorf("verify fixed root-owned B clone bootstrap: %w", bootstrapErr)
+			return NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmBootstrapInstalled, 0,
+				fmt.Errorf("verify fixed root-owned B clone bootstrap: %w", bootstrapErr))
 		}
 		bootstrapImage = image
 	}
@@ -686,7 +872,8 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 	if err := gate.verifyIdentity(leafFD, true); err != nil {
 		abortErr := gate.abortLocked()
 		gate.mu.Unlock()
-		return errors.Join(fmt.Errorf("%w: verify A gate before RELEASE: %v", ErrOutcomeUnknown, err), abortErr)
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepGateAuthorize, ReleaseArmGateIdentity, 0,
+			fmt.Errorf("%w: verify A gate before RELEASE: %v", ErrOutcomeUnknown, err)), abortErr)
 	}
 	deadlineNS, err := monotonicDeadlineNS(guard.LeaseDeadline)
 	if err != nil {
@@ -766,7 +953,8 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 	}
 	if waitErr != nil {
 		abortErr := gate.Abort()
-		return errors.Join(fmt.Errorf("%w: await guarded native exec result: %w", ErrOutcomeUnknown, waitErr), abortErr)
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeAwaitResult, 0,
+			fmt.Errorf("%w: await guarded native exec result: %w", ErrOutcomeUnknown, waitErr)), abortErr)
 	}
 	gate.mu.Lock()
 	gate.releaseWaiting = false
@@ -778,19 +966,22 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 		gate.state = gateUnresolved
 		gate.mu.Unlock()
 		abortErr := gate.Abort()
-		return errors.Join(fmt.Errorf("native exec failed after RELEASE: errno=%d", status.errno), abortErr)
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeErrno, int(status.errno),
+			fmt.Errorf("native exec failed after RELEASE: errno=%d", status.errno)), abortErr)
 	}
 	if !status.execAttempted {
 		gate.state = gateUnresolved
 		gate.mu.Unlock()
 		abortErr := gate.Abort()
-		return errors.Join(fmt.Errorf("%w: gate closed exec-status FD without an exec attempt", ErrOutcomeUnknown), abortErr)
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeNoAttempt, 0,
+			fmt.Errorf("%w: gate closed exec-status FD without an exec attempt", ErrOutcomeUnknown)), abortErr)
 	}
 	if err := gate.verifyNativeImage(status.device, status.inode, gate.nativeImage); err != nil {
 		gate.state = gateUnresolved
 		gate.mu.Unlock()
 		abortErr := gate.Abort()
-		return errors.Join(fmt.Errorf("%w: verify same-PID native exec: %v", ErrOutcomeUnknown, err), abortErr)
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeImage, 0,
+			fmt.Errorf("%w: verify same-PID native exec: %v", ErrOutcomeUnknown, err)), abortErr)
 	}
 	gate.state = gateReleased
 	gate.released = true
@@ -839,23 +1030,27 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	}
 	device, inode, err := readCloneBootstrapExecAttempt(ctx, int(gate.execAck.Fd()), deadline)
 	if err != nil {
-		return execStatus{}, fmt.Errorf("receive same-PID B bootstrap attempt: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmBootstrapAttempt, 0,
+			fmt.Errorf("receive same-PID B bootstrap attempt: %w", err))
 	}
 	if err := verifyExecAttemptImageIdentity(device, inode, gate.bootstrapImage.identity); err != nil {
-		return execStatus{}, fmt.Errorf("B bootstrap attempt differs from the fixed root-owned image: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmBootstrapImage, 0,
+			fmt.Errorf("B bootstrap attempt differs from the fixed root-owned image: %w", err))
 	}
 	receipt, err := readCloneCheckoutReady(ctx, int(gate.execAck.Fd()), deadline)
 	if err != nil {
-		return execStatus{}, fmt.Errorf("receive B checkout-ready receipt: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneCheckout, ReleaseArmCheckoutReceipt, 0,
+			fmt.Errorf("receive B checkout-ready receipt: %w", err))
 	}
 	if err := validateCloneCheckoutReceipt(*command.Clone, receipt); err != nil {
-		return execStatus{}, err
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneCheckout, ReleaseArmCheckoutReceiptMismatch, 0, err)
 	}
 	if err := gate.verifyNativeImage(device, inode, gate.bootstrapImage); err != nil {
-		return execStatus{}, fmt.Errorf("verify exact B bootstrap process: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmBootstrapProcess, 0,
+			fmt.Errorf("verify exact B bootstrap process: %w", err))
 	}
 	if err := gate.verifyBLeafMembership(leafFD); err != nil {
-		return execStatus{}, err
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmLeafMembership, 0, err)
 	}
 	if err := validateReleaseGuardLive(guard); err != nil {
 		return execStatus{}, err
@@ -866,7 +1061,8 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	// The callback must perform the exact grant and target dev/inode CAS before
 	// returning; B's receipt stays a progress claim without A's stop authority.
 	if err := onCheckoutReady(ctx, receipt); err != nil {
-		return execStatus{}, fmt.Errorf("durably record clone checkout-ready receipt: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneCheckout, ReleaseArmCheckoutCallback, 0,
+			fmt.Errorf("durably record clone checkout-ready receipt: %w", err))
 	}
 	if err := ctx.Err(); err != nil {
 		return execStatus{}, err
@@ -876,7 +1072,7 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	}
 	ack, err := EncodeCloneCheckoutReadyAck(receipt)
 	if err != nil {
-		return execStatus{}, err
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneCheckout, ReleaseArmCheckoutAckEncode, 0, err)
 	}
 	gate.mu.Lock()
 	if gate.state != gateReleaseAttempted {
@@ -898,11 +1094,13 @@ func (gate *PreparedGate) awaitCloneRelease(ctx context.Context, leafFD int, com
 	clear(ack)
 	gate.mu.Unlock()
 	if sendErr != nil {
-		return execStatus{}, fmt.Errorf("send durable checkout-ready ACK to bootstrap: %w", sendErr)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepCloneCheckout, ReleaseArmCheckoutAckSend, 0,
+			fmt.Errorf("send durable checkout-ready ACK to bootstrap: %w", sendErr))
 	}
 	status, err := readCloneNativeExecResult(ctx, int(gate.execAck.Fd()), deadline)
 	if err != nil {
-		return execStatus{}, fmt.Errorf("receive same-PID native exec proof: %w", err)
+		return execStatus{}, NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeCloneProof, 0,
+			fmt.Errorf("receive same-PID native exec proof: %w", err))
 	}
 	return status, nil
 }

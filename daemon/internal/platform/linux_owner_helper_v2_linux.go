@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -301,16 +302,24 @@ func (client *LinuxOwnerHelperV2Client) newRequest(operation string) linuxOwnerH
 type LinuxOwnerHelperV2ReleaseUnresolvedError struct {
 	Code     string
 	Evidence *LinuxOwnerHelperV2StopEvidence
+	Detail   *LinuxOwnerHelperV2ReleaseErrorDetail
 }
 
 func (failure *LinuxOwnerHelperV2ReleaseUnresolvedError) Error() string {
 	if failure == nil {
 		return ErrLinuxOwnerHelperV2ReleaseUnresolved.Error()
 	}
-	if failure.Code == "" {
+	parts := make([]string, 0, 2)
+	if failure.Code != "" {
+		parts = append(parts, failure.Code)
+	}
+	if failure.Detail != nil {
+		parts = append(parts, failure.Detail.String())
+	}
+	if len(parts) == 0 {
 		return ErrLinuxOwnerHelperV2ReleaseUnresolved.Error()
 	}
-	return fmt.Sprintf("%s (%s)", ErrLinuxOwnerHelperV2ReleaseUnresolved, failure.Code)
+	return fmt.Sprintf("%s (%s)", ErrLinuxOwnerHelperV2ReleaseUnresolved, strings.Join(parts, "; "))
 }
 
 func (failure *LinuxOwnerHelperV2ReleaseUnresolvedError) Unwrap() error {

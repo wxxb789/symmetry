@@ -1851,6 +1851,22 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
       goal with guest-side debugging; no fixture change is proposed without a named root.
 
+- [ ] `migration`'s release fails in the guest exec-status producer — now named: `release_outcome_unknown;
+      stage=native_exec arm=await_result wait_class=other` (2026-11-25, goal
+      `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9, run `45564071868`): the
+      non-clone (reuse) release waits for the gate's `FRAME_EXEC_ATTEMPT`/`EXEC_FAILURE` result
+      (`daemon/native/linux-gate/c-gate/gate.c:1276`, sent before the exec) and the read fails with a
+      class that is neither a deadline nor a peer EOF; it is not the errno-reporting
+      `launcher_integration_linux_test.go:439` stop (`native exec failed after RELEASE: errno=1`,
+      arm `exec_errno`). The remaining producers are the gate C code and the reused guest, outside the
+      owning goal's set: `DECISION_NEEDED`, and the follow-up goal `rf-acc-guest-native-exec` (conductor
+      2026-11-25 ruling) owns it — its first probes split `wait_class=other` (the conflated
+      `exec-status channel closed or carried ancillary data before a frame` in the unowned
+      `daemon/native/linux-gate/protocol/wire_linux.go:685` needs its own sentinel). After the aborted
+      release the App cannot even measure a stop (`Linux v2 helper could not prove the exact run leaf
+      stopped: dial unixpacket: connect: connection refused`); the "no fixture change without a named
+      root" rule of the entry above is now satisfied on the naming half only.
+
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
       effective owner `Before` (systemd's reverse of the daemon's own required
@@ -1923,18 +1939,22 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       No clause (1) text above is deleted: the root-cause question it asks is answered by ruling Q1(a)
       and the fix is the behaviour it names.
 
-- [ ] rf-acc-release-recovery-diagnostics: release/recovery errors drop their sub-step and errno, so
-      the retargeted post-release rows cannot be read (2026-11-25, same goal and ruling; evidence
-      record §4c, plan §3.10 class 2): the helper answers `release_outcome_unknown` for any release
-      error with the inner sub-step discarded
-      (`daemon/internal/platform/helper_v2_server.go:1183-1189`); the `handoff_committed` recovery
-      refuses with `recover existing owner witness RunJournal without launch` over a live unresolved
-      journal (`linux_owner_witness_linux.go:531-534`); `stale_leaf`'s recovery refuses its own
-      summary (`stage replay unresolved outcome lacks retained journal/owner uncertainty`). Lesson 72:
-      make the failure observable first — carry the failing sub-step and errno into the unresolved
-      response — then fix the root. Blocks `migration` (run `45481221551`), `stale_leaf`'s recovery
-      (run `45484692731`), the four stale-journal sets (run `45489336388`) and every `shared` leg
-      strictly after `native_release`; the credentialed pi turn counts ride on it.
+- [ ] rf-acc-release-recovery-diagnostics residual: the `migration` release arm (2026-11-25, goal
+      `rf-acc-release-recovery-diagnostics`; evidence record
+      `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md` §9, plan
+      `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md` §3): the diagnostics and the
+      `stale_leaf` validator alignment are closed (CLOSED-TODO, same heading), but the release that
+      must reach `migration`'s `native_release` hold fails with the now-named arm
+      `(release_outcome_unknown; stage=native_exec arm=await_result wait_class=other)` — the non-clone
+      (reuse) exec-status await, whose remaining producers are the gate C code and the reused guest
+      (run `45564071868`, the stage-3 rerun on the final bytes) — after which the App cannot prove the
+      stop (`Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket: connect:
+      connection refused`). No owned file can satisfy it: `DECISION_NEEDED`, and the new goal
+      `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling; per-arm entry above) owns it. The four
+      `stale_journal_*` sets' green rows stay
+      `rf-acc-owner-loss-semantics`'s; their guard is now named
+      (`refusal=journal_without_unresolved_authority reason=release_proof_present
+      recovery_error_class=recovery_failed`).
 
 - [ ] rf-acc-owner-loss-semantics: F4 design question — owner-loss resolution versus the
       unresolved-journal premise (2026-11-25, same goal and ruling; evidence record §4c): a parked

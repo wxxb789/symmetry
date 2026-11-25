@@ -5060,6 +5060,29 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       nothing). The credentialed dispatch and the Q3(a) pi turn counts stay open in `docs/TODO.md`
       under the heading above, as do the three carried follow-up goals.
 
+- [ ] rf-acc-release-recovery-diagnostics: release/recovery errors drop their sub-step and errno, so
+      the retargeted post-release rows cannot be read (2026-11-25, same section; contract
+      `goal-rf-acc-release-recovery-diagnostics.md`, conductor rulings Q-A(a)/Q-B(a)/Q-C(a)/Q-D(a)).
+      **Closed (2026-11-25, branch `refactor/rf-acc-release-recovery-diagnostics`, base `48ef0982`;
+      plan `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md`, evidence record
+      `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md`):** the unresolved release
+      response now carries a bounded, redacted `release_error_detail` — closed sub-step **and arm**
+      vocabularies (21 wrap sites across `gate_authorize`, `clone_bootstrap`, `clone_checkout`,
+      `native_exec`, `register`), the closed wait class of an exec-status read, the closed guest
+      clone-bootstrap stage and errno, the sub-step's own errno, and the branch reason on a nil error
+      — that joins the error chain to App stderr, and the same-RunKey refusal names its guard, the deciding journal
+      term and a bounded recovery error class and writes a minimal identity-only refusal document
+      (no `Outcome`/`FailureCategory`/`Release`/`Stop`) so the recovery leg's structured read now
+      succeeds; the `unresolved` summary validator names every tripped predicate and accepts the
+      exact versioned physical-stop proof the e2e already accepts (the file's existing
+      `linuxV2NativeWitnessStopSummaryHasPhysicalProof`), keeping unversioned/partial receipts
+      tripped. `stale_leaf` is green (`run=1 pass=1 skip=0`, manifest `status=passed`, run
+      `45557621798`); runs `45554251351` (base re-confirmation) and `45555828634` (the named causes)
+      bound the before/after. The `migration` release arm (`stage=native_exec arm=await_result
+      wait_class=other`, run `45564071868` — a guest/gate-C producer) and the four `stale_journal_*`
+      green rows remain open in `docs/TODO.md` under
+      the heading above.
+
 ## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)
 
 - [ ] `TestAutonomousReturnReleasesItsInputReader` (`daemon/cmd/symmetry-fake-agent/autonomous_test.go`;
