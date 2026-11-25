@@ -67,4 +67,6 @@ that widening, so the "Out of scope" list above and D-3/D-4/D-6 describe the imp
 - W2-W5: the digest census, the old-to-new table, the frozen-record rationale and the supersede
   pointers are in the evidence note; the 2.4.1 README and the reeval record §14 are corrected in
   place.
-- Residual: the opt-in native acceptance pin is tracked in `docs/TODO.md`.
+- Residual (retired by the PR #291 round-1 ruling, 2026-11-26): the opt-in native acceptance pin
+  is re-expressed home-relative in `daemon/internal/harness/omo/native_test.go` (size and digest
+  pins unchanged), so the `docs/TODO.md` entry is closed and the pin resolves again.

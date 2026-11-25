@@ -2038,12 +2038,3 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       (reformat the file under the CI-parity toolchain, or pin the formatter version); the gate
       stays recorded as an amendment until then, and this goal's own hunks are formatter-clean
       (hunk-scoped check, record §10.10).
-
-- [ ] Re-express the redacted live pin of the opt-in OmO native acceptance (2026-11-26, goal
-      `rf-opencode-230-hostname-redact`, evidence record §7): the `expectedPath` literal in
-      `daemon/internal/harness/omo/native_test.go` now names the redacted token path, so
-      `filepath.EvalSymlinks` cannot resolve it and `TestNativeAcceptance` fails when an operator
-      supplies the real binary with `SYMMETRY_OMO_NATIVE_ACCEPTANCE=1`. The fixture replay pin
-      (`TestPinnedNativeTranscript`) is unaffected and green. Re-express the live pin without a
-      profile-name literal (for example by resolving the executable under the process user's home)
-      in a separate authorized change.

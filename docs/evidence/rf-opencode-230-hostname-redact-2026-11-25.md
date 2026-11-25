@@ -1,9 +1,10 @@
 # rf-opencode-230-hostname-redact — redacting host identifiers from the frozen OpenCode 2.3.0 receipts and the tracked tree
 
 Delivered 2026-11-25; widened 2026-11-26 under the goal contract's conductor ruling (review round
-`DECISION_NEEDED`). Neither the machine hostname value, the relay host, the user-profile name nor
-the credential appears in this record: the censuses below name the value classes abstractly and
-print counts, file locations and digests only.
+`DECISION_NEEDED`); PR #291 round-1 review corrections applied 2026-11-26 (§8). Neither the machine
+hostname value, the relay host, the user-profile name nor the credential appears in this record:
+the censuses below name the value classes abstractly and print counts, file locations and digests
+only.
 
 ## 1. Why, and the pre-change censuses
 
@@ -37,7 +38,9 @@ pass starts from, whole tree, counts only:
 | relay host, truncated to its first label | 1 | 1 | the evidence record `docs/evidence/goal-0006j-omp-native-capability-2026-11-14.md` |
 | user-profile path prefix, plain or escaped | 22 | 167 | the three receipts, the omo fixture set and its README, four harness run records under `testdata/`, the omp fixture manifest, two Go test files, three archived goals, two plans, the control-plane runbook |
 
-The path-class probe is described in prose in §4; per-file counts are in §5.
+The path-class probe is described in prose in §4; per-file counts are in §5. The class is absolute
+paths containing the profile name under a `Users` or home component; the separate `/home`-rooted
+spelling of the profile path probes 0 at every revision (§6).
 
 ## 2. The substitution
 
@@ -53,38 +56,47 @@ non-absolute `sessionFile` (`daemon/internal/harness/omo/rpc.go:289`, sha256
 `1e706bb27c87a3dd424eed0473518806d5a6d1f001747a238ea8b539ad0d45c1`) and
 `TestPinnedNativeTranscript` compares the fixture's binary path against its Go literal; holding the
 ruling's plain reading reddens that test (observed: `entry 16 observe response: invalid OmO RPC
-record`, from a foreground run of the package suite on those bytes). Five OmO files therefore keep
+record`, from a foreground run of the package suite on those bytes). Four OmO files therefore keep
 the drive root and replace only the account-home run — `omo/5.1.69/windows.json`,
-`omo/5.1.69/adapter-windows.json`, `omo/5.1.69/README.md`, `omo/native_test.go` and
-`omo/transcript_test.go`. Every other file replaces the whole prefix.
+`omo/5.1.69/adapter-windows.json`, `omo/5.1.69/README.md` and `omo/transcript_test.go`;
+`omo/native_test.go` carried the same shape until the round-1 review replaced its Windows pin with
+a home-relative expression (§8). Every other file replaces the whole prefix.
 
 ## 3. Digest census — every digest that binds a changed file
 
-Each changed file's pre-change sha256 (full and 8/12/16/24/32-character prefixes) and pre-change
-Git blob id (full and 8/12/16/24-character prefixes) were probed across every tracked file, at the
-revision §5 names for that file's pre-change bytes:
+Each changed file's pre-change sha256 (full and 8/12/16/24/32-character prefixes), its pre-change
+Git blob id (full and 8/12/16/24-character prefixes) and — where its bytes at the PR base differ
+from its §5 pre revision — its PR-base blob id (same five probes) were matched case-insensitively
+across every tracked file: 324 probe terms at the PR base
+`613999840a4e4bc1d1169a37d3775b1814671015` and at the head
+`a5d622434959fc110d50c6f8d35e614ad36d3a0d`; the fix-round tree (§6 `<scratch>`) re-run adds the
+round-1 test edit's superseded `a5d62243` sha256 and blob id of `omo/native_test.go` (§8), 335
+terms:
 
 ```sh
-git grep -I -F -c -e "<probe>" <revision>    # one probe per row; 11 probes per file
+git grep -I -i -n -F -e "<probe>" <revision>    # one probe per row
 ```
 
-No `SHA256SUMS` names a changed file; no loader, test, CI assertion or acceptance script cites one.
-The probes that hit, and their disposition:
+Probe lines at matching files: 4 lines / 3 files at the PR base; 32 lines / 4 files at the head;
+33 lines / 4 files at the fix-round tree. No `SHA256SUMS` names a changed file; no loader, test,
+CI assertion or acceptance script cites one. The probes that hit, and their disposition:
 
 | probe | cited at | disposition |
 | --- | --- | --- |
+| every pre-change sha256 §5 lists — all 28 rows, the two correction-file rows (`2.4.1/README.md`, `rf-acc-opencode-reeval-2026-11-25.md`) among them | this record §5 (the mandated old→new table, W4) | exempt: the table is the mandated self-citation of these digests; rewriting it would erase the old→new mapping |
 | pre-change sha256 of `omo/native_test.go` and `omo/transcript_test.go` | `docs/evidence/goal-0009-source-identity-2026-11-16.json:336` and `:343` (sha256 `8bd6d70ef71b9e73682b8d39d5f26d792e49459a218aa6f6917bb3c7d360ad8c`) | exempt: a historical source-identity snapshot of an operator-supplied past revision; re-deriving it would falsify that snapshot |
 | pre-change sha256 of the control-plane runbook | `docs/evidence/rf-daemon-state-dir-default-2026-11-25.md:26` (sha256 `fcf236e4444241380f29532ccd8e2cb1569c430a9b2180ab3d8f255bc26fe197`) | exempt: an earlier goal's delivery-state table; it records that goal's bytes, not the current tree |
-| the pre-change sha256 and blob ids of the three receipts | this record §5 | exempt: the mandated old-to-new table |
+| the PR-base Git blob id `ac3f5740…` of `2.3.0/README.md` | `docs/plans/2026-11-23-rf-w5-10-harness-capture-fixtures-plan.md:237` (a mutation-census row marked "= base") and this record §3 (its own disposition row) | exempt: a historical base-revision blob pointer inside frozen plan bytes this fix does not edit, plus the census's self-citation of the same value; the §5 row for that file uses the fix pass's pre revision, a different blob |
+| the pre-change blob ids of the changed files | — | probe 0: no tracked file cites one, and §5 lists sha256 values only |
 | the two `witness_sha256` collector identities | `2.3.0/README.md` and the receipts | exempt: the collecting collector script's identity, not receipt bytes |
 
-Everything else probed 0. The two files this fix edits for corrections (the 2.4.1 README and the
-reeval record) probe 0 across the tree as well.
+Everything else probed 0; the two correction files' pre-change sha256 values hit only this record's
+§5 rows, which the first row above covers.
 
 ## 4. The substitution is the only change
 
 The proof tool (§Appendix, sha256
-`1a97389ac4a8fdacdc68d7dc0d872a4bb87cadf58e2a99153f43da09639ed8ae`) reads each changed file's
+`68caef0c710503aa830022775beca9352b1b10574a20c83585bee00197add756`) reads each changed file's
 pre-change bytes from Git, recovers the three values at run time from the pinned base bytes — the
 hostname from the recorded `/api/info` field, the relay host from the recorded `base_url`, the
 profile name from the recorded WSL command's mount-root path, each by its recorded position, never
@@ -97,8 +109,9 @@ python3 proof_note_final.py    # the appendix listing, pinned by the sha256 abov
 | proof class | files | assertion |
 | --- | --- | --- |
 | exact | 20 | mapped pre-change bytes are byte-identical to the delivered file |
-| exact, drive root kept (§2 amendment) | 5 | same, with the five-file rule |
-| one declared paragraph replace | 1 | `2.3.0/README.md`: mapped bytes differ from the delivered file in one line-replace block (the redaction paragraph of §2) |
+| exact, drive root kept (§2 amendment) | 4 | same, with the four-file rule of §2 |
+| exact, drive root kept, plus the §8 test edit | 1 | `omo/native_test.go`: mapped pre-change bytes differ only in the declared pin block, replaced by the home-relative expression of §8 |
+| one declared paragraph replace | 1 | `2.3.0/README.md`: the single replaced block's delivered side equals the declared redaction paragraph of §2, line for line |
 | insert-only | 2 | the 2.4.1 README and the reeval record: pre-change bytes plus the §7 pointer insertions only |
 
 Parsed JSON is equal under the same mapping for all nine JSON files among them. The whole-tree
@@ -123,7 +136,7 @@ matches of the §4 class probe; hostname and relay counts are §1's.
 | `daemon/internal/harness/testdata/omo/5.1.69/windows.json` | exact, root kept | 13 | `b482b14cea9f3663657cae2b9a55d4b393483590f338b8b45aaeac362347ece8` | `fd7f64d96fc2096d18f341dc925674bf0188c4ee737959831a11856571f3a00e` |
 | `daemon/internal/harness/testdata/omo/5.1.69/adapter-windows.json` | exact, root kept | 20 | `e2eb11777677a3235593f9310bbdfc66d69153f7964e7fab7aeaab02be880b5c` | `f25257e96537a006a7094288922b2d71b176796f83aa7c23d7c6a7a7cb5a47de` |
 | `daemon/internal/harness/testdata/omo/5.1.69/README.md` | exact, root kept | 1 | `bd8b562b8ca11ede84eedb6a59b15d55ad173d6d780f0d20fb74a8ef115e632e` | `f133e212e6d53efa5ed469dc8d52acf97114966775b6606e7a5ecaaf7c388152` |
-| `daemon/internal/harness/omo/native_test.go` | exact, root kept | 1 | `dfd20ac60d251f308d6273d4411f89426eec50a4d066496392b7b407f4eadb5f` | `0ce09840a21b92b9c59cdc4a34e03ea9b2279f1b9180f4f4ddf7683ee164d75a` |
+| `daemon/internal/harness/omo/native_test.go` | exact, root kept, plus the §8 test edit | 1 | `dfd20ac60d251f308d6273d4411f89426eec50a4d066496392b7b407f4eadb5f` | `7d1d5716a79510b636256c78703de1e18ec1cb4b4dc251cd8b878f0adc97aa8e` |
 | `daemon/internal/harness/omo/transcript_test.go` | exact, root kept | 1 | `8c68cb2faaceba7bdaad769e36d77b8c7e40f6e44850f51a3ef2cc46a95056e5` | `cca00162827d8d1c79724715198a49e06427bd43dece2b1affc820a9c7530fc0` |
 | `daemon/internal/harness/testdata/claude/2.1.323/native-repository-turn-windows-2026-11-13.md` | exact | 3 | `001e81ce5080f4e35dfc58144f2c9a2855b5bddc174e013dda2a04d6612ffb2c` | `cb4ed187355c39e68bcb7ea17e1684f99cb01532dca2c019bb12e93cc9f4f892` |
 | `daemon/internal/harness/testdata/codex/0.168.0/native-windows-2026-11-13.md` | exact | 2 | `debf1f8ce9b19c2f88a23cc3bbe060b90ee446d23d47cea08f44b8a799f92d34` | `574d5b74f1f92ab9c285df702e1939207ed85280aaca753f9bc01a88726174c9` |
@@ -157,13 +170,21 @@ command's own exit status.
 | citation existence over the change | `python3 scripts/ci/check-citation-existence.py --base 613999840a4e… --head <scratch>` | 0 | `1 changed document(s) pass the path and symbol check` |
 | clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 613999840a4e… --head <scratch>` | 0 | none new; the tolerated pairs are the receipts' pre-existing internal duplication, each row reported as holding no added content |
 | clone gate self-test | `python3 scripts/ci/test-jscpd-changed.py` | `OK` | see the stage report |
-| equality and whole-tree residual proof | `python3 proof_note_final.py` (§Appendix) | 0 | 26 mapped == delivered rows plus 2 insert-only rows; residual 0 / 0 / 0 |
+| equality and whole-tree residual proof | `python3 proof_note_final.py` (§Appendix) | 0 | 28 proved rows (25 mapped == delivered, 1 declared paragraph replace, 2 insert-only); residual 0 / 0 / 0 |
 | post-change censuses, whole tree | hostname: `git grep -I -i -c -F -e "<hostname value>" <scratch>` (1 = no match); relay: same with `<relay host value>`; path class: the §4 probe | 1 = no match each | hostname 0, relay 0, profile-name path 0; one bare profile mention (§7) |
 
-Key-shape census over the delivered tree: the configured relay credential probes 0; a
-boundary-anchored credential shape (`sk-` followed by sixteen or more alphanumerics) probes 0; the
-loose `sk-` substring matches are 51 occurrences in 28 files, all inside `task-`/`disk-`/`risk-`/`multi-task-`
-words or the deliberate scratch dummy tokens of the redaction tests, none a credential.
+Key-shape census over the delivered tree, counts only (`<revision>` is `<scratch>`; `-P` is PCRE2):
+
+```sh
+git grep -I -o -P -e 'sk-[A-Za-z0-9_-]{8,}' <revision> | wc -l
+git grep -I -l -P -e 'sk-[A-Za-z0-9_-]{8,}' <revision> | wc -l
+git grep -I -o -P -e '(?<![A-Za-z0-9_-])sk-[A-Za-z0-9]{16,}(?![A-Za-z0-9])' <revision> | wc -l
+```
+
+The loose token shape (`sk-` plus eight or more token characters) is 51 occurrences in 33 files,
+all inside `task-`/`disk-`/`umask-` words (43) or the deliberate scratch dummy tokens of the
+redaction tests (8); the anchored key shape (`sk-` plus sixteen or more alphanumerics,
+boundary-delimited) is 0; the configured relay credential probes 0. None is a credential.
 
 ## 7. Residuals, exemptions and superseded statements
 
@@ -187,16 +208,25 @@ words or the deliberate scratch dummy tokens of the redaction tests, none a cred
   `docs/runbooks/control-plane-and-daemon.md:216,:351,:354` carry the state directory under the
   var root and, twice, the scratch build-output path under the tmp root (sha256
   `fc9226eb42473216956790c06c4ad5982e26ff5f426147b8ccac96ce62baebac`).
-- Oracle gap this change creates: the opt-in native acceptance pins its executable through the
-  `expectedPath` literal at `daemon/internal/harness/omo/native_test.go:194`, which is now a redacted
-  token path, so an operator-run acceptance cannot resolve the pin; the fixture-replay pin
-  (`daemon/internal/harness/omo/transcript_test.go:47`) is unaffected and green. Re-expression is
-  tracked as a TODO entry.
 - One bare account-name mention remains, not a path and outside the three ruled classes:
   `docs/evidence/rf-w3-08-unexport-state-surface-2026-11-21.md:287` (sha256
   `77e493bd8e0b54d7cc114d0ebf02efd386e03cee0f1a77bc769be7cecefe38eb`).
 
-## Appendix — proof tooling (verbatim; sha256 1a97389ac4a8fdacdc68d7dc0d872a4bb87cadf58e2a99153f43da09639ed8ae)
+## 8. PR #291 round-1 review corrections (2026-11-26)
+
+One non-substitution edit beyond the record text: `daemon/internal/harness/omo/native_test.go`'s
+Windows pin, a redacted token path after the widening, is re-expressed home-relative — the process
+user's home directory (required non-nil) joined with `.local/bin/omo.exe` — so the opt-in
+`TestNativeAcceptance` pin resolves again; the size and digest pins that carry the identity proof
+are byte-unchanged and the fixture-replay pin is untouched. The `docs/TODO.md` entry and the §7
+bullet that tracked this gap are closed, and the §5 row carries the new delivered sha256. The
+other round-1 corrections are in place: §3's exemption set covers every self-hit and names the PR
+base, the head and the fix-round tree; §6's key-shape counts carry their exact commands; the 2.3.0
+README proof is content-aware; and the appendix listing's sha256 was re-derived, updating both
+citations (the §4 line and the appendix header). No redacted artifact changed; the §5 digest chain
+stays as delivered.
+
+## Appendix — proof tooling (verbatim; sha256 68caef0c710503aa830022775beca9352b1b10574a20c83585bee00197add756)
 
 ```python
 #!/usr/bin/env python3
@@ -298,18 +328,42 @@ def walk(node, fn):
     return node
 
 
+# declared non-substitution code/record edits, each verified as a content-aware delta
 PROSE = {
-    # declared non-substitution record edits, verified as line-level deltas
-    "daemon/internal/harness/testdata/opencode/2.3.0/README.md": "one-replace-block",
+    "daemon/internal/harness/testdata/opencode/2.3.0/README.md": "readme-paragraph",
     "daemon/internal/harness/testdata/opencode/2.4.1/README.md": "insert-only",
     "docs/evidence/rf-acc-opencode-reeval-2026-11-25.md": "insert-only",
 }
+NATIVE_TEST = "daemon/internal/harness/omo/native_test.go"
+# §8: the declared pin edit; the old block is matched exactly, its drive root never spelled out
+PIN_OLD = re.compile(rb"\t\texpectedPath, expectedSize = `[A-Za-z]:/<HOST-PATH>/\.local/bin/omo\.exe`, 202352128\n")
+TEST_EDIT_NEW = (b"\t\t// Home-relative: the pin must not carry the profile name (redaction ruling P1).\n"
+                 b"\t\thome, err := os.UserHomeDir()\n"
+                 b'\t\trequire(err == nil, "home_directory_lookup_failed")\n'
+                 b'\t\texpectedPath, expectedSize = filepath.Join(home, ".local", "bin", "omo.exe"), 202352128\n')
+# §4: the delivered side of the 2.3.0 README's one replaced block, verbatim
+README_PARAGRAPH = [line.encode() for line in [
+    "All three receipts are byte-redacted since 2026-11-25, widened 2026-11-26: the collecting machine's",
+    "hostname value became `<HOSTNAME>`, the relay host became `<RELAY_HOST>` and the user-profile",
+    "absolute paths became `<HOST-PATH>` — constant-token substitutions, nothing else changed. This",
+    "supersedes the residual those receipts carried in `../2.4.1/README.md`; the census, the",
+    "byte-equality proof and the old→new digests are in",
+]]
 
 
 def delta_kind(before, after):
     opcodes = difflib.SequenceMatcher(None, before.splitlines(), after.splitlines()).get_opcodes()
     kinds = sorted({op for op, *_ in opcodes if op != "equal"})
     return kinds
+
+
+def one_replace_paragraph(before, after, expected):
+    """The only delta is one replace block whose delivered side equals the declared paragraph."""
+    ops = [op for op in difflib.SequenceMatcher(None, before.splitlines(),
+                                                 after.splitlines()).get_opcodes() if op[0] != "equal"]
+    assert len(ops) == 1 and ops[0][0] == "replace", f"{ops}"
+    *_, j1, j2 = ops[0]
+    assert after.splitlines()[j1:j2] == expected, f"paragraph mismatch: {j1}:{j2}"
 
 
 rows = []
@@ -319,11 +373,15 @@ for rel in SUBSTITUTED:
     root_keep = rel in ROOT_KEEP
     mapped = map_bytes(pre, root_keep)
     kind = PROSE.get(rel, "exact")
-    if kind == "exact":
+    if rel == NATIVE_TEST:
+        kind = "root-kept + §8 test edit"
+        old = PIN_OLD.findall(mapped)
+        assert len(old) == 1, f"{rel}: pin block not found"
+        mapped = mapped.replace(old[0], TEST_EDIT_NEW)
+    if kind in ("exact", "root-kept + §8 test edit"):
         assert mapped == disk, f"mapping mismatch: {rel}"
-    elif kind == "one-replace-block":
-        kinds = delta_kind(mapped, disk)
-        assert kinds == ["replace"], f"{rel}: {kinds}"
+    elif kind == "readme-paragraph":
+        one_replace_paragraph(mapped, disk, README_PARAGRAPH)
     else:
         kinds = delta_kind(mapped, disk)
         assert kinds == ["insert"], f"{rel}: {kinds}"
