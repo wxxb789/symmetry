@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/wxxb789/symmetry/daemon/internal/config"
+	"github.com/wxxb789/symmetry/daemon/internal/state"
 )
 
 func TestLinuxV2NativeOwnerWitnessCommandRequiresExplicitOptIn(t *testing.T) {
@@ -93,6 +96,113 @@ func TestPrintStateDirRejectsTraversalAndSymlinkWithoutOutput(t *testing.T) {
 	}
 }
 
+func TestPrintStateDirRefusesAnAbsentStateDirWithoutOutput(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("StateDir print command is Linux-only")
+	}
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	configPath := writeStateDirCommandConfig(t, "")
+	var stdout bytes.Buffer
+	err := runPrintStateDirCommand([]string{"-config", configPath}, &stdout)
+	if err == nil || !strings.Contains(err.Error(), "state_dir must be explicitly configured for the installed owner path") {
+		t.Fatalf("print command error = %v, want the installed-owner explicit requirement", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("refused print command wrote to stdout: %q", stdout.String())
+	}
+}
+
+func TestLoadDefaultStateDirCreatesAPrivateStore(t *testing.T) {
+	expected := resolvedHostDefault(t, t.TempDir())
+	loaded, err := config.Load(writeStateDirCommandConfig(t, ""))
+	if err != nil {
+		t.Fatalf("Load() absent state_dir error = %v", err)
+	}
+	if loaded.StateDir != expected {
+		t.Fatalf("resolved default state_dir = %q, want %q", loaded.StateDir, expected)
+	}
+	store, err := state.New(loaded.StateDir)
+	if err != nil {
+		t.Fatalf("state.New(%q) error = %v", loaded.StateDir, err)
+	}
+	defer store.Close()
+	info, err := os.Lstat(loaded.StateDir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("resolved state dir Lstat = %v, %v; want a directory", info, err)
+	}
+	// On Windows the private ACL is asserted by state.New's own apply+verify path.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Fatalf("resolved state dir mode = %v, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestLoadDefaultStateDirReSecuresAPermissiveStore(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("POSIX mode bits are asserted only on unix hosts")
+	}
+	expected := resolvedHostDefault(t, t.TempDir())
+	if err := os.MkdirAll(expected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(expected, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(writeStateDirCommandConfig(t, ""))
+	if err != nil {
+		t.Fatalf("Load() absent state_dir error = %v", err)
+	}
+	store, err := state.New(loaded.StateDir)
+	if err != nil {
+		t.Fatalf("state.New() on an existing 0755 directory error = %v", err)
+	}
+	defer store.Close()
+	info, err := os.Lstat(loaded.StateDir)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("re-secured state dir Lstat = %v, %v; want mode 0700", info, err)
+	}
+}
+
+func TestConfiguredOwnerCommandsRefuseAnAbsentStateDirWithoutOutput(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	configPath := writeStateDirCommandConfig(t, "")
+	for _, command := range []string{
+		"-verify-legacy-owner-drained",
+		"-verify-linux-owner-install",
+		"-recover-containment-only",
+	} {
+		t.Run(command, func(t *testing.T) {
+			output, runErr := captureStdout(t, func() error {
+				return runConfiguredOwnerCommand(command, []string{"-config", configPath})
+			})
+			if runErr == nil || !strings.Contains(runErr.Error(), "state_dir must be explicitly configured for the installed owner path") {
+				t.Fatalf("%s error = %v, want the installed-owner explicit requirement", command, runErr)
+			}
+			if output != "" {
+				t.Fatalf("%s wrote to stdout: %q", command, output)
+			}
+		})
+	}
+}
+
+func resolvedHostDefault(t *testing.T, base string) string {
+	t.Helper()
+	switch runtime.GOOS {
+	case "linux":
+		t.Setenv("XDG_STATE_HOME", base)
+		return path.Join(base, "symmetry")
+	case "darwin":
+		t.Setenv("HOME", base)
+		return path.Join(base, "Library/Application Support/Symmetry")
+	case "windows":
+		t.Setenv("LOCALAPPDATA", base)
+		return base + `\Symmetry`
+	default:
+		t.Skipf("no per-user state_dir default on %s", runtime.GOOS)
+		return ""
+	}
+}
+
 func writeStateDirCommandConfig(t *testing.T, stateDir string) string {
 	t.Helper()
 	value := config.Config{
@@ -114,4 +224,30 @@ func writeStateDirCommandConfig(t *testing.T, stateDir string) string {
 		t.Fatal(err)
 	}
 	return configPath
+}
+
+func captureStdout(t *testing.T, run func() error) (string, error) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	original := os.Stdout
+	os.Stdout = writer
+	defer func() {
+		os.Stdout = original
+		_ = writer.Close()
+	}()
+	runErr := run()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close captured stdout: %v", err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close captured stdout reader: %v", err)
+	}
+	return string(output), runErr
 }
