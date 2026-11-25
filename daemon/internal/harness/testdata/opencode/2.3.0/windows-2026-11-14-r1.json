@@ -26,7 +26,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"version\":\"2.3.0\",\"pid\":54612,\"hostname\":\"CPC-lhan-AWGGLB\",\"urls\":[\"http://127.0.0.1:58214\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "body": "{\"version\":\"2.3.0\",\"pid\":54612,\"hostname\":\"<HOSTNAME>\",\"urls\":[\"http://127.0.0.1:58214\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
       "credential_redacted_before_write": false
     },
     {

@@ -26,7 +26,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"version\":\"2.3.0\",\"pid\":32376,\"hostname\":\"CPC-lhan-AWGGLB\",\"urls\":[\"http://127.0.0.1:50377\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "body": "{\"version\":\"2.3.0\",\"pid\":32376,\"hostname\":\"<HOSTNAME>\",\"urls\":[\"http://127.0.0.1:50377\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-lmxvrbav\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
       "credential_redacted_before_write": false
     },
     {

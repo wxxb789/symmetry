@@ -16,7 +16,7 @@
     "kernel": "6.18.58.1-microsoft-standard-WSL2",
     "uname": [
       "Linux",
-      "CPC-lhan-AWGGLB",
+      "<HOSTNAME>",
       "6.18.58.1-microsoft-standard-WSL2",
       "#1 SMP PREEMPT_DYNAMIC Tue Oct 27 00:24:11 UTC 2026",
       "x86_64"

@@ -27,6 +27,11 @@ It used the raw-socket SSE reader and the rejected host credential; it is not
 current support evidence and is not relabelled as a run of the fixed collector.
 `linux-2026-11-14.json` records the exact WSL command, kernel/distribution,
 binary identity and all seven unavailable native Linux classes.
+All three receipts are byte-redacted since 2026-11-25: the collecting machine's hostname value was
+replaced by the constant token `<HOSTNAME>` (one occurrence each, nothing else changed), superseding
+the residual those receipts carried in `../2.4.1/README.md`; the census, the byte-equality proof and
+the old→new digests are in
+[the redaction note](../../../../../../docs/evidence/rf-opencode-230-hostname-redact-2026-11-25.md).
 
 ## Decisive observations
 
