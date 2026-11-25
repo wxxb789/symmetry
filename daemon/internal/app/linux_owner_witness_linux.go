@@ -350,6 +350,9 @@ type linuxV2NativeWitnessRun struct {
 	nativeEnvironment    []string
 	runnerBarrierRestore func()
 	runnerBarrierErr     error
+	// Codex and Claude stage native_release from daemon.start; every other
+	// adapter owns its Runner and needs the release-ACK callback to stage it.
+	startProcessStagesRelease bool
 }
 
 // RunLinuxV2NativeOwnerWitness is an opt-in production-boundary test path. It
@@ -2009,6 +2012,76 @@ func linuxV2NativeWitnessProcessGroups(pid int) (int, int, int, error) {
 	return parent, group, session, nil
 }
 
+// captureReleasedNativeTarget binds the exact same-PID target the helper's
+// accepted RELEASE covers, because a self-owned Runner never exposes a Process.
+func (witness *linuxV2NativeWitnessRun) captureReleasedNativeTarget(store journalStore) error {
+	key := state.RunKey{RunID: witness.request.RunKey.RunID, Generation: witness.request.RunKey.Generation}
+	journal, err := store.LoadJournal(key)
+	if err != nil {
+		return fmt.Errorf("read exact RunJournal at the native RELEASE acknowledgement: %w", err)
+	}
+	if !linuxV2JournalMatchesFence(journal, key, witness.request.Fence) {
+		return errors.New("native RELEASE acknowledgement journal differs from the exact RunKey/fence")
+	}
+	authorityValue := journal.ContainmentAuthority
+	if !journal.HasProcessDetails() || authorityValue == nil || journal.ContainmentCgroup == nil ||
+		journal.ContainmentCgroup.Gate == nil {
+		return errors.New("native RELEASE acknowledgement lacks the committed same-PID target")
+	}
+	pid, identity := journal.PID, journal.ProcessIdentity
+	gate := journal.ContainmentCgroup.Gate.Process
+	if pid <= 0 || identity == "" || authorityValue.TargetPID != pid || authorityValue.TargetIdentity != identity ||
+		gate.PID != pid || gate.Identity != identity {
+		return errors.New("native RELEASE acknowledgement target differs from its committed gate identity")
+	}
+	current, err := platform.ProcessIdentity(pid)
+	if err != nil || current != identity {
+		return errors.Join(errors.New("released same-PID target creation identity is not the exact RunJournal identity"), err)
+	}
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		return fmt.Errorf("open exact released target pidfd: %w", err)
+	}
+	pidfd := os.NewFile(uintptr(fd), "owner-witness-released-target-pidfd")
+	if pidfd == nil {
+		_ = unix.Close(fd)
+		return errors.New("wrap released target pidfd")
+	}
+	if settled, settleErr := platform.ProcessIdentity(pid); settleErr != nil || settled != identity {
+		_ = pidfd.Close()
+		return errors.Join(errors.New("released target identity changed while its pidfd was opened"), settleErr)
+	}
+	var poll [1]unix.PollFd
+	poll[0] = unix.PollFd{Fd: int32(fd), Events: unix.POLLIN}
+	if _, err := unix.Poll(poll[:], 0); err != nil || poll[0].Revents != 0 {
+		_ = pidfd.Close()
+		return errors.New("released same-PID target pidfd is not live")
+	}
+	userNamespace, err := linuxV2NativeWitnessUserNamespace(pid)
+	if err != nil {
+		_ = pidfd.Close()
+		return err
+	}
+	networkNamespace, err := linuxV2NativeWitnessNetworkNamespace(pid)
+	if err != nil {
+		_ = pidfd.Close()
+		return err
+	}
+	witness.mu.Lock()
+	witness.peer = &execution.LinuxV2Peer{
+		PID: pid, Identity: identity,
+		UserNamespace: platform.LinuxUserNamespaceIdentity{Device: userNamespace.Device, Inode: userNamespace.Inode},
+		PIDFD:         pidfd,
+	}
+	witness.summary.Target = linuxV2NativeWitnessTarget{
+		PID: pid, Identity: identity, PIDFDVerified: true, HostUID: witness.ownerConfig.BUID,
+		UserNamespace:    userNamespace,
+		NetworkNamespace: networkNamespace, SamePIDExec: true,
+	}
+	witness.mu.Unlock()
+	return nil
+}
+
 func linuxV2NativeWitnessNetworkNamespace(pid int) (linuxV2NativeWitnessNamespace, error) {
 	if pid <= 0 {
 		return linuxV2NativeWitnessNamespace{}, errors.New("network namespace identity requires the exact native PID")
@@ -2023,6 +2096,20 @@ func linuxV2NativeWitnessNetworkNamespace(pid int) (linuxV2NativeWitnessNamespac
 	if native.Mode&unix.S_IFMT != unix.S_IFREG || local.Mode&unix.S_IFMT != unix.S_IFREG ||
 		native.Dev != local.Dev || native.Ino != local.Ino {
 		return linuxV2NativeWitnessNamespace{}, errors.New("native process does not retain the exact host network namespace")
+	}
+	return linuxV2NativeWitnessNamespace{Device: uint64(native.Dev), Inode: native.Ino}, nil
+}
+
+func linuxV2NativeWitnessUserNamespace(pid int) (linuxV2NativeWitnessNamespace, error) {
+	if pid <= 0 {
+		return linuxV2NativeWitnessNamespace{}, errors.New("user namespace identity requires the exact native PID")
+	}
+	var native unix.Stat_t
+	if err := unix.Stat(fmt.Sprintf("/proc/%d/ns/user", pid), &native); err != nil {
+		return linuxV2NativeWitnessNamespace{}, fmt.Errorf("stat native user namespace: %w", err)
+	}
+	if native.Mode&unix.S_IFMT != unix.S_IFREG || native.Dev == 0 || native.Ino == 0 {
+		return linuxV2NativeWitnessNamespace{}, errors.New("native process user namespace is not an exact nsfs inode")
 	}
 	return linuxV2NativeWitnessNamespace{Device: uint64(native.Dev), Inode: native.Ino}, nil
 }
@@ -3299,6 +3386,12 @@ func (witness *linuxV2NativeWitnessRun) prepareClone(
 	return prepared, grant, cloneWorkspace, nil
 }
 
+// The witness wraps the exact execution.Process only for adapters that consume
+// harness.StartRequest.StartProcess; the others own their Runner.
+func linuxV2NativeWitnessStagesReleaseFromStartProcess(kind harness.Kind) bool {
+	return kind == harness.KindCodex || kind == harness.KindClaude
+}
+
 func (witness *linuxV2NativeWitnessRun) launchNative(
 	ctx context.Context,
 	daemon *daemon,
@@ -3509,7 +3602,8 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	if kind == harness.KindPi {
 		startRequest.Context = witness.nativeContext()
 	}
-	if kind == harness.KindCodex || kind == harness.KindClaude {
+	witness.startProcessStagesRelease = linuxV2NativeWitnessStagesReleaseFromStartProcess(kind)
+	if witness.startProcessStagesRelease {
 		startRequest.StartProcess = func(startContext context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
 			process, startErr := daemon.start(startContext, invocation, sink)
 			if process == nil {
@@ -3628,11 +3722,11 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 		turnErr := <-turnDone
 		crashCase := witness.request.Case == "helper_sigkill_detached_child" || witness.request.Case == "daemon_sigkill_helper_survives_detached_child"
 		if turnErr != nil && !crashCase {
-			return errors.New("run authentic Pi owner witness turn")
+			return fmt.Errorf("run authentic Pi owner witness turn: %w", turnErr)
 		}
 		if turnErr == nil {
 			if err := staged.WaitTurn(startContext); err != nil && !crashCase {
-				return errors.New("wait for authentic Pi owner witness turn")
+				return fmt.Errorf("wait for authentic Pi owner witness turn: %w", err)
 			}
 		}
 	}
@@ -3925,9 +4019,18 @@ func (witness *linuxV2NativeWitnessRun) wrapLinuxV2Callbacks(
 		})
 	}
 	callbacks.DropAckAfter = func(stage string, ownerEffectAlreadyAckedOnEntry bool) error {
-		if (stage != linuxV2NativeWitnessLeaseStage && stage != linuxV2NativeWitnessReleaseStage) ||
-			witness.request.DropAckAfter != stage || ownerEffectAlreadyAckedOnEntry {
+		if stage != linuxV2NativeWitnessLeaseStage && stage != linuxV2NativeWitnessReleaseStage {
 			return nil
+		}
+		selected := witness.request.DropAckAfter == stage
+		runnerRelease := stage == linuxV2NativeWitnessReleaseStage && !witness.startProcessStagesRelease
+		if (!selected && !runnerRelease) || ownerEffectAlreadyAckedOnEntry {
+			return nil
+		}
+		if stage == linuxV2NativeWitnessReleaseStage {
+			if err := witness.captureReleasedNativeTarget(store); err != nil {
+				return err
+			}
 		}
 		if err := witness.stage(stage, daemon, store, true); err != nil {
 			return err

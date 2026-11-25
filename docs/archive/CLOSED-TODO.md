@@ -5329,3 +5329,29 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       verbatim in the evidence record §8; the conductor's Bind run `45688173130` bound
       `2d423748`, the round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds
       the delivered revisions (the record's §1 digest table is the delivered set).
+
+## rf-acc-migration-pi-hold: the `migration` release hold is wired on the pi runner path (2026-11-26)
+
+- [x] The `migration` release arm and its unreached `native_release` hold (moved from `docs/TODO.md`;
+      residual of the entries closed under goals `rf-acc-guest-native-exec` (2026-11-25) and
+      `rf-acc-apparmor-userns-profile` (2026-11-26)): the pre-clone guard and its unsatisfied
+      credential fact were root-named by runs `45593856716`, `45601287283` and `45602546196`, and
+      the AppArmor-userns exception delivered by `rf-acc-apparmor-userns-profile` resolved the
+      release stop. The remaining clause — "the `native_release` hold of the `migration` set is
+      still unreached" — is closed by goal `rf-acc-migration-pi-hold` (2026-11-26, branch
+      `refactor/rf-acc-migration-pi-hold`, base `8453da12`; plan
+      `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md`, record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md`): `native_release` is staged from the
+      witness's release-ACK callback (`execution/linux_owner_v2_linux.go:1073-1077`) for every
+      adapter that owns its `Runner` (pi, opencode) instead of only from `daemon.start`, with the
+      exact released same-PID target (journal/authority/gate agreement, verified live pidfd, nsfs
+      user and host network namespaces) as its marker evidence; the hold engaging and the evidence
+      shape are pinned locally by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`,
+      `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` and
+      `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with three mutant rows. No e2e
+      validator, fixture byte or `pi/**` file changed. Carried, not closed: the guest row, which the
+      goal's acceptance assigns to the conductor's Bind (one `migration` run on the PR head, its
+      next stop recorded verbatim or green). The entry's intermittent aborted-release stop measurement
+      (`dial unixpacket: connect: connection refused` in runs `45555828634`/`45579163968`, absent in
+      `45557621798`/`45564071868`) is a measurement note on the arm the AppArmor fix superseded; a
+      recurrence would ride the rf-acc-release-recovery-diagnostics entry still in `docs/TODO.md`.
