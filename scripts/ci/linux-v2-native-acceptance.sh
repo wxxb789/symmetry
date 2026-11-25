@@ -199,25 +199,50 @@ for text in lines[-10:]:
 PY
 }
 
-# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
-# as the witness event lines; each caller names the block the lines belong to.
-print_filtered_output_lines() {
+# One redaction stage for both line filters: `drop` skips over-bound and secret-bearing lines and
+# keeps the newest; `truncate` rewrites secrets and clips, so a stalled witness's only cause survives.
+redact_evidence_lines() {
+  local mode=$1 bound=$2 keep=$3
   python3 -c '
 import pathlib, sys
 
-secrets_path, = sys.argv[1:]
+mode, bound, keep, secrets_path = sys.argv[1:5]
+bound = int(bound)
+keep = int(keep)
 try:
     secrets = [value for value in pathlib.Path(secrets_path).read_bytes().split(b"\0") if value]
 except OSError:
     secrets = []
 lines = []
 for line in sys.stdin.buffer:
-    if len(line.rstrip(b"\r\n")) > 400 or any(secret in line for secret in secrets):
-        continue
-    lines.append(line)
-for line in lines[-40:]:
-    sys.stdout.buffer.write(line)
-' "$evidence_secret_values_file" >&2 || true
+    if mode == "drop":
+        if len(line.rstrip(b"\r\n")) > bound or any(secret in line for secret in secrets):
+            continue
+        lines.append(line)
+    else:
+        for secret in secrets:
+            line = line.replace(secret, b"<redacted>")
+        sys.stdout.buffer.write(line[:bound].rstrip(b"\r\n") + b"\n")
+if mode == "drop":
+    for line in lines[-keep:]:
+        sys.stdout.buffer.write(line)
+' "$mode" "$bound" "$keep" "$evidence_secret_values_file"
+}
+
+# Guest daemon output is echoed only through the same secret-values filter and 400-byte bound
+# as the witness event lines; each caller names the block the lines belong to.
+print_filtered_output_lines() {
+  redact_evidence_lines drop 400 40 "$evidence_secret_values_file" >&2 || true
+}
+
+# A stalled witness prints nothing, and its one error line can exceed the shared
+# length bound, so truncate and redact instead of dropping the only named cause.
+print_witness_stderr_tail() {
+  local path=$1
+  sudo test -s "$path" || return 0
+  printf 'owner-witness command stderr (bounded last 20 lines):\n' >&2
+  sudo tail --lines=20 -- "$path" |
+    redact_evidence_lines truncate 400 0 "$evidence_secret_values_file" >&2 || true
 }
 
 export_native_evidence() {
@@ -248,6 +273,13 @@ export_native_evidence() {
       native_binary_sha="sha256:${claude_executable_sha:-}"
       native_archive_sha="sha256:${claude_archive_sha:-}"
       native_version_line="${claude_version_line:-}"
+      ;;
+    *)
+      native_kind=pi
+      native_binary=/usr/local/lib/symmetry-pi/pi
+      native_binary_sha="sha256:${pi_executable_sha:-}"
+      native_archive_sha="sha256:${pi_archive_sha:-}"
+      native_version_line="${pi_version_line:-}"
       ;;
   esac
   local -a native_manifest_args=()
@@ -422,8 +454,10 @@ sudo chmod 0755 "$rootfs/usr/local/lib/symmetry-pi/pi"
   fail 'staged pi share directory must be root-owned mode-0755 so A can traverse it'
 [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs/usr/local/lib/symmetry-pi/pi")" == '0:0:755:1' ]] ||
   fail 'staged pi executable must be a singly-linked root-owned mode-0755 file'
-[[ "$(sudo sha256sum "$rootfs/usr/local/lib/symmetry-pi/pi" | cut -d' ' -f1)" == "$(sha256sum "$pi_unpack/pi/pi" | cut -d' ' -f1)" ]] ||
-  fail 'staged pi executable digest differs from the verified 1.5.2 release archive'
+[[ "$(sudo sha256sum "$rootfs/usr/local/lib/symmetry-pi/pi" | cut -d' ' -f1)" == "$pi_executable_sha" ]] ||
+  fail 'staged pi executable digest differs from the pinned 1.5.2 release archive'
+[[ "$(linux_v2_pi_tree_digest "$rootfs/usr/local/lib/symmetry-pi" sudo)" == "${pi_tree_sha:-}" ]] ||
+  fail 'staged pi release tree differs from the pinned 1.5.2 archive'
 sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
 if [[ "$fixture_case_set" == codex_containment ]]; then
   linux_v2_fetch_codex "$fixture_root"
@@ -954,7 +988,8 @@ machine_run_as() {
   home=$(cut -d: -f6 <"$passwd_log")
   [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   machine_run_count=$((machine_run_count + 1))
-  local unit="${machine}-step-${machine_run_count}"
+  # A pipeline runs this in a subshell and loses the increment there, so the suffix keeps the name unique.
+  local unit="${machine}-step-${machine_run_count}-${BASHPID}"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
     --setenv="HOME=$home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
@@ -1025,11 +1060,12 @@ control_fixture="$fixture_root/control-fixture.json"
 
 pi_repository_id=$(jq --exit-status --raw-output .pi_repository_resource_id "$control_fixture")
 opencode_repository_id=$(jq --exit-status --raw-output .opencode_repository_resource_id "$control_fixture")
+pi_durability_repository_id=$(jq --exit-status --raw-output .pi_durability_repository_resource_id "$control_fixture")
 
 python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \
   "$B_CLONE_ROOT" "$SEED_ROOT" "$DAEMON_SERVICE_STATE_DIR" "$PI_SHARE" "$SYMMETRY_PI_MODEL" \
   "$SYMMETRY_OPENCODE_MODEL" "$SYMMETRY_OPENAI_BASE_URL" "$native_api_key_file" "$pi_repository_id" \
-  "$opencode_repository_id" "$fixture_identity_suffix" \
+  "$opencode_repository_id" "$pi_durability_repository_id" "$fixture_identity_suffix" \
   "$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$SYNTHETIC_GOAL_CLEANUP_SEEDS" \
   "$SYNTHETIC_GOAL_CLEANUP_CLONES" <<'PY'
 import json
@@ -1039,19 +1075,20 @@ import sys
 (
     fixture_root, a_home, repository,
     clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url, api_key_file,
-    pi_repository_id, opencode_repository_id, fixture_identity_suffix,
+    pi_repository_id, opencode_repository_id, pi_durability_repository_id, fixture_identity_suffix,
     synthetic_source, synthetic_seeds, synthetic_clones,
 ) = sys.argv[1:]
 fixture = pathlib.Path(fixture_root)
 
-def config(kind, profile, model, resource_id):
+def config(kind, profile, model, resource_id, provider_access=None):
+    provider_access = kind == "pi" if provider_access is None else provider_access
     agent = {
         "command": "/usr/local/lib/symmetry-pi/pi" if kind == "pi" else "/usr/local/bin/opencode",
         "args": ["--provider", "openai", "--model", model] if kind == "pi" else [],
         "native_model": model,
         "native_model_provider": "openai",
         "input_mode": "json",
-        "provider_access": kind == "pi",
+        "provider_access": provider_access,
         "interactive": True,
         "supervisory_control": False,
         "event_format": "jsonl",
@@ -1110,6 +1147,9 @@ configs = {
     "pi-provider-action.json": config("pi", "pi-native", pi_model, pi_repository_id),
     "pi-helper-crash.json": config("pi", "pi-native", pi_model, pi_repository_id),
     "pi-daemon-crash.json": config("pi", "pi-native", pi_model, pi_repository_id),
+    "pi-durability.json": config(
+        "pi", "pi-durability", pi_model, pi_durability_repository_id, provider_access=False
+    ),
     "opencode-health.json": config("opencode", "opencode-native", opencode_model, opencode_repository_id),
     "opencode-wsl2.json": config("opencode", "opencode-native", opencode_model, opencode_repository_id),
     "codex-containment.json": config("codex", "codex-native", "gpt-5.1-codex", opencode_repository_id),
@@ -1118,7 +1158,9 @@ configs = {
 for name, value in configs.items():
     (fixture / name).write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
 if fixture_identity_suffix == "synthetic-goal-cleanup":
-    cleanup_config = config("opencode", "opencode-native", opencode_model, opencode_repository_id)
+    cleanup_config = config(
+        "pi", "pi-durability", pi_model, pi_durability_repository_id, provider_access=False
+    )
     cleanup_config["workspaces"]["native"]["repository"] = synthetic_source
     cleanup_config["workspaces"]["native"]["root"] = synthetic_clones
     cleanup_config["workspaces"]["native"]["seed_root"] = synthetic_seeds
@@ -1236,7 +1278,7 @@ else:
         json.dumps({"openai": {"type": "api", "key": api_key}}), encoding="utf-8"
     )
 PY
-python3 - "$fixture_root/opencode-health.json" "$fixture_root/stage-replay" "$DAEMON_SERVICE_STATE_DIR" \
+python3 - "$fixture_root/pi-durability.json" "$fixture_root/stage-replay" "$DAEMON_SERVICE_STATE_DIR" \
   "${OWNER_STAGE_REPLAY_HOLDS[@]}" <<'PY'
 import json
 import pathlib
@@ -1267,7 +1309,7 @@ for kind, config_path in (("codex", codex_config_path), ("claude", claude_config
     stage_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     (stage_dir / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
-python3 - "$fixture_root/opencode-health.json" "$fixture_root/ack-loss" "$DAEMON_SERVICE_STATE_DIR" \
+python3 - "$fixture_root/pi-durability.json" "$fixture_root/ack-loss" "$DAEMON_SERVICE_STATE_DIR" \
   "${OWNER_ACK_LOSS_STAGES[@]}" <<'PY'
 import json
 import pathlib
@@ -1283,7 +1325,7 @@ for stage in stages:
     config["state_dir"] = owner_state_dir
     (stage_dir / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
-python3 - "$fixture_root/opencode-health.json" "$fixture_root/negative-root" "$DAEMON_SERVICE_STATE_DIR" \
+python3 - "$fixture_root/pi-durability.json" "$fixture_root/negative-root" "$DAEMON_SERVICE_STATE_DIR" \
   "$OWNER_ALTERNATE_CGROUP_MOUNT" \
   "${OWNER_NEGATIVE_CASES[@]}" <<'PY'
 import json
@@ -1320,7 +1362,7 @@ for name in ("unprovisioned",):
     config["state_dir"] = f"{state_root}/{name}"
     (bundle / "config.json").write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
 PY
-daemon_service_template="$fixture_root/opencode-health.json"
+daemon_service_template="$fixture_root/pi-durability.json"
 case "$fixture_case_set" in
 codex_containment) daemon_service_template="$fixture_root/codex-containment.json" ;;
 claude_containment) daemon_service_template="$fixture_root/claude-containment.json" ;;
@@ -1519,9 +1561,9 @@ unprovisioned_request_source="$fixture_root/request-stage_replay_unprovisioned_r
       "$control_fixture" stage_replay_unprovisioned_refusal "$unprovisioned_run_metadata"
 )
 python3 "$repo/scripts/ci/write-linux-v2-owner-request.py" \
-  stage_replay "$unprovisioned_run_metadata" "$fixture_root/unprovisioned/config.json" \
+  stage_replay_unprovisioned_refusal "$unprovisioned_run_metadata" "$fixture_root/unprovisioned/config.json" \
   "$OWNER_BARRIER_ROOT/unprovisioned/request" "$control_url" "$machine_token_file" \
-  "$unprovisioned_request_source" native_release
+  "$unprovisioned_request_source"
 sudo install -o root -g "$A_GID" -m 0440 "$unprovisioned_request_source" \
   "$rootfs$OWNER_UNPROVISIONED_ROOT/request.json"
 if ! sudo test -f "$rootfs$OWNER_UNPROVISIONED_ROOT/request.json" ||
@@ -1681,8 +1723,8 @@ machine_run /bin/bash -c \
   'test "$(/usr/bin/findmnt --noheadings --output ID --target /sys/fs/cgroup)" != "$(/usr/bin/findmnt --noheadings --output ID --target "$1")"' \
   bash "$OWNER_ALTERNATE_CGROUP_MOUNT"
 
-# A failed witness is named from the fixture state it leaves: its document, journals,
-# markers, and configs.
+# A failed witness is named from its document, journals, markers and configs, and from the
+# bounded private stderr log the e2e keeps beside its witnesses.
 print_witness_failure_context() {
   local output_directory=$1
   shift
@@ -1693,7 +1735,27 @@ print_witness_failure_context() {
       document="$rootfs$output_directory/${name//\//_}.json"
       print_witness_document "$document"
     done
+    print_witness_stderr_tail "$rootfs$output_directory/owner-witness.stderr"
   fi
+  # A witness that stalls before its requested boundary leaves its progress only in the
+  # journal, the stage markers and the owner service journal; print all three, redacted.
+  printf 'owner witness RunJournal progress (secret-free projection):\n' >&2
+  sudo bash -c '
+for file in "$1"/runs/journal-*.json; do
+  [ -f "$file" ] || continue
+  printf "%s " "${file##*/}"
+  jq -c "{local_state, has_claim_grant: (.lease_token != null), has_clone_intent: (.linux_clone_intent != null), has_seed_receipt: (.linux_clone_seed_receipt != null), recovery_required: (.workspace_recovery_required // false)}" "$file" 2>/dev/null ||
+    printf "%s\n" "{unreadable}"
+done' bash "$rootfs$DAEMON_SERVICE_STATE_DIR" >&2 || true
+  printf 'owner witness stage markers (type mode size name):\n' >&2
+  sudo find "$rootfs$OWNER_BARRIER_ROOT" -mindepth 1 -maxdepth 3 -printf '%y %m %s %P\n' 2>/dev/null |
+    sort | head -n 60 >&2 || true
+  printf 'A-owned Git source metadata created by the witness (type mode owner path):\n' >&2
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/find "$A_SOURCE/.git/refs" "$A_SOURCE/.git/logs" \
+    -mindepth 1 -maxdepth 4 -printf '%y %m %u:%g %P\n' 2>/dev/null | sort | head -n 40 >&2 || true
+  printf 'owner service journal (bounded, filtered):\n' >&2
+  machine_run /usr/bin/journalctl --no-pager --output=cat -n 40 -u symmetry-owner.service 2>&1 |
+    print_filtered_output_lines || true
   # The staged native tools run as A, so a permission fault names itself only from the guest view.
   printf 'guest view of the staged native tools (as A):\n' >&2
   machine_run_as "$A_USER" "$A_USER" /usr/bin/ls -ld \
@@ -1791,6 +1853,11 @@ run_go_test() {
     --setenv=CGO_ENABLED=0
     --setenv=GOFLAGS=-mod=readonly
   )
+  # The bundle-based witnesses stand in for the installed daemon, whose units set UMask=0077;
+  # without it the clone seed's new A-owned refs are B-accessible and its own revalidation refuses.
+  case "$test_mode" in
+    stage-replay|negative) command+=(--property=UMask=0077) ;;
+  esac
   case "$test_mode" in
     pi-baseline)
       command+=(
@@ -2621,8 +2688,8 @@ request_path, output_path, expected_barrier = sys.argv[1:]
 request = json.loads(pathlib.Path(request_path).read_text(encoding="utf-8"))
 run_key = request.get("run_key")
 barrier = request.get("barrier")
-if request.get("case") != "stage_replay" or request.get("harness") != "opencode":
-    raise SystemExit("helper-exit request must be an authentic OpenCode stage_replay Claim")
+if request.get("case") != "stage_replay" or request.get("harness") != "pi":
+    raise SystemExit("helper-exit request must be an authentic Pi stage_replay Claim")
 if not isinstance(run_key, dict) or not isinstance(run_key.get("run_id"), str) or not run_key["run_id"]:
     raise SystemExit("helper-exit request omitted its exact Control RunID")
 if not isinstance(run_key.get("generation"), int) or isinstance(run_key["generation"], bool) or run_key["generation"] <= 0:
@@ -2930,20 +2997,13 @@ case "$fixture_case_set" in
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/fifo \
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/oversized
 
-    # This refusal is first so no unrelated Store row can mask the mount proof.
+    # This refusal is first so no unrelated Store row can mask the mount proof. Every pi leg
+    # runs above the frozen opencode health leg, which stops this set on its pinned-version gate.
     run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     run_native_owner_witness pi_provider_action "$v2_pi_events"
-    run_native_owner_witness opencode_native_health "$v2_opencode_events"
     run_go_test "$v2_peer_negative_pi_events" ./internal/harness/pi \
       '^TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction$' peer-negative \
       '' '' '' -- TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction
-    run_go_test "$v2_peer_negative_opencode_events" ./internal/harness/opencode \
-      '^(TestOpenCodeQualifiedStartNamespacePeerDenials|TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP)$' \
-      peer-negative '' '' '' -- \
-      TestOpenCodeQualifiedStartNamespacePeerDenials \
-      TestOpenCodeQualifiedStartNamespacePeerDenials/changed_start_identity \
-      TestOpenCodeQualifiedStartNamespacePeerDenials/wrong_user_namespace \
-      TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP
     run_native_owner_witness helper_sigkill_detached_child "$v2_crash_events"
     run_native_owner_witness daemon_sigkill_helper_survives_detached_child "$v2_daemon_crash_events"
     run_stage_replay_cases "$v2_stage_replay_events" \
@@ -2958,6 +3018,14 @@ case "$fixture_case_set" in
     run_receipt_persist_failure_witness "$v2_receipt_persist_events"
     run_literal_pid_reuse_witness "$v2_pid_reuse_events"
     run_legacy_v1_replay_witness "$v2_v1_replay_events"
+    run_native_owner_witness opencode_native_health "$v2_opencode_events"
+    run_go_test "$v2_peer_negative_opencode_events" ./internal/harness/opencode \
+      '^(TestOpenCodeQualifiedStartNamespacePeerDenials|TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP)$' \
+      peer-negative '' '' '' -- \
+      TestOpenCodeQualifiedStartNamespacePeerDenials \
+      TestOpenCodeQualifiedStartNamespacePeerDenials/changed_start_identity \
+      TestOpenCodeQualifiedStartNamespacePeerDenials/wrong_user_namespace \
+      TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP
     ;;
   stage_replay_create_started)
     run_stage_replay_case "$v2_stage_replay_events" create_started

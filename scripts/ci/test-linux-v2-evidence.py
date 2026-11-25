@@ -397,6 +397,62 @@ def containment_witness(kind: str, native_open_reached: bool = True) -> dict:
     }
 
 
+PI_PINS = {
+    "case_set": "stale_leaf",
+    "binary": "/usr/local/lib/symmetry-pi/pi",
+    "binary_sha256": "6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57",
+    "archive_sha256": "811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5",
+    "version_line": "1.5.2",
+    "tree_digest": "sha256:" + "4" * 64,
+    "witness": "stale-leaf/TestProductionLinuxV2StaleLeafIdentityRetainsJournal.json",
+    "exported": ("stale-leaf-identity.json",),
+}
+
+
+def pi_durability_witness(pin: dict = PI_PINS) -> dict:
+    return {
+        "version": 1,
+        "case": "stage_replay",
+        "harness": "pi",
+        "native_version": "1.5.2",
+        "native_binary": pin["binary"],
+        "native_binary_sha256": "sha256:" + pin["binary_sha256"],
+        "native_version_line": pin["version_line"],
+        "subject": {"tree_digest": pin["tree_digest"]},
+        "owner_witness_outcome": "recovered",
+    }
+
+
+def pi_cleanup_witness(runtime_kind: str = "pi") -> dict:
+    return {
+        "version": 1,
+        "test": "TestProductionLinuxV2CloneCleanupAuthenticatedScratch",
+        "status": "passed",
+        "fixture": {"runtime_kind": runtime_kind},
+    }
+
+
+def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
+    lines = text[text.index(f"{function}() {{") :].splitlines()
+    index = next(i for i, line in enumerate(lines) if line.strip() == header)
+    arms: dict[str, str] = {}
+    pattern = None
+    current: list[str] = []
+    for line in lines[index + 1 :]:
+        stripped = line.strip()
+        if pattern is None:
+            if stripped == "esac":
+                break
+            pattern, _, tail = stripped.partition(")")
+            pattern, current = pattern.strip(), [tail.strip()]
+        else:
+            current.append(stripped)
+        if current[-1].endswith(";;"):
+            arms[pattern] = "\n".join(current)
+            pattern = None
+    return arms
+
+
 class ExporterTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -469,6 +525,36 @@ class ExporterTest(unittest.TestCase):
             pin["native_version_line"],
             "--source-tree-digest",
             pin["tree_digest"],
+        )
+
+    def populate_pi_durability(self, source: pathlib.Path, witness: dict | None = None) -> None:
+        self.write_json(source / PI_PINS["witness"], pi_durability_witness() if witness is None else witness)
+
+    def run_pi_durability_gate(self, source, receipts, output, *, binary_sha256=None, case_set=None):
+        return citest.run_gate(
+            SCRIPT,
+            "manual",
+            str(output),
+            "1" * 40,
+            "passed",
+            "--witness-root",
+            str(source),
+            "--receipt-root",
+            str(receipts),
+            "--case-set",
+            case_set or PI_PINS["case_set"],
+            "--native-kind",
+            "pi",
+            "--native-binary",
+            PI_PINS["binary"],
+            "--native-binary-sha256",
+            binary_sha256 or "sha256:" + PI_PINS["binary_sha256"],
+            "--native-archive-sha256",
+            "sha256:" + PI_PINS["archive_sha256"],
+            "--native-version-line",
+            PI_PINS["version_line"],
+            "--source-tree-digest",
+            PI_PINS["tree_digest"],
         )
 
     def test_legacy_projects_actual_shapes_without_mutating_or_leaking_raw_inputs(self) -> None:
@@ -1758,6 +1844,148 @@ class ExporterTest(unittest.TestCase):
                 self.assertIn(expected, result.stderr)
                 self.assertFalse((output / "manifest.json").exists())
 
+    def test_manual_pi_durability_export_records_pinned_native_binary(self) -> None:
+        source = self.private_dir("pi-source")
+        receipts = self.private_dir("pi-receipts")
+        output = self.private_dir("pi-output")
+        self.populate_pi_durability(source)
+        result = self.run_pi_durability_gate(source, receipts, output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        manifest = json.loads((output / "manifest.json").read_text())
+        self.assertEqual(manifest["case_set"], PI_PINS["case_set"])
+        self.assertEqual(manifest["status"], "passed")
+        self.assertNotIn("containment", manifest)
+        self.assertEqual(
+            manifest["native_binary"],
+            {
+                "kind": "pi",
+                "path": PI_PINS["binary"],
+                "sha256": "sha256:" + PI_PINS["binary_sha256"],
+                "archive_sha256": "sha256:" + PI_PINS["archive_sha256"],
+                "version": PI_PINS["version_line"],
+            },
+        )
+        self.assertEqual(manifest["source_tree_digest"], PI_PINS["tree_digest"])
+        self.assertEqual({entry["file"] for entry in manifest["files"]}, set(PI_PINS["exported"]))
+
+    def test_manual_pi_durability_digest_or_binding_mismatch_refuses_publication(self) -> None:
+        mutations = (
+            (
+                "argument digest",
+                pi_durability_witness(),
+                "sha256:" + "0" * 64,
+                "does not bind the staged pi executable",
+            ),
+            (
+                "witness digest",
+                pi_durability_witness() | {"native_binary_sha256": "sha256:" + "1" * 64},
+                None,
+                "does not bind the staged pi executable",
+            ),
+            (
+                "witness harness",
+                pi_durability_witness() | {"harness": "opencode"},
+                None,
+                "does not bind the staged pi executable",
+            ),
+            (
+                "witness binary",
+                {key: value for key, value in pi_durability_witness().items() if key != "native_binary"},
+                None,
+                "does not bind the staged pi executable",
+            ),
+            (
+                "source tree digest",
+                pi_durability_witness() | {"subject": {"tree_digest": "sha256:" + "f" * 64}},
+                None,
+                "does not bind --source-tree-digest",
+            ),
+        )
+        for index, (name, witness, binary_sha256, expected) in enumerate(mutations):
+            with self.subTest(mutation=name):
+                source = self.private_dir(f"pi-mutation-source-{index}")
+                receipts = self.private_dir(f"pi-mutation-receipts-{index}")
+                output = self.private_dir(f"pi-mutation-output-{index}")
+                self.populate_pi_durability(source, witness)
+                result = self.run_pi_durability_gate(source, receipts, output, binary_sha256=binary_sha256)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+                self.assertFalse((output / "manifest.json").exists())
+
+    def test_manual_pi_kind_refuses_non_retargeted_case_sets(self) -> None:
+        source = self.private_dir("pi-kind-source")
+        receipts = self.private_dir("pi-kind-receipts")
+        output = self.private_dir("pi-kind-output")
+        result = self.run_pi_durability_gate(source, receipts, output, case_set="codex_containment")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("retargeted durability case set", result.stderr)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_manual_pi_durability_shared_requires_every_pi_witness(self) -> None:
+        source = self.private_dir("pi-shared-source")
+        receipts = self.private_dir("pi-shared-receipts")
+        output = self.private_dir("pi-shared-output")
+        result = self.run_pi_durability_gate(source, receipts, output, case_set="shared")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("pi durability witness is unavailable: ack-loss-replay-checkout_ready.json", result.stderr)
+        self.assertEqual(list(output.iterdir()), [])
+
+    def test_manual_pi_cleanup_witness_binds_the_vehicle_runtime_kind(self) -> None:
+        for index, runtime_kind in enumerate(("pi", "opencode")):
+            with self.subTest(runtime_kind=runtime_kind):
+                source = self.private_dir(f"pi-cleanup-source-{index}")
+                receipts = self.private_dir(f"pi-cleanup-receipts-{index}")
+                output = self.private_dir(f"pi-cleanup-output-{index}")
+                self.write_json(
+                    source / "synthetic-goal-cleanup/TestProductionLinuxV2CloneCleanupAuthenticatedScratch.json",
+                    pi_cleanup_witness(runtime_kind),
+                )
+                result = self.run_pi_durability_gate(source, receipts, output, case_set="synthetic_goal_cleanup")
+                if runtime_kind == "pi":
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    manifest = json.loads((output / "manifest.json").read_text())
+                    self.assertEqual(manifest["case_set"], "synthetic_goal_cleanup")
+                    self.assertEqual(manifest["native_binary"]["kind"], "pi")
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("pi vehicle runtime_kind", result.stderr)
+                    self.assertFalse((output / "manifest.json").exists())
+
+    def test_pi_durability_checks_every_allowlisted_witness_except_the_named_non_pi_documents(self) -> None:
+        exporter = load_exporter()
+        receipt_targets = {target for _, target in exporter.MANUAL_RECEIPTS}
+        self.assertEqual(
+            exporter.PI_VEHICLE_INDEPENDENT_WITNESSES,
+            receipt_targets | {"opencode-native-health.json", "unprovisioned-owner-refusal.json"},
+        )
+        witness_targets = (
+            {target for _, target in exporter.MANUAL_WITNESSES}
+            | {f"stage-crash-replay-{stage}.json" for stage in exporter.MANUAL_STAGE_HOLDS}
+            | {f"ack-loss-replay-{stage}.json" for stage in exporter.MANUAL_ACK_LOSS_STAGES}
+        )
+        shared_allowlist = exporter.MANUAL_CASE_SET_FILES["shared"]
+        self.assertEqual(
+            (witness_targets & shared_allowlist) - (shared_allowlist - exporter.PI_VEHICLE_INDEPENDENT_WITNESSES),
+            {"opencode-native-health.json", "unprovisioned-owner-refusal.json"},
+        )
+        for case_set in exporter.PI_DURABILITY_CASE_SETS:
+            checked = exporter.MANUAL_CASE_SET_FILES[case_set] - exporter.PI_VEHICLE_INDEPENDENT_WITNESSES
+            self.assertTrue(checked, case_set)
+            if case_set != "shared":
+                self.assertEqual(checked, exporter.MANUAL_CASE_SET_FILES[case_set], case_set)
+
+    def test_acceptance_case_set_lists_match_the_exporter_pi_durability_sets(self) -> None:
+        text = SCRIPT.with_name("linux-v2-native-acceptance.sh").read_text(encoding="utf-8")
+        listed = [line.strip() for line in text.splitlines() if line.strip().startswith("shared|codex_containment|")]
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(
+            set(listed[0].removesuffix(") ;;").split("|")),
+            set(load_exporter().PI_DURABILITY_CASE_SETS) | {"codex_containment", "claude_containment"},
+        )
+        arms = bash_case_arms(text, "export_native_evidence", 'case "$fixture_case_set" in')
+        self.assertEqual(set(arms), {"codex_containment", "claude_containment", "*"})
+        self.assertIn("native_kind=pi", arms["*"])
+
     def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
         pin = CONTAINMENT_PINS["codex"]
         source = self.private_dir("native-args-source")
@@ -1777,7 +2005,7 @@ class ExporterTest(unittest.TestCase):
         cases = (
             ("codex_containment", ("--native-kind", "codex"), "requires --native-kind"),
             ("claude_containment", complete, "requires --case-set codex_containment"),
-            ("claude_containment", ("--native-kind", "opencode", *complete[2:]), "not a containment-capable"),
+            ("claude_containment", ("--native-kind", "opencode", *complete[2:]), "not a supported native kind"),
             ("codex_containment", complete, "requires --source-tree-digest"),
             (
                 "codex_containment",

@@ -5013,3 +5013,45 @@ decision as open while this entry and the goal record carry the closure.
       under `## rf-acc-native-burndown: Linux v2 native acceptance follow-ups (2026-11-24)` as the
       clone-admission item. Evidence record
       `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §2/§3/§4/§5/§7.
+
+## rf-acc-pi-durability-matrices: the twelve OpenCode-vehicle F2 rows (2026-11-24)
+
+- [ ] Keep the twelve OpenCode-vehicle case sets as F2-excluded rows until `rf-acc-pi-durability-matrices`
+      retargets the durability matrices to pi under the D3 `harness.md` amendment (2026-11-24, owner
+      rulings A1/C1 in `decision-native-opencode-2026-11-24.md`): on the final bytes the App's own
+      witness gate refuses every OpenCode-family config — `owner witness config native harness
+      version differs from the tested release` observed 210 times in run `45402706492` — because the
+      fixture's frozen `opencode: "1.18.32"` pin differs from `opencode.TestedVersion = "2.3.0"`
+      (`daemon/internal/harness/opencode/adapter.go:28`). The pin, the opencode render tokens and
+      the frozen lines stay untouched by decision; the evidence record's per-set table records each
+      excluded row (§3.15).
+      **Closed (2026-11-24, branch `refactor/rf-acc-pi-durability-matrices`, base `477e4c62`)** (plan
+      `docs/plans/2026-11-24-rf-acc-pi-durability-matrices-plan.md`, evidence record
+      `docs/evidence/rf-acc-pi-durability-matrices-2026-11-24.md`): the twelve durability case sets
+      now request, claim and run on the pi durability vehicle — provider-free pi resource, generic
+      `pi-durability` runtime, `pi` requests/claims, pi stage/ack/negative/cleanup configs and e2e
+      harness literals, and a pi `native_binary` binding in the exporter — so no durability row
+      stays F2-excluded for the OpenCode pin. The rows are not green, and the reasons moved with the
+      work: the F1 clone-reserve wall was closed by the Goal-admitted fixture (ruling of 2026-11-25;
+      plan §3.10), and what bounds the rows now is three unowned product classes carried as named
+      follow-up goals (`rf-acc-witness-unresolved-exit`, `rf-acc-release-recovery-diagnostics`,
+      `rf-acc-owner-loss-semantics`) — plus the frozen `shared` OpenCode leg and the credential-gated
+      pi turns. The residual moved back to `docs/TODO.md` under
+      `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`.
+
+## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
+
+Moved 2026-11-25 from branch `refactor/rf-acc-pi-durability-matrices` (PR #281, round-2 fix); the
+still-open residual stays in `docs/TODO.md` under the same heading.
+
+- [ ] The literal all-12 scratch run on the delivered bytes (2026-11-25, goal
+      `rf-acc-pi-durability-matrices`; DS-review ruling F02; evidence record §11.6/§12.6).
+      **Closed (2026-11-25)**: the round-1 delivered-bytes run `45516749453` executed the merged
+      code bytes (scratch head `6db50a7e`, all-equal sha256 table, artifact
+      `linux-v2-native-evidence-45516749453-1`, record §11.6), and the round-2 fixes' binding run
+      `45525645545` executed the round-2 final code bytes as the last code-affecting action
+      (scratch head `b19848895`, all-equal sha256 table, artifact
+      `linux-v2-native-evidence-45525645545-1`, record §12.6). Each scratch branch was deleted and
+      the deletion proven (`git ls-remote origin scratch/rf-acc-pi-durability-matrices` prints
+      nothing). The credentialed dispatch and the Q3(a) pi turn counts stay open in `docs/TODO.md`
+      under the heading above, as do the three carried follow-up goals.

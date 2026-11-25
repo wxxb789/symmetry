@@ -11,12 +11,40 @@ linux_v2_fetch_archive() {
   tar --extract --file "$archive" --directory "$unpack"
 }
 
+linux_v2_pi_tree_digest() {
+  local tree=$1 runner=${2:-}
+  # Binds entry type, mode, ownership, path, link target and content, so an added link,
+  # a chmod or a rewritten file cannot match the pinned normalized release tree.
+  $runner bash -c '
+    set -o pipefail
+    cd "$1" || exit 1
+    {
+      find . -mindepth 1 -printf "%y %m %U:%G %P\t%l\0"
+      find . -mindepth 1 -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | tr "\n" "\0"
+    } | LC_ALL=C sort -z | sha256sum | cut -d" " -f1
+  ' _ "$tree"
+}
+
+linux_v2_pin_pi_tree() {
+  local tree=$1 runner=${2:-}
+  # The pin binds the normalized release tree (root:root; dirs 0755; files 0644 / u+x 0755), and a
+  # raw extraction's modes and ownership follow the caller's umask and uid, so normalize in place.
+  $runner chown -R root:root "$tree"
+  $runner find "$tree" -type d -exec chmod 0755 {} +
+  $runner find "$tree" -type f ! -perm -u+x -exec chmod 0644 {} +
+  $runner find "$tree" -type f -perm -u+x -exec chmod 0755 {} +
+  test "$(linux_v2_pi_tree_digest "$tree" "$runner")" = "${pi_tree_sha:-}"
+}
+
 linux_v2_fetch_pi() {
   local destination=$1
   local pi_url='https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-x64.tar.gz'
   local pi_archive="$destination/pi-linux-x64.tar.gz"
-  local pi_archive_sha='811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5'
-  local pi_executable_sha='6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57'
+  # Callers that publish pi evidence need the pins and the version line outside this function.
+  pi_archive_sha='811c6f2c9e7aaee252b5404252e556fb713aa209c1f7f924226aa77d4ef70cb5'
+  pi_executable_sha='6a2ac1c5b0d08b91ce6095591c1960b469d0665c7fc5f32812960a4a17ca0c57'
+  export pi_tree_sha='f5fc36f79aa55b685295b4c8c251ed4da485e565181c22dcb16a1676d2396a68'
+  pi_version_line='1.5.2'
   pi_unpack="$destination/pi-release"
   pi_executable="$pi_unpack/pi/pi"
   curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
@@ -25,8 +53,10 @@ linux_v2_fetch_pi() {
   mkdir "$pi_unpack"
   tar --extract --file "$pi_archive" --directory "$pi_unpack"
   test -x "$pi_executable"
+  # Every caller exposes or copies this tree, so the pin is checked on the canonicalized bytes.
+  linux_v2_pin_pi_tree "$pi_unpack/pi" sudo
   test "$(sha256sum "$pi_executable" | cut -d' ' -f1)" = "$pi_executable_sha"
-  test "$(timeout 30s "$pi_executable" --version)" = '1.5.2'
+  test "$(timeout 30s "$pi_executable" --version)" = "$pi_version_line"
 }
 
 linux_v2_fetch_native_tools() {
