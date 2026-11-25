@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -3506,27 +3507,50 @@ func linuxWitnessProcessSnapshotAt(role string, pid int, identity string) linuxW
 		snapshot.Error = "pid is not positive"
 		return snapshot
 	}
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	parsed, err := readLinuxWitnessProcessSnapshot(pid)
 	if err != nil {
 		snapshot.Error = err.Error()
 		return snapshot
 	}
-	closing := strings.LastIndexByte(string(raw), ')')
-	if closing < 0 || closing+2 >= len(raw) {
-		snapshot.Error = "malformed /proc stat"
-		return snapshot
+	parsed.At = snapshot.At
+	parsed.Role = role
+	parsed.PID = pid
+	parsed.Identity = identity
+	return parsed
+}
+
+func readLinuxWitnessProcessSnapshot(pid int) (linuxWitnessProcessSnapshot, error) {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return linuxWitnessProcessSnapshot{}, err
 	}
-	fields := strings.Fields(string(raw)[closing+2:])
+	return parseLinuxWitnessProcessSnapshot(raw)
+}
+
+func parseLinuxWitnessProcessSnapshot(raw []byte) (linuxWitnessProcessSnapshot, error) {
+	fields, err := linuxWitnessProcStatFields(raw)
+	if err != nil {
+		return linuxWitnessProcessSnapshot{}, err
+	}
 	if len(fields) <= 19 {
-		snapshot.Error = "short /proc stat"
-		return snapshot
+		return linuxWitnessProcessSnapshot{}, errors.New("short /proc stat")
 	}
-	snapshot.State = fields[0]
+	startTime, err := strconv.ParseUint(fields[19], 10, 64)
+	if err != nil {
+		return linuxWitnessProcessSnapshot{}, errors.New("malformed /proc stat")
+	}
+	snapshot := linuxWitnessProcessSnapshot{Exists: true, State: fields[0], StartTime: startTime}
 	snapshot.PGRP, _ = strconv.ParseInt(fields[2], 10, 64)
 	snapshot.Session, _ = strconv.ParseInt(fields[3], 10, 64)
-	snapshot.StartTime, _ = strconv.ParseUint(fields[19], 10, 64)
-	snapshot.Exists = true
-	return snapshot
+	return snapshot, nil
+}
+
+func linuxWitnessProcStatFields(raw []byte) ([]string, error) {
+	closing := strings.LastIndexByte(string(raw), ')')
+	if closing < 0 || closing+2 >= len(raw) {
+		return nil, errors.New("malformed /proc stat")
+	}
+	return strings.Fields(string(raw)[closing+2:]), nil
 }
 
 func assertLinuxWitnessSameGroup(t *testing.T, target, descendant linuxWitnessProcessSnapshot) {
@@ -3641,12 +3665,17 @@ func assertLinuxWitnessProcessLive(pid int, identity string) error {
 }
 
 func waitForLinuxWitnessIdentityGone(pid int, identity string, timeout time.Duration) error {
+	return waitForLinuxWitnessIdentityGoneWith(pid, identity, timeout, platform.ProcessIdentity, readLinuxWitnessProcessSnapshot)
+}
+
+func waitForLinuxWitnessIdentityGoneWith(pid int, identity string, timeout time.Duration, read func(int) (string, error), probe func(int) (linuxWitnessProcessSnapshot, error)) error {
 	if pid <= 0 {
 		return nil
 	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		actual, err := platform.ProcessIdentity(pid)
+	started := time.Now()
+	deadline := started.Add(timeout)
+	for iteration := 1; time.Now().Before(deadline); iteration++ {
+		actual, err := read(pid)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
@@ -3661,8 +3690,31 @@ func waitForLinuxWitnessIdentityGone(pid int, identity string, timeout time.Dura
 			time.Sleep(25 * time.Millisecond)
 			continue
 		}
+		if errors.Is(err, syscall.EACCES) {
+			// The kernel returns one EACCES for a reap-window detach and for a ptrace denial on a
+			// live process, so absence is decided by the recorded starttime, never by the errno.
+			snapshot, probeErr := probe(pid)
+			switch {
+			case errors.Is(probeErr, os.ErrNotExist) || errors.Is(probeErr, syscall.ESRCH):
+				return nil
+			case probeErr != nil:
+				return linuxWitnessDeniedIdentityError(pid, identity, snapshot, probeErr)
+			case snapshot.State == "Z":
+				return nil
+			case identity == "":
+				time.Sleep(25 * time.Millisecond)
+				continue
+			case linuxWitnessIdentityStartTimeDiffers(identity, snapshot.StartTime):
+				return nil
+			default:
+				return linuxWitnessDeniedIdentityError(pid, identity, snapshot, nil)
+			}
+		}
 		if err != nil {
-			return err
+			snapshot, probeErr := probe(pid)
+			return fmt.Errorf("%w (identity read failure: leg=%s errno=%s poll=%d elapsed=%s; /proc/%d/stat probe: %s)",
+				err, linuxWitnessIdentityReadLeg(err), linuxWitnessErrnoText(err), iteration,
+				time.Since(started).Round(time.Millisecond), pid, linuxWitnessProcessProbeText(snapshot, probeErr))
 		}
 		if identity != "" && actual != identity {
 			return nil
@@ -3674,6 +3726,470 @@ func waitForLinuxWitnessIdentityGone(pid int, identity string, timeout time.Dura
 		time.Sleep(25 * time.Millisecond)
 	}
 	return fmt.Errorf("process %d with identity %q remained live", pid, identity)
+}
+
+func linuxWitnessDeniedIdentityError(pid int, identity string, snapshot linuxWitnessProcessSnapshot, probeErr error) error {
+	observed := fmt.Sprintf("shows state=%s starttime=%d", snapshot.State, snapshot.StartTime)
+	if probeErr != nil {
+		observed = fmt.Sprintf("probe failed: %v", probeErr)
+	}
+	return fmt.Errorf("process %d identity %q is unreadable after a denied identity read: /proc/%d/stat %s", pid, identity, pid, observed)
+}
+
+func linuxWitnessIdentityStartTimeDiffers(identity string, startTime uint64) bool {
+	parts, err := parseLinuxNegativePIDReuseIdentity(identity)
+	return err == nil && parts.startTime != startTime
+}
+
+func linuxWitnessIdentityReadLeg(err error) string {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "stat namespace link"):
+		return "stat namespace link"
+	case strings.Contains(message, "start time"):
+		return "read process start time"
+	case strings.Contains(message, "readlink"):
+		return "readlink"
+	default:
+		return "unknown"
+	}
+}
+
+func linuxWitnessErrnoText(err error) string {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return fmt.Sprintf("%d(%v)", int(errno), errno)
+	}
+	return "none"
+}
+
+func linuxWitnessProcessProbeText(snapshot linuxWitnessProcessSnapshot, probeErr error) string {
+	return fmt.Sprintf("exists=%t state=%s starttime=%d err=%v", snapshot.Exists, snapshot.State, snapshot.StartTime, probeErr)
+}
+
+const linuxWitnessDeniedIdentityChildEnvironment = "SYMMETRY_LINUX_WITNESS_DENIED_IDENTITY_CHILD"
+
+func TestLinuxWitnessIdentityGoneDeniedChildProcess(t *testing.T) {
+	if os.Getenv(linuxWitnessDeniedIdentityChildEnvironment) != "1" {
+		t.Skip("child mode only: TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed and TestLinuxWitnessIdentityGoneDeniedReadDecisions spawn this test binary with " + linuxWitnessDeniedIdentityChildEnvironment + "=1")
+	}
+	_, _ = fmt.Fprintln(os.Stdout, "READY")
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		if strings.TrimSpace(line) != "deny" {
+			continue
+		}
+		if err := unix.Prctl(unix.PR_SET_DUMPABLE, 0, 0, 0, 0); err != nil {
+			t.Fatalf("deny ptrace reads of the child /proc entry: %v", err)
+		}
+		_, _ = fmt.Fprintln(os.Stdout, "DUMPABLE 0")
+	}
+}
+
+type linuxWitnessDeniedIdentityChild struct {
+	pid      int
+	identity string
+	command  *exec.Cmd
+	stdin    io.WriteCloser
+	stdout   *os.File
+	reader   *bufio.Reader
+	waited   bool
+}
+
+func startLinuxWitnessDeniedIdentityChild(t *testing.T) *linuxWitnessDeniedIdentityChild {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestLinuxWitnessIdentityGoneDeniedChildProcess$")
+	command.Env = setLinuxWitnessEnvironment(os.Environ(), linuxWitnessDeniedIdentityChildEnvironment, "1")
+	stdin, err := command.StdinPipe()
+	if err != nil {
+		t.Fatalf("open denied identity child stdin: %v", err)
+	}
+	stdout, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("open denied identity child stdout: %v", err)
+	}
+	command.Stdout = stdoutWriter
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		_ = stdoutWriter.Close()
+		_ = stdout.Close()
+		t.Fatalf("start denied identity child: %v", err)
+	}
+	_ = stdoutWriter.Close()
+	child := &linuxWitnessDeniedIdentityChild{
+		pid:     command.Process.Pid,
+		command: command,
+		stdin:   stdin,
+		stdout:  stdout,
+		reader:  bufio.NewReader(stdout),
+	}
+	t.Cleanup(func() {
+		_ = child.stdin.Close()
+		_ = child.killAndReap()
+		_ = child.stdout.Close()
+	})
+	child.awaitLine(t, "READY")
+	child.identity = linuxWitnessCanonicalIdentity(t, child.pid)
+	return child
+}
+
+func (child *linuxWitnessDeniedIdentityChild) awaitLine(t *testing.T, want string) {
+	t.Helper()
+	if err := child.stdout.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatalf("bound denied identity child output read: %v", err)
+	}
+	defer func() { _ = child.stdout.SetReadDeadline(time.Time{}) }()
+	for {
+		line, err := child.reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read denied identity child output waiting for %q: %v (saw %q)", want, err, line)
+		}
+		if strings.TrimSpace(line) == want {
+			return
+		}
+	}
+}
+
+func (child *linuxWitnessDeniedIdentityChild) deny(t *testing.T) {
+	t.Helper()
+	if _, err := io.WriteString(child.stdin, "deny\n"); err != nil {
+		t.Fatalf("request denied identity child dumpability denial: %v", err)
+	}
+	child.awaitLine(t, "DUMPABLE 0")
+}
+
+func (child *linuxWitnessDeniedIdentityChild) killAndReap() error {
+	if child.waited {
+		return nil
+	}
+	if err := child.command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	child.waited = true
+	_ = child.command.Wait()
+	return nil
+}
+
+func (child *linuxWitnessDeniedIdentityChild) requireReaped(t *testing.T) {
+	t.Helper()
+	if err := child.killAndReap(); err != nil {
+		t.Fatalf("kill and reap denied identity child %d: %v", child.pid, err)
+	}
+}
+
+func linuxWitnessCanonicalIdentity(t *testing.T, pid int) string {
+	t.Helper()
+	bootID, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatalf("read boot ID for canonical process identity: %v", err)
+	}
+	link, err := os.Readlink("/proc/self/ns/pid")
+	if err != nil {
+		t.Fatalf("read self PID namespace link: %v", err)
+	}
+	if !strings.HasPrefix(link, "pid:[") || !strings.HasSuffix(link, "]") {
+		t.Fatalf("self PID namespace link = %q, want pid:[N]", link)
+	}
+	namespace, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(link, "pid:["), "]"), 10, 64)
+	if err != nil || namespace == 0 {
+		t.Fatalf("parse self PID namespace inode from %q: %v", link, err)
+	}
+	snapshot := linuxWitnessProcessSnapshotAt("canonical_identity", pid, "")
+	if !snapshot.Exists {
+		t.Fatalf("read child %d /proc stat for canonical identity: %#v", pid, snapshot)
+	}
+	identity := fmt.Sprintf("linux:v2:%s:%d:%d:%d", strings.TrimSpace(string(bootID)), namespace, pid, snapshot.StartTime)
+	actual, err := platform.ProcessIdentity(pid)
+	if err != nil || actual != identity {
+		t.Fatalf("canonical identity %q does not match platform.ProcessIdentity = %q, error=%v", identity, actual, err)
+	}
+	return identity
+}
+
+func linuxWitnessDoctoredIdentity(t *testing.T, identity string) string {
+	t.Helper()
+	parts := strings.Split(identity, ":")
+	if len(parts) != 6 {
+		t.Fatalf("canonical identity %q is not a linux:v2 form", identity)
+	}
+	startTime, err := strconv.ParseUint(parts[5], 10, 64)
+	if err != nil {
+		t.Fatalf("parse canonical identity starttime from %q: %v", identity, err)
+	}
+	parts[5] = strconv.FormatUint(startTime+1, 10)
+	return strings.Join(parts, ":")
+}
+
+func linuxWitnessDeniedIdentityRead(leg string, pid int) func(int) (string, error) {
+	return func(int) (string, error) {
+		if leg == "readlink" {
+			return "", fmt.Errorf("read process %d PID namespace: readlink /proc/%d/ns/pid: %w", pid, pid, syscall.EACCES)
+		}
+		return "", fmt.Errorf("read process %d PID namespace: %s: %w", pid, leg, syscall.EACCES)
+	}
+}
+
+func requireLinuxWitnessUnreadableIdentityError(t *testing.T, err error, pid int, identity string, startTime uint64, forbidden ...string) {
+	t.Helper()
+	message := err.Error()
+	for _, want := range []string{
+		"is unreadable after a denied identity read",
+		fmt.Sprintf("process %d identity %q", pid, identity),
+		fmt.Sprintf("/proc/%d/stat shows state=", pid),
+		fmt.Sprintf("starttime=%d", startTime),
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("classified unreadable-identity error %q does not name %q", message, want)
+		}
+	}
+	for _, text := range forbidden {
+		if strings.Contains(message, text) {
+			t.Fatalf("classified unreadable-identity error %q contains forbidden text %q", message, text)
+		}
+	}
+}
+
+func TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed(t *testing.T) {
+	child := startLinuxWitnessDeniedIdentityChild(t)
+	before := linuxWitnessProcessSnapshotAt("denied_identity_pin_before_denial", child.pid, child.identity)
+	if !before.Exists {
+		t.Fatalf("live child %d is not visible in /proc: %#v", child.pid, before)
+	}
+	child.deny(t)
+	if _, err := platform.ProcessIdentity(child.pid); err == nil {
+		t.Skipf("kernel does not deny identity reads for the non-dumpable child (privileged host)")
+	} else if !errors.Is(err, syscall.EACCES) {
+		t.Fatalf("identity read for the non-dumpable child failed with %v, want EACCES", err)
+	}
+	started := time.Now()
+	err := waitForLinuxWitnessIdentityGone(child.pid, child.identity, 3*time.Second)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatalf("live non-dumpable process %d with identity %q was reported gone", child.pid, child.identity)
+	}
+	if elapsed >= 3*time.Second {
+		t.Fatalf("denied identity read reached the deadline after %s: %v", elapsed, err)
+	}
+	t.Logf("unreadable live process %d classified after %s: %v", child.pid, elapsed.Round(time.Millisecond), err)
+	requireLinuxWitnessUnreadableIdentityError(t, err, child.pid, child.identity, before.StartTime, "permission denied", "remained live")
+}
+
+func TestLinuxWitnessIdentityGoneDeniedReadDecisions(t *testing.T) {
+	const timeout = 10 * time.Second
+	live := startLinuxWitnessDeniedIdentityChild(t)
+	liveBefore := linuxWitnessProcessSnapshotAt("denied_read_pin_live_child", live.pid, live.identity)
+	if !liveBefore.Exists {
+		t.Fatalf("live child %d is not visible in /proc: %#v", live.pid, liveBefore)
+	}
+	requireClassified := func(t *testing.T, err error, elapsed time.Duration, pid int, identity string) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("live process %d with identity %q was reported gone", pid, identity)
+		}
+		if elapsed >= timeout/2 {
+			t.Fatalf("live process %d with identity %q did not fail closed promptly: %s elapsed, error=%v", pid, identity, elapsed, err)
+		}
+		requireLinuxWitnessUnreadableIdentityError(t, err, pid, identity, liveBefore.StartTime, "remained live")
+	}
+
+	t.Run("reaped_pid_probe_missing_is_gone", func(t *testing.T) {
+		reaped := startLinuxWitnessDeniedIdentityChild(t)
+		reaped.requireReaped(t)
+		started := time.Now()
+		if err := waitForLinuxWitnessIdentityGoneWith(reaped.pid, reaped.identity, timeout, linuxWitnessDeniedIdentityRead("stat namespace link", reaped.pid), readLinuxWitnessProcessSnapshot); err != nil {
+			t.Fatalf("reaped process %d with a denied stat namespace link = %v, want gone", reaped.pid, err)
+		}
+		if elapsed := time.Since(started); elapsed >= time.Second {
+			t.Fatalf("reaped process %d took %s to classify as gone", reaped.pid, elapsed)
+		}
+	})
+
+	t.Run("probe_esrch_is_gone", func(t *testing.T) {
+		esrchProbe := func(int) (linuxWitnessProcessSnapshot, error) {
+			return linuxWitnessProcessSnapshot{}, syscall.ESRCH
+		}
+		started := time.Now()
+		if err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, linuxWitnessDeniedIdentityRead("stat namespace link", live.pid), esrchProbe); err != nil {
+			t.Fatalf("process %d with identity %q and an ESRCH probe = %v, want gone", live.pid, live.identity, err)
+		}
+		if elapsed := time.Since(started); elapsed >= time.Second {
+			t.Fatalf("ESRCH probe for process %d took %s to classify as gone", live.pid, elapsed)
+		}
+	})
+
+	t.Run("zombie_state_is_gone", func(t *testing.T) {
+		zombie := startLinuxWitnessDeniedIdentityChild(t)
+		if err := zombie.command.Process.Kill(); err != nil {
+			t.Fatalf("kill child %d into a zombie: %v", zombie.pid, err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			snapshot := linuxWitnessProcessSnapshotAt("denied_read_pin_zombie", zombie.pid, zombie.identity)
+			if snapshot.Exists && snapshot.State == "Z" {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("killed child %d state = %#v, want a visible zombie", zombie.pid, snapshot)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if err := waitForLinuxWitnessIdentityGoneWith(zombie.pid, "", timeout, linuxWitnessDeniedIdentityRead("stat namespace link", zombie.pid), readLinuxWitnessProcessSnapshot); err != nil {
+			t.Fatalf("zombie %d with a denied stat namespace link and no recorded identity = %v, want gone", zombie.pid, err)
+		}
+	})
+
+	t.Run("doctored_starttime_is_gone", func(t *testing.T) {
+		doctored := linuxWitnessDoctoredIdentity(t, live.identity)
+		if err := waitForLinuxWitnessIdentityGoneWith(live.pid, doctored, timeout, linuxWitnessDeniedIdentityRead("readlink", live.pid), readLinuxWitnessProcessSnapshot); err != nil {
+			t.Fatalf("live process %d with a doctored recorded starttime = %v, want gone", live.pid, err)
+		}
+	})
+
+	for _, leg := range []string{"stat namespace link", "readlink"} {
+		t.Run("live_pid_real_identity_"+strings.ReplaceAll(leg, " ", "_")+"_fails_closed", func(t *testing.T) {
+			started := time.Now()
+			err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, linuxWitnessDeniedIdentityRead(leg, live.pid), readLinuxWitnessProcessSnapshot)
+			requireClassified(t, err, time.Since(started), live.pid, live.identity)
+		})
+	}
+
+	t.Run("non_denial_error_carries_the_probe_record", func(t *testing.T) {
+		failure := func(int) (string, error) {
+			return "", fmt.Errorf("read process %d start time: %w", live.pid, syscall.EIO)
+		}
+		err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, failure, readLinuxWitnessProcessSnapshot)
+		if err == nil {
+			t.Fatalf("identity read failure %v was reported gone", syscall.EIO)
+		}
+		if !errors.Is(err, syscall.EIO) {
+			t.Fatalf("identity read failure lost its errno: %v", err)
+		}
+		for _, want := range []string{
+			"identity read failure: leg=read process start time",
+			"errno=5(input/output error)",
+			"poll=1",
+			"elapsed=",
+			fmt.Sprintf("/proc/%d/stat probe: exists=true state=", live.pid),
+			fmt.Sprintf(" starttime=%d err=<nil>", liveBefore.StartTime),
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("identity read failure %q does not record %q", err, want)
+			}
+		}
+		t.Logf("identity read failure record: %v", err)
+	})
+
+	t.Run("denied_read_probe_failure_fails_closed", func(t *testing.T) {
+		failingProbe := func(int) (linuxWitnessProcessSnapshot, error) {
+			return linuxWitnessProcessSnapshot{}, syscall.EIO
+		}
+		err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, linuxWitnessDeniedIdentityRead("stat namespace link", live.pid), failingProbe)
+		if err == nil {
+			t.Fatalf("live process %d with identity %q was reported gone after a failing /proc probe", live.pid, live.identity)
+		}
+		for _, want := range []string{
+			"is unreadable after a denied identity read",
+			fmt.Sprintf("process %d identity %q", live.pid, live.identity),
+			fmt.Sprintf("/proc/%d/stat probe failed: input/output error", live.pid),
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("classified probe-failure error %q does not name %q", err, want)
+			}
+		}
+	})
+
+	t.Run("non_denial_error_records_probe_failure", func(t *testing.T) {
+		failure := func(int) (string, error) {
+			return "", fmt.Errorf("read process %d start time: %w", live.pid, syscall.EIO)
+		}
+		failingProbe := func(int) (linuxWitnessProcessSnapshot, error) {
+			return linuxWitnessProcessSnapshot{}, syscall.EIO
+		}
+		err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, failure, failingProbe)
+		if err == nil {
+			t.Fatalf("identity read failure %v was reported gone", syscall.EIO)
+		}
+		if !errors.Is(err, syscall.EIO) {
+			t.Fatalf("identity read failure lost its errno: %v", err)
+		}
+		if want := fmt.Sprintf("/proc/%d/stat probe: exists=false state= starttime=0 err=input/output error", live.pid); !strings.Contains(err.Error(), want) {
+			t.Fatalf("identity read failure %q does not record %q", err, want)
+		}
+	})
+
+	t.Run("empty_identity_keeps_polling", func(t *testing.T) {
+		denied := linuxWitnessDeniedIdentityRead("stat namespace link", live.pid)
+		reads := 0
+		countingRead := func(pid int) (string, error) {
+			reads++
+			return denied(pid)
+		}
+		started := time.Now()
+		err := waitForLinuxWitnessIdentityGoneWith(live.pid, "", 500*time.Millisecond, countingRead, readLinuxWitnessProcessSnapshot)
+		if err == nil {
+			t.Fatalf("live process %d with no recorded identity was reported gone under a denied read", live.pid)
+		}
+		if want := fmt.Sprintf("process %d with identity %q remained live", live.pid, ""); err.Error() != want {
+			t.Fatalf("empty-identity deadline error = %q, want %q", err, want)
+		}
+		if elapsed := time.Since(started); elapsed < 400*time.Millisecond {
+			t.Fatalf("empty-identity wait returned before its deadline after %s", elapsed)
+		}
+		if reads < 2 {
+			t.Fatalf("empty-identity wait read the identity %d time(s), want a repeated-read poll", reads)
+		}
+	})
+}
+
+func TestLinuxWitnessProcessSnapshotPayloadDecisions(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want linuxWitnessProcessSnapshot
+		fail string
+	}{
+		{
+			name: "complete_payload_parses",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345 109 110",
+			want: linuxWitnessProcessSnapshot{Exists: true, State: "S", PGRP: 2, Session: 3, StartTime: 12345},
+		},
+		{
+			name: "short_payload_is_rejected",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+			fail: "short /proc stat",
+		},
+		{
+			name: "missing_closing_parenthesis_is_rejected",
+			raw:  "7 (u S 1",
+			fail: "malformed /proc stat",
+		},
+		{
+			name: "non_decimal_starttime_is_rejected",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 abc 109 110",
+			fail: "malformed /proc stat",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			snapshot, err := parseLinuxWitnessProcessSnapshot([]byte(c.raw))
+			if c.fail != "" {
+				if err == nil || err.Error() != c.fail {
+					t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) error = %v, want %q", c.raw, err, c.fail)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) error = %v", c.raw, err)
+			}
+			if snapshot != c.want {
+				t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) = %#v, want %#v", c.raw, snapshot, c.want)
+			}
+		})
+	}
 }
 
 func waitForLinuxWitnessProcessStopped(pid int, identity string, timeout time.Duration) error {
@@ -3763,11 +4279,10 @@ func waitForLinuxWitnessAllThreadsStopped(pid int, identity string, timeout time
 }
 
 func linuxWitnessProcStatState(raw []byte) (string, error) {
-	closing := strings.LastIndexByte(string(raw), ')')
-	if closing < 0 || closing+2 >= len(raw) {
-		return "", errors.New("malformed /proc stat")
+	fields, err := linuxWitnessProcStatFields(raw)
+	if err != nil {
+		return "", err
 	}
-	fields := strings.Fields(string(raw)[closing+2:])
 	if len(fields) == 0 || len(fields[0]) != 1 {
 		return "", errors.New("missing /proc stat state")
 	}
