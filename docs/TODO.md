@@ -1647,6 +1647,16 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       per-program exception for its own ephemeral binary, which does not cover production installs. The
       native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
       before its case sets can pass.
+      **Confirmed on the guest (2026-11-25, goal `rf-acc-guest-native-exec`, runs `45593856716`,
+      `45601287283` and the final `45602546196`, evidence §7/§9):** the gate's pre-clone credential
+      drop is refused a capability *use*, not a missing capability — `PR_CAPBSET_DROP` returns
+      `EPERM` while the gate is its user namespace's root and the bounding set is still non-zero,
+      reported verbatim as `guest_stage=gate_drop_bounding_set errno=1`. No gate-side change can
+      substitute (the `CapBnd == 0` invariant is read back by `drop_to_b` and skipping it would
+      weaken it), so the fix here is the named one above: the per-program `userns` profile in the
+      installer plus the fixture exception. Follow-up goal: `rf-acc-apparmor-userns-profile`, which
+      owns `scripts/install-linux-owner.sh` and the acceptance fixture (both outside that goal's
+      owned set).
 
 ## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
 
@@ -1837,46 +1847,29 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       set by that harness block. The alternative, exempting the witness from the shared clone-v2
       admission guard, would weaken a production guard (`daemon/internal/**`).
 
-- [ ] Root-cause the three product-test stops the installed-owner leg now reaches (2026-11-24, goal
-      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15): `shared`'s leg
-      `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
-      passed `CloneCleanupScratch` and failed the other three —
-      `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259` (`A cleanup caller exited
-      without the requested parent-death signal`; run `45398550682` stopped one check earlier at
-      `:207`, cleared by the fixture's six-digit `z-later-` name fix, §3.14/§3.15),
-      `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
-      the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
-      and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`).
-      All three sit in `daemon/native/linux-gate/**` and were unreachable until the fifth leg's pin
-      was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
-      goal with guest-side debugging; no fixture change is proposed without a named root.
+- [ ] Root-cause the product-test stops the installed-owner leg reaches (opened 2026-11-24, goal
+      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
+      `rf-acc-guest-native-exec`): `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259`
+      (`A cleanup caller exited without the requested parent-death signal`) still has no named root.
+      The sibling legs `clone_integration_linux_test.go:240` (`clone status frame magic or version is
+      invalid`) and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE:
+      errno=1`) are root-named to the same pre-clone guard consumer as `migration`'s arm — runs
+      `45593856716`/`45601287283`/`45602546196` name the guard and its unsatisfied credential fact
+      (the AppArmor-userns entry below) — but stay open as residuals: the `shared` set never ran on
+      the fixed bytes, so neither leg's post-fix line is observed. They close with the
+      AppArmor-userns fix (`rf-acc-apparmor-userns-profile`). No fixture change is proposed without
+      a named root.
 
-- [ ] `migration`'s release fails awaiting the same-PID B bootstrap attempt (`arm=bootstrap_attempt`
-      observed, 2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9):
-      the post-F1 binding run `45579163968` (head `8da0f941` = PR head `65bb41b1` + the two scratch
-      files; artifact `linux-v2-native-evidence-45579163968-1`, digest
-      `sha256:2e1c0d8cfde2eec23dd6d73b3ef3a15693c80ff5a4e7d2818fcd0e82cbbabbd2`) reads the release
-      detail verbatim as `(release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt
-      wait_class=other)` — a different arm than the stage-3 observation
-      (`release_outcome_unknown; stage=native_exec arm=await_result wait_class=other`), which the
-      review's F1 proved was the pre-F1 wrap's own label. The failing read is the unowned
-      `readCloneBootstrapExecAttempt`/`receiveCloneStatusPacket`
-      (`daemon/native/linux-gate/protocol/wire_linux.go:559,:511`), wrapped at the owned
-      `gate_lifecycle_linux.go:1054-1056`; the frame it expects is the gate's
-      `FRAME_BOOTSTRAP_EXEC_ATTEMPT` (`daemon/native/linux-gate/c-gate/gate.c:1168`), and no `errno`
-      and no `guest_stage` are emitted. It is not the errno-reporting
-      `launcher_integration_linux_test.go:439` stop (`native exec failed after RELEASE: errno=1`, arm
-      `exec_errno`), and it is not a reuse-only site (the witness vehicle sets a `CloneGrant`).
-      `DECISION_NEEDED`: the follow-up goal `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling)
-      routes from this arm — its first probes split `wait_class=other` with sentinels at the
-      clone-path producers (`daemon/native/linux-gate/protocol/wire_linux.go:527/530/534/539/559`
-      and `wire.go:486/619-625`), the read this arm already fails in; the non-clone
-      `wire_linux.go:685` (`receiveStatusPacket`) stays out of this route. The aborted-release stop
-      measurement is intermittent: `Linux v2 helper could not prove the exact run leaf stopped: dial
-      unixpacket: connect: connection refused` appears four times in run `45555828634`, zero times in
-      runs `45557621798` and `45564071868`, and four times again in the binding run's bounded App
-      stderr. The "no fixture change without a named root" rule of the entry above stays satisfied:
-      the arm is observed and its producer sits in the unowned gate C code / reused guest.
+- [ ] `migration`'s release now fails with a named cause inside the guest policy, not with an
+      unnamed read (residual of the entry closed in `docs/archive/CLOSED-TODO.md` under goal
+      `rf-acc-guest-native-exec`, 2026-11-25): runs `45593856716` (`read_class=gate_v1_frame`),
+      `45601287283` and the final `45602546196` (both `guest_stage=gate_drop_bounding_set errno=1`)
+      name the pre-clone guard and the credential fact; the remaining fix is the AppArmor-userns
+      exception below, in `scripts/install-linux-owner.sh` and the acceptance fixture, owned by
+      follow-up goal `rf-acc-apparmor-userns-profile`.
+      The `native_release` hold of the `migration` set is still unreached, and the aborted-release
+      stop measurement stays intermittent (`dial unixpacket: connect: connection refused` in runs
+      `45555828634`/`45579163968`, absent in `45557621798`/`45564071868`).
 
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
@@ -1999,10 +1992,17 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its
       record; burndown entries above): `shared` aborts in its owner-leg
       scratch group (`daemon/native/linux-gate/**`, three product-test stops) before any witness
-      runs, and `synthetic_goal_cleanup` stops at the release refusal `Linux v2 native release
-      requires an App admission check` (`daemon/internal/execution/linux_owner_v2_linux.go:340`).
-      Both are product-side and already tracked; their pi rows stay unreadable while those stops
-      remain (the clone reserve is no longer among them).
+      runs, and `synthetic_goal_cleanup` re-observed on 2026-11-25 (credentialed `main` run
+      `45573253632`) stops in the same release class as `migration`'s arm:
+      `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the
+      real Linux v2 launcher/anchor/helper: resume process "/bin/sh": one-use Linux v2 RELEASE
+      result is unresolved: Linux owner helper rejected operation (release_outcome_unknown)` (the
+      earlier `Linux v2 native release requires an App admission check` stop of run `45402706492`
+      no longer reproduces). Both case sets stay product-side and tracked; their pi rows stay
+      unreadable while those stops remain — the two pre-clone-guard legs are residuals behind the
+      AppArmor-userns entry above (follow-up goal `rf-acc-apparmor-userns-profile`), the
+      `clone_cleanup_linux_test.go:259` parent-death stop stays a separate open row above (the
+      clone reserve is no longer among them).
 
 - [ ] The pi durability witnesses bind `native_binary`/`native_binary_sha256`/`native_version_line`
       from the e2e publisher, not from the daemon (2026-11-24, same goal): the daemon's

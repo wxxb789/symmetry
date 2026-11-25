@@ -3,10 +3,14 @@
 package protocol
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -552,4 +557,464 @@ func FuzzDecodeCloneBootstrapRequest(f *testing.F) {
 			return DecodeCloneBootstrapRequest(packet)
 		})
 	})
+}
+
+type cloneStatusReadProbe struct {
+	name string
+	// prepare returns the descriptor the arm read must consume.
+	prepare      func(t *testing.T, peer, local *os.File) int
+	arm          func(ctx context.Context, fd int) error
+	wantClass    string
+	wantErrno    int
+	wantText     string
+	mustNotClass string
+}
+
+func runCloneStatusReadProbes(t *testing.T, probes []cloneStatusReadProbe) {
+	t.Helper()
+	for _, test := range probes {
+		t.Run(test.name, func(t *testing.T) {
+			local, peer := wireTestCloneStatusPair(t)
+			defer local.Close()
+			defer peer.Close()
+			fd := test.prepare(t, peer, local)
+			// A frame written at one end of the pair is read at the other one.
+			if fd == int(peer.Fd()) {
+				fd = int(local.Fd())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			runCloneStatusReadProbe(t, test, test.arm(ctx, fd))
+		})
+	}
+}
+
+func runCloneStatusReadProbe(t *testing.T, test cloneStatusReadProbe, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("clone-status read succeeded, want the %s producer", test.wantClass)
+	}
+	var readFailure *CloneStatusReadError
+	if !errors.As(err, &readFailure) {
+		t.Fatalf("clone-status read failure is untyped: %v", err)
+	}
+	if readFailure.Class != test.wantClass || readFailure.Errno != test.wantErrno {
+		t.Fatalf("clone-status read class = %q errno=%d, want class=%q errno=%d",
+			readFailure.Class, readFailure.Errno, test.wantClass, test.wantErrno)
+	}
+	if err.Error() != test.wantText {
+		t.Fatalf("clone-status read text = %q, want the unchanged %q", err.Error(), test.wantText)
+	}
+	if test.mustNotClass != "" && readFailure.Class == test.mustNotClass {
+		t.Fatalf("clone-status read collapsed onto the neighbouring %s producer", test.mustNotClass)
+	}
+}
+
+func wireTestCloneStatusPair(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	pair, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatalf("create clone-status seqpacket pair: %v", err)
+	}
+	return os.NewFile(uintptr(pair[0]), "clone-status-local"), os.NewFile(uintptr(pair[1]), "clone-status-peer")
+}
+
+func wireTestCloneStatusSend(t *testing.T, peer *os.File, packet []byte) int {
+	t.Helper()
+	if _, err := unix.SendmsgN(int(peer.Fd()), packet, nil, nil, 0); err != nil {
+		t.Fatalf("send clone-status probe frame: %v", err)
+	}
+	return int(peer.Fd())
+}
+
+func wireTestCloneStatusKeep(t *testing.T, local, peer *os.File) int {
+	t.Helper()
+	return int(local.Fd())
+}
+
+// wireTestCloneReadGateV1Failure is the gate's 16-byte v1 FRAME_EXEC_FAILURE
+// (WIRE_MAGIC, version 1, kind 8, errno 13); the test pins the literal bytes.
+func wireTestCloneReadGateV1Failure(t *testing.T) []byte {
+	t.Helper()
+	frame, err := hex.DecodeString("53594d4c41303031010008000d000000")
+	if err != nil || len(frame) != execFailureSize {
+		t.Fatalf("decode the golden v1 gate failure frame: %v", err)
+	}
+	return frame
+}
+
+// TestCloneStatusReadClassNamesEveryProducer drives each closed clone-read
+// producer through a real seqpacket arm and pins its class, errno and text.
+func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
+	attempt := func(ctx context.Context, fd int) error {
+		_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(5*time.Second))
+		return err
+	}
+	receipt := func(ctx context.Context, fd int) error {
+		_, err := readCloneCheckoutReady(ctx, fd, time.Now().Add(5*time.Second))
+		return err
+	}
+	proof := func(ctx context.Context, fd int) error {
+		_, err := readCloneNativeExecResult(ctx, fd, time.Now().Add(5*time.Second))
+		return err
+	}
+	quiet := func(t *testing.T, peer, local *os.File) int { return wireTestCloneStatusKeep(t, local, peer) }
+	probes := []cloneStatusReadProbe{
+		{
+			name: "canceled wait",
+			arm: func(ctx context.Context, fd int) error {
+				canceled, cancel := context.WithCancel(ctx)
+				cancel()
+				return attempt(canceled, fd)
+			},
+			prepare: quiet, wantClass: CloneReadClassWait, wantText: context.Canceled.Error(),
+		},
+		{
+			name: "expired deadline",
+			arm: func(ctx context.Context, fd int) error {
+				_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(-time.Second))
+				return err
+			},
+			prepare: quiet, wantClass: CloneReadClassWait, wantText: context.DeadlineExceeded.Error(),
+		},
+		{
+			name: "receive failure",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				reader, writer, err := os.Pipe()
+				if err != nil {
+					t.Fatalf("create non-socket probe descriptor: %v", err)
+				}
+				t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
+				if _, err := writer.Write([]byte{'x'}); err != nil {
+					t.Fatalf("prime non-socket probe descriptor: %v", err)
+				}
+				return int(reader.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassRecv, wantText: "socket operation on non-socket",
+		},
+		{
+			name: "ancillary descriptors",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				extra, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatalf("open ancillary probe descriptor: %v", err)
+				}
+				t.Cleanup(func() { _ = extra.Close() })
+				if _, err := unix.SendmsgN(int(peer.Fd()), EncodeBootstrapExecAttempt(7, 19),
+					unix.UnixRights(int(extra.Fd())), nil, 0); err != nil {
+					t.Fatalf("send clone-status frame with rights: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassAncillary, wantText: "clone status channel carried unexpected descriptors",
+		},
+		{
+			name: "truncated frame",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				oversized := make([]byte, maxCloneStatusFrameSize+1)
+				copy(oversized, cloneStatusFrame(frameBootstrapExecAttempt, len(oversized)))
+				return wireTestCloneStatusSend(t, peer, oversized)
+			},
+			arm: attempt, wantClass: CloneReadClassTruncated, wantText: "clone status frame is truncated or oversized",
+		},
+		{
+			// Linux AF_UNIX recvmsg never reports MSG_EOR, so a zero-length
+			// record is indistinguishable from a peer close (probe below).
+			name: "zero-length record inside the peer close class",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if _, err := unix.SendmsgN(int(peer.Fd()), []byte{}, nil, nil, 0); err != nil {
+					t.Fatalf("send zero-length clone-status packet: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassPeerClosed, wantText: io.EOF.Error(),
+		},
+		{
+			name: "bad magic",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				mutated := EncodeBootstrapExecAttempt(7, 19)
+				mutated[0] = 'X'
+				return wireTestCloneStatusSend(t, peer, mutated)
+			},
+			arm: attempt, wantClass: CloneReadClassMagicOrVersion, wantText: "clone status frame magic or version is invalid",
+		},
+		{
+			name: "unrecognized version",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				mutated := EncodeBootstrapExecAttempt(7, 19)
+				binary.LittleEndian.PutUint16(mutated[8:10], releaseWireVersion)
+				return wireTestCloneStatusSend(t, peer, mutated)
+			},
+			arm: attempt, wantClass: CloneReadClassMagicOrVersion, wantText: "clone status frame magic or version is invalid",
+		},
+		{
+			name: "v1 gate failure frame",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				frame := wireTestCloneReadGateV1Failure(t)
+				if !bytes.Equal(frame, EncodeExecFailure(13)) {
+					t.Fatalf("golden v1 gate failure frame differs from EncodeExecFailure(13)")
+				}
+				return wireTestCloneStatusSend(t, peer, frame)
+			},
+			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantErrno: 13,
+			wantText: "clone status frame magic or version is invalid",
+		},
+		{
+			name: "v1 gate attempt frame",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				return wireTestCloneStatusSend(t, peer, EncodeExecAttempt(7, 19))
+			},
+			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantText: "clone status frame magic or version is invalid",
+		},
+		{
+			name: "v1 gate failure frame with errno beyond the signed range",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				frame := EncodeExecFailure(13)
+				binary.LittleEndian.PutUint32(frame[12:16], ^uint32(0))
+				return wireTestCloneStatusSend(t, peer, frame)
+			},
+			arm: attempt, wantClass: CloneReadClassGateV1Frame,
+			wantText: "clone status frame magic or version is invalid",
+		},
+		{
+			name: "peer closed before the attempt",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if err := peer.Close(); err != nil {
+					t.Fatalf("close the clone-status peer: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassPeerClosed, wantText: io.EOF.Error(),
+		},
+		{
+			name: "peer closed before the receipt",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if err := peer.Close(); err != nil {
+					t.Fatalf("close the clone-status peer: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: receipt, wantClass: CloneReadClassPeerClosed, wantText: io.EOF.Error(),
+		},
+		{
+			name: "peer closed before the native proof",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if err := peer.Close(); err != nil {
+					t.Fatalf("close the clone-status peer: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: proof, wantClass: CloneReadClassPeerClosed, wantText: io.EOF.Error(),
+		},
+		{
+			name: "wrong frame kind",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				return wireTestCloneStatusSend(t, peer, EncodeNativeExecAttempt(11, 23))
+			},
+			arm: attempt, wantClass: CloneReadClassFrameHeader,
+			wantText: "Linux clone status frame version, type, or size is invalid",
+		},
+		{
+			name: "wrong frame size",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameBootstrapExecAttempt, 12))
+			},
+			arm: attempt, wantClass: CloneReadClassFrameHeader,
+			wantText: "Linux clone status frame version, type, or size is invalid",
+		},
+		{
+			name: "attempt frame without the image inode",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				return wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 0))
+			},
+			arm: attempt, wantClass: CloneReadClassImageInode,
+			wantText: "Linux clone exec-attempt frame lacks an image inode",
+		},
+		{
+			name: "malformed guest failure frame",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
+			},
+			arm: attempt, wantClass: CloneReadClassGuestMalformed,
+			wantText: "Linux clone bootstrap failure frame is malformed",
+		},
+		{
+			name: "invalid guest failure code",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
+			},
+			arm: attempt, wantClass: CloneReadClassGuestCode,
+			wantText: "Linux clone bootstrap failure frame code is invalid",
+		},
+	}
+	runCloneStatusReadProbes(t, probes)
+}
+
+// TestCloneStatusReadClassSplitsNeighbouringProducers pins that each producer
+// never collapses onto the neighbouring class of the same read family.
+func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
+	attempt := func(ctx context.Context, fd int) error {
+		_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(5*time.Second))
+		return err
+	}
+	probes := []cloneStatusReadProbe{
+		{
+			name: "v1 gate frame is not an unrecognized version",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, wireTestCloneReadGateV1Failure(t))
+			},
+			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantErrno: 13,
+			wantText: "clone status frame magic or version is invalid", mustNotClass: CloneReadClassMagicOrVersion,
+		},
+		{
+			name: "unrecognized version is not a v1 gate frame",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				mutated := EncodeBootstrapExecAttempt(7, 19)
+				binary.LittleEndian.PutUint16(mutated[8:10], releaseWireVersion)
+				return wireTestCloneStatusSend(t, peer, mutated)
+			},
+			arm: attempt, wantClass: CloneReadClassMagicOrVersion,
+			wantText: "clone status frame magic or version is invalid", mustNotClass: CloneReadClassGateV1Frame,
+		},
+		{
+			name: "wrong frame kind is not a missing inode",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				return wireTestCloneStatusSend(t, peer, EncodeNativeExecAttempt(11, 23))
+			},
+			arm: attempt, wantClass: CloneReadClassFrameHeader,
+			wantText: "Linux clone status frame version, type, or size is invalid", mustNotClass: CloneReadClassImageInode,
+		},
+		{
+			name: "missing inode is not a frame header mismatch",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				return wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 0))
+			},
+			arm: attempt, wantClass: CloneReadClassImageInode,
+			wantText: "Linux clone exec-attempt frame lacks an image inode", mustNotClass: CloneReadClassFrameHeader,
+		},
+		{
+			name: "malformed guest failure is not an invalid guest code",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
+			},
+			arm: attempt, wantClass: CloneReadClassGuestMalformed,
+			wantText: "Linux clone bootstrap failure frame is malformed", mustNotClass: CloneReadClassGuestCode,
+		},
+		{
+			name: "invalid guest code is not a malformed guest failure",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
+			},
+			arm: attempt, wantClass: CloneReadClassGuestCode,
+			wantText: "Linux clone bootstrap failure frame code is invalid", mustNotClass: CloneReadClassGuestMalformed,
+		},
+		{
+			name: "truncation is not a header mismatch",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				oversized := make([]byte, maxCloneStatusFrameSize+1)
+				copy(oversized, cloneStatusFrame(frameBootstrapExecAttempt, len(oversized)))
+				return wireTestCloneStatusSend(t, peer, oversized)
+			},
+			arm: attempt, wantClass: CloneReadClassTruncated,
+			wantText: "clone status frame is truncated or oversized", mustNotClass: CloneReadClassMagicOrVersion,
+		},
+		{
+			// The MSG_EOR branch is unreachable from a Linux AF_UNIX send; the
+			// input it would classify renders the peer-close neighbour instead.
+			name: "zero-length record never reaches the empty-packet branch",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if _, err := unix.SendmsgN(int(peer.Fd()), []byte{}, nil, nil, 0); err != nil {
+					t.Fatalf("send zero-length clone-status packet: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassPeerClosed,
+			wantText: io.EOF.Error(), mustNotClass: CloneReadClassEmptyPacket,
+		},
+		{
+			name: "peer close is not a version mismatch",
+			prepare: func(t *testing.T, peer, local *os.File) int {
+				t.Helper()
+				if err := peer.Close(); err != nil {
+					t.Fatalf("close the clone-status peer: %v", err)
+				}
+				return int(local.Fd())
+			},
+			arm: attempt, wantClass: CloneReadClassPeerClosed, wantText: io.EOF.Error(),
+			mustNotClass: CloneReadClassMagicOrVersion,
+		},
+	}
+	runCloneStatusReadProbes(t, probes)
+}
+
+// TestCloneStatusReadClassVocabularyIsPinned pins every closed code by its
+// literal, so a swapped or renamed constant (mutant M2) reddens here.
+func TestCloneStatusReadClassVocabularyIsPinned(t *testing.T) {
+	literals := []struct {
+		literal string
+		code    string
+	}{
+		{"wait_failed", CloneReadClassWait},
+		{"recv_failed", CloneReadClassRecv},
+		{"ancillary_data", CloneReadClassAncillary},
+		{"truncated_frame", CloneReadClassTruncated},
+		{"empty_packet", CloneReadClassEmptyPacket},
+		{"magic_or_version", CloneReadClassMagicOrVersion},
+		{"gate_v1_frame", CloneReadClassGateV1Frame},
+		{"peer_closed_without_frame", CloneReadClassPeerClosed},
+		{"frame_header", CloneReadClassFrameHeader},
+		{"image_inode_missing", CloneReadClassImageInode},
+		{"guest_failure_malformed", CloneReadClassGuestMalformed},
+		{"guest_failure_code", CloneReadClassGuestCode},
+	}
+	seen := make(map[string]string, len(literals))
+	for _, row := range literals {
+		if row.code != row.literal {
+			t.Fatalf("read class constant named %q carries %q", row.literal, row.code)
+		}
+		if other, duplicate := seen[row.code]; duplicate {
+			t.Fatalf("read classes %q and %q share the literal %q", other, row.literal, row.code)
+		}
+		seen[row.code] = row.literal
+	}
+}
+
+// TestCloneStatusReadClassAbsentOnSuccess pins that a completed arm read keeps
+// no read sentinel and that the peer close stays a wait-class peer close.
+func TestCloneStatusReadClassAbsentOnSuccess(t *testing.T) {
+	local, peer := wireTestCloneStatusPair(t)
+	defer local.Close()
+	defer peer.Close()
+	wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 19))
+	device, inode, err := readCloneBootstrapExecAttempt(context.Background(), int(local.Fd()), time.Now().Add(5*time.Second))
+	if err != nil || device != 7 || inode != 19 {
+		t.Fatalf("successful clone-status read = device=%d inode=%d err=%v, want 7/19 and no failure", device, inode, err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatalf("close the clone-status peer: %v", err)
+	}
+	_, _, err = readCloneBootstrapExecAttempt(context.Background(), int(local.Fd()), time.Now().Add(5*time.Second))
+	if err == nil || !errors.Is(err, io.EOF) || ReleaseWaitErrorClass(err) != ReleaseWaitClassPeerClosed {
+		t.Fatalf("peer close lost its wait class: %v (class %q)", err, ReleaseWaitErrorClass(err))
+	}
 }

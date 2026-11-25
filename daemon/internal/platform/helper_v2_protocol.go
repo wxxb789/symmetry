@@ -470,6 +470,7 @@ type LinuxOwnerHelperV2ReleaseErrorDetail struct {
 	Stage      string `json:"stage"`
 	Arm        string `json:"arm,omitempty"`
 	WaitClass  string `json:"wait_class,omitempty"`
+	ReadClass  string `json:"read_class,omitempty"`
 	GuestStage string `json:"guest_stage,omitempty"`
 	Errno      int    `json:"errno,omitempty"`
 	Reason     string `json:"reason,omitempty"`
@@ -492,6 +493,9 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) String() string {
 	}
 	if detail.WaitClass != "" {
 		message += " wait_class=" + detail.WaitClass
+	}
+	if detail.ReadClass != "" {
+		message += " read_class=" + detail.ReadClass
 	}
 	if detail.GuestStage != "" {
 		message += " guest_stage=" + detail.GuestStage
@@ -527,7 +531,7 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
 		return errors.New("Linux owner helper release error detail mixes a branch reason with a sub-step")
 	}
 	if detail.Stage == linuxOwnerHelperV2ReleaseStageNone {
-		if detail.Arm != "" || detail.WaitClass != "" || detail.GuestStage != "" {
+		if detail.Arm != "" || detail.WaitClass != "" || detail.ReadClass != "" || detail.GuestStage != "" {
 			return errors.New("Linux owner helper release error detail carries arm detail without a sub-step")
 		}
 		if detail.Errno != 0 {
@@ -550,6 +554,17 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
 	default:
 		return fmt.Errorf("Linux owner helper release error detail has an unknown wait class %q", detail.WaitClass)
 	}
+	if detail.ReadClass != "" && !shape.CloneRead {
+		return errors.New("Linux owner helper release error detail carries a read class on an arm that cannot read the clone status channel")
+	}
+	switch detail.ReadClass {
+	case "", linuxgate.CloneReadClassWait, linuxgate.CloneReadClassRecv, linuxgate.CloneReadClassAncillary,
+		linuxgate.CloneReadClassTruncated, linuxgate.CloneReadClassEmptyPacket, linuxgate.CloneReadClassMagicOrVersion,
+		linuxgate.CloneReadClassGateV1Frame, linuxgate.CloneReadClassPeerClosed, linuxgate.CloneReadClassFrameHeader,
+		linuxgate.CloneReadClassImageInode, linuxgate.CloneReadClassGuestMalformed, linuxgate.CloneReadClassGuestCode:
+	default:
+		return fmt.Errorf("Linux owner helper release error detail has an unknown read class %q", detail.ReadClass)
+	}
 	if detail.GuestStage != "" {
 		if !shape.GuestBootstrap {
 			return errors.New("Linux owner helper release error detail carries a guest bootstrap stage on an arm that cannot read one")
@@ -557,7 +572,13 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
 		switch detail.GuestStage {
 		case linuxgate.ReleaseGuestStageRequest, linuxgate.ReleaseGuestStageSeed, linuxgate.ReleaseGuestStageTarget,
 			linuxgate.ReleaseGuestStageGit, linuxgate.ReleaseGuestStageCheckout,
-			linuxgate.ReleaseGuestStageNativeImage, linuxgate.ReleaseGuestStageExec:
+			linuxgate.ReleaseGuestStageNativeImage, linuxgate.ReleaseGuestStageExec,
+			linuxgate.ReleaseGuestStageGateClose, linuxgate.ReleaseGuestStageGateDrop,
+			linuxgate.ReleaseGuestStageGateParentDeath, linuxgate.ReleaseGuestStageGateFence,
+			linuxgate.ReleaseGuestStageGateDropGroups, linuxgate.ReleaseGuestStageGateDropBoundingSet,
+			linuxgate.ReleaseGuestStageGateDropCredentials, linuxgate.ReleaseGuestStageGateDropCapabilities,
+			linuxgate.ReleaseGuestStageGateDropAmbient, linuxgate.ReleaseGuestStageGateDropNoNewPrivs,
+			linuxgate.ReleaseGuestStageGateDropStatus:
 		default:
 			return fmt.Errorf("Linux owner helper release error detail has an unknown guest bootstrap stage %q", detail.GuestStage)
 		}
@@ -574,6 +595,7 @@ func linuxOwnerHelperV2ReleaseErrorDetailFor(err error, ownerLost, leaseLive, st
 		detail.Stage = subStep.SubStep
 		detail.Arm = subStep.Arm
 		detail.WaitClass = subStep.WaitClass
+		detail.ReadClass = subStep.ReadClass
 		detail.GuestStage = subStep.GuestStage
 		detail.Errno = subStep.Errno
 	}

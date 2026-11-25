@@ -199,6 +199,21 @@ const (
 	CloneFailureCheckout
 	CloneFailureNativeImage
 	CloneFailureExec
+	// Gate-side pre-clone guard stages: the gate names which guard failed in
+	// the same closed numeric vocabulary its clone release binds.
+	CloneFailureGateClose
+	CloneFailureGateDrop
+	CloneFailureGateParentDeath
+	CloneFailureGateFence
+	// A failed B credential drop names the first unsatisfied credential fact in
+	// the drop's own order; the drop path itself is unchanged.
+	CloneFailureGateDropGroups
+	CloneFailureGateDropBoundingSet
+	CloneFailureGateDropCredentials
+	CloneFailureGateDropCapabilities
+	CloneFailureGateDropAmbient
+	CloneFailureGateDropNoNewPrivs
+	CloneFailureGateDropStatus
 )
 
 type CloneBootstrapFailureError struct {
@@ -466,11 +481,54 @@ func cloneStatusFrame(kind uint16, size int) []byte {
 	return packet
 }
 
+// CloneStatusReadError names the exact closed producer of a failed clone-status
+// read; the message stays verbatim, so every existing rendered line is unchanged.
+type CloneStatusReadError struct {
+	Class string
+	Errno int
+	Err   error
+}
+
+// Closed read_class vocabulary: one code per clone-status read producer.
+const (
+	CloneReadClassWait           = "wait_failed"
+	CloneReadClassRecv           = "recv_failed"
+	CloneReadClassAncillary      = "ancillary_data"
+	CloneReadClassTruncated      = "truncated_frame"
+	CloneReadClassEmptyPacket    = "empty_packet"
+	CloneReadClassMagicOrVersion = "magic_or_version"
+	CloneReadClassGateV1Frame    = "gate_v1_frame"
+	CloneReadClassPeerClosed     = "peer_closed_without_frame"
+	CloneReadClassFrameHeader    = "frame_header"
+	CloneReadClassImageInode     = "image_inode_missing"
+	CloneReadClassGuestMalformed = "guest_failure_malformed"
+	CloneReadClassGuestCode      = "guest_failure_code"
+)
+
+func (failure *CloneStatusReadError) Error() string {
+	if failure == nil || failure.Err == nil {
+		return "clone status read failed"
+	}
+	return failure.Err.Error()
+}
+
+func (failure *CloneStatusReadError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
+func cloneStatusReadFailure(class string, err error) error {
+	return &CloneStatusReadError{Class: class, Err: err}
+}
+
 func validateCloneStatusFrame(packet []byte, kind uint16, size int) error {
 	if len(packet) != size || string(packet[:8]) != launchMagic ||
 		binary.LittleEndian.Uint16(packet[8:10]) != cloneStatusWireVersion ||
 		binary.LittleEndian.Uint16(packet[10:12]) != kind {
-		return errors.New("Linux clone status frame version, type, or size is invalid")
+		return cloneStatusReadFailure(CloneReadClassFrameHeader,
+			errors.New("Linux clone status frame version, type, or size is invalid"))
 	}
 	return nil
 }
@@ -489,7 +547,8 @@ func decodeCloneExecAttempt(packet []byte, kind uint16) (uint64, uint64, error) 
 	device := binary.LittleEndian.Uint64(packet[12:20])
 	inode := binary.LittleEndian.Uint64(packet[20:28])
 	if inode == 0 {
-		return 0, 0, errors.New("Linux clone exec-attempt frame lacks an image inode")
+		return 0, 0, cloneStatusReadFailure(CloneReadClassImageInode,
+			errors.New("Linux clone exec-attempt frame lacks an image inode"))
 	}
 	return device, inode, nil
 }
@@ -606,7 +665,7 @@ func DecodeCloneCheckoutReadyAck(packet []byte) (authority.LinuxCloneCheckoutRec
 }
 
 func EncodeCloneBootstrapFailure(stage CloneBootstrapFailureStage, errno uint32) ([]byte, error) {
-	if stage < CloneFailureRequest || stage > CloneFailureExec || errno == 0 || errno > uint32(^uint32(0)>>1) {
+	if stage < CloneFailureRequest || stage > CloneFailureGateDropStatus || errno == 0 || errno > uint32(^uint32(0)>>1) {
 		return nil, errors.New("Linux clone bootstrap failure code is invalid")
 	}
 	packet := cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize)
@@ -617,12 +676,14 @@ func EncodeCloneBootstrapFailure(stage CloneBootstrapFailureStage, errno uint32)
 
 func DecodeCloneBootstrapFailure(packet []byte) (*CloneBootstrapFailureError, error) {
 	if validateCloneStatusFrame(packet, frameCloneBootstrapFailure, cloneFailureSize) != nil {
-		return nil, errors.New("Linux clone bootstrap failure frame is malformed")
+		return nil, cloneStatusReadFailure(CloneReadClassGuestMalformed,
+			errors.New("Linux clone bootstrap failure frame is malformed"))
 	}
 	stage := CloneBootstrapFailureStage(binary.LittleEndian.Uint32(packet[12:16]))
 	errno := binary.LittleEndian.Uint32(packet[16:20])
-	if stage < CloneFailureRequest || stage > CloneFailureExec || errno == 0 || errno > uint32(^uint32(0)>>1) {
-		return nil, errors.New("Linux clone bootstrap failure frame code is invalid")
+	if stage < CloneFailureRequest || stage > CloneFailureGateDropStatus || errno == 0 || errno > uint32(^uint32(0)>>1) {
+		return nil, cloneStatusReadFailure(CloneReadClassGuestCode,
+			errors.New("Linux clone bootstrap failure frame code is invalid"))
 	}
 	return &CloneBootstrapFailureError{Stage: stage, Errno: errno}, nil
 }
