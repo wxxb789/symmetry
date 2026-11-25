@@ -38,7 +38,9 @@ func Serve(ctx context.Context, options ServeOptions) error {
 	served := 0
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			// A signal stop is a clean stop: the fixture's unit needs exit 0.
+			logf("stop signal requests=%d", served)
+			return nil
 		}
 		if rootStopRequested(filepath.Join(options.Channel, "stop")) {
 			logf("stop requests=%d", served)
@@ -161,6 +163,11 @@ func serveRequest(options ServeOptions, name string, logf func(string, ...any)) 
 		Environ: capture.Environ, Descriptors: capture.Descriptors, Namespaces: capture.Namespaces,
 	}
 	if err := publishResponse(options, nonce, &response); err != nil {
+		var refusal *CaptureError
+		if errors.As(err, &refusal) {
+			refuse(options, nonce, refusal.Stage, refusal.Reason, logf)
+			return
+		}
 		logf("response write failed nonce=%s pid=%d error=%v", nonce, want.PID, err)
 		_ = os.Remove(requestPath)
 		return
@@ -252,7 +259,8 @@ func publishResponse(options ServeOptions, nonce string, response *responseBody)
 		return fmt.Errorf("encode readback response: %w", err)
 	}
 	if len(encoded) > maxResponseBytes {
-		return errors.New("encoded readback response exceeds its bound")
+		// The client must receive the typed refusal, not wait out its timeout.
+		return &CaptureError{Stage: RefusalLimit, Reason: "capture response exceeds the readback bound"}
 	}
 	tempPath := filepath.Join(options.Channel, responseName(nonce)+".tmp")
 	finalPath := filepath.Join(options.Channel, responseName(nonce))

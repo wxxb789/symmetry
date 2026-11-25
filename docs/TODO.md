@@ -1849,30 +1849,34 @@ The clone-admission contradiction of this section's third item closed on 2026-11
 goal's new residuals are in the `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
 section below.
 
-The two remaining product-test stops of this section's first item closed on 2026-11-26: the
-AppArmor-userns fix (`rf-acc-apparmor-userns-profile`, run 3 `45659523339`) cleared
-`clone_integration_linux_test.go:240` / `launcher_integration_linux_test.go:439`, and the
-root readback conversion (`rf-acc-b-process-readback`, this tree) clears the `environ` rows those
-runs then reached. The moved text and the closure statement are in `docs/archive/CLOSED-TODO.md`
+The two remaining product-test stops of this section's first item are addressed as of 2026-11-26:
+the AppArmor-userns fix (`rf-acc-apparmor-userns-profile`, run 3 `45659523339`) cleared
+`clone_integration_linux_test.go:240` / `launcher_integration_linux_test.go:439` on its head, and
+the root readback conversion (`rf-acc-b-process-readback`, this tree) replaces the `environ` rows
+those runs then reached — delivered pending the conductor's Bind run on the PR head, which binds
+the cleared rows. The moved text and the closure statement are in `docs/archive/CLOSED-TODO.md`
 under `## rf-acc-native-burndown: the installed-owner legs' product-test stops (2026-11-26)`, and
 the conversion's residual is in `## rf-acc-b-process-readback: residual same-class e2e reads
 (2026-11-26)` below.
 
 ## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)
 
-- [ ] Convert the same-class A→B reads this goal's census left outside its named `ns/*` surface
-      (`docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-10, branch
+- [ ] Convert the same-class ptrace-gated A→B `/proc` reads this goal's census deferred (plan
+      §7.2 option (i), outside the converted capture-path surface;
+      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-10, branch
       `refactor/rf-acc-b-process-readback`, base `8453da12`): the e2e
-      `linuxV2RequireNoWritableCgroupFDs*` fdinfo and leaf-descendant identity audit
-      (`daemon/e2e/production_linux_v2_native_witness_test.go`), `linuxV2CaptureDetachedChild`'s
-      child identity, `linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity` on a released B
-      (`daemon/e2e/production_linux_v2_owner_cli_test.go`, literal-PID-reuse leg), and the
-      post-release helper-exit leaf audit
-      (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:466`). Each is ptrace-gated
-      (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none is reached by any
-      recorded run (the ten witness sets stop before the live capture). Trigger: the first run
-      that reaches one, plus the fixture's reader-step A capability readback row in that run — if
-      it prints `CapEff 0`, the next stop is one of these sites.
+      `linuxV2RequireNoWritableCgroupFDs*` fdinfo audit with its in-leaf descendant identity read
+      (`/proc/<B>/ns/pid`, `daemon/e2e/production_linux_v2_native_witness_test.go:3277`),
+      `linuxV2CaptureDetachedChild`'s child identity, `linuxV2OpenExactPIDFD` +
+      `linuxV2ReadPIDNamespaceIdentity` on a released B (`daemon/e2e/production_linux_v2_owner_cli_test.go`,
+      literal-PID-reuse leg; the ns/pid read is `:3603`), and the post-release helper-exit
+      `platform.ProcessIdentity` / `platform.CaptureLinuxUserNamespaceIdentity` / exe readlink plus
+      leaf audit (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:427,431,489,466`).
+      Each is ptrace-gated (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none
+      is reached by any recorded run (the ten witness sets stop before the live capture). Trigger:
+      the first run that reaches one, plus the fixture's reader-step A capability readback row in
+      that run — if it prints `CapEff 0`, the first stop in the helper-exit witness is its `:427`
+      released-B identity read (before the `:466` leaf audit).
       Conversion consumes the same `daemon/internal/linuxreadback` reader with an added per-FD
       `flags`/`mnt_id` return and a leaf-wide per-PID capture loop, preserving each audit's race
       tolerances. Owner: the next `rf-acc` acceptance increment that reaches the live e2e capture.

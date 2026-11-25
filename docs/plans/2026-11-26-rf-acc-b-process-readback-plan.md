@@ -118,8 +118,8 @@ arbitrary-target oracle. The reader never logs file contents (only stage/pid/siz
 | 6 | `launcher_integration_linux_test.go:1390-1410` `/proc/<B>/fd` dir + readlinks | ptrace + DAC | **converted** |
 | 7 | `production_linux_v2_native_witness_test.go:3075,3080,3085,3089` `/proc/<B>/ns/{user,net}` | ptrace | **converted** (reader namespace capture) |
 | 8 | `production_linux_v2_native_witness_test.go:3046,3136` `platform.ProcessIdentity(B)` (`/proc/<B>/ns/pid` readlink) | ptrace | **converted** (reader identity; the request carries the journal's exact identity) |
-| 9 | `production_linux_v2_native_witness_test.go:3195-3259,3289-3319` `/proc/<B>/fdinfo/*` + leaf-descendant `platform.ProcessIdentity` (`linuxV2RequireNoWritableCgroupFDs*`) | ptrace | **exempt, deferred**: not an ns/`*` read; reached only after the capture path that has never run green; converting the leaf-wide audit needs a second reader return channel (per-FD `flags`/`mnt_id`) and preserves its race tolerances; residual named in `docs/TODO.md` with the reader step's A-capability row as the discriminator |
-| 10 | `production_linux_v2_native_witness_test.go:2723,2770` (detached B child), `production_linux_v2_owner_cli_test.go:3474-3488` (`linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity` on released B), `production_linux_v2_helper_exit_witness_test.go:466` (post-release gate leaf audit) | ptrace | **exempt, deferred**: same class, not ns/`*` named by the contract, no green run reaches them; same residual entry |
+| 9 | `production_linux_v2_native_witness_test.go:3179-3258` (`/proc/<B>/fdinfo/*` + identity rechecks) and `:3260-3324` (`linuxV2RequireNoWritableCgroupFDsInLeaf`; the leaf-descendant `platform.ProcessIdentity` at `:3277` reads `/proc/<B>/ns/pid`) | ptrace | **exempt, deferred**: the descendant identity is the same ns/pid class as converted rows 7-8, outside plan §7.2 option (i)'s conversion surface; reached only after the capture path that has never run green; converting the leaf-wide audit needs the reader's per-FD `flags`/`mnt_id` return plus a leaf-wide capture loop and preserves its race tolerances; residual named in `docs/TODO.md` with the reader step's A-capability row as the discriminator |
+| 10 | `production_linux_v2_native_witness_test.go:2724,2771` (detached B child), `production_linux_v2_owner_cli_test.go:3474-3488` (`linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity`; the ns/pid read is `:3603`), `production_linux_v2_helper_exit_witness_test.go:427` (`platform.ProcessIdentity(gate.PID)`, ns/pid), `:431` (`platform.CaptureLinuxUserNamespaceIdentity`, ns/user), `:466` (post-release gate leaf audit) and `:489` (released-B exe readlink) | ptrace | **exempt, deferred**: same ptrace-gated class, outside plan §7.2 option (i)'s named conversion surface; no green run reaches them, and at `CapEff 0` the helper-exit witness's first stop is its `:427` ns/pid read, before the `:466` leaf audit; same residual entry |
 | 11 | `platform.ProcessIdentity`/`fd` reads whose targets are A-credentialed (`anchor/helper/mirror/launcher/daemon`, parked gate, owner-death helpers), `linuxV2Cgroup2MountIDs` (`mountinfo`), `linuxV2ReadProcessCredentials`/`Groups` (`status`/`stat`), `cmdline` | none / measured A-legal | **exempt: not the same class or measured A-legal** (§2.2) |
 
 ### 3.3 Fixture reader step (`scripts/ci/linux-v2-native-acceptance.sh`, reader step only)
@@ -167,9 +167,12 @@ arbitrary-target oracle. The reader never logs file contents (only stage/pid/siz
 - WSL reproduction (root, kernel 6.18.58, cgroup2, userns): the env-gated in-package test builds
   the userns-dropped child, runs the reader (in-process and, when
   `SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY` is set, the built helper), and the A-side client
-  asserts: `A_DIRECT_READ=denied`, `READER_CAPTURE=ok` (environ bytes and descriptor census
-  verified with the same `CheckEnvironment` the tests use), `PID_MISMATCH=refused`, and the mutant
-  `MUTANT_ENV_BYTE=red` (one corrupted expected byte turns the shared assertion red).
+  asserts: `A_DIRECT_ENVIRON=denied`/`A_DIRECT_FD=denied`, `READER_CAPTURE=ok` (environ bytes and
+  descriptor census verified with the same `CheckEnvironment` the tests use), the mutant
+  `MUTANT_ENV_BYTE=red` (one corrupted expected byte turns the shared assertion red), the
+  `PID_MISMATCH` identity refusal, the refusal rows (`REFUSAL_CREDENTIALS`,
+  `REFUSAL_LEAF_OUTSIDE`, `REFUSAL_LEAF_MEMBERSHIP`, `REFUSAL_EXECUTABLE`) and `RESPONSE_LIMIT`
+  (a long-target descriptor census past the response bound gets the typed `limit` refusal).
 - Conductor-side (recorded, not run here): the Bind run's `shared` reader step rows (ready/clean
   exit, capability readback) and the two cleared stop lines with the next stop verbatim.
 
@@ -237,3 +240,17 @@ membership. Bounds and refusals are otherwise unchanged.
 - §2.3 item 3 lists boot ID before start time; `readTarget` checks the start time first and the
   boot ID second. Both bindings exist and both refuse `stage=identity`; only the refusal reason
   when both mismatch differs, accepted as implemented rather than reordering the code.
+
+### 8.4 Fix-stage amendments (review R1-R5)
+
+- `Serve` treats a cancelled context (SIGTERM/SIGINT) as the clean stop it is for the fixture: it
+  logs `stop signal requests=N` and returns nil, so the unit records `Result=success` with
+  `ExecMainStatus=0` and only a real failure exits non-zero (R4).
+- The encoded-response bound is no longer a silent drop: `publishResponse` refuses `stage=limit`
+  when the encoded capture exceeds `maxResponseBytes`, and `serveRequest` turns that typed error
+  into the same refusal file the client decodes, so an oversized census receives the typed `limit`
+  refusal instead of the client's 60 s timeout (R5).
+- The env-gated reproduction adds refusal rows (`credentials`, leaf-outside `request`, leaf
+  membership `leaf`, `executable`), a wide-descriptor target whose long-target census pushes the
+  encoded capture past the response bound (R2, R5), and an in-process stop that requires a nil
+  return (R4 pin).

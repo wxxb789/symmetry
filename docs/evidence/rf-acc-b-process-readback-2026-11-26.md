@@ -14,18 +14,18 @@ distro); gates that must not depend on host layout ran on the pinned toolchain
 | file | sha256 at the delivered bytes |
 | --- | --- |
 | `daemon/internal/linuxreadback/readback.go` | `7653e0dcc3f476599f2f53eefb5c8ac4efb124100dc555531a908f3d591d0619` |
-| `daemon/internal/linuxreadback/reader_linux.go` | `750b04628e81053247c4dbe00691a0083083054b6f32d203c825d329d41f20d8` |
+| `daemon/internal/linuxreadback/reader_linux.go` | `702bd2cbb341488c29896cb6ca7065c200fb43d1075a400e237f4885ca01784f` |
 | `daemon/internal/linuxreadback/reader_unsupported.go` | `9cb3aea49d3d12d4414e93c6c52e069e91f34eb5666f44e3bf44e4a1d4fd93ba` |
-| `daemon/internal/linuxreadback/local_repro_linux_test.go` | `0802c8a9f52181646bb4ab62a2a7fd9f3a1dab6b53eb88e69a003214734c01bc` |
+| `daemon/internal/linuxreadback/local_repro_linux_test.go` | `5d4e7ccff4fe6d4dc2489ce5a4acda689ebe46b1589620f2b5a9640bd21b71a6` |
 | `daemon/internal/linuxreadback/cmd/linux-v2-readback-reader/main.go` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` |
 | `daemon/native/linux-gate/protocol/readback_helpers_linux_test.go` | `170ea85fdeda954892543d5c05eab1b7f58478b21bfd0de715c95ccfb49a3de8` |
 | `daemon/native/linux-gate/protocol/clone_integration_linux_test.go` | `4ce7d2216f990c9c67d24be8944249c906871a571db7a53c4e5086a72aeb9d5b` |
 | `daemon/native/linux-gate/protocol/launcher_integration_linux_test.go` | `11629ac47f874cc1dc7781eaa94b7b69dd77f1e2fe08b731aa5fa565d55e36f4` |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `3c26bf3f729342b8e088ba9470236485f09cb6924bf05267df7cb44243e3e558` |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `ff40b2b1d88b7fbb2266fabf7d29bfd50427424b329cd767dc39e9b007b529f1` |
-| `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md` | `490961718b434aed989e132b067fca917017f84dc95c3a0bac8c0c08516f8ea6` (record revision) |
+| `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md` | `3bfd5a35392bbe3316253ed4e29071db4a0925960aa86b14fa9b41d8046d5106` (record revision) |
 
-The readback digests above are the post-apply revision: the first pass had the channel/bound names
+The readback digests above are the fix revision. The file history: the first pass had the channel/bound names
 exported, the scoped simplification review unexported the names no caller outside the package uses
 and trimmed the two comment runs the contract's two-line bound refuses, and the apply stage then
 deleted the dead `ErrRefused`/`Is` pair, unexported `ChannelEnv`, deleted the three never-set
@@ -34,13 +34,18 @@ the request budget to one `maxRequests` bound, replaced the hand-rolled slice lo
 `slices.Contains`, and renamed the shared request helper from the misleading
 `readback_integration_linux_test.go` to `readback_helpers_linux_test.go` (bytes unchanged; the
 plan's §8.3 records the flag-list, client-name and check-order amendments). The reproduction rows
-and gates were re-run at these digests (§6). The simplification review had also dropped a
+and gates were re-run at these digests (§6). The fix stage (review R1-R5) then changed two of
+them: `reader_linux.go` (a cancelled context is the clean signal stop and exits 0; an encoded
+capture past `maxResponseBytes` becomes the typed `stage=limit` refusal instead of a dropped
+response, plan §8.4) and `local_repro_linux_test.go` (the R2/R5 refusal rows with a
+wide-descriptor target and the R4 nil-stop pin); their digest rows above are the fix revision,
+and every movable §6 row was re-run at it. The simplification review had also dropped a
 `readlink`-vanished-descriptor tolerance from the FD census: the inline census it replaces treated
 any `readlink` failure as a hard test error, so the reader refuses with `stage=read` instead of
 censusing a shorter table — base parity, no weakened predicate.
 
 No production byte changed: `gate.c`, the launcher, the wrapper, the AppArmor profile, the sysctls
-and `daemon/internal/**` non-test code are untouched; the new package is imported only by test
+and the pre-existing `daemon/internal/**` non-test code are untouched; the new package is imported only by test
 files and by the fixture-built helper binary. `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this
 record are deliberately not hashed.
 
@@ -92,13 +97,18 @@ settled by the Bind run rather than assumed; the converted legs never consult it
 
 Converted sites: the two native assertions' `environ`, `fd` census and `exe` binding (plan rows
 1-6), the e2e capture's `ns/user` + `ns/net` and its two `platform.ProcessIdentity(B)` reads (rows
-7-8, `linuxV2CaptureReadbackTarget`, the old `linuxV2OpenNamespace` deleted). Deferred with
-reasons (rows 9-10): `linuxV2RequireNoWritableCgroupFDs*`'s fdinfo/descendant-identity audit,
-`linuxV2CaptureDetachedChild`'s child identity, the pid-reuse/marker `linuxV2OpenExactPIDFD` +
-`linuxV2ReadPIDNamespaceIdentity` on a released B, and the helper-exit leaf audit — none is an
-`ns/*` read in the contract's named surface, none is reached by any recorded run, and converting
-them needs the reader's per-FD `flags`/`mnt_id` return plus a leaf-wide capture loop; the trigger
-and the A-capability discriminator are recorded in `docs/TODO.md`.
+7-8, `linuxV2CaptureReadbackTarget`, the old `linuxV2OpenNamespace` deleted). Deferred rows 9-10
+are the same ptrace-gated class but lie outside plan §7.2 option (i)'s conversion surface and are
+unreached by any recorded run: `linuxV2RequireNoWritableCgroupFDs`'s fdinfo audit and its in-leaf
+descendant `platform.ProcessIdentity` (`/proc/<B>/ns/pid`,
+`production_linux_v2_native_witness_test.go:3277`), `linuxV2CaptureDetachedChild`'s child
+identity, the pid-reuse/marker `linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity` on a
+released B (the ns/pid read is `production_linux_v2_owner_cli_test.go:3603`), and the post-release
+`platform.ProcessIdentity` / `platform.CaptureLinuxUserNamespaceIdentity` / exe readlink plus the
+helper-exit leaf audit (`production_linux_v2_helper_exit_witness_test.go:427,431,489,466`).
+Converting them needs the reader's per-FD `flags`/`mnt_id` return plus a leaf-wide capture loop;
+at `CapEff 0` the helper-exit witness's first stop is its `:427` released-B ns/pid read. The
+trigger and the A-capability discriminator are recorded in `docs/TODO.md`.
 
 ## 4. Converted assertions (byte-exact preserved)
 
@@ -142,23 +152,30 @@ a converted leg has it running.
 | fixture syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | exit 0 |
 | shellcheck (advisory CI metric) | `shellcheck --severity=warning --format=gcc scripts/ci/linux-v2-native-acceptance.sh` | baseline `8453da12`: 17 findings; delivered bytes: 17 findings (none in the new functions) |
 | fixture contract suite | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | `Ran 55 tests … OK` |
-| reader unit proof | `unit-proof.sh` (WSL Ubuntu-24.04 root, real systemd) | `root readback reader ready: unit=… MainPID=457470` … `readback-reader: stop requests=0` … `UNIT-PROOF-OK` (the start/ready/stop proof blocks are the fixture's own) |
-| WSL reproduction, helper-binary mode | `SYMMETRY_LINUX_READBACK_LOCAL_REPRO=1 SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY=<reader> readback.test -test.run '^TestReadbackLocalReproduction$' -test.v` | `A_DIRECT_ENVIRON=denied`, `A_DIRECT_FD=denied`, `READER_CAPTURE=ok environ_bytes=98 descriptors=9 user_ns=4:4026532219 net_ns=4:4026531833`, `MUTANT_ENV_BYTE=red`, `PID_MISMATCH=refused stage=identity`, `READBACK_LOCAL_CLIENT=ok`, `--- PASS` (exit 0) |
-| WSL reproduction, in-process mode | same without the binary variable | identical rows, `--- PASS` (exit 0) |
+| reader unit proof | `scratch/rf-acc-b-fix/unit-proof-fixed.sh` (WSL Ubuntu-24.04 root, real systemd) | `root readback reader ready: unit=… MainPID=491566` … `readback-reader: stop requests=0` … `UNIT-PROOF-OK` (the start/ready/stop proof blocks are the fixture's own) |
+| SIGTERM stop probe | `scratch/rf-acc-b-fix/sigterm-probe.sh <reader>` (WSL root: `systemd-run` transient unit, then `systemctl stop`) | pre-fix `reader-baseline`: `state=failed result=exit-code exec_main_status=1`; fix revision: `state=inactive result=success exec_main_status=0`, journal `readback-reader: stop signal requests=0` (R4) |
+| WSL reproduction, helper-binary mode | `SYMMETRY_LINUX_READBACK_LOCAL_REPRO=1 SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY=<reader> readback.test -test.run '^TestReadbackLocalReproduction$' -test.v` | `A_DIRECT_ENVIRON=denied`, `A_DIRECT_FD=denied`, `READER_CAPTURE=ok environ_bytes=98 descriptors=9 user_ns=4:4026532219 net_ns=4:4026531833`, `MUTANT_ENV_BYTE=red`, `PID_MISMATCH=refused stage=identity`, `REFUSAL_CREDENTIALS=refused stage=credentials`, `REFUSAL_LEAF_OUTSIDE=refused stage=request`, `REFUSAL_LEAF_MEMBERSHIP=refused stage=leaf`, `REFUSAL_EXECUTABLE=refused stage=executable`, `RESPONSE_LIMIT=refused stage=limit`, `READBACK_LOCAL_CLIENT=ok`, `--- PASS` (exit 0) |
+| WSL reproduction, in-process mode | same without the binary variable | identical rows plus `readback-reader: stop signal requests=7`, `--- PASS` (exit 0) |
+| refusal-row mutants (scratch copy) | `scratch/rf-acc-b-fix/mutant-run.sh` over a copy of `daemon/` | M1 `verifyLeafMembership` → `return nil`: reproduction FAILs `READBACK_LOCAL_FAIL: a target outside the named leaf was captured`; M2 four-uid loop → `range 0`: FAILs `an A-credentialed target is not the typed credentials refusal: … stage leaf`; M3 exe dev/ino guard dropped: FAILs `a wrong executable inode was accepted as the approved image`; the restored copy is identical to the delivered `reader_linux.go`/`local_repro_linux_test.go`/`readback.go` by sha256 and the reproduction PASSes |
+| duplication + record cleanliness (scratch commit of the delivered files) | `python scripts/ci/jscpd-changed.py --base 8453da12 --head HEAD`; `python scripts/ci/check-record-cleanliness.py --base 8453da12 --head HEAD` | jscpd: 14 changed files, 1765 scanned sources, 1262 corpus clones, none new, exit 0 (notice: `CLOSED-TODO.md`'s markdown lies outside the configured scope, so its clones are not checked); cleanliness: 1 changed record passes the root-only check, exit 0 |
 | gate-shape probe | `python3 findings/probe-gate-sequence.py` | root OK; `read as A(52000) … Permission denied`; `read as B(52001) … Permission denied`; `read as A+2caps: OK`; `A stat ns/user: Permission denied` |
 | capability census | `python3 probe-visibility.py` / `probe-a-with-ptrace.py` | the §3 matrix |
 
 The reproduction's child is the gate-shaped userns child of plan §8.2 (the local row maps `0 0 1`
 beside `1 <B> 1` so the post-exec drop to the B extent is possible in Go; the exact single-extent
-map is measured by the two probes above). The mutant row corrupts one expected environment byte
+map is measured by the two probes above). The wide-descriptor target is the same userns child shape
+with `maxResponseBytes/len(path) + 16` non-CLOEXEC descriptors on a >1.9 KiB path, so its encoded
+capture necessarily exceeds `maxResponseBytes` and the reader must answer `stage=limit`; the pre-fix
+baseline for that row is the reader's `response write failed … encoded readback response exceeds its
+bound` followed by the client's 30 s timeout. The mutant row corrupts one expected environment byte
 (`mutated[0][0] ^ 1`) and requires the shared `CheckEnvironment` to redden — the single test the
 contract asks for.
 
-Every row above that the delivered bytes can move was re-run after the simplification review and
-again after the apply stage at the §1 digests (gofmt/vet/compile, the protocol unit rows, the
-fixture syntax/contract suite, the reader unit proof and both reproduction modes); only the
-run-specific identifiers differ between passes (`MainPID=450468` → `450765` → `457132` → `457470`,
-the userns inode numbers, nonces, the child PID). The kernel-shape probes and the capability
+Every row above that the delivered bytes can move was re-run after the simplification review, after
+the apply stage and again at the fix revision's §1 digests (gofmt/vet/compile, the protocol unit
+rows, the fixture syntax/contract suite, the reader unit proof and both reproduction modes); only
+the run-specific identifiers differ between passes (`MainPID=450468` → `450765` → `457132` →
+`457470` → `491566`, the userns inode numbers, nonces, the child PID). The kernel-shape probes and the capability
 census (`findings/probe-gate-sequence.py`, `probe-visibility.py`, `probe-a-with-ptrace.py`) are
 unchanged rows: no production or kernel-facing byte moved, and their host kernel is the same.
 
@@ -168,8 +185,8 @@ No run was dispatched from this stage: the contract's acceptance binds the condu
 scratch/Bind `shared` run on the PR head, and the fixture's reader step, the unit proof and the
 conversion rows above are the local evidence that step consumes. Pending in that run: the reader
 step's ready/stop rows and A capability readback, and the two cleared stop lines
-(`clone_integration_linux_test.go:252` / `launcher_integration_linux_test.go:451`) with the next
-stop recorded verbatim.
+(`clone_integration_linux_test.go:252` / `launcher_integration_linux_test.go:451`, positions
+recorded at the dispatch head) with the next stop recorded verbatim.
 
 ## 8. Limits and residuals
 
@@ -184,5 +201,10 @@ stop recorded verbatim.
 - The local reproduction writes its channel under `/tmp` and its leaf under `/sys/fs/cgroup`; it is
   env-gated (`SYMMETRY_LINUX_READBACK_LOCAL_REPRO=1`) and therefore never runs in CI, which
   exercises only the compile rows for it.
-- The plan and this record carry record-only edits after the code digests in §1; if a later fix
-  stage changes code bytes, the digests and the affected rows must be re-derived.
+- The R2/R4/R5 pins (the refusal and limit rows, the nil-stop check, and the mutants in §6) live in
+  that env-gated reproduction and in the scratch unit proof, so a regression there reddens only the
+  local WSL rows as root: recorded as an oracle gap. CI reaches the same code through the compile
+  rows and, at the Bind, the fixture's reader step.
+- The plan and this record also carry record-only edits after the fix revision's code digests in
+  §1; the affected rows were re-derived at the delivered bytes (§6) and every cited line anchor
+  was re-measured against them.

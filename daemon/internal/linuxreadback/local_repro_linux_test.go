@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ const (
 	localStateEnv  = "SYMMETRY_LINUX_READBACK_LOCAL_STATE"
 	localReaderEnv = "SYMMETRY_LINUX_READBACK_LOCAL_READER_BINARY"
 	localCgroupEnv = "SYMMETRY_LINUX_READBACK_LOCAL_CGROUP_ROOT"
+	localWideEnv   = "SYMMETRY_LINUX_READBACK_LOCAL_WIDE"
 
 	localAUID    = 52000
 	localAGID    = 52000
@@ -44,16 +46,17 @@ var localReproTargetEnv = []string{
 }
 
 type localReproState struct {
-	Channel    string   `json:"channel"`
-	PID        int      `json:"pid"`
-	StartTime  uint64   `json:"start_time"`
-	BootID     string   `json:"boot_id"`
-	Identity   string   `json:"identity"`
-	Executable string   `json:"executable"`
-	ExeDevice  uint64   `json:"exe_device"`
-	ExeInode   uint64   `json:"exe_inode"`
-	Leaf       string   `json:"leaf"`
-	Expected   []string `json:"expected"`
+	Channel    string           `json:"channel"`
+	PID        int              `json:"pid"`
+	StartTime  uint64           `json:"start_time"`
+	BootID     string           `json:"boot_id"`
+	Identity   string           `json:"identity"`
+	Executable string           `json:"executable"`
+	ExeDevice  uint64           `json:"exe_device"`
+	ExeInode   uint64           `json:"exe_inode"`
+	Leaf       string           `json:"leaf"`
+	Expected   []string         `json:"expected"`
+	Wide       *localReproState `json:"wide,omitempty"`
 }
 
 // TestReadbackLocalReproduction is the opt-in WSL row: a root reader against a
@@ -89,22 +92,27 @@ func TestReadbackLocalReproduction(t *testing.T) {
 	if err := os.Chown(channel, 0, localAGID); err != nil {
 		t.Fatal(err)
 	}
-	child, leaf, err := startLocalReproChild(t, image)
+	child, leaf, err := startLocalReproChild(t, image, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reaped := false
-	t.Cleanup(func() {
-		if !reaped {
-			_ = child.Process.Kill()
-			_ = child.Wait()
-		}
-		_ = os.Remove(leaf)
-	})
+	widePath, err := createLocalReproWidePath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wideChild, wideLeaf, err := startLocalReproChild(t, image, []string{localWideEnv + "=" + widePath})
+	if err != nil {
+		t.Fatal(err)
+	}
 	state, err := localReproStateFor(t, child, image, leaf, channel)
 	if err != nil {
 		t.Fatal(err)
 	}
+	wideState, err := localReproStateFor(t, wideChild, image, wideLeaf, channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Wide = &wideState
 	stopReader, err := startLocalReproReader(t, channel, localReproLeafRoot())
 	if err != nil {
 		t.Fatal(err)
@@ -126,11 +134,6 @@ func TestReadbackLocalReproduction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("A-side local readback client did not hold every row: %v", err)
 	}
-	if err := child.Process.Kill(); err != nil {
-		t.Fatal(err)
-	}
-	_ = child.Wait()
-	reaped = true
 }
 
 // TestReadbackLocalChild starts inside CLONE_NEWUSER, re-execs to regain
@@ -161,7 +164,11 @@ func localReproAwaitMapsAndReexec(t *testing.T) {
 	}
 	// The first exec cleared this namespace's capabilities before its map
 	// existed; the second exec after the map restores the namespace root set.
-	if err := syscall.Exec(image, []string{image, "-test.run=^TestReadbackLocalChild$"}, []string{localChildEnv + "=maps-ready"}); err != nil {
+	env := []string{localChildEnv + "=maps-ready"}
+	if wide := os.Getenv(localWideEnv); wide != "" {
+		env = append(env, localWideEnv+"="+wide)
+	}
+	if err := syscall.Exec(image, []string{image, "-test.run=^TestReadbackLocalChild$"}, env); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -180,7 +187,17 @@ func localReproDropAndExec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Exec(image, []string{image, "-test.run=^TestReadbackLocalTarget$"}, localReproTargetEnv); err != nil {
+	env := localReproTargetEnv
+	if wide := os.Getenv(localWideEnv); wide != "" {
+		env = append(append([]string(nil), localReproTargetEnv...), localWideEnv+"="+wide)
+		for range maxResponseBytes/len(wide) + 16 {
+			// O_RDONLY without O_CLOEXEC: the census must see these across exec.
+			if _, err := unix.Open(wide, unix.O_RDONLY, 0); err != nil {
+				t.Fatalf("open wide readback descriptor: %v", err)
+			}
+		}
+	}
+	if err := syscall.Exec(image, []string{image, "-test.run=^TestReadbackLocalTarget$"}, env); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -258,6 +275,59 @@ func TestReadbackLocalClient(t *testing.T) {
 		fail("wrong-start-time refusal is not the typed identity refusal: %v", err)
 	}
 	fmt.Printf("PID_MISMATCH=refused stage=%s\n", RefusalIdentity)
+	if state.Wide == nil {
+		fail("local row state lacks the wide descriptor target")
+	}
+	selfStart, err := readStatStartTime(os.Getpid())
+	if err != nil {
+		fail("client cannot read its own start time: %v", err)
+	}
+	selfBootID, err := readBootID()
+	if err != nil {
+		fail("client cannot read the kernel boot identity: %v", err)
+	}
+	credentials := want
+	credentials.PID, credentials.StartTime, credentials.BootID, credentials.Identity = os.Getpid(), selfStart, selfBootID, ""
+	if _, err := Read(state.Channel, credentials, localTimeout); err == nil {
+		fail("an A-credentialed target was captured instead of refused")
+	} else if stage, ok := RefusalStageOf(err); !ok || stage != RefusalCredentials {
+		fail("an A-credentialed target is not the typed credentials refusal: %v", err)
+	}
+	fmt.Printf("REFUSAL_CREDENTIALS=refused stage=%s\n", RefusalCredentials)
+	outside := want
+	outside.Leaf = "/tmp/symmetry-readback-leaf-outside"
+	if _, err := Read(state.Channel, outside, localTimeout); err == nil {
+		fail("a leaf outside the fixed leaf root was accepted")
+	} else if stage, ok := RefusalStageOf(err); !ok || stage != RefusalRequest {
+		fail("a leaf outside the fixed leaf root is not the typed request refusal: %v", err)
+	}
+	fmt.Printf("REFUSAL_LEAF_OUTSIDE=refused stage=%s\n", RefusalRequest)
+	membership := want
+	membership.Leaf = state.Wide.Leaf
+	if _, err := Read(state.Channel, membership, localTimeout); err == nil {
+		fail("a target outside the named leaf was captured")
+	} else if stage, ok := RefusalStageOf(err); !ok || stage != RefusalLeaf {
+		fail("a target outside the named leaf is not the typed leaf refusal: %v", err)
+	}
+	fmt.Printf("REFUSAL_LEAF_MEMBERSHIP=refused stage=%s\n", RefusalLeaf)
+	executable := want
+	executable.ExeInode++
+	if _, err := Read(state.Channel, executable, localTimeout); err == nil {
+		fail("a wrong executable inode was accepted as the approved image")
+	} else if stage, ok := RefusalStageOf(err); !ok || stage != RefusalExecutable {
+		fail("a wrong executable inode is not the typed executable refusal: %v", err)
+	}
+	fmt.Printf("REFUSAL_EXECUTABLE=refused stage=%s\n", RefusalExecutable)
+	wide := Want{
+		PID: state.Wide.PID, StartTime: state.Wide.StartTime, BootID: state.Wide.BootID,
+		Identity: state.Wide.Identity, Leaf: state.Wide.Leaf, Environ: true, Descriptors: true,
+	}
+	if _, err := Read(state.Channel, wide, localTimeout); err == nil {
+		fail("a descriptor census beyond the response bound was captured instead of refused")
+	} else if stage, ok := RefusalStageOf(err); !ok || stage != RefusalLimit {
+		fail("an oversized descriptor census is not the typed limit refusal: %v", err)
+	}
+	fmt.Printf("RESPONSE_LIMIT=refused stage=%s\n", RefusalLimit)
 	fmt.Println("READBACK_LOCAL_CLIENT=ok")
 	os.Exit(0)
 }
@@ -286,13 +356,13 @@ func copyLocalReproImage(root string) (string, error) {
 	return image, nil
 }
 
-func startLocalReproChild(t *testing.T, image string) (*exec.Cmd, string, error) {
+func startLocalReproChild(t *testing.T, image string, extraEnv []string) (*exec.Cmd, string, error) {
 	syncRead, syncWrite, err := os.Pipe()
 	if err != nil {
 		return nil, "", err
 	}
 	child := exec.Command(image, "-test.run=^TestReadbackLocalChild$")
-	child.Env = []string{localChildEnv + "=1"}
+	child.Env = append([]string{localChildEnv + "=1"}, extraEnv...)
 	child.SysProcAttr = &syscall.SysProcAttr{Cloneflags: syscall.CLONE_NEWUSER}
 	child.ExtraFiles = []*os.File{syncRead}
 	child.Stdout, child.Stderr = os.Stdout, os.Stderr
@@ -348,7 +418,27 @@ func startLocalReproChild(t *testing.T, image string) (*exec.Cmd, string, error)
 		_ = child.Process.Kill()
 		return nil, "", fmt.Errorf("move the target into the exact leaf: %w", err)
 	}
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+		_ = os.Remove(leaf)
+	})
 	return child, leaf, nil
+}
+
+func createLocalReproWidePath(root string) (string, error) {
+	path := root
+	for len(path) < 1900 {
+		path = filepath.Join(path, strings.Repeat("w", 240))
+	}
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return "", err
+	}
+	file := filepath.Join(path, "readback-wide-file")
+	if err := os.WriteFile(file, []byte("wide\n"), 0o644); err != nil {
+		return "", err
+	}
+	return file, nil
 }
 
 func localReproStateFor(t *testing.T, child *exec.Cmd, image, leaf, channel string) (localReproState, error) {
@@ -429,8 +519,8 @@ func startLocalReproReader(t *testing.T, channel, leafRoot string) (func(), erro
 	}
 	return func() {
 		cancel()
-		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-			t.Errorf("in-process reader did not stop cleanly: %v", err)
+		if err := <-done; err != nil {
+			t.Errorf("in-process reader must stop cleanly on cancellation: %v", err)
 		}
 	}, nil
 }
