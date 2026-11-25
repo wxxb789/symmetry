@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -145,10 +146,61 @@ type Workspace struct {
 	Cleanup    CleanupPolicy   `json:"cleanup"`
 }
 
+func defaultStateDir(goos string, getenv func(string) string) (string, error) {
+	switch goos {
+	case "linux":
+		if xdgStateHome := getenv("XDG_STATE_HOME"); path.IsAbs(xdgStateHome) {
+			return path.Join(xdgStateHome, "symmetry"), nil
+		}
+		if home := getenv("HOME"); path.IsAbs(home) {
+			return path.Join(home, ".local", "state", "symmetry"), nil
+		}
+		return "", errors.New("state_dir default requires $HOME to be set to an absolute path")
+	case "darwin":
+		if home := getenv("HOME"); path.IsAbs(home) {
+			return path.Join(home, "Library", "Application Support", "Symmetry"), nil
+		}
+		return "", errors.New("state_dir default requires $HOME to be set to an absolute path")
+	case "windows":
+		base, ok := windowsStateDirBase(getenv("LOCALAPPDATA"))
+		if !ok {
+			return "", errors.New("state_dir default requires %LOCALAPPDATA% to be set to an absolute path")
+		}
+		return base + `\Symmetry`, nil
+	default:
+		return "", fmt.Errorf("state_dir default is not defined for GOOS %q", goos)
+	}
+}
+
+func windowsStateDirBase(value string) (string, bool) {
+	trimmed := strings.TrimRight(value, `\/`)
+	if len(value) >= 3 && isASCIILetter(value[0]) && value[1] == ':' && (value[2] == '\\' || value[2] == '/') {
+		return trimmed, true
+	}
+	if strings.HasPrefix(value, `\\`) && len(trimmed) > 2 {
+		return trimmed, true
+	}
+	return "", false
+}
+
+func isASCIILetter(character byte) bool {
+	return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+}
+
 // Load decodes a single, strictly-specified JSON configuration file and
-// validates the values required to start the daemon.
-func Load(path string) (Config, error) {
-	file, err := os.Open(path)
+// validates it, resolving the per-user default state_dir when the file omits it.
+func Load(configPath string) (Config, error) {
+	return load(configPath, false)
+}
+
+// LoadInstalled loads the installed owner's configuration; the per-user state_dir
+// default never applies there, so a missing state_dir fails closed.
+func LoadInstalled(configPath string) (Config, error) {
+	return load(configPath, true)
+}
+
+func load(configPath string, installed bool) (Config, error) {
+	file, err := os.Open(configPath)
 	if err != nil {
 		return Config{}, fmt.Errorf("open config: %w", err)
 	}
@@ -170,6 +222,16 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
 
+	if value.StateDir == "" {
+		if installed {
+			return Config{}, errors.New("state_dir must be explicitly configured for the installed owner path")
+		}
+		resolved, err := defaultStateDir(runtime.GOOS, os.Getenv)
+		if err != nil {
+			return Config{}, fmt.Errorf("resolve default state_dir: %w", err)
+		}
+		value.StateDir = resolved
+	}
 	if err := value.Validate(); err != nil {
 		return Config{}, err
 	}
