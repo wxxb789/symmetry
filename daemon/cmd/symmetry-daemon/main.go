@@ -144,7 +144,7 @@ func runPrintStateDirCommand(args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 || *configPath == "" {
 		return errors.New("requires only -config <daemon.json>")
 	}
-	value, err := config.Load(*configPath)
+	value, err := config.LoadInstalled(*configPath)
 	if err != nil {
 		return fmt.Errorf("load daemon config: %w", err)
 	}
@@ -247,7 +247,7 @@ func runConfiguredOwnerCommand(command string, args []string) error {
 	if flags.NArg() != 0 || *configPath == "" {
 		return fmt.Errorf("%s requires only -config <path>", command)
 	}
-	value, err := config.Load(*configPath)
+	value, err := config.LoadInstalled(*configPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}

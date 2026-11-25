@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -495,6 +496,178 @@ func TestLoadRejectsEmptyRequiredValues(t *testing.T) {
 				t.Fatalf("Load() error = %v, want %s validation error", err, test.field)
 			}
 		})
+	}
+}
+
+func TestDefaultStateDirResolvesPerGOOS(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		goos    string
+		env     map[string]string
+		want    string
+		wantErr string
+	}{
+		{name: "linux absolute XDG state home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "/srv/state", "HOME": "/home/u"}, want: "/srv/state/symmetry"},
+		{name: "linux trailing separator in XDG state home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "/srv/state/", "HOME": "/home/u"}, want: "/srv/state/symmetry"},
+		{name: "linux relative XDG state home falls back to home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "state", "HOME": "/home/u"}, want: "/home/u/.local/state/symmetry"},
+		{name: "linux empty XDG state home falls back to home", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "", "HOME": "/home/u"}, want: "/home/u/.local/state/symmetry"},
+		{name: "linux absolute home", goos: "linux", env: map[string]string{"HOME": "/home/u"}, want: "/home/u/.local/state/symmetry"},
+		{name: "linux relative home is refused", goos: "linux", env: map[string]string{"XDG_STATE_HOME": "state", "HOME": "home/u"}, wantErr: "$HOME"},
+		{name: "linux blank home is refused", goos: "linux", env: map[string]string{"HOME": "  "}, wantErr: "$HOME"},
+		{name: "linux missing home is refused", goos: "linux", wantErr: "$HOME"},
+		{name: "darwin absolute home", goos: "darwin", env: map[string]string{"HOME": "/Users/u"}, want: "/Users/u/Library/Application Support/Symmetry"},
+		{name: "darwin relative home is refused", goos: "darwin", env: map[string]string{"HOME": "Users/u"}, wantErr: "$HOME"},
+		{name: "darwin missing home is refused", goos: "darwin", wantErr: "$HOME"},
+		{name: "windows drive-absolute local app data", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`}, want: `C:\Users\u\AppData\Local\Symmetry`},
+		{name: "windows trailing separator is trimmed", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local\`}, want: `C:\Users\u\AppData\Local\Symmetry`},
+		{name: "windows drive root", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:\`}, want: `C:\Symmetry`},
+		{name: "windows UNC share", goos: "windows", env: map[string]string{"LOCALAPPDATA": `\\server\share`}, want: `\\server\share\Symmetry`},
+		{name: "windows missing local app data is refused", goos: "windows", wantErr: "%LOCALAPPDATA%"},
+		{name: "windows blank local app data is refused", goos: "windows", env: map[string]string{"LOCALAPPDATA": "  "}, wantErr: "%LOCALAPPDATA%"},
+		{name: "windows lookalike variables are refused", goos: "windows", env: map[string]string{"APPDATA": `C:\Users\u\AppData\Roaming`, "USERPROFILE": `C:\Users\u`}, wantErr: "%LOCALAPPDATA%"},
+		{name: "windows relative local app data is refused", goos: "windows", env: map[string]string{"LOCALAPPDATA": `Local\AppData`}, wantErr: "%LOCALAPPDATA%"},
+		{name: "windows drive-relative local app data is refused", goos: "windows", env: map[string]string{"LOCALAPPDATA": `C:Local`}, wantErr: "%LOCALAPPDATA%"},
+		{name: "windows bare UNC prefix is refused", goos: "windows", env: map[string]string{"LOCALAPPDATA": `\\`}, wantErr: "%LOCALAPPDATA%"},
+		{name: "unsupported GOOS is refused", goos: "freebsd", env: map[string]string{"HOME": "/home/u"}, wantErr: "freebsd"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := defaultStateDir(test.goos, func(key string) string { return test.env[key] })
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("defaultStateDir(%q) error = %v, want one naming %q", test.goos, err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("defaultStateDir(%q) error = %v", test.goos, err)
+			}
+			if resolved != test.want {
+				t.Fatalf("defaultStateDir(%q) = %q, want %q", test.goos, resolved, test.want)
+			}
+			if test.goos != "windows" && !path.IsAbs(resolved) {
+				t.Fatalf("defaultStateDir(%q) = %q, want an absolute path", test.goos, resolved)
+			}
+		})
+	}
+}
+
+func TestLoadDefaultsAndRefusesStateDir(t *testing.T) {
+	t.Run("explicit state_dir always wins", func(t *testing.T) {
+		t.Setenv("HOME", "")
+		t.Setenv("XDG_STATE_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		value := validConfigObject(t)
+		value["state_dir"] = "/var/lib/symmetry"
+		contents, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(writeConfig(t, string(contents)))
+		if err != nil {
+			t.Fatalf("Load() explicit state_dir error = %v", err)
+		}
+		if loaded.StateDir != "/var/lib/symmetry" {
+			t.Fatalf("Load() state_dir = %q, want %q", loaded.StateDir, "/var/lib/symmetry")
+		}
+	})
+
+	t.Run("absent state_dir resolves the host default", func(t *testing.T) {
+		want := hostDefaultStateDir(t, t.TempDir())
+		value := validConfigObject(t)
+		delete(value, "state_dir")
+		contents, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(writeConfig(t, string(contents)))
+		if err != nil {
+			t.Fatalf("Load() absent state_dir error = %v", err)
+		}
+		if loaded.StateDir != want {
+			t.Fatalf("Load() state_dir = %q, want the host default %q", loaded.StateDir, want)
+		}
+	})
+
+	t.Run("absent state_dir without a platform environment fails closed", func(t *testing.T) {
+		t.Setenv("HOME", "")
+		t.Setenv("XDG_STATE_HOME", "")
+		t.Setenv("LOCALAPPDATA", "")
+		value := validConfigObject(t)
+		delete(value, "state_dir")
+		contents, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Load(writeConfig(t, string(contents)))
+		wantVar := map[string]string{"linux": "$HOME", "darwin": "$HOME", "windows": "%LOCALAPPDATA%"}[runtime.GOOS]
+		if wantVar == "" {
+			t.Skipf("no per-user state_dir default on %s", runtime.GOOS)
+		}
+		if err == nil || !strings.HasPrefix(err.Error(), "resolve default state_dir: ") || !strings.Contains(err.Error(), wantVar) {
+			t.Fatalf("Load() error = %v, want a resolve default state_dir failure naming %s", err, wantVar)
+		}
+	})
+}
+
+func TestLoadInstalledRequiresAnExplicitStateDir(t *testing.T) {
+	t.Run("explicit state_dir loads", func(t *testing.T) {
+		value := validConfigObject(t)
+		value["state_dir"] = "/var/lib/symmetry"
+		contents, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := LoadInstalled(writeConfig(t, string(contents)))
+		if err != nil {
+			t.Fatalf("LoadInstalled() explicit state_dir error = %v", err)
+		}
+		if loaded.StateDir != "/var/lib/symmetry" {
+			t.Fatalf("LoadInstalled() state_dir = %q, want %q", loaded.StateDir, "/var/lib/symmetry")
+		}
+	})
+
+	for _, test := range []struct {
+		name string
+		set  func(map[string]any)
+		want string
+	}{
+		{name: "absent state_dir", set: func(value map[string]any) { delete(value, "state_dir") }, want: "state_dir must be explicitly configured for the installed owner path"},
+		{name: "empty state_dir", set: func(value map[string]any) { value["state_dir"] = "" }, want: "state_dir must be explicitly configured for the installed owner path"},
+		{name: "whitespace stays explicit", set: func(value map[string]any) { value["state_dir"] = " " }, want: "state_dir must not be empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			t.Setenv("HOME", t.TempDir())
+			t.Setenv("LOCALAPPDATA", t.TempDir())
+			value := validConfigObject(t)
+			test.set(value)
+			contents, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = LoadInstalled(writeConfig(t, string(contents)))
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("LoadInstalled() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func hostDefaultStateDir(t *testing.T, base string) string {
+	t.Helper()
+	switch runtime.GOOS {
+	case "linux":
+		t.Setenv("XDG_STATE_HOME", base)
+		return path.Join(base, "symmetry")
+	case "darwin":
+		t.Setenv("HOME", base)
+		return path.Join(base, "Library/Application Support/Symmetry")
+	case "windows":
+		t.Setenv("LOCALAPPDATA", base)
+		return base + `\Symmetry`
+	default:
+		t.Skipf("no per-user state_dir default on %s", runtime.GOOS)
+		return ""
 	}
 }
 
