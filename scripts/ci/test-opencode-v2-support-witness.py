@@ -383,6 +383,28 @@ class ReadinessTests(unittest.TestCase):
                 self.assertFalse(witness.readiness_identity(info, pid))
 
 
+class InfoRecordTests(unittest.TestCase):
+    """The recorded /api/info body keeps identity keys only; host metadata is never recorded."""
+
+    def test_the_recorded_info_body_drops_host_metadata(self):
+        raw = json.dumps(
+            {
+                "version": "2.4.1",
+                "pid": 4242,
+                "hostname": "fixture-host-name",
+                "urls": ["http://127.0.0.1:51844"],
+                "paths": {"tmp": "path-sha256:" + "0" * 64},
+            }
+        )
+        recorded = witness.recorded_info_body("/api/info", 200, raw)
+        self.assertEqual(json.loads(recorded), {"pid": 4242, "version": "2.4.1", "status": 200})
+        self.assertNotIn("hostname", recorded)
+        self.assertNotIn("fixture-host-name", recorded)
+        refusal = witness.recorded_info_body("/api/info", 401, '{"_tag":"UnauthorizedError","message":"Authentication required"}')
+        self.assertEqual(json.loads(refusal), {"pid": None, "version": None, "status": 401})
+        self.assertEqual(witness.recorded_info_body("/api/health", 404, raw), raw)
+
+
 class RedactionTests(unittest.TestCase):
     """The credential and the relay origin never reach a record, whatever the carrier."""
 

@@ -52,20 +52,32 @@ group, no `wsl.exe` interop for the run itself).
 `scripts/ci/opencode-v2-support-witness.py` takes `--mode probe|full|provider-failure|truncation`.
 Every mode refuses a blob whose size, sha256 or file magic differs from the running platform's
 pin, checks the readiness identity (`GET /api/info` must answer 200 with `pid == server pid`
-and `version == "2.4.1"` exactly), records the route rows verbatim, replaces the credential,
-the relay base URL and the relay host in memory before any write, bounds the SSE capture at
-8 MiB and reaches the process/socket/reader cleanup barriers.
+and `version == "2.4.1"` exactly), records the route rows verbatim (the `/api/info` body
+narrowed to `pid`/`version`/`status`), replaces the credential, the relay base URL and the
+relay host in memory before any write, bounds the SSE capture at 8 MiB and reaches the
+process/socket/reader cleanup barriers.
 
 | receipt | mode | raw sha256 (uncommitted) | pre-compaction sha256 (uncommitted) | committed sha256 |
 | --- | --- | --- | --- | --- |
-| `probe-windows.json` | probe | `71516a99bf1fda1038e988e0a23850566531d7eca36335b535fa1406702f3213` | `93e3d1954a4ab1745c6d65b049e889f0057db5fbb467e1002fa12b4a626b1543` | `a1238edd7533ec89d5428313b433313254b52cc25f31d01b8da7e133dbd7ed52` |
-| `probe-linux.json` | probe | `78aa649fbad114e8165485cf463a3527522ce4687868dc7a61368699fd4066c6` | `07cacda5706e344e86e1313f3176b70ee2a9d6782fe4d282e38928ad88668ab6` | `e1661d1fbc3630ab5e2d2725490a32b85b6d352c2938cfb27cfc934054f32d3b` |
-| `windows-2026-11-25-r2.json` | full | `35d89994cea6129f9fcc450f231c0480095371f043aa3425b7b229e5cba210f7` | `c1d9d7713581de4da656344871964079853e338762c56d05f0f2f12f34946895` | `88a6a8c77938706fbb759f443360f94bd93370dc43cfdcb86ffaa7a66b18b564` |
-| `linux-2026-11-25.json` | full | `6ab27bde8ea7556808bf841860c715ec4410e1336aa72d6a034a0009f2b4777e` | `2ede51de419d98f77e8ab38cacb5280072121b9c0f0200781c09e2683dbfee87` | `5a46da78a5c8f273ca1bd436f4cece3ec6c6f7109ad54824e5e95d351d628503` |
-| `windows-2026-11-25-provider-failure.json` | provider-failure | `88d8c109576f8ced6d8a8848bb613dcb955273bfd119e4d62538ec056321488b` | `958dcb32c7ecf5fdbfe1f3ce96cabc26a80a04810022ed4d6e74cd7572928ec7` | `a1f9435fb813637a7ee7be195ae3ec6c3fcabde1af641202fdf6fc7d88818e05` |
-| `linux-2026-11-25-provider-failure.json` | provider-failure | `6b2b7807360a5fdff20ff6277b1d245388671a188b044d09c96668349ea4cd71` | `e3e5d2c9a5a3bab69d74b4633d00c45d8f059d5290191fc36e52c050a01b2d00` | `55a1691d2d9ff8275fa4f500c811597d8fcf3d2b75424c9e5a8c489ec1724a90` |
-| `windows-2026-11-25-truncation.json` | truncation | `02ab07840acb0329e3f7c1a63e9ecc5119c98df44388802940259142df77e20e` | `f4855a31e1f92cf21085f599ffdeb5cb02f7330e5966f13e62cbbe95e3963a33` | `64b04b4d73677c1c5d405d5ff6d76a4bc49e917a7470888b7d85068ef9be01f0` |
-| `linux-2026-11-25-truncation.json` | truncation | `9489fb6d5e520e62fe03c833898258ef2af9ea5d9d1d9534060c6136aa571423` | `40e85d111afcc059043cafe451aeedba71c76280a82a52a9f514a5652c4179ae` | `ebcb186a1dd89e5597120060731c498460dead9912caba38ebf2e4aa29e2fef5` |
+| `probe-windows.json` | probe | `71516a99bf1fda1038e988e0a23850566531d7eca36335b535fa1406702f3213` | `93e3d1954a4ab1745c6d65b049e889f0057db5fbb467e1002fa12b4a626b1543` | `7044a470874be4deb8e4ccc0843e0a17b6a1fd2bc45cedb4e4fb355bdeb09258` |
+| `probe-linux.json` | probe | `78aa649fbad114e8165485cf463a3527522ce4687868dc7a61368699fd4066c6` | `07cacda5706e344e86e1313f3176b70ee2a9d6782fe4d282e38928ad88668ab6` | `a78a4289e2bd8b4f32a2398aa090493cd541168c33175f426875668a5dae97c4` |
+| `windows-2026-11-25-r2.json` | full | `35d89994cea6129f9fcc450f231c0480095371f043aa3425b7b229e5cba210f7` | `c1d9d7713581de4da656344871964079853e338762c56d05f0f2f12f34946895` | `0670b3d3581c9ee8bf8d73d13d53f3f1db762e2cc0ef3ff4ff793ad3e84a96b2` |
+| `linux-2026-11-25.json` | full | `6ab27bde8ea7556808bf841860c715ec4410e1336aa72d6a034a0009f2b4777e` | `2ede51de419d98f77e8ab38cacb5280072121b9c0f0200781c09e2683dbfee87` | `c4a4fb6ff96fc7c562a4edd6679ad963050c59ffaa6947f3c45eb3e35e0b31b2` |
+| `windows-2026-11-25-provider-failure.json` | provider-failure | `88d8c109576f8ced6d8a8848bb613dcb955273bfd119e4d62538ec056321488b` | `958dcb32c7ecf5fdbfe1f3ce96cabc26a80a04810022ed4d6e74cd7572928ec7` | `1e576b5b12a62a1098c25a297ff4aa38da6e221cf7962b1251736c40d42ca7fe` |
+| `linux-2026-11-25-provider-failure.json` | provider-failure | `6b2b7807360a5fdff20ff6277b1d245388671a188b044d09c96668349ea4cd71` | `e3e5d2c9a5a3bab69d74b4633d00c45d8f059d5290191fc36e52c050a01b2d00` | `8351173c402755873dcd9d77de564633f600d2a5b004a35a420d0bfc88b7d772` |
+| `windows-2026-11-25-truncation.json` | truncation | `02ab07840acb0329e3f7c1a63e9ecc5119c98df44388802940259142df77e20e` | `f4855a31e1f92cf21085f599ffdeb5cb02f7330e5966f13e62cbbe95e3963a33` | `2c74bfd31c3d4a711a7aae744145fc8ad3e3dc7d19dea9d4f2dd9ce5a6dc5e14` |
+| `linux-2026-11-25-truncation.json` | truncation | `9489fb6d5e520e62fe03c833898258ef2af9ea5d9d1d9534060c6136aa571423` | `40e85d111afcc059043cafe451aeedba71c76280a82a52a9f514a5652c4179ae` | `361cb4ffb23df5a3c628887a2df281ab12b57d509e5c55da902d0d0407bb7a68` |
+
+**Fix pass (2026-11-25, PRE-2 — public-repo hostname ruling).** The collector narrows the
+recorded `/api/info` body to `pid`/`version`/`status`, so no host metadata is recorded in
+future; the eight records committed before that ruling had the machine hostname value in that
+body replaced with the constant token `<HOSTNAME>`, a recorded post-render substitution over
+the renderer's output. The committed digests above are re-derived from the substituted bytes;
+the old→new pair per file and the `classify()` re-grade (identical verdicts on all eight) are
+in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4 and §12. The raw and pre-compaction
+columns are unchanged: those uncommitted artifacts are outside the repository and still carry
+the original value. The frozen 2.3.0 receipts keep their `hostname` field verbatim — not
+edited, recorded as a residual.
 
 Every committed receipt carries the collector binding
 `56d6e602631fdd8d0c3baa34dd3821df3cc0d332ee0d33aecc59afed0b126bea` for
@@ -74,12 +86,13 @@ Every committed receipt carries the collector binding
 `scripts/ci/source_subject.py` in its own `binding_sha256` field, and records
 `source_head 6b2d4f8f195a…` (the base commit; the collector changes are uncommitted at
 collection time, which is why the binding, not the head, is the byte identity of the tool).
-A later apply pass and a fix pass changed the collector and its suite after collection (deltas
-in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every receipt here keeps its
-collecting revision in `binding_sha256`, and none was re-rendered.
+A later apply pass, a fix pass and the PRE-2 fix pass changed the collector and its suite
+after collection (deltas in `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every
+receipt here keeps its collecting revision in `binding_sha256`, and none was re-collected.
 
-Each committed record is produced from its raw receipt by two recorded steps (Q-RENDER a):
-the repository renderer's root-only pass, then a one-line JSON pass.
+Each committed record is produced from its raw receipt by two recorded steps (Q-RENDER a) —
+the repository renderer's root-only pass, then a one-line JSON pass — and the eight pre-PRE-2
+records additionally carry the recorded hostname-token substitution described above.
 
 ```text
 python3 scripts/ci/model-routing-record-sanitize.py --root-only < <raw>/<record>.json > <render>/<record>.json
@@ -95,9 +108,10 @@ reads machine-generated records as duplication, because the same collector write
 receipt and they share their structural blocks by construction. A record committed as a single
 JSON object on one line is below that threshold; the gate reports it as a notice rather than
 silently skipping it, and no record can embed a run of another record's lines. The parsed
-equality check above proves the compaction changed whitespace only; the data is exactly the
-renderer's output, and the raw and pre-compaction sha256 values stay in the table so both
-earlier forms can be reproduced byte-for-byte. `.gitattributes` pins `*.json text eol=lf`, so
+equality check above proves the compaction changed whitespace only; apart from the recorded
+`<HOSTNAME>` substitution the data is exactly the renderer's output, and the raw and
+pre-compaction sha256 values stay in the table so both earlier forms can be reproduced
+byte-for-byte. `.gitattributes` pins `*.json text eol=lf`, so
 that step writes bytes (LF) instead of letting the platform translate newlines; a CRLF spelling
 would be refused by `git add` under the pin.
 
@@ -133,7 +147,9 @@ containment caveat of §1.
 
 `HTTP 200`, idle, `Step.Ended`, SSE EOF and files still do not establish success; the
 classifier that decides each row is unchanged in that respect and still refuses a failed
-provider turn, a no-op interrupt and an unapproved tool continuation.
+provider turn, a no-op interrupt and an unapproved tool continuation. The PRE-2 substitution
+was re-graded: `classify()` over the eight edited records returns the pre-edit `classes`
+mapping for every one of them, so no verdict above moves (evidence record §12).
 
 ## 4. Route table (live statuses, never normalized)
 
@@ -152,6 +168,9 @@ provider turn, a no-op interrupt and an unapproved tool continuation.
 | `POST /api/session/{id}/permission/{requestID}/reply` | 204 (`{"decision":"once"}`) | 204 | reply enum `once\|always\|reject`; only `once` is ever sent |
 | `POST /api/session/{id}/interrupt?resume=false` | 200 `{"interrupted":true}` | 200 | query flag and top-level body are 2.4.1 spellings |
 | `DELETE /api/session/{id}` + readback | 204, readback 404 | 204, readback 404 | unchanged |
+
+Every status above is the live one; each row's body is recorded verbatim except the
+`/api/info` rows, whose body is narrowed to `pid`/`version`/`status` (§2, PRE-2).
 
 ## 5. Decisive observations
 
@@ -194,8 +213,11 @@ provider turn, a no-op interrupt and an unapproved tool continuation.
 - **Deleted sessions read back.** `DELETE` answers 204 and the following `GET` answers 404
   `SessionNotFoundError` on both platforms, so session removal is observed rather than
   assumed.
-- The `/api/info` body carries the server's own `hostname` field verbatim (the same field the
-  committed 2.3.0 receipts carry). It is a response field, not a host path.
+- The recorded `/api/info` body keeps only `pid`/`version`/`status` after the PRE-2 fix (the
+  collector narrows it in memory before any write), so no host metadata is recorded in future;
+  the eight edited records carry the constant token `<HOSTNAME>` where the collector of the
+  day wrote the machine hostname value. The frozen 2.3.0 receipts keep their `hostname` field
+  verbatim — not edited, recorded as a residual in the evidence record §10.
 
 ## 6. Credential and record locality
 
@@ -207,8 +229,8 @@ The receipts keep `credential_scan` (`files_scanned`, `matches: []`), the in-mem
 credential/relay-origin replacement with its counts, and the config/payload/event refusals.
 The literal relay origin is replaced before any write (Q-URL b: `provider.base_url` is
 `<RELAY-BASE-URL>`, the host is `<RELAY-HOST>`), and the repository renderer then removes every
-host absolute path. The credential/key census over the change and the renderer's root-only
-gate are reported with their exact commands in
+host absolute path. The credential/key census and the PRE-2 hostname census over the change
+(0 occurrences) and the renderer's root-only gate are reported with their exact commands in
 `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`.
 
 ## 7. Reproduce the observation, not a support claim

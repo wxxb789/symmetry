@@ -137,6 +137,21 @@ def readiness_identity(info, pid):
     return isinstance(info, dict) and info.get("pid") == pid and info.get("version") == VERSION
 
 
+def recorded_info_body(path, status, raw):
+    """The /api/info row keeps identity keys only; the server's host metadata never reaches a receipt."""
+    if path != "/api/info":
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
+    return json.dumps(
+        {"pid": parsed.get("pid"), "version": parsed.get("version"), "status": status}, ensure_ascii=True
+    )
+
+
 def bounding_field(properties):
     """The first prompt-schema property that bounds output length, or None."""
     return next((name for name in properties if name.lower() in BOUNDING_FIELDS), None)
@@ -665,6 +680,10 @@ def main():
             response = connection.getresponse()
             raw = response.read(8 << 20).decode(errors="replace")
             safe_raw, redacted = redact(raw, replacements)
+            try:
+                parsed = json.loads(safe_raw) if safe_raw else None
+            except ValueError:
+                parsed = None
             if record:
                 receipt["operations"].append(
                     {
@@ -673,14 +692,10 @@ def main():
                         "authenticated": authenticated,
                         "payload": payload,
                         "status": response.status,
-                        "body": safe_raw,
+                        "body": recorded_info_body(path, response.status, safe_raw),
                         "credential_redacted_before_write": bool(redacted),
                     }
                 )
-            try:
-                parsed = json.loads(safe_raw) if safe_raw else None
-            except ValueError:
-                parsed = None
             return response.status, parsed
         finally:
             connection.close()
