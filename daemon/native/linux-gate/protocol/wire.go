@@ -50,7 +50,7 @@ const (
 	releaseStdioFDCount        = 3
 	releaseFDCount             = 4
 	maxReleaseSize             = 128 << 10
-	maxCommandString           = 16 << 10
+	maxCommandString           = 64 << 10
 	maxCommandVector           = 128
 )
 

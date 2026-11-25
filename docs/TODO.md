@@ -1024,10 +1024,14 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       pure move and kept them byte-identical). Single-point mutants of
       `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
       for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
-      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
-      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
-      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
-      per check in a separate maintenance slice.
+      NUL check, the receipt generation upper bound and minimum length, and
+      `encodeGuardedRelease`'s body and grant bounds. `readWireString`'s `maxCommandString` bound
+      left this list on 2026-11-26: `rf-claude-schema-argv` added
+      `TestWireLinuxCommandStringBoundary`, whose decode row refuses a `maxCommandString`+1 element
+      (`length-prefixed command string is oversized or truncated`, evidence record §7); the NUL
+      check stays open. The generation and minimum-length checks may be shadowed by later reads or
+      `receipt.Validate`; the rest are real gaps. Add one rejection test per check in a separate
+      maintenance slice.
 
 ## Deferred review findings (PR #205)
 
@@ -1898,23 +1902,17 @@ section below.
       `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §3, run `45671784251`):
       both sets now pass the clone reserve and the fresh-leg umask wall (the authorized one-line
       `production` UMask arm is in; runs `45665341553`/`45668197894` red at the wall, run 4 zero
-      `… are 05` lines) and stop at, verbatim, `codex_containment` — `start native owner witness
-      transport: resume process "/usr/local/bin/codex": one-use Linux v2 RELEASE result is
-      unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown;
-      stage=clone_bootstrap arm=bootstrap_attempt wait_class=other
-      guest_stage=gate_drop_bounding_set errno=1)` (the same pre-clone credential fact the
-      `## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction` entry above records;
-      the AppArmor userns wall, owned by the in-flight goal `rf-acc-apparmor-userns-profile` per
-      the conductor ruling 2026-11-26 — not `rf-acc-guest-native-exec`, which merged as #289);
-      `claude_containment` — `start native owner witness transport: start
-      "/usr/local/bin/claude": validate native command and three Runner pipes before cgroup
-      reservation: Linux owner native argv contains an empty, oversized, or NUL value` (root
-      cause measured: the Claude adapter's fixed `--json-schema` element is 23 881 bytes,
-      `daemon/internal/harness/claude/adapter.go:160-180`, over the 16 KiB `maxCommandString`
-      bound, `daemon/native/linux-gate/protocol/wire.go:53`, refused at `wire_linux.go:450-452`
-      via `daemon/internal/execution/linux_owner_v2_linux.go:182`; owner `rf-claude-schema-argv`,
-      a new conductor goal whose design is pending: raise the argv bound, shrink the schema
-      argument, or move the schema off argv). Both sets'
+      `… are 05` lines), and both walls the run then stopped at are closed, moved to
+      `docs/archive/CLOSED-TODO.md`: `codex_containment`'s AppArmor userns wall by
+      `rf-acc-apparmor-userns-profile` (#293; its record §8 names the rows that clear the wall
+      and the runs' next stops — the migration turn wait and the `shared` `/proc/<pid>/environ`
+      identity rows — and its §12 frames them as next-goal territory), and
+      `claude_containment`'s fixed
+      `--json-schema` argv wall by `rf-claude-schema-argv` (closure under
+      `## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg
+      (2026-11-26)`; its Bind run `45710455914` on `72f8d01e` shows zero `oversized` refusals
+      and the claude transport reaching its first native stage, and the set's next stop is
+      recorded in the `## rf-claude-schema-argv: residuals` section below). Both sets'
       `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
       failing leg).
 
@@ -1948,6 +1946,24 @@ section below.
       file sha256 `c5da521d…`, identical at both heads); run 4 had 0 such lines. Post-wall
       cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
       conductor.
+
+## rf-claude-schema-argv: residuals (2026-11-26)
+
+- [ ] The `claude_containment` set's next stop beyond the argv wall (2026-11-26, Bind run
+      `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): verbatim `positive owner witness
+      lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` [INFERENCE:
+      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Owner:
+      TBD, a new conductor goal; the stop is the owner witness's durable-stage summary check
+      (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
+      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`).
+
+- [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
+      `daemon/internal/platform/linux_supervisor_protocol_linux.go:19`) carries the command's
+      Args/Env as JSON and would refuse a 23 881-byte element (`errLinuxSupervisorFrameTooLarge`,
+      `supervisor_linux_client.go:79,219-224`). It is not on the linux-v2 path that
+      `claude_containment` takes (`linuxV2Requested()` dispatches first). Owner: platform, if a
+      claude-like leg ever takes that route. No code change.
 
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 
