@@ -498,7 +498,7 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 			if err := witness.closeCapturedFDs(); err != nil {
 				return err
 			}
-			return writeLinuxV2NativeWitnessSummary(output, witness.summary)
+			return writeLinuxV2NativeWitnessSummaryAndExit(output, witness.summary)
 		}
 		if err := validateLinuxV2NativeWitnessExistingJournal(journal, request); err != nil {
 			return err
@@ -553,7 +553,7 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 			if err := witness.closeCapturedFDs(); err != nil {
 				return err
 			}
-			return writeLinuxV2NativeWitnessSummary(output, witness.summary)
+			return writeLinuxV2NativeWitnessSummaryAndExit(output, witness.summary)
 		}
 		if err := witness.summarizeJournal(journal, true); err != nil {
 			return err
@@ -593,7 +593,7 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 		if err := witness.closeCapturedFDs(); err != nil {
 			return err
 		}
-		return writeLinuxV2NativeWitnessSummary(output, witness.summary)
+		return writeLinuxV2NativeWitnessSummaryAndExit(output, witness.summary)
 	}
 	if err := barrier.ensureFresh(); err != nil {
 		return err
@@ -2036,6 +2036,20 @@ func writeLinuxV2NativeWitnessSummary(output io.Writer, summary linuxV2NativeWit
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(summary); err != nil {
 		return fmt.Errorf("encode redacted owner witness summary: %w", err)
+	}
+	return nil
+}
+
+var errLinuxV2NativeWitnessContainmentUnproven = errors.New("owner witness containment is unresolved")
+
+// The acceptance job decides an unresolved stage-replay recovery by the process
+// exit status, not only by its response file.
+func writeLinuxV2NativeWitnessSummaryAndExit(output io.Writer, summary linuxV2NativeWitnessSummary) error {
+	if err := writeLinuxV2NativeWitnessSummary(output, summary); err != nil {
+		return err
+	}
+	if summary.Outcome == "unresolved" {
+		return errLinuxV2NativeWitnessContainmentUnproven
 	}
 	return nil
 }

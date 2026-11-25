@@ -1630,8 +1630,80 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 	}
 }
 
-func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwners) error {
-	for _, pair := range []struct {
+// linuxV2JournalBindsOwnerSlot projects one owner slot the way fillSummaryFromJournal does;
+// a placeholder pair is only legitimate where that projection is empty.
+func linuxV2JournalBindsOwnerSlot(journal state.RunJournal, slot string) bool {
+	var pid int
+	var identity string
+	if reservation := journal.ContainmentCgroup; reservation != nil {
+		switch slot {
+		case "anchor":
+			pid, identity = reservation.Anchor.PID, reservation.Anchor.Identity
+		case "helper":
+			if reservation.Helper != nil {
+				pid, identity = reservation.Helper.PID, reservation.Helper.Identity
+			}
+		case "launcher":
+			if reservation.Launcher != nil {
+				pid, identity = reservation.Launcher.PID, reservation.Launcher.Identity
+			}
+		case "gate":
+			if reservation.Gate != nil {
+				pid, identity = reservation.Gate.Process.PID, reservation.Gate.Process.Identity
+			}
+		}
+	}
+	if handoff := journal.ContainmentHandoff; handoff != nil {
+		switch slot {
+		case "anchor":
+			pid, identity = handoff.AnchorPID, handoff.AnchorIdentity
+		case "helper":
+			pid, identity = handoff.SupervisorPID, handoff.SupervisorIdentity
+		case "launcher":
+			pid, identity = handoff.LauncherPID, handoff.LauncherIdentity
+		case "gate":
+			pid, identity = handoff.TargetPID, handoff.TargetIdentity
+		}
+	}
+	if owner := journal.ContainmentAuthority; owner != nil {
+		switch slot {
+		case "anchor":
+			pid, identity = owner.AnchorPID, owner.AnchorIdentity
+		case "helper":
+			pid, identity = owner.SupervisorPID, owner.SupervisorIdentity
+		case "launcher":
+			pid, identity = owner.LauncherPID, owner.LauncherIdentity
+		case "gate":
+			pid, identity = owner.TargetPID, owner.TargetIdentity
+		}
+	}
+	if proof := journal.ContainmentCgroupReleaseProof; proof != nil {
+		switch slot {
+		case "anchor":
+			pid, identity = proof.AnchorPID, proof.AnchorIdentity
+		case "helper":
+			pid, identity = proof.SupervisorPID, proof.SupervisorIdentity
+		case "launcher":
+			pid, identity = proof.LauncherPID, proof.LauncherIdentity
+		case "gate":
+			pid, identity = proof.TargetPID, proof.TargetIdentity
+		}
+	}
+	if proof := journal.ContainmentCgroupPreGateReleaseProof; proof != nil {
+		switch slot {
+		case "anchor":
+			pid, identity = proof.Receipt.Anchor.PID, proof.Receipt.Anchor.Identity
+		case "helper":
+			pid, identity = proof.Receipt.Helper.PID, proof.Receipt.Helper.Identity
+		case "launcher":
+			pid, identity = proof.Receipt.Launcher.PID, proof.Receipt.Launcher.Identity
+		}
+	}
+	return pid > 1 && identity != ""
+}
+
+func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwners, journal state.RunJournal) error {
+	pairs := []struct {
 		name     string
 		expected *linuxV2OwnerWitnessProcess
 		actual   *linuxV2OwnerWitnessProcess
@@ -1640,15 +1712,23 @@ func linuxV2RequireSameOwnerIdentities(expected, actual linuxV2OwnerWitnessOwner
 		{name: "helper", expected: expected.Helper, actual: actual.Helper},
 		{name: "launcher", expected: expected.Launcher, actual: actual.Launcher},
 		{name: "gate", expected: expected.Gate, actual: actual.Gate},
-	} {
+	}
+	for _, pair := range pairs {
 		if pair.expected != nil && (pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
 			return fmt.Errorf("same-RunKey replay changed exact %s PID/creation identity", pair.name)
 		}
 	}
 	seenPIDs := make(map[int]struct{}, 4)
 	seenIdentities := make(map[string]struct{}, 4)
-	for _, process := range []*linuxV2OwnerWitnessProcess{actual.Anchor, actual.Helper, actual.Launcher, actual.Gate} {
+	for _, pair := range pairs {
+		process := pair.actual
 		if process == nil {
+			continue
+		}
+		// The witness emits an unbound owner slot as the same zero object on both sides;
+		// only a placeholder pair the journal has not bound may escape the completeness check.
+		if pair.expected != nil && pair.expected.PID <= 1 && pair.expected.Identity == "" &&
+			process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
 			continue
 		}
 		if process.PID <= 1 || process.Identity == "" {
@@ -3498,7 +3578,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 		t.Fatalf("same-RunKey exact response replay failed %s stage assertions: %v", stage, err)
 	}
 	replayExitCode := linuxV2OwnerCommandExitCode(command)
-	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners); err != nil {
+	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners, initial.Journal); err != nil {
 		t.Fatalf("%s ACK-loss replay duplicated or replaced an owner process: %v", stage, err)
 	}
 	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, replayResponse)
@@ -3734,7 +3814,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 	} else if err := linuxV2ValidateStageReplayResponse(replayFixture, responseLoss.hold, replayResponse); err != nil {
 		t.Fatalf("same-RunKey helper replay response is not exact: %v", err)
 	}
-	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners); err != nil {
+	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners, initial.Journal); err != nil {
 		t.Fatalf("helper response-loss replay duplicated/replaced owner identities: %v", err)
 	}
 	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, replayResponse)
