@@ -1928,6 +1928,16 @@ section below.
       run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
       needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
 
+- [ ] Bind-run observation: codex post-wall cleanup race (2026-11-26, goal
+      `rf-acc-containment-goal-admission`; evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §6, Bind run `45689981952`):
+      the codex set's stderr carries 12 `dial unixpacket: connect: connection refused` lines,
+      6 verbatim as `Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket:
+      connect: connection refused` (`daemon/internal/execution/linux_owner_v2_linux.go:1292`;
+      file sha256 `c5da521d…`, identical at both heads); run 4 had 0 such lines. Post-wall
+      cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
+      conductor.
+
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 
 - [ ] Record the credentialed `linux-native-v2-acceptance` rows for the retargeted durability sets

@@ -5297,12 +5297,14 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       provider-free row on the non-Goal refusal; `daemon/internal/**` stayed byte-identical and no
       assertion was weakened outside the conductor ruling
       (`refactor/decision-witness-admission-2026-11-25.md`).
-      Scratch runs `45665341553`, `45668197894` and `45671784251` observe both containment cases
-      (`codex_containment`, `claude_containment`) past the clone reserve with zero `reserve owner
-      witness clone` / `clone intent does not match` refusals; both
+      Scratch runs `45665341553` and `45668197894` (earlier rounds, their own bytes) observe both
+      containment cases (`codex_containment`, `claude_containment`) past the clone reserve with
+      zero `reserve owner witness clone` / `clone intent does not match` refusals; the Bind run
+      `45689981952` on the delivered bytes (one scratch run on the PR head) re-observes both past
+      the clone reserve and the umask wall with zero such refusals and zero umask lines. Both
       `stage_replay_native_release_<kind>` legs remain unexecuted, because each set stops at its
       first failing leg. The authorized one-line UMask arm (`production` joins
-      `stage-replay|negative`) cleared the fresh-leg umask wall in run `45671784251`, whose next
-      stops (the codex release class — the AppArmor userns wall, owned by
+      `stage-replay|negative`) cleared the fresh-leg umask wall in run `45671784251`; that
+      earlier round's walls (the codex release class — the AppArmor userns wall, owned by
       `rf-acc-apparmor-userns-profile`; the Claude fixed-argv bound wall, owned by
       `rf-claude-schema-argv`) are recorded in the goal's residual entry in `docs/TODO.md`.

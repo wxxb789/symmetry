@@ -12,7 +12,7 @@ host locations read `<worktree>` / `<scratch>`.
 
 | File | sha256 | Change |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` — an explicit map of goal-routed (`harness`, `request_case`) pairs; every other provider-free row keeps the non-Goal refusal; the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`); post-run-4 (S1/S4) plus review fix r1 (§9): the helper comment names the excluded provider-free opencode rows, and `TestLinuxV2WitnessRequiresGoalAdmissionRows` derives its 11 rows from the case constructors the witness tests dispatch |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `19085d33007f9d79c50945a7ddb083ab4979192e75c00f57af55a3515dcd6dc1` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` — an explicit map of goal-routed (`harness`, `request_case`) pairs; every other provider-free row keeps the non-Goal refusal; the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`); post-run-4 (S1/S4) plus review fix r1 (§9): the helper comment names the excluded provider-free opencode rows, and `TestLinuxV2WitnessRequiresGoalAdmissionRows` derives 9 of its 12 rows from the case constructors the witness tests dispatch; round-1 fix (§10): one literal default-refuse row is added post-Bind (before `7f743b0f…` → after `19085d33…`, test-table-only) |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | the four containment rows move to the goal route via the `:opencode_goal` repository role (open repository resource); `runtime_adapter_binding?/3` asserts `adapter.kind` = the case's harness for that role; `@expected_fixture_runs` stays 48 (43 goal: 39 pi-durability + 4 containment; 5 legacy) |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | the codex/claude claim runtimes gain `harness_kind`/`harness_version` (`0.168.0`/`2.1.323`, the pins at `linux-v2-native-acceptance.sh:1135-1136`)/`adapter_version`/`adapter_protocol_version` and the adapter operations block, mirroring the pi-durability spec; post-run-4 (S2): the three goal-assigned specs share one `goal_assigned_runtime_spec` builder and the emitted session payload is byte-identical (§4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | the admission branch keys on `GOAL_ADMISSION_CASES` (the five goal-routed writer cases) instead of `profile_name == "pi-durability"`; its three checks and the legacy repository check are unchanged |
@@ -231,9 +231,10 @@ linux/amd64`: `--- PASS: TestGoalAdmissionInScope (0.00s)`. Positive rows: `stag
 `opencode_native_health`, `stage_replay_unprovisioned_refusal` (harness `opencode`), `wsl2_denial`.
 
 The S4 post-run-4 amendment pinned the same row set in-repo:
-`TestLinuxV2WitnessRequiresGoalAdmissionRows` (11 rows) runs in the package's existing CI job;
-the review fix r1 re-collected it on the delivered bytes, where the rows derive from the case
-constructors the witness tests dispatch (`linuxV2CodexContainmentCase` and the kind-leg table):
+`TestLinuxV2WitnessRequiresGoalAdmissionRows` (11 rows; 12 after the round-1 fix, §10) runs in
+the package's existing CI job; the review fix r1 re-collected it on the delivered bytes, where
+the rows derive from the case constructors the witness tests dispatch (`linuxV2CodexContainmentCase`
+and the kind-leg table):
 `go test -count=1 -run "^TestLinuxV2WitnessRequiresGoalAdmissionRows$" ./e2e/` PASS on `go1.26.8
 linux/amd64`, exit 0 (§9).
 
@@ -295,10 +296,12 @@ both scripts exit 0; the five `test-linux-v2-*.py` suites exit 0 each (`OK`); `b
 (`84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e`) script, identical but for the
 file argument (exit 1 both, pre-existing findings) → delta 0; the P3 extraction from the delivered
 Go file re-hashes to
-`ebb846af82debf35700aa4ac62b7d7c1be23a147ce79a088ecf6444f470deb93` and `go test -count=1` PASS
-(exit 0), with the M2/M5 flips of the extracted text reddening exactly the recorded rows (exit 1
-each) and the restored run green. P1/P2's original runs stand for the four code files whose bytes
-are unchanged (the §6 equality table).
+`7fb32b9ff2acb55c557d3065f330c3681db02f21e120715fc4833ec80d7cbace` (the review fix r1
+re-collection; the earlier `ebb846af…` extraction stays labelled as the superseded pre-r1
+collection in the P3 block above and in §9) and the re-collected `go test -count=1` probe PASS
+(exit 0), with §9's M2/M5 mutants of the extracted text reddening exactly the recorded rows
+(exit 1 each) and the restored run green. P1/P2's original runs stand for the four code files
+whose bytes are unchanged (the §6 equality table).
 
 Apply-resume re-run on the post-run-4 delivered bytes (2026-11-26, S1/S2/S4): `gofmt -l daemon/` 0
 files (exit 0); `GOOS=linux go vet ./e2e/` exit 0 and the S4 row test PASS (exit 0) on `go1.27.0
@@ -327,15 +330,33 @@ refusals, zero umask lines, both sets red on their containment witness. The cond
 fix below; S1/S2/S4 land off the witness run path, and the review fix changes predicate bytes on
 that path while leaving the decision unchanged for every real case (§9), so the conductor's Bind
 run on the PR head (`codex_containment claude_containment`, one scratch run, expecting the same
-walls as run 4) binds the delivered bytes. Its row is left empty here:
+walls as run 4) binds the delivered bytes. Its row:
 
 | Bind run | Head | Case sets | Result |
 | --- | --- | --- | --- |
-|  |  |  |  |
+| `45689981952` | `499a633d878b8e4f5c146cee62a8acc56ffe5b01` (= `8afffc6d` + the scratch workflow `e3f526a2c06a4079a4e6b4e2ce4240574597fe593b00c5c199f7868871e70e8f` and shim `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`) | `codex_containment claude_containment` | both sets exited 1 — walls match run 4 (codex `guest_stage=gate_drop_bounding_set errno=1`; claude oversized argv), 0 umask / 0 reserve-refusal lines; evidence artifact `c3af071cdb674c375039b2a2e92434512d0385d287204de61a7aae6dd78cae47` |
+
+Bind-run input equality — the scratch head carries the PR head's run-input bytes (`git cat-file`
+sha256 at both revisions; `git diff --name-status 8afffc6d 499a633d` is exactly the two
+scratch-only files below):
+
+| File | Run-head bytes (`499a633d`) | PR-head bytes (`8afffc6d`) | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | yes |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | yes |
+| `scripts/ci/register-linux-v2-claim-machine.py` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | yes |
+| `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `e3f526a2c06a4079a4e6b4e2ce4240574597fe593b00c5c199f7868871e70e8f` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The round-1 fix (§10) then added one test-table row to the e2e file after this bind:
+`7f743b0f…` → `19085d33…` (full values in §1), a test-table-only delta — no predicate,
+witness-test or script byte moved.
 
 | File | Run-4 head bytes | Delivered bytes | Equal? |
 | --- | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | no — post-run-4 S1/S4 delta (comment reword + row test) plus review fix r1 (§9); the predicate region re-extracts to `7fb32b9f…` and the row test is green (§4) |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `19085d33007f9d79c50945a7ddb083ab4979192e75c00f57af55a3515dcd6dc1` | no — post-run-4 S1/S4 delta (comment reword + row test), review fix r1 (§9) and the round-1 fix row (§10; the §6 bind-bound bytes `7f743b0f…` → `19085d33…`, test-table-only); the predicate region re-extracts to `7fb32b9f…` and the row test is green (§4) |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | yes |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | no — post-run-4 S2 delta (shared builder); emitted session payload byte-identical (`47bfd1c0…`, §4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | yes |
@@ -433,9 +454,10 @@ Residuals and known limits:
    (`:3021`; `shared` scheduled at `.github/workflows/linux-native-v2-acceptance.yml:122`) — are
    unobserved under `UMask=0077`; their coverage is the conductor-owned credentialed all-14
    dispatch (oracle gap).
-6. The delivered bytes carry the post-run-4 S1/S2/S4 amendments plus the review fix r1 (§6, §9):
-   run 4 binds the walls, and the conductor's Bind run on the PR head binds the delivered bytes;
-   the Bind row slot in §6 stays empty until that run.
+6. The delivered bytes carry the post-run-4 S1/S2/S4 amendments, the review fix r1 (§6, §9) and
+   the round-1 review fixes (§10): run 4 binds the walls, and the conductor's Bind run
+   `45689981952` on the PR head binds the delivered bytes (§6); the post-Bind test-only e2e row
+   delta is stated in §10.
 
 ## 9. Review fix r1 (2026-11-26, conductor ruling on the review MUST_FIX)
 
@@ -495,3 +517,38 @@ tokenizable), and the committed gate does not cover it (`docs/evaluations/**` an
 `gofmt -l .` in `daemon/` lists 0 files (exit 0); `GOTOOLCHAIN=auto GOOS=linux go vet ./e2e/`
 exit 0; the row test above PASS (exit 0) with its constructor mutant red (exit 1) and the
 restored file green again.
+
+## 10. Round-1 review fixes (2026-11-26, conductor ruling on PR #294 round 1)
+
+The round-1 review (adversarial `294-opus-review-1.md`, security `294-sec-review-1.md`, audit
+`294-ds-audit-1.md`) was accepted in full by the conductor. This stage reworded the PR body and
+the CLOSED-TODO closure so the reserve-pass claim cites the Bind run `45689981952` on the
+delivered bytes (run 4 cited only for the earlier round's walls, §6), aligned the PR body's
+row-test toolchain claim with this record (`go1.27.0`, the toolchain `GOTOOLCHAIN=auto` selects
+for `daemon/go.mod`), corrected the §4 P4 extraction hash, and added the row below.
+
+- **STD-A04 in-repo default-refuse row (test-only).** `TestLinuxV2WitnessRequiresGoalAdmissionRows`
+  gains one literal row: a provider-free `codex` row whose `requestCase` is `claude_containment`
+  (a pair only under `claude_code`, absent for `codex`) wants `false`, pinning the map's
+  default-refuse arm in-repo. The row discriminates: on the pre-fix predicate it returned `true`
+  (every provider-free codex/claude row was admitted). The delta sits in that test function only
+  — the predicate region still re-extracts to `7fb32b9f…`, the witness tests and every script
+  byte are unchanged, and the acceptance run path does not execute the row test — so the Bind
+  run on the `8afffc6d` bytes (plus the two scratch-only files) stays binding.
+- **e2e file before/after.** `daemon/e2e/production_linux_v2_native_witness_test.go`: before
+  `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` (the bytes the Bind run and
+  the §6 equality table bind) → after
+  `19085d33007f9d79c50945a7ddb083ab4979192e75c00f57af55a3515dcd6dc1`; the delta is
+  test-table-only (one added row; `git diff --stat` = 1 file, 1 insertion). Re-measured on the
+  new bytes: `gofmt -l .` in `daemon/` lists 0 files (exit 0); `GOOS=linux GOARCH=amd64 go vet
+  ./e2e/` exit 0 (host go1.27.4); the row test PASS (exit 0) on `go1.27.0 linux/amd64` (WSL,
+  `GOTOOLCHAIN=auto`).
+- **§4 P4 hash correction (audit P3-1).** That paragraph now carries the delivered extraction
+  `7fb32b9f…` and §9's re-collected mutants; the earlier `ebb846af…` extraction stays labelled
+  as the superseded pre-r1 collection (P3 block above, §9).
+- **Bind-run observation recorded as a TODO residual (not chased, per the ruling).** The codex
+  set's post-wall cleanup carries 12 `dial unixpacket: connect: connection refused` lines
+  (6 `Linux v2 helper could not prove the exact run leaf stopped: …`) from
+  `daemon/internal/execution/linux_owner_v2_linux.go:1292`, a file whose sha256 is identical at
+  both heads (`c5da521d…`); run 4 had 0. Owner TBD by the conductor (`docs/TODO.md`
+  `## rf-acc-containment-goal-admission: residuals (2026-11-26)`).

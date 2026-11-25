@@ -1808,6 +1808,7 @@ func TestLinuxV2WitnessRequiresGoalAdmissionRows(t *testing.T) {
 		{name: "opencode_native_health", testCase: linuxV2OpenCodeNativeHealthCase(), want: false},
 		{name: "stage_replay_unprovisioned_refusal", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "stage_replay"}, want: false},
 		{name: "wsl2_denial", testCase: linuxV2WSL2DenialCase(), want: false},
+		{name: "codex_unmapped_request_case", testCase: linuxV2NativeWitnessCase{harness: "codex", requestCase: "claude_containment"}, want: false},
 	}
 	for _, leg := range linuxV2StageReplayKindLegs {
 		rows = append(rows, row{name: "stage_replay_" + leg.name, testCase: linuxV2StageReplayKindLegCase(leg), want: true})
