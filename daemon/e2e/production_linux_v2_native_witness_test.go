@@ -74,16 +74,27 @@ const (
 
 var errLinuxV2DaemonCrashInjected = errors.New("production v2 daemon crash witness injected")
 
+func linuxV2PiProviderActionCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: "pi", configEnvironment: linuxV2PiConfigEnvironment,
+		requestEnvironment: linuxV2PiRequestEnvironment, requestCase: "pi_provider_action",
+		providerActionRequired: true,
+	}
+}
+
 // TestProductionLinuxV2PiNativeProviderAction runs the isolated production
 // owner witness with the real B Pi adapter and Control-issued provider access.
 // It proves native-owner containment and a real brokered resource sync; it does
 // not claim Goal acceptance or promote Pi capabilities.
 func TestProductionLinuxV2PiNativeProviderAction(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
-		harness: "pi", configEnvironment: linuxV2PiConfigEnvironment,
-		requestEnvironment: linuxV2PiRequestEnvironment, requestCase: "pi_provider_action",
-		providerActionRequired: true,
-	})
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2PiProviderActionCase())
+}
+
+func linuxV2OpenCodeNativeHealthCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		requestEnvironment: linuxV2OpenCodeRequestEnvironment, requestCase: "opencode_native_health",
+	}
 }
 
 // TestProductionLinuxV2OpenCodeNativeHealth runs the isolated production owner
@@ -91,26 +102,39 @@ func TestProductionLinuxV2PiNativeProviderAction(t *testing.T) {
 // launch-pidfd/user-namespace/loopback health verification. It is not Goal
 // acceptance or capability evidence.
 func TestProductionLinuxV2OpenCodeNativeHealth(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2OpenCodeConfigEnvironment,
-		requestEnvironment: linuxV2OpenCodeRequestEnvironment, requestCase: "opencode_native_health",
-	})
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2OpenCodeNativeHealthCase())
 }
 
-func TestProductionLinuxV2CodexNativeContainment(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
+func linuxV2CodexContainmentCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
 		harness: "codex", configEnvironment: linuxV2CodexConfigEnvironment,
 		requestEnvironment: linuxV2CodexRequestEnvironment, requestCase: "codex_containment",
 		markerDirectory: "codex-containment", containmentRequired: true,
-	})
+	}
 }
 
-func TestProductionLinuxV2ClaudeNativeContainment(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
+func TestProductionLinuxV2CodexNativeContainment(t *testing.T) {
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2CodexContainmentCase())
+}
+
+func linuxV2ClaudeContainmentCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
 		harness: "claude_code", configEnvironment: linuxV2ClaudeConfigEnvironment,
 		requestEnvironment: linuxV2ClaudeRequestEnvironment, requestCase: "claude_containment",
 		markerDirectory: "claude-containment", containmentRequired: true,
-	})
+	}
+}
+
+func TestProductionLinuxV2ClaudeNativeContainment(t *testing.T) {
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2ClaudeContainmentCase())
+}
+
+func linuxV2HelperSIGKILLCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: "pi", configEnvironment: linuxV2PiCrashConfigEnvironment,
+		requestEnvironment: linuxV2CrashPiRequestEnvironment, requestCase: "helper_sigkill_detached_child",
+		providerActionRequired: true, helperCrashWitness: true, markerDirectory: "pi-crash",
+	}
 }
 
 // TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild exercises the
@@ -120,11 +144,15 @@ func TestProductionLinuxV2ClaudeNativeContainment(t *testing.T) {
 // separation and pinned-leaf membership, then SIGKILLs only the helper pidfd
 // and requires anchor reaping plus receipt-backed release after recovery.
 func TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
-		harness: "pi", configEnvironment: linuxV2PiCrashConfigEnvironment,
-		requestEnvironment: linuxV2CrashPiRequestEnvironment, requestCase: "helper_sigkill_detached_child",
-		providerActionRequired: true, helperCrashWitness: true, markerDirectory: "pi-crash",
-	})
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2HelperSIGKILLCase())
+}
+
+func linuxV2DaemonSIGKILLCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: "pi", configEnvironment: linuxV2PiDaemonCrashConfigEnvironment,
+		requestEnvironment: linuxV2DaemonCrashPiRequestEnvironment, requestCase: "daemon_sigkill_helper_survives_detached_child",
+		providerActionRequired: true, daemonCrashWitness: true, markerDirectory: "pi-daemon-crash",
+	}
 }
 
 // TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild kills only the
@@ -132,11 +160,15 @@ func TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild(t *testing.T) {
 // The exact A helper must survive, stop the whole pinned leaf, and replay its
 // physical receipt through the restarted production daemon.
 func TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild(t *testing.T) {
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
-		harness: "pi", configEnvironment: linuxV2PiDaemonCrashConfigEnvironment,
-		requestEnvironment: linuxV2DaemonCrashPiRequestEnvironment, requestCase: "daemon_sigkill_helper_survives_detached_child",
-		providerActionRequired: true, daemonCrashWitness: true, markerDirectory: "pi-daemon-crash",
-	})
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2DaemonSIGKILLCase())
+}
+
+func linuxV2WSL2DenialCase() linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: "opencode", configEnvironment: linuxV2WSL2ConfigEnvironment,
+		requestEnvironment: linuxV2WSL2RequestEnvironment, requestCase: "wsl2_denial",
+		wsl2DenialRequired: true,
+	}
 }
 
 // TestProductionLinuxV2WSL2DenialWitness is a manual, opt-in negative witness.
@@ -151,11 +183,24 @@ func TestProductionLinuxV2WSL2DenialWitness(t *testing.T) {
 	if !linuxV2IsWSL2() {
 		t.Fatal("the opt-in WSL2 denial witness requires a WSL2 kernel")
 	}
-	runProductionLinuxV2NativeOwnerWitness(t, linuxV2NativeWitnessCase{
-		harness: "opencode", configEnvironment: linuxV2WSL2ConfigEnvironment,
-		requestEnvironment: linuxV2WSL2RequestEnvironment, requestCase: "wsl2_denial",
-		wsl2DenialRequired: true,
-	})
+	runProductionLinuxV2NativeOwnerWitness(t, linuxV2WSL2DenialCase())
+}
+
+type linuxV2StageReplayKindLeg struct {
+	name, harness, markerDirectory, configEnvironment string
+}
+
+var linuxV2StageReplayKindLegs = []linuxV2StageReplayKindLeg{
+	{name: "native_release_codex", harness: "codex", markerDirectory: "stage-replay-native-release-codex", configEnvironment: linuxV2CodexConfigEnvironment},
+	{name: "native_release_claude", harness: "claude_code", markerDirectory: "stage-replay-native-release-claude", configEnvironment: linuxV2ClaudeConfigEnvironment},
+}
+
+func linuxV2StageReplayKindLegCase(leg linuxV2StageReplayKindLeg) linuxV2NativeWitnessCase {
+	return linuxV2NativeWitnessCase{
+		harness: leg.harness, configEnvironment: leg.configEnvironment,
+		requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
+		barrierStage: "native_release", markerDirectory: leg.markerDirectory,
+	}
 }
 
 func TestProductionLinuxV2StageCrashReplayMatrix(t *testing.T) {
@@ -178,23 +223,13 @@ func TestProductionLinuxV2StageCrashReplayMatrix(t *testing.T) {
 			runProductionLinuxV2StageCrashReplay(t, stage)
 		})
 	}
-	kindLegs := []struct {
-		name, harness, markerDirectory, configEnvironment string
-	}{
-		{"native_release_codex", "codex", "stage-replay-native-release-codex", linuxV2CodexConfigEnvironment},
-		{"native_release_claude", "claude_code", "stage-replay-native-release-claude", linuxV2ClaudeConfigEnvironment},
-	}
-	for _, leg := range kindLegs {
+	for _, leg := range linuxV2StageReplayKindLegs {
 		leg := leg
 		t.Run(leg.name, func(t *testing.T) {
 			stageRoot := filepath.Join(fixtureRoot, leg.name)
 			t.Setenv(leg.configEnvironment, filepath.Join(stageRoot, "config.json"))
 			t.Setenv(linuxV2StageReplayRequestEnvironment, filepath.Join(stageRoot, "request.json"))
-			runProductionLinuxV2StageCrashReplayCase(t, "native_release", linuxV2NativeWitnessCase{
-				harness: leg.harness, configEnvironment: leg.configEnvironment,
-				requestEnvironment: linuxV2StageReplayRequestEnvironment, requestCase: "stage_replay",
-				barrierStage: "native_release", markerDirectory: leg.markerDirectory,
-			})
+			runProductionLinuxV2StageCrashReplayCase(t, "native_release", linuxV2StageReplayKindLegCase(leg))
 		})
 	}
 }
@@ -1643,10 +1678,10 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness request does not bind the exact live claim, configured runtime, and Subject")
 	}
 	admission, admitted, err := protocol.ParseAdmissionInput(request.Claim.Work.Input)
-	if testCase.harness == "pi" && !testCase.providerActionRequired {
+	if linuxV2WitnessRequiresGoalAdmission(testCase) {
 		if err != nil || !admitted || admission.Subject.Validate() != nil ||
 			admission.Subject != request.Subject || admission.ProviderScope != nil {
-			return linuxV2OwnerWitnessRequest{}, errors.New("pi durability owner-witness claim must carry the Control admission for the exact Subject")
+			return linuxV2OwnerWitnessRequest{}, fmt.Errorf("%s owner-witness claim must carry the Control admission for the exact Subject", testCase.harness)
 		}
 	} else if err != nil || admitted {
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness claim must be a real non-Goal Control task")
@@ -1737,6 +1772,52 @@ func linuxV2AckLossReplayStageSupported(stage string) bool {
 		}
 	}
 	return false
+}
+
+// Goal-routed request cases (writer GOAL_ADMISSION_CASES; the stage-replay kind legs emit
+// request_case "stage_replay") require the Control admission; provider-free opencode rows do not.
+var linuxV2GoalAdmissionRequestCases = map[linuxV2WitnessRequestKey]bool{
+	{harness: "pi", requestCase: "stage_replay"}:                true,
+	{harness: "codex", requestCase: "stage_replay"}:             true,
+	{harness: "claude_code", requestCase: "stage_replay"}:       true,
+	{harness: "codex", requestCase: "codex_containment"}:        true,
+	{harness: "claude_code", requestCase: "claude_containment"}: true,
+}
+
+type linuxV2WitnessRequestKey struct {
+	harness, requestCase string
+}
+
+func linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool {
+	return linuxV2GoalAdmissionRequestCases[linuxV2WitnessRequestKey{harness: testCase.harness, requestCase: testCase.requestCase}]
+}
+
+func TestLinuxV2WitnessRequiresGoalAdmissionRows(t *testing.T) {
+	type row struct {
+		name     string
+		testCase linuxV2NativeWitnessCase
+		want     bool
+	}
+	rows := []row{
+		{name: "stage_replay_pi_durability", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "stage_replay"}, want: true},
+		{name: "codex_containment", testCase: linuxV2CodexContainmentCase(), want: true},
+		{name: "claude_containment", testCase: linuxV2ClaudeContainmentCase(), want: true},
+		{name: "pi_provider_action", testCase: linuxV2PiProviderActionCase(), want: false},
+		{name: "helper_sigkill_detached_child", testCase: linuxV2HelperSIGKILLCase(), want: false},
+		{name: "daemon_sigkill_helper_survives_detached_child", testCase: linuxV2DaemonSIGKILLCase(), want: false},
+		{name: "opencode_native_health", testCase: linuxV2OpenCodeNativeHealthCase(), want: false},
+		{name: "stage_replay_unprovisioned_refusal", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "stage_replay"}, want: false},
+		{name: "wsl2_denial", testCase: linuxV2WSL2DenialCase(), want: false},
+		{name: "codex_unmapped_request_case", testCase: linuxV2NativeWitnessCase{harness: "codex", requestCase: "claude_containment"}, want: false},
+	}
+	for _, leg := range linuxV2StageReplayKindLegs {
+		rows = append(rows, row{name: "stage_replay_" + leg.name, testCase: linuxV2StageReplayKindLegCase(leg), want: true})
+	}
+	for _, row := range rows {
+		if got := linuxV2WitnessRequiresGoalAdmission(row.testCase); got != row.want {
+			t.Errorf("%s: linuxV2WitnessRequiresGoalAdmission = %t, want %t", row.name, got, row.want)
+		}
+	}
 }
 
 func linuxV2WitnessClaimRequirementsMatch(testCase linuxV2NativeWitnessCase, actual map[string]bool) bool {

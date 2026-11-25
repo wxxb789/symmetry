@@ -47,9 +47,9 @@ defmodule LinuxV2ControlClaimFixture do
      "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child helper crash witness. Do not publish."},
     {"daemon_sigkill_helper_survives_detached_child", "pi-native", :pi, :pi_provider,
      "Use the real symmetry_resource_sync tool, then create and commit one small file for the detached-child daemon crash witness. Do not publish."},
-    {"codex_containment", "codex-native", :codex, :opencode,
+    {"codex_containment", "codex-native", :codex, :opencode_goal,
      "Use the real codex runtime for the Linux v2 containment boundary witness. Do not publish."},
-    {"claude_containment", "claude-native", :claude_code, :opencode,
+    {"claude_containment", "claude-native", :claude_code, :opencode_goal,
      "Use the real Claude Code runtime for the Linux v2 containment boundary witness. Do not publish."}
   ] ++
     Enum.map(@stage_replay_holds, fn hold ->
@@ -93,9 +93,9 @@ defmodule LinuxV2ControlClaimFixture do
        "Use the real Pi runtime for the Linux v2 helper launcher-response-loss replay witness. Do not publish."},
       {"stage_replay_unprovisioned_refusal", "opencode-native", :opencode, :opencode,
        "Use the real OpenCode runtime for the unprovisioned Linux owner refusal witness. Do not publish."},
-      {"stage_replay_native_release_codex", "codex-native", :codex, :opencode,
+      {"stage_replay_native_release_codex", "codex-native", :codex, :opencode_goal,
        "Use the real codex runtime for the Linux v2 native-release crash-replay witness. Do not publish."},
-      {"stage_replay_native_release_claude", "claude-native", :claude_code, :opencode,
+      {"stage_replay_native_release_claude", "claude-native", :claude_code, :opencode_goal,
        "Use the real Claude Code runtime for the Linux v2 native-release crash-replay witness. Do not publish."}
     ]
 
@@ -150,7 +150,7 @@ defmodule LinuxV2ControlClaimFixture do
 
     {legacy_cases, goal_cases} =
       Enum.split_with(@cases, fn {_name, _profile, _harness, repository_role, _description} ->
-        repository_role != :pi_durability
+        repository_role not in [:pi_durability, :opencode_goal]
       end)
 
     work_items =
@@ -181,13 +181,19 @@ defmodule LinuxV2ControlClaimFixture do
          }}
       end)
 
-    # The retargeted durability cases get their WorkItem through Control's own Goal
-    # admission (schedule/5); their WorkItem must stay goal-owned for the clone fence.
+    # The goal-routed cases get their WorkItem through Control's own Goal admission
+    # (schedule/5); their WorkItem must stay goal-owned for the clone fence.
     goal_case_specs =
-      Map.new(goal_cases, fn {case_name, profile, _harness, _repository_role, description} ->
+      Map.new(goal_cases, fn {case_name, profile, _harness, repository_role, description} ->
+        repository_id =
+          case repository_role do
+            :pi_durability -> pi_durability_repository.id
+            :opencode_goal -> opencode_repository.id
+          end
+
         {case_name,
          %{
-           "repository_resource_id" => pi_durability_repository.id,
+           "repository_resource_id" => repository_id,
            "agent_profile" => profile,
            "description" => description
          }}
@@ -252,7 +258,7 @@ defmodule LinuxV2ControlClaimFixture do
     if !(runtime.agent_profile == profile and runtime.workspace == "native" and
            runtime.repository_resource_id == item["repository_resource_id"] and
            provider_access? == (repository_role == :pi_provider) and
-           runtime_adapter_binding?(runtime, repository_role)) do
+           runtime_adapter_binding?(runtime, repository_role, harness)) do
       raise "generic Control claim runtime did not match the exact Work profile/resource"
     end
 
@@ -594,10 +600,14 @@ defmodule LinuxV2ControlClaimFixture do
 
   # Goal assignment requires a native-harness runtime with adapter operations
   # (assignment.ex:332,:519-530); the legacy claim runtimes stay adapter-free.
-  defp runtime_adapter_binding?(runtime, :pi_durability),
+  defp runtime_adapter_binding?(runtime, :pi_durability, _harness),
     do: get_in(runtime.capabilities || %{}, ["adapter", "kind"]) == "pi"
 
-  defp runtime_adapter_binding?(runtime, _repository_role), do: not Map.has_key?(runtime.capabilities || %{}, "adapter")
+  defp runtime_adapter_binding?(runtime, :opencode_goal, harness),
+    do: get_in(runtime.capabilities || %{}, ["adapter", "kind"]) == Atom.to_string(harness)
+
+  defp runtime_adapter_binding?(runtime, _repository_role, _harness),
+    do: not Map.has_key?(runtime.capabilities || %{}, "adapter")
 
   defp start_repo! do
     {:ok, _started} = Application.ensure_all_started(:ecto_sql)
