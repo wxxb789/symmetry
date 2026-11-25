@@ -2313,8 +2313,6 @@ func linuxV2RequireRetainedCloneArtifacts(fixture linuxV2NativeFixture, journal 
 	return nil
 }
 
-// linuxV2RequireRetainedCloneOutcome requires the named retention outcome for a
-// released replay whose clone never checked out.
 func linuxV2RequireRetainedCloneOutcome(response linuxV2OwnerWitnessResponse) error {
 	clone := response.Clone
 	if response.RecoveryState != "released" || clone != nil && clone.CheckoutReady {
@@ -3699,8 +3697,6 @@ func linuxV2CleanupPIDReuseReplacement(
 	return errors.New("root helper did not publish exact PID-reuse kill/reap response")
 }
 
-// linuxV2StartProductionWitnessCommand builds and verifies the production witness binary,
-// records it on the witness document, and starts the owner-witness command.
 func linuxV2StartProductionWitnessCommand(t *testing.T, fixture linuxV2NativeFixture, witness *linuxV2NativeWitness) (*linuxV2OwnerWitnessCommand, string) {
 	t.Helper()
 	binary := buildProductionDaemonWitness(t, fixture.artifactDir)

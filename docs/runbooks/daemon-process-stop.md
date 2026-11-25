@@ -103,7 +103,8 @@ whose B-owned clone never checked out keeps the clone row, the A seed bundle and
 that RunKey's `refs/heads/symmetry/clone-v2/base/<hash>` ref on disk; the B target
 exists only when the clone bootstrap had already created it, which the
 pre-checkout crash point this shape is recovered from precedes (artifact-state
-measurement on all four `stale_journal_*` sets, evidence record §7.5). That
+measurement on all four `stale_journal_*` sets, evidence record
+`docs/evidence/rf-acc-owner-loss-semantics-2026-11-25.md` §7.5). That
 retention is the recorded durable shape, not a failure: the row keeps its
 `linux_clone_intent` (`seed_path`, `target`), `linux_clone_seed_receipt` and the
 containment release proof, and carries no checkout, promotion, abort or cleanup

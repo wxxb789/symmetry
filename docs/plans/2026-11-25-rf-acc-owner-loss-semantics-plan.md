@@ -18,7 +18,7 @@ is out of scope.
 | Change 5 observability | #285 already names the guard/reason/class and writes the identity-only refusal document (`linux_owner_witness_linux.go:2916-3060`) | satisfied; the d1b refusal is replaced by the named retention outcome |
 | Change 6 records | plan/evidence/TODO do not exist yet | this plan, `docs/evidence/rf-acc-owner-loss-semantics-2026-11-25.md` |
 | Owned set (amended by the d1b ruling) | witness, `state/linux_clone_validation.go`, `state/linux_cgroup_journal.go`, their tests, the e2e files, the runbook, TODO | matches §2-§4 below |
-| Carried #284 items | `daemon/e2e/production_linux_v2_owner_cli_test.go:1639-1753`, `production_linux_v2_owner_identity_test.go:46-132`, `docs/archive/CLOSED-TODO.md` (§rf-acc-owner-loss-semantics) | implemented here (see §3.4); the entry is closed |
+| Carried #284 items | `daemon/e2e/production_linux_v2_owner_cli_test.go:1639-1753`, `production_linux_v2_owner_identity_test.go:46-132`, `docs/archive/CLOSED-TODO.md` (§rf-acc-owner-loss-semantics: owner-identity polish) | implemented here (see §3.4); the entry is closed |
 | Gates | four `stale_journal_*` sets red at run `45485437534`; scratch workflow shape on `scratch/rf-acc-native-burndown` | §5 |
 
 ## 2. Public/API shape (choices the contract leaves open)
