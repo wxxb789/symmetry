@@ -5060,8 +5060,11 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       nothing). The credentialed dispatch and the Q3(a) pi turn counts stay open in `docs/TODO.md`
       under the heading above, as do the three carried follow-up goals.
 
+## rf-acc-release-recovery-diagnostics: release/recovery diagnostics residual (2026-11-25)
+
 - [ ] rf-acc-release-recovery-diagnostics: release/recovery errors drop their sub-step and errno, so
-      the retargeted post-release rows cannot be read (2026-11-25, same section; contract
+      the retargeted post-release rows cannot be read (2026-11-25, moved from the residual section
+      above; contract
       `goal-rf-acc-release-recovery-diagnostics.md`, conductor rulings Q-A(a)/Q-B(a)/Q-C(a)/Q-D(a)).
       **Closed (2026-11-25, branch `refactor/rf-acc-release-recovery-diagnostics`, base `48ef0982`;
       plan `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md`, evidence record
@@ -5079,13 +5082,18 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       exact versioned physical-stop proof the e2e already accepts (the file's existing
       `linuxV2NativeWitnessStopSummaryHasPhysicalProof`), keeping inexact (versioned but incomplete)
       receipts tripped; a version-0 receipt is intentionally untripped, matching the pre-existing
-      predicate and the e2e's own acceptance. `stale_leaf` is green (`run=1 pass=1 skip=0`, manifest `status=passed`, run
-      `45557621798`); runs `45554251351` (base re-confirmation) and `45555828634` (the named causes)
-      bound the before/after. The `migration` release arm (`stage=native_exec arm=await_result
-      wait_class=other`, run `45564071868` on the pre-F1 bytes) is pending the post-F1 binding run
-      before any producer is named, and the four `stale_journal_*`
-      green rows remain open in `docs/TODO.md` under
-      the heading above.
+      predicate and the e2e's own acceptance. `stale_leaf` is green (`run=1 pass=1 skip=0`, manifest
+      `status=passed`, runs `45557621798` and the binding run `45579163968` on the delivered bytes);
+      runs `45554251351` (base re-confirmation) and `45555828634` (the named causes) bound the
+      before/after. The `migration` release arm is observed: the post-F1 binding run `45579163968`
+      reads `stage=clone_bootstrap arm=bootstrap_attempt wait_class=other` (the run `45564071868`
+      reading `stage=native_exec arm=await_result wait_class=other` was the pre-F1 wrap's own
+      label), the failing read is the unowned bootstrap-attempt read (`wire_linux.go:559`) whose
+      expected frame the gate C code / reused guest sends (`gate.c:1168`), and the residual stays
+      open in `docs/TODO.md` under
+      `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`, routing to
+      `rf-acc-guest-native-exec`. The four `stale_journal_*` green rows remain open in
+      `docs/TODO.md` under the same heading.
 
 ## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)
 

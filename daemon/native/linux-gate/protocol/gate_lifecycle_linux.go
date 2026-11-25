@@ -793,8 +793,8 @@ func NativeExecVerifyArm(err error) string {
 	return ReleaseArmNativeReadback
 }
 
-// NewReleaseSubStepError bounds one failed release arm and never re-labels an
-// already-labelled error; unknown arms stay untyped so the wire validator refuses them.
+// NewReleaseSubStepError bounds one failed release arm and never re-labels an already-labelled
+// error; an arm outside the closed table is not shape-classified, and the wire validator refuses it.
 func NewReleaseSubStepError(subStep, arm string, errno int, err error) *ReleaseSubStepError {
 	var existing *ReleaseSubStepError
 	if errors.As(err, &existing) {

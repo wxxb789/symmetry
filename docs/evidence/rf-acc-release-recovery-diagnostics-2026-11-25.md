@@ -21,7 +21,7 @@ their own head revisions, and every number carrying a run id belongs to that run
 
 | Contract (origin/main `33ad88a9`) | Delivered bytes | Disposition |
 | --- | --- | --- |
-| helper `:1184-1203` | `helper_v2_server.go:1196-1219` | converted: the unresolved block computes the bounded detail and writes it via `writeResponseWithDetail` |
+| helper `:1184-1203` | `helper_v2_server.go:1196-1217` | converted: the unresolved block computes the bounded detail and writes it via `writeResponseWithDetail` |
 | helper `:1126-1139` | `helper_v2_server.go:1129-1140` | converted: `gate_authorize` typed wraps around the missing-identity error and `AuthorizeGateRelease` |
 | helper `:1169-1173` | `helper_v2_server.go:1178-1191` | converted: `register` typed wraps around `RegisterProcess` and `ensureGateWait` |
 | helper `:1073-1099` | `helper_v2_server.go:1073-1099` | untouched: pre-attempt rejections, never the unresolved path |
@@ -30,7 +30,7 @@ their own head revisions, and every number carrying a run id belongs to that run
 | `linux_owner_v2_linux.go:1066` | unchanged | `%w` carries the new text |
 | `runner.go:864` | unchanged | `%w` carries the new text |
 | app `:3279` | `:3510` | unchanged |
-| app `:531-534` | `:532-539` | converted: guard + reason + recovery class named, `recoveryErr` chain joined, refusal document written for the stage-replay arm |
+| app `:531-534` | `:531-539` | converted: guard + reason + recovery class named, `recoveryErr` chain joined, refusal document written for the stage-replay arm |
 | app `:2801-2811` | `:2916-2926` | predicate unchanged; companion reason function (`:2989`) + refusal builder added |
 | app `:737-742` | `:715-732` (`linuxV2NativeWitnessUnresolvedSummaryTripped`), validated at `:765-767` | converted: names each tripped predicate |
 | app `:3211` | `:3410,:3424,:3442` through `stage` (`:2158`), hold at `:2214` | the `native_release` hold (unchanged: `migration` never reaches it — §9) |
@@ -44,9 +44,9 @@ their own head revisions, and every number carrying a run id belongs to that run
    (delivered bytes): `:872` (clone bootstrap verify), `:898` (pre-RELEASE gate identity),
    `:979,:992,:999,:1006` (native exec result; errno on `:992`; the `:1006` site picks
    `native_process`/`exec_readback` — §2.8), `:1056,:1060,:1072,:1076` (clone bootstrap),
-   `:1065,:1069,:1087,:1098,:1120` (clone checkout), `:1125` (clone native exec proof); platform:
-   `helper_v2_server.go:1122` (checkout receipt), `:1131,:1137` (gate authorize),
-   `:1181,:1185` (register).
+   `:1065,:1069,:1087,:1098,:1120` (clone checkout), `:1125` (clone native exec proof); platform
+   call lines: `helper_v2_server.go:1121` (checkout receipt), `:1130,:1136` (gate authorize),
+   `:1180,:1184` (register).
 2. **Detail wire type** `LinuxOwnerHelperV2ReleaseErrorDetail`
    (`helper_v2_protocol.go:469-565`): `stage` always set (`none` for an untyped error), `errno` only
    when the sub-step carries one, `reason` only when `err == nil`
@@ -85,11 +85,11 @@ clone-bootstrap failure. Wrap sites at the delivered bytes, all owned:
 
 | Sub-step | Arms (closed) | Wrap sites (delivered bytes) |
 | --- | --- | --- |
-| `gate_authorize` | `missing_gate_identity`, `anchor_authorize`, `gate_identity` | `helper_v2_server.go:1131`, `:1137`; `gate_lifecycle_linux.go:898` |
+| `gate_authorize` | `missing_gate_identity`, `anchor_authorize`, `gate_identity` | `helper_v2_server.go:1130`, `:1136`; `gate_lifecycle_linux.go:898` |
 | `clone_bootstrap` | `installed_bootstrap`, `bootstrap_attempt`*, `bootstrap_image`, `bootstrap_process`, `leaf_membership` | `gate_lifecycle_linux.go:872`, `:1056`*, `:1060`, `:1072`, `:1076` |
-| `clone_checkout` | `checkout_receipt`*, `checkout_receipt_mismatch`, `checkout_callback`, `checkout_ack_encode`, `checkout_ack_send` | `gate_lifecycle_linux.go:1065`*, `:1069`, `:1087`, `:1098`, `:1120`; `helper_v2_server.go:1122` |
+| `clone_checkout` | `checkout_receipt`*, `checkout_receipt_mismatch`, `checkout_callback`, `checkout_ack_encode`, `checkout_ack_send` | `gate_lifecycle_linux.go:1065`*, `:1069`, `:1087`, `:1098`, `:1120`; `helper_v2_server.go:1121` |
 | `native_exec` | `await_result`*, `exec_errno`, `no_exec_attempt`, `native_process`, `exec_readback`, `clone_exec_proof`* | `gate_lifecycle_linux.go:979`*, `:992`, `:999`, `:1006`, `:1125`* |
-| `register` | `native_register`, `gate_waiter` | `helper_v2_server.go:1181`, `:1185` |
+| `register` | `native_register`, `gate_waiter` | `helper_v2_server.go:1180`, `:1184` |
 
 `*` = reads the exec-status channel: its detail also carries the wait class (`deadline | peer_closed |
 other`, computed from that arm's own error by `ReleaseWaitErrorClass`, so a joined abort error cannot
@@ -121,8 +121,17 @@ helper's `checkout_receipt_mismatch`; an unlabelled wait error still renders `aw
 checkout-rejection branch joins the terminal response error (`linux_owner_helper_v2_linux.go:659`).
 The summary predicate's version-0 exemption is pinned by the "absent stop receipt version stays
 untripped" row and the "unknown stop receipt version" row (F3); the record's census is re-anchored to
-the delivered bytes (F4), and the `migration` arm reading is restated as pending the post-F1 run
-(F2, §7.5/§9).
+the delivered bytes (F4), and the `migration` arm reading (F2) is observed by the post-F1 binding run
+`45579163968` as `stage=clone_bootstrap arm=bootstrap_attempt wait_class=other` (§7.5/§9).
+
+One chain consequence of F1 is recorded here: when a labelled inner error wins, the outer
+`ErrOutcomeUnknown` sentinel leaves the chain, so `errors.Is(err, linuxgate.ErrOutcomeUnknown)` is
+false for those release failures (it was true before the guard). The round-1 review verified no
+consumer keys off it on the release path: `linuxOwnerHelperV2ErrorCode` (`helper_v2_protocol.go:724`)
+is called only for `prepare` (`helper_v2_server.go:941`) and `stop` (`helper_v2_stop.go:431`)
+responses, and the only other reader, this goal's new `linuxV2NativeWitnessRecoveryErrorClass`
+(app `:3004`), then renders `recovery_failed` for such a leg instead of `outcome_unknown` — a new
+diagnostic field with no prior release-path behavior to preserve.
 
 ## 3. Change-6 grep census
 
@@ -211,6 +220,16 @@ Fix-stage re-run of the whole gate on the delivered bytes (WSL Ubuntu-24.04 `-u 
 | new probes under load | `GOMAXPROCS=8 go test -race -count=200 -timeout 1200s -run '<the five fix-stage probe tests>' ./internal/platform/` | 0 | `ok internal/platform 28.580s` (200 iterations of the F1/F5/F6/F7/F8 probes incl. the socket/goroutine checkout-rejection exchange) |
 | host vet | `go vet ./...` (Windows host, Go 1.27.4, from `daemon/`) | 0 | clean |
 | scripts | `git diff --stat -- scripts/ .github/` (WSL) | — | empty: no script or workflow byte changed by this goal, so `bash -n`/`shellcheck` delta is 0 by identity |
+
+Round-1 re-check on the round-1 bytes (WSL Ubuntu-24.04 `-u accept`, `daemon/`, Go 1.27.0), all
+exit 0:
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| format | `gofmt -l .` | 0 | no file listed |
+| linux vet | `GOOS=linux go vet ./internal/app/` | 0 | clean |
+| app probes | `go test -count=1 -run 'TestLinuxV2NativeWitness' ./internal/app/` | 0 | `ok app 0.817s` |
+| clone gate (CI invocation) | `python scripts/ci/jscpd-changed.py --base HEAD^1 --head HEAD` on a scratch commit carrying exactly the six round-1 changed files | 0 | `6 changed file(s), 1737 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`; the clone the round-1 review refused (`[935-950]` vs `[584-599]`) is gone, and the test file's only remaining duplicate is the pre-existing `[274-284]` vs `[1516-1526]` pair, outside every added range |
 
 ## 5. Probes (lesson 74)
 
@@ -392,7 +411,7 @@ additionally requires the launcher/gate exit identities). Inexact receipts — v
 (M4); a version-0 (unversioned) receipt is intentionally untripped, matching the pre-existing
 predicate and the e2e's own acceptance, and is pinned by the "absent stop receipt version stays
 untripped" row (the fix stage renamed the stale mutant row). The `migration` sub-step cause is
-pending the post-F1 run (§9).
+named by the post-F1 binding run (§9).
 
 ### 7.3 Stage-2 six-set run `45557621798` (`stale_leaf` green, the named causes held)
 
@@ -435,7 +454,7 @@ stage-3 bytes); both heads are the eight code files plus the two scratch-only fi
 (`git diff 48ef0982 <head>` = 10 paths). The fix stage then changed seven of the eight code files
 (F1/F5-F8/F10 and their probes), so both earlier equality tables are historical: the post-F1 binding
 run on the delivered bytes is the conductor's Bind-worker dispatch (one `migration` plus one
-`stale_leaf`), and its equality table is filled there (§9). Delivered digests (sha256, `sha256sum`
+`stale_leaf`, run `45579163968`), and its equality table is in §9. Delivered digests (sha256, `sha256sum`
 at the fix stage):
 
 | File | Run head `f32d47d9` (historical) | Delivered (fix stage) | Eq vs run head |
@@ -477,6 +496,21 @@ commands of §4 and §5, and the M2/M6/M7 rows were re-derived on them (§6).
 The fix stage then changed seven of the eight code files again (F1/F5-F8/F10 and the probes, §2.9,
 §6); the apply-stage delta above is history, and §7.4's delivered column carries the fix-stage bytes.
 
+### 7.4b Round-1 fix delta (test-only plus one comment)
+
+The round-1 review push then changed two of the eight code files: `linux_owner_witness_linux_test.go`
+(R1 hoists the exact versioned physical-stop fixture into `linuxV2NativeWitnessExactPhysicalStop`,
+used by both tests and the summary table row; no assertion changed) and `gate_lifecycle_linux.go`
+(R4's `NewReleaseSubStepError` comment reword — two comment lines, no code line). No scratch run was
+spent (the round-1 ruling: R1 is test-only; the gate and probes rerun in CI), so §7.4's delivered
+column and §9's binding equality stay on the fix-stage bytes they compare, and the verbatim failure
+line numbers of §6 belong to those fix-stage bytes.
+
+| File | Fix-stage sha256 (§7.4's delivered column) | Round-1 sha256 |
+| --- | --- | --- |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `f148a377532c7f4ab0382c2355f93cdca6387bf0ceb422cc380b7299fc324378` | `f7720105b09399b98da3485a6c4fab9e0faa5345cb1eef5ac044e6e4e11ae3f4` |
+| `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` | `7761233ffeb044da36d20fc574c5a7a094dad067b264144dbac554b7b4a45488` | `1699a2a244308297bcc8686b84549560c80fd0cbe1c84eb4a1280091e59c1a3d` |
+
 ### 7.5 Stage-3 run `45564071868` (migration only — the pre-F1 arm)
 
 Head `f32d47d9` (the stage-3 bytes + the two scratch-only files, one case set `migration`),
@@ -495,14 +529,17 @@ Reading (pre-F1, superseded by the fix stage): this run's bytes carry the stage-
 `arm=await_result` is that wrap's own code for an error the wrap could not classify; per the
 fix-stage F1 ruling a labelled `awaitCloneRelease` arm (or the helper's checkout-receipt mismatch)
 inside the await failed with exactly this rewriting, so the observation does not establish which arm
-failed — it is **pending the post-F1 binding run** (§9). `wait_class=other` means the read failed on
+failed — the post-F1 binding run named it (§9, run `45579163968`: `stage=clone_bootstrap
+arm=bootstrap_attempt wait_class=other`). `wait_class=other` means the read failed on
 its own terms — neither the lease/deadline wait nor a peer EOF/`ENOTCONN`/`EPIPE`/`ECONNRESET`, which
-render `deadline`/`peer_closed`; the class stays honest for an unlabelled failure. No producer is
-named here: the candidates inside that read are the gate C code's exec-status producer
+render `deadline`/`peer_closed`; the class stays honest for an unlabelled failure. For this pre-F1
+reading the candidates inside the exec-status read are the gate C code's exec-status producer
 (`daemon/native/linux-gate/c-gate/gate.c`, `exec_as_b`, which sends `EXEC_FAILURE(errno)` on every
 internal failure and the `FRAME_EXEC_ATTEMPT` at `:1276` before the exec) and the reused guest, none
-of them owned by this goal — so per contract Change 7 and the conductor ruling this clause stops with
-the definitive arm still pending in `docs/TODO.md` (§9).
+of them owned by this goal. Per contract Change 7 and the conductor ruling this clause stopped with
+`DECISION_NEEDED` until the post-F1 binding run; that run (`45579163968`, §9) observed the earlier
+`stage=clone_bootstrap arm=bootstrap_attempt wait_class=other` instead, and the residual pointer in
+`docs/TODO.md` carries that arm.
 
 Artifact `linux-v2-native-evidence-45564071868-1` (id `14998998279`, 1570 bytes, digest
 `sha256:a129c0394ce62cfb57537746483d613fc3c90d83a6210fb545931384173c8644`):
@@ -537,25 +574,72 @@ Stage 2 could only say `stage=native_exec` with **no errno** (runs `45555828634`
 four candidate sites at the delivered bytes (`gate_lifecycle_linux.go:979,:999,:1006,:1125`), not the
 errno-reporting `:992` that the tracked `launcher_integration_linux_test.go:439` stop (`native exec
 failed after RELEASE: errno=1`) names. The stage-3 rerun (run `45564071868`, §7.5) reported
-`stage=native_exec arm=await_result wait_class=other`, but F1 proved those bytes re-wrapped every
-labelled clone arm into `await_result`, so that observation cannot establish the failing arm; the
-definitive arm is **pending the conductor's post-F1 binding run** (one `migration` plus one
-`stale_leaf` on the PR head), and no guest producer is named before it is observed. One named fact
+`stage=native_exec arm=await_result wait_class=other`, and F1 proved those bytes re-wrapped every
+labelled clone arm into `await_result`, so that observation could not establish the failing arm.
+**The post-F1 binding run observed a different arm than those earlier runs claimed**: run `45579163968`
+(head `8da0f941` = PR head `65bb41b1` + the two scratch-only files; one dispatch; jobs `contracts`
+success `139084520220`, `linux-native-v2-acceptance` failure `139085197567`; one `migration` plus one
+`stale_leaf`) reads `migration`'s release verbatim as
+
+```
+-linux-v2-native-owner-witness: start native owner witness transport: resume process "/usr/local/lib/symmetry-pi/pi": one-use Linux v2 RELEASE result is unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other)
+```
+
+so the failing arm is `stage=clone_bootstrap arm=bootstrap_attempt` — not `native_exec/await_result`:
+the release fails while awaiting the same-PID B bootstrap attempt (`gate_lifecycle_linux.go:1054-1056`
+wraps `readCloneBootstrapExecAttempt`, unowned `wire_linux.go:559`, into
+`NewReleaseSubStepError(ReleaseSubStepCloneBootstrap, ReleaseArmBootstrapAttempt, 0, …)`), before the
+native exec; the first failing check stays
+`production_linux_v2_native_witness_test.go:613: wait for exact native_release boundary: owner-witness
+command did not reach its requested durable stage`. `wait_class=other` means that read failed on its
+own terms (`ReleaseWaitErrorClass`, `:739-751`: not the deadline `waitForStatus` returns, not a clean
+peer close/EOF), and the line emits no `errno` and no `guest_stage`, so the inner error is not a
+decoded `CloneBootstrapFailureError` with a known stage (that would set `guest_stage` and, when
+nonzero, `errno`). The frame the read expects is the gate's `FRAME_BOOTSTRAP_EXEC_ATTEMPT`
+(`daemon/native/linux-gate/c-gate/gate.c:1168`), so the producer candidates remain the gate C code and
+the reused guest, outside the owned set — only the arm's wrap site is owned. One named fact
 stands independent of the arm: the witness vehicle sets a `CloneGrant`
 (`linux_owner_witness_linux.go:3353`), so this release path is not a reuse-only site; the
 `awaitCloneRelease` arms are distinguishable only after the F1 guard. Per contract Change 7 and
 the conductor ruling this clause stops with `DECISION_NEEDED`: the residual pointer in `docs/TODO.md`
-routes to `rf-acc-guest-native-exec` only once the arm is observed; if the post-F1 arm is inside the
-owned Go set and the fix is a one-site change, the conductor decides it in a later round.
+now names the observed arm and routes to `rf-acc-guest-native-exec`; the observed failure surface is
+the unowned bootstrap-attempt read and its producer, while the owned wrap
+(`gate_lifecycle_linux.go:1054-1056`) already names the arm correctly.
 The guest-side staging of the executed binary is already correct and verified
 (`/usr/local/lib/symmetry-pi/pi` `regular file root:root 755 1`, `test -x` as A; run `45555828634`
 log, "guest view of the staged native tools"). After the aborted release the App cannot even measure
 a stop — `Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket: connect:
-connection refused`, observed four times in run `45555828634` and zero times in runs `45557621798`
-and `45564071868` (an intermittent measurement, not a consequence of the final-bytes run; measured
-with `gh run view --log` over those three runs) — which is why `native_release` is never stamped and
+connection refused`, observed four times in run `45555828634`, zero times in runs `45557621798`
+and `45564071868`, and four times again in the binding run's bounded App stderr (`45579163968`) — an
+intermittent measurement, not a consequence of the final-bytes run (measured with `gh run view --log`
+over those runs) — which is why `native_release` is never stamped and
 the wait times out. Stage 1, the `stale_leaf` stage-2 fix, the stage-3 diagnostics and the fix-stage
 F1-F10 changes still merge.
+
+Equality at the run head (§7.4's promise): `8da0f941` is `65bb41b1` plus the two scratch-only files
+(`git diff 65bb41b1 8da0f941` = 2 paths), all eight code-file rows of §7.4 are **EQ** against its
+delivered column (sha256 re-verified at `65bb41b1`), so the run was on the PR-head bytes. Scratch
+pins: `scripts/ci/scratch-gh-shim` sha256
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` (the ratified burndown copy) and
+`.github/workflows/scratch-rf-acc-release-recovery-diagnostics.yml` sha256
+`f75ccbbb50c6e5f827147e0301488ba31abf7a7d6b821fbb53ba7b110f97cad4` (the §7 copy with
+`case_sets=(migration stale_leaf)`); both were deleted with the scratch branch (deletion proof in the
+binding-run report, `findings/285-binding-run.md` under the GDD state root).
+
+Artifact `linux-v2-native-evidence-45579163968-1` (id `15005951876`, 4346 bytes, digest
+`sha256:2e1c0d8cfde2eec23dd6d73b3ef3a15693c80ff5a4e7d2818fcd0e82cbbabbd2`):
+
+| Set | `manifest.json` sha256 | Witness document sha256 |
+| --- | --- | --- |
+| `migration` (status `failed`) | `62f37b8b53e85b7f9f7746719547ab996bdc8b94de71ac5de709952171cf532d` | `c845d0667d6a6eb5da3561bf3ee5a0415d6c1dd6fcd59b56a3b1a49937dd1474` |
+| `stale_leaf` (status `passed`) | `4259023270eacf7128634818e81df6cf8fe4f1f53f9d36fee32cc6c23f84f75e` | `f567e6a6d9636bdde214674f9c4a4055a7adcc6bbcf29021af204308e4b10f00` |
+
+`stale_leaf`'s green row re-confirms §7.3 on the fix-stage bytes — `Case set stale_leaf exited 0`,
+`verified TestProductionLinuxV2StaleLeafIdentityRetainsJournal: run=1 pass=1 skip=0`, manifest
+`source_commit=8da0f941c201004b4acca2b7b0383eedb68a93e1`, `missing_allowlisted_files=[]`,
+`credentials_included=false`, `mode=manual` — with `owner_witness_outcome=unresolved`,
+`recovery_state=unresolved`, `journal_unproven=true`, `failure_category=containment_unproven` in its
+witness document; `migration`'s manifest is `status=failed`.
 
 The four `stale_journal_*` sets' refusal is the owner-loss consult's candidate (B): the verbatim App
 stderr of run `45557621798` is
@@ -567,10 +651,12 @@ green row is claimed here.
 
 ## 10. Residual risks and limits
 
-- `migration`'s arm stays pending the post-F1 run (§9): `stage=native_exec arm=await_result
-  wait_class=other` was the stage-3 observation and may be a masked arm; the definitive arm is
-  pending the post-F1 binding run, and its producer (the gate C code / reused guest, or an owned
-  Go site) is not named before it is observed. The `native_release`, `turn`, `stop_receipt_durable`,
+- `migration`'s arm is observed (§9): the binding run `45579163968` reads
+  `stage=clone_bootstrap arm=bootstrap_attempt wait_class=other` — a different arm than the stage-3
+  observation `stage=native_exec arm=await_result wait_class=other` claimed — at the owned wrap
+  `gate_lifecycle_linux.go:1054-1056` around the unowned bootstrap-attempt read
+  (`wire_linux.go:559`), whose expected frame the gate C code / reused guest sends
+  (`gate.c:1168`). The `native_release`, `turn`, `stop_receipt_durable`,
   `leaf_removed` and `journal_cleared` boundaries of every pi leg strictly after `native_release`
   remain unreachable until it is fixed.
 - Wait-class granularity is the ruling's three-class vocabulary, so every non-deadline, non-EOF
@@ -578,16 +664,19 @@ green row is claimed here.
   `exec-status channel closed or carried ancillary data before a frame` (`receiveStatusPacket`,
   `wire_linux.go:685`, `n == 0` in practice: the gate closed the FD before a frame) and the
   frame-level rejections of the same read. Splitting those needs a sentinel in the unowned
-  `wire_linux.go`; they are the follow-up goal's first discriminating probes, and the class is honest
-  as delivered (`other` = neither `deadline` nor `peer_closed`, both of which have their own pins).
+  `wire_linux.go`; the follow-up goal's first discriminating probes are the clone-path producers
+  (§9 — the binding run's first arm is the bootstrap-attempt read), while `receiveStatusPacket`
+  (`wire_linux.go:685`) is the non-clone path, unreachable on the migration release, and the class is
+  honest as delivered (`other` = neither `deadline` nor `peer_closed`, both of which have their own
+  pins).
 - The arm literals, the arm/sub-step binding and the wait/guest shape are pinned by owned probe rows
   (§5) and by mutants M7/M9 (§6); the *wrap-site* assignment itself (which site constructs which arm)
   has no owned unit test, because every test file in `daemon/native/linux-gate/protocol/` is outside
   the owned set. Two parts are now pinned outside it: the F1 guard (the wrap never re-labels; M8) and
   the verify-split classifier (`NativeExecVerifyArm`; M9); the remaining assignment — which
-  `verifyNativeImage` returns are process-side — is pinned behaviorally by the post-F1 binding run,
-  whose `migration` arm either matches an owned site's code or the residual pointer names the exact
-  arm for `rf-acc-guest-native-exec`.
+  `verifyNativeImage` returns are process-side — is not pinned by the post-F1 binding run, whose
+  `migration` failure is the earlier bootstrap-attempt read and never reaches `verifyNativeImage`
+  (§9); the residual pointer names that observed arm for `rf-acc-guest-native-exec`.
 - The four `stale_journal_*` green rows stay `rf-acc-owner-loss-semantics`'s (Q-D); the refusal
   document now decodes, so that goal starts from a named guard, not from a decode failure. The
   `stale_journal_run_key` fresh-request precondition shows three variants of its pidfd message across

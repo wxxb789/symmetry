@@ -1506,7 +1506,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       `serveConnection` over a real unixpacket socket, and all five tests failed in the same step of that
       attempt, each at the wire harness's client read (`linuxOwnerAnchorWirePair` →
       `linuxOwnerAnchorWireReadFrame` → `ReadMsgUnix`, the stdlib `(*net.UnixConn).ReadMsgUnix` behind the
-      helper's `t.Fatalf("read wire frame: %v", err)`), with the full recorded lines (the `/tmp/Test…`
+      helper's `t.Fatalf("read wire frame: %v", err)`), with the full recorded lines (the `path-sha256:3ff0306ff829e21a5ae9bef2bfa3d222df279dffcc8af0fcb217845c5aabdb8a`
       segment elides the run's temp directory, which is named after the test):
       `--- FAIL: TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts (0.00s)`
       `anchor_wire_shape_test.go:295: read wire frame: read unixpacket @->/tmp/Test…/owner.sock: recvmsg: connection reset by peer`
@@ -1851,25 +1851,32 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
       goal with guest-side debugging; no fixture change is proposed without a named root.
 
-- [ ] `migration`'s release fails in the guest exec-status producer — the arm is pending the post-F1
-      run (2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9, run
-      `45564071868` plus the conductor's post-F1 binding run): the stage-3 observation
-      (`release_outcome_unknown; stage=native_exec arm=await_result wait_class=other`) may be a masked
-      arm — the review's F1 proved those bytes re-wrapped every labelled clone arm into `await_result`
-      — so the definitive arm is named by the post-F1 binding run on the PR head, never before it is
-      observed; it is not the errno-reporting `launcher_integration_linux_test.go:439` stop (`native
-      exec failed after RELEASE: errno=1`, arm `exec_errno`). The witness vehicle sets a `CloneGrant`,
-      so the release is not a reuse-only site, and the waiting release still waits for the gate's
-      `FRAME_EXEC_ATTEMPT`/`EXEC_FAILURE` result (`daemon/native/linux-gate/c-gate/gate.c:1276`, sent
-      before the exec). `DECISION_NEEDED`: the follow-up goal `rf-acc-guest-native-exec` (conductor
-      2026-11-25 ruling) routes from that observation — its first probes split `wait_class=other` (the
-      conflated `exec-status channel closed or carried ancillary data before a frame` in the unowned
-      `daemon/native/linux-gate/protocol/wire_linux.go:685` needs its own sentinel). The
-      aborted-release stop measurement is intermittent: `Linux v2 helper could not prove the exact run
-      leaf stopped: dial unixpacket: connect: connection refused` appears four times in run
-      `45555828634` and zero times in runs `45557621798` and `45564071868`. The "no fixture change
-      without a named root" rule of the entry above stays satisfied on the naming half only until the
-      post-F1 arm is observed.
+- [ ] `migration`'s release fails awaiting the same-PID B bootstrap attempt (`arm=bootstrap_attempt`
+      observed, 2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9):
+      the post-F1 binding run `45579163968` (head `8da0f941` = PR head `65bb41b1` + the two scratch
+      files; artifact `linux-v2-native-evidence-45579163968-1`, digest
+      `sha256:2e1c0d8cfde2eec23dd6d73b3ef3a15693c80ff5a4e7d2818fcd0e82cbbabbd2`) reads the release
+      detail verbatim as `(release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt
+      wait_class=other)` — a different arm than the stage-3 observation
+      (`release_outcome_unknown; stage=native_exec arm=await_result wait_class=other`), which the
+      review's F1 proved was the pre-F1 wrap's own label. The failing read is the unowned
+      `readCloneBootstrapExecAttempt`/`receiveCloneStatusPacket`
+      (`daemon/native/linux-gate/protocol/wire_linux.go:559,:511`), wrapped at the owned
+      `gate_lifecycle_linux.go:1054-1056`; the frame it expects is the gate's
+      `FRAME_BOOTSTRAP_EXEC_ATTEMPT` (`daemon/native/linux-gate/c-gate/gate.c:1168`), and no `errno`
+      and no `guest_stage` are emitted. It is not the errno-reporting
+      `launcher_integration_linux_test.go:439` stop (`native exec failed after RELEASE: errno=1`, arm
+      `exec_errno`), and it is not a reuse-only site (the witness vehicle sets a `CloneGrant`).
+      `DECISION_NEEDED`: the follow-up goal `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling)
+      routes from this arm — its first probes split `wait_class=other` with sentinels at the
+      clone-path producers (`daemon/native/linux-gate/protocol/wire_linux.go:527/530/534/539/559`
+      and `wire.go:486/619-625`), the read this arm already fails in; the non-clone
+      `wire_linux.go:685` (`receiveStatusPacket`) stays out of this route. The aborted-release stop
+      measurement is intermittent: `Linux v2 helper could not prove the exact run leaf stopped: dial
+      unixpacket: connect: connection refused` appears four times in run `45555828634`, zero times in
+      runs `45557621798` and `45564071868`, and four times again in the binding run's bounded App
+      stderr. The "no fixture change without a named root" rule of the entry above stays satisfied:
+      the arm is observed and its producer sits in the unowned gate C code / reused guest.
 
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
@@ -1943,18 +1950,23 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       No clause (1) text above is deleted: the root-cause question it asks is answered by ruling Q1(a)
       and the fix is the behaviour it names.
 
-- [ ] rf-acc-release-recovery-diagnostics residual: the `migration` release arm is pending the post-F1
-      run (2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record
+- [ ] rf-acc-release-recovery-diagnostics residual: the `migration` release arm is observed
+      (2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record
       `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md` §9, plan
       `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md` §3): the diagnostics, the
-      `stale_leaf` validator alignment and the fix-stage F1-F10 changes are applied (CLOSED-TODO, same
-      heading), but the release that must reach `migration`'s `native_release` hold still fails, and
-      the stage-3 arm `(release_outcome_unknown; stage=native_exec arm=await_result wait_class=other)`
-      (run `45564071868`, on the pre-F1 bytes) may be a masked clone arm — the post-F1 binding run on
-      the PR head names the definitive arm before any producer is named. The aborted-release stop
-      measurement is intermittent (four occurrences in run `45555828634`, zero in runs `45557621798`
-      and `45564071868`). `DECISION_NEEDED`, and the new goal `rf-acc-guest-native-exec` (conductor
-      2026-11-25 ruling; per-arm entry above) routes from that observation. The four
+      `stale_leaf` validator alignment and the fix-stage F1-F10 changes are applied (CLOSED-TODO, its
+      own heading), but the release that must reach `migration`'s `native_release` hold still fails, and
+      the binding run `45579163968` (head `8da0f941`, on the delivered bytes) reads
+      `(release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other)` — a
+      different arm than the pre-F1 stage-3 reading
+      `(release_outcome_unknown; stage=native_exec arm=await_result wait_class=other)` (run
+      `45564071868`). The failing read is the unowned `wire_linux.go:559` bootstrap-attempt read
+      wrapped at the owned `gate_lifecycle_linux.go:1054-1056`, and the expected frame's producer is
+      the gate C code / reused guest (`gate.c:1168`). The aborted-release stop measurement is
+      intermittent (four occurrences in run `45555828634`, zero in runs `45557621798` and
+      `45564071868`, four again in the binding run's bounded App stderr). `DECISION_NEEDED`, and the
+      new goal `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling; per-arm entry above) routes
+      from that arm. The four
       `stale_journal_*` sets' green rows stay
       `rf-acc-owner-loss-semantics`'s; their guard is now named
       (`refusal=journal_without_unresolved_authority reason=release_proof_present

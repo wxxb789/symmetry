@@ -525,6 +525,18 @@ func TestLinuxV2NativeWitnessReportsOnlyExactAuthenticatedHelperDrop(t *testing.
 	}
 }
 
+func linuxV2NativeWitnessExactPhysicalStop() linuxV2NativeWitnessStop {
+	return linuxV2NativeWitnessStop{
+		ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
+		Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
+		Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
+		KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
+		ProducerFenced: true, DescendantsReaped: true,
+		LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
+		GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
+	}
+}
+
 func TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck(t *testing.T) {
 	witness := &linuxV2NativeWitnessRun{
 		request: linuxV2NativeWitnessRequest{
@@ -538,15 +550,7 @@ func TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck(t *testing.T) {
 			Stages: linuxV2NativeWitnessStages{
 				NativeReleased: true, StopReceiptDurable: true, LeafRemoved: true, JournalCleared: true,
 			},
-			Stop: linuxV2NativeWitnessStop{
-				ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-				Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-				Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-				KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
-				LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-				GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-			},
+			Stop: linuxV2NativeWitnessExactPhysicalStop(),
 			Release: linuxV2NativeWitnessRelease{
 				Version: authority.SupervisorHandoffVersionV2, LeafDisposition: authority.LinuxCgroupLeafRemoved,
 				OpaquePlatformRelease: true, LeafRemoved: true, ClearPersisted: true,
@@ -584,15 +588,7 @@ func TestLinuxV2NativeWitnessAllowsExactStopReceiptForLostReceiptAck(t *testing.
 			ResponseLostAfter: linuxV2NativeWitnessStopReceiptStage, JournalUnproven: true,
 			NativeReleaseState: linuxV2NativeWitnessNativeReleaseReleased,
 			Stages:             linuxV2NativeWitnessStages{NativeReleased: true, StopReceiptDurable: true},
-			Stop: linuxV2NativeWitnessStop{
-				ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-				Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-				Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-				KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
-				LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-				GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-			},
+			Stop:               linuxV2NativeWitnessExactPhysicalStop(),
 		},
 	}
 	if err := witness.validateFinalSummary(); err != nil {
@@ -845,15 +841,7 @@ func TestLinuxV2NativeWitnessUnresolvedSummaryTrippedNamesPredicates(t *testing.
 		{
 			name: "exact versioned stop receipt",
 			mutate: func(s *linuxV2NativeWitnessSummary) {
-				s.Stop = linuxV2NativeWitnessStop{
-					ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-					Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-					Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-					KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-					ProducerFenced: true, DescendantsReaped: true,
-					LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-					GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-				}
+				s.Stop = linuxV2NativeWitnessExactPhysicalStop()
 			},
 		},
 		{
@@ -935,15 +923,7 @@ func TestLinuxV2NativeWitnessAllowsExactVersionedStopForUnresolvedRecovery(t *te
 			Outcome: "unresolved", RecoveryState: "unresolved", FailureCategory: "containment_unproven", JournalUnproven: true,
 			NativeReleaseState: linuxV2NativeWitnessNativeReleaseReleased,
 			Stages:             linuxV2NativeWitnessStages{NativeReleased: true, StopReceiptDurable: true},
-			Stop: linuxV2NativeWitnessStop{
-				ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-				Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-				Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-				KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
-				LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-				GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-			},
+			Stop:               linuxV2NativeWitnessExactPhysicalStop(),
 		},
 	}
 	if err := witness.validateFinalSummary(); err != nil {

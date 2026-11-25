@@ -130,22 +130,25 @@ number where the two differ.
    No second convention is added.
    `migration` — fix the named sub-step cause only if it is staging in an owned script; a cause in
    the gate C code, `control/**` or the guest outside the owned scripts stops with `DECISION_NEEDED`
-   and the verbatim detail. The observed detail is `stage=native_exec` without an errno, i.e. one of
-   the four non-errno `native_exec` sites inside the gate/bootstrap protocol (delivered bytes
-   `gate_lifecycle_linux.go:979,:999,:1006,:1125`) — with the 2026-11-25 F1 ruling the stage-3
-   observation (`arm=await_result`) may be masked, so the arm stays pending the conductor's post-F1
-   binding run and the site class is not named before it is observed.
+   and the verbatim detail. The stage-2 detail was `stage=native_exec` without an errno; with the
+   2026-11-25 F1 ruling the stage-3 observation (`arm=await_result`) was the pre-F1 wrap's own
+   label, and the conductor's post-F1 binding run `45579163968` observed
+   `stage=clone_bootstrap arm=bootstrap_attempt wait_class=other` at the unowned bootstrap-attempt
+   read (`wire_linux.go:559`; expected frame `gate.c:1168`), so `migration` stays `DECISION_NEEDED`
+   and the residual pointer names that arm.
 4. Stage 3 (conductor ruling on the implement `DECISION_NEEDED`): §2.8's arm/wait/guest extension
    plus one literal `migration`-only scratch run on the final bytes — the stage-2 six-set run
    (`45557621798`) stays the proof of record for `stale_leaf` (green) and the four denial legs
    (named guard, handed to `rf-acc-owner-loss-semantics`), so no second six-set run is spent. The
    run's verbatim detail goes to evidence §9 as the pre-F1 observation; the fix stage (F1-F10)
-   follows, and the post-F1 binding run on the PR head names the definitive arm: `migration` stays
-   `DECISION_NEEDED` when the named arm is outside the owned set, the residual pointer names the
-   exact arm, and the follow-up goal (`rf-acc-guest-native-exec`) routes from that observation only.
+   follows, and the post-F1 binding run on the PR head named the definitive arm: `migration` stays
+   `DECISION_NEEDED` because the named arm is outside the owned set, the residual pointer names the
+   exact arm, and the follow-up goal (`rf-acc-guest-native-exec`) routes from that observation.
+   Observed: run `45579163968` named `stage=clone_bootstrap arm=bootstrap_attempt wait_class=other`
+   (§7.5/§9 of the evidence record).
 5. Scratch budget: three runs total in the goal (base confirmation, stage-1, stage-2), plus the
    stage-3 `migration`-only run, plus the conductor's post-F1 binding run (one `migration` plus one
-   `stale_leaf`); mutants M1-M12 are local (`daemon` job) and need no scratch run. If a run clears
+   `stale_leaf`); mutants M1-M13 are local (`daemon` job) and need no scratch run. If a run clears
    no new class twice, stop.
 
 ## 4. Local probes (lesson 74, each with ≥1 positive and ≥1 negative case)
@@ -156,7 +159,7 @@ number where the two differ.
   detail contains no fragment of the raw text (M6). Plus the `ReleaseSubStepError` message and the
   extended `Error()` rendering.
 
-  Stage 3 rows: one row per arm literal (`TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm`, 20
+  Stage 3 rows: one row per arm literal (`TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm`, 21
   arms — exact rendered string per arm, so a swapped constant value reddens; the arm→sub-step
   binding; no two arms render alike), the wait-class table (nil, context/os deadline, EOF, wrapped
   EOF, `ErrUnexpectedEOF`, `ENOTCONN`/`EPIPE`/`ECONNRESET`, canceled context, the raw channel-closed
@@ -192,7 +195,7 @@ number where the two differ.
 
 `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md`: the clause census, the per-set
 table (before line from the parent runs; after: run id, case set, boundary, exit status, first
-failing check, the verbatim named cause, artifact/manifest sha256), probe outputs, the M1-M12 rows
+failing check, the verbatim named cause, artifact/manifest sha256), probe outputs, the M1-M13 rows
 with restored blob hashes and the CI job that reddens, the sha256 equality table of the tested
 bytes, the greps of Change 6, and the refusal-document bytes verbatim. Stage 3 adds §2.8 (the
 arm/wait/guest vocabulary with the wrap-site table), the matching probe and mutant rows, §7.5 (the
