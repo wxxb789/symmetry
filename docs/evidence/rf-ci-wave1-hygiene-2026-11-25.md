@@ -21,9 +21,9 @@ Working tree at the time of this record (all paths in scope; `git status --porce
 | `.github/workflows/ci.yml` | `a7d2d138475fd6397ec970e14e5d2b1ef2f013be3c67acff6ecde4cf5623c95c` | `5997f368ce8464db54f37c1bcfe03cf27ac8235c114c9b77d2af96ab86244197` |
 | `.github/actions/contracts-build/action.yml` | `2d36e663dc8b0f34eecfd44b0dc4e0758405c2797259f0d3671d3040dd505e55` | `5c49e6cea58e0b0516238378d9dcc0abd6b0382784e351d89a55f057d29f6767` |
 | `docs/design/quality.md` | `f34eca086f43ae1ad4751e1e92c59b69b222202dd4e76aa50fc5e9deedf9be41` | `04adc7faa77acb7831f7638c7ca4a243375de11547f81f0ce53a18b172e58b75` |
-| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `d750f390deccde1f65d89149b002de575af27afedc83c300e81479f8a952ff6f` |
+| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `f4b1a7e0a686340277f03feb1be2b9e9ec9f1088d79559df2669efd196890438` |
 | `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | `d1392647d9cc1afa0fd65382ead4cefca229dd5f5408fd10eb50cea5dd37f0b9` | `87df1c4713ca5195441345ca30e0671d24aad28ae05de87d1488566aab06a0b8` |
-| `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` | new | `8c062fb1f0a9b4afe963117e2c275457c0cc88cca4337afd1ec61566b1da711f` |
+| `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` | new | `63b5626a25b6232cd90fdce430e53258f6322e7ee4669c6cea6f80b10373abf9` |
 
 `ci.yml` is 2216 lines after the change (2158 before).
 
@@ -66,7 +66,7 @@ Corrections the measurements force on the contract's own assumptions:
 
 | gate | command (working directory: repository root) | result |
 | --- | --- | --- |
-| structure extraction | `python3 scripts/ci/test-ci-structure-extraction.py` | `Ran 61 tests`, `OK`, exit 0 (baseline at drafting: 40 tests OK; +5 pins, +16 mutations, of which 5 were added in response to the two reviews below) |
+| structure extraction | `python3 scripts/ci/test-ci-structure-extraction.py` | `Ran 62 tests`, `OK`, exit 0 (baseline at drafting: 40 tests OK; +5 pins, +17 mutations, of which 5 were added in response to the two reviews below and 1 to the simplify pass) |
 | changed-path classifier | `python3 scripts/ci/test-ci-changed-path-classifier.py` | `Ran 37 tests`, `OK`, exit 0 (unmodified file) |
 | citation existence (amended `quality.md`) | `python3 scripts/ci/check-citation-existence.py --base HEAD^1 --head HEAD` in a scratch repository holding the head tree plus the amended document | exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))` |
 | record cleanliness (this new record) | `python3 scripts/ci/check-record-cleanliness.py --base HEAD^1 --head HEAD` in the same scratch repository | exit 0 — `1 changed record(s) pass the root-only check` |

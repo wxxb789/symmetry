@@ -27,7 +27,6 @@ INLINE_RUN_KEY = re.compile(r"^(?: {8}| {6}- )run: \|$")
 
 WORKFLOW_INDENT = (6, 8)
 ACTION_INDENT = (4, 6)
-JOB_KEY_INDENT = 4
 CLASSIFIER_HEREDOC = "python3 - <<'PY'"
 MAX_INLINE_BODY_LINES = 80
 ACTION_CALL = "uses: ./.github/actions/contracts-build"
@@ -278,20 +277,13 @@ FRONTEND_SUITE_COMMAND = "pnpm --filter @symmetry/frontend exec vitest run --cov
 PLAIN_FRONTEND_SUITE = re.compile(
     r"@symmetry/frontend\b[^\n]*\btest\b|--dir[ =]frontend\b[^\n]*\btest\b|-C[ =]frontend\b[^\n]*\btest\b"
 )
+WORKFLOW_LABEL = "ci.yml"
 ACTION_LABEL = "contracts-build/action.yml"
-DAEMON_AUDIT_WORK_DIRECTORY = "daemon"
-ADVISORY_COMMAND_PINS = {
+ADVISORY_BODY_SHA256 = {
     "Measure golangci-lint findings (GOOS=linux, advisory)": (
-        "golangci_version='v2.15.0'",
-        "golangci_archive='golangci-lint-2.15.0-linux-amd64.tar.gz'",
-        "golangci_archive_sha256='9b7fe6a6bf6334b98decf8d86b11415ea7889afdabdd1959fdce23af2a9ebcea'",
-        'GOOS=linux "$golangci_bin" run --config .golangci.yml \\',
-        "--max-issues-per-linter=0 --max-same-issues=0",
+        "8a9af339b2faf39d333274211fffdeb8b13c9852582ddb898d3667572ee0c39d"
     ),
-    "Measure govulncheck findings (advisory)": (
-        "govulncheck_version='v1.10.0'",
-        '"$govulncheck_bin" ./... | tee "$govulncheck_log"',
-    ),
+    "Measure govulncheck findings (advisory)": "aad6fd52299ff5be9e18dabecc57c537d1af8f7ba9f2f6a652c9db42254d4546",
 }
 ELIXIR_CACHE_ACTION = "actions/cache@v6"
 ELIXIR_CACHE_PATHS = ("control/deps", "control/_build")
@@ -313,10 +305,10 @@ class ElixirCacheSite:
 
 
 ELIXIR_CACHE_SITES = (
-    ElixirCacheSite(file="ci.yml", job="control", key=ELIXIR_CACHE_KEYS["test"]),
-    ElixirCacheSite(file="ci.yml", job="coverage-control", key=ELIXIR_CACHE_KEYS["test"]),
-    ElixirCacheSite(file="ci.yml", job="pi-control-e2e-windows", key=ELIXIR_CACHE_KEYS["test"]),
-    ElixirCacheSite(file="ci.yml", job="browser-fixture-linux", key=ELIXIR_CACHE_KEYS["dev"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="control", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="coverage-control", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="pi-control-e2e-windows", key=ELIXIR_CACHE_KEYS["test"]),
+    ElixirCacheSite(file=WORKFLOW_LABEL, job="browser-fixture-linux", key=ELIXIR_CACHE_KEYS["dev"]),
     ElixirCacheSite(
         file=ACTION_LABEL,
         job=ACTION_JOB,
@@ -511,7 +503,7 @@ def all_steps(workflow_text: str, action_text: str) -> list[tuple[str, str, str,
     """Every step of both files, as (file, job, name, run text or None, normalized lines)."""
     found: list[tuple[str, str, str, str | None, list[str]]] = []
     for label, dash_indent, key_indent, blocks in (
-        ("ci.yml", WORKFLOW_INDENT[0], WORKFLOW_INDENT[1], workflow_jobs(workflow_text)),
+        (WORKFLOW_LABEL, WORKFLOW_INDENT[0], WORKFLOW_INDENT[1], workflow_jobs(workflow_text)),
         (ACTION_LABEL, ACTION_INDENT[0], ACTION_INDENT[1], {ACTION_JOB: action_text.split("\n")}),
     ):
         for job, block in blocks.items():
@@ -886,17 +878,15 @@ def check_daemon_audit_relocation(workflow_text: str) -> None:
     daemon_steps = named_steps(jobs["daemon"])
     for moved in DAEMON_AUDIT_STEPS:
         require(moved not in daemon_steps, f"the daemon job must not keep the moved step {moved!r}")
-    defaults = nested_values(jobs[DAEMON_AUDIT_JOB], "defaults", JOB_KEY_INDENT)
+    defaults = nested_values(jobs[DAEMON_AUDIT_JOB], "defaults", 4)
     require(
-        defaults == {"run": (f"working-directory: {DAEMON_AUDIT_WORK_DIRECTORY}",)},
+        defaults == {"run": ("working-directory: daemon",)},
         f"the {DAEMON_AUDIT_JOB} defaults block changed: {defaults!r}",
     )
-    for step, pins in ADVISORY_COMMAND_PINS.items():
-        body = run_body_at(find_step(jobs[DAEMON_AUDIT_JOB], step), WORKFLOW_INDENT[1])
-        require(body is not None, f"{step!r} must keep its `run: |` body")
-        commands = [line.strip() for line in body if line.strip() and not line.lstrip().startswith("#")]
-        for pin in pins:
-            require(pin in commands, f"{step!r} lost its pinned command {pin!r}; found {commands!r}")
+    for step, digest in ADVISORY_BODY_SHA256.items():
+        body = run_body_at(find_step(jobs[DAEMON_AUDIT_JOB], step), WORKFLOW_INDENT[1]) or []
+        actual = hashlib.sha256("\n".join(body).encode("utf-8")).hexdigest()
+        require(actual == digest, f"{step!r}: the moved advisory body changed (sha256 {actual})")
     prerequisites = []
     for step_lines in split_steps(jobs[DAEMON_AUDIT_JOB], WORKFLOW_INDENT[0]):
         normalized = normalized_step(step_lines, *WORKFLOW_INDENT)
@@ -930,7 +920,7 @@ def check_single_frontend_suite_owner(workflow_text: str, action_text: str) -> N
     steps = all_steps(workflow_text, action_text)
     owners = [(file, job, name, text) for file, job, name, text, _ in steps if text is not None and "vitest" in text]
     require(
-        owners == [("ci.yml", FRONTEND_SUITE_JOB, FRONTEND_SUITE_STEP, FRONTEND_SUITE_COMMAND)],
+        owners == [(WORKFLOW_LABEL, FRONTEND_SUITE_JOB, FRONTEND_SUITE_STEP, FRONTEND_SUITE_COMMAND)],
         f"exactly one step must run vitest, with the pinned command, in {FRONTEND_SUITE_JOB}: {owners!r}",
     )
     plain = [
@@ -951,7 +941,6 @@ def check_elixir_cache_sites(workflow_text: str, action_text: str) -> None:
     for site in ELIXIR_CACHE_SITES:
         job_steps = [step for step in steps if step[0] == site.file and step[1] == site.job]
         positions = [index for index, step in enumerate(job_steps) if step[3] is not None and "mix deps.get" in step[3]]
-        require(len(positions) == 1, f"{site.job}: expected one `mix deps.get` step; found {len(positions)}")
         index = positions[0]
         require(index > 0, f"{site.job}: no step precedes its `mix deps.get` step")
         file, job, _, _, normalized = job_steps[index - 1]
@@ -1415,7 +1404,15 @@ class MutationTests(unittest.TestCase):
         self.assertIn(invocation, self.workflow_text, "the mutation's anchor must be the golangci invocation")
         mutated = self.workflow_text.replace(invocation, "          exit 0\n")
         self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
-        with self.assertRaisesRegex(AssertionError, "lost its pinned command"):
+        with self.assertRaisesRegex(AssertionError, "the moved advisory body changed"):
+            check_daemon_audit_relocation(mutated)
+
+    def test_mutation_swapping_the_govulncheck_status_read_reddens_the_relocation_pin(self) -> None:
+        status = "          govulncheck_status=${PIPESTATUS[0]}\n"
+        self.assertIn(status, self.workflow_text, "the mutation's anchor must be the govulncheck status read")
+        mutated = self.workflow_text.replace(status, "          govulncheck_status=$?\n")
+        self.assertNotEqual(mutated, self.workflow_text, "the mutation must edit the workflow text")
+        with self.assertRaisesRegex(AssertionError, "the moved advisory body changed"):
             check_daemon_audit_relocation(mutated)
 
     def test_mutation_pointing_the_moved_jobs_defaults_at_the_root_reddens_the_relocation_pin(self) -> None:

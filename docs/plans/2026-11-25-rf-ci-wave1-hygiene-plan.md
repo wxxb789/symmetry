@@ -53,11 +53,14 @@ item) and what was done instead, and the evidence plan.
    document goes stale.
 5. **New structure pins** (`scripts/ci/test-ci-structure-extraction.py`): `check_workflow_concurrency`,
    `check_job_timeouts` (`JOB_TIMEOUTS` table, two-way completeness against the workflow's job set, the
-   step-cap invariant), `check_daemon_audit_model_routing_step` (+ `DAEMON_AUDIT_STEPS` step-name pin),
-   `check_single_frontend_suite_owner`, `check_elixir_cache_sites`. Mutation rows M1, M2, M3, M4, M4b,
-   M5, M9, M11, M12, plus M6/M7/M8/M13's CI-side plants, are validated by the suite's own mutation
-   tests here and by `legacy-route-audit` in CI. `ACTION_STEPS`/`ACTION_CONDITIONS` are updated for the
-   deleted test step and the new cache step; `ADVISORY_STEPS` moves the two rows to `daemon-audit`.
+   step-cap invariant), `check_daemon_audit_relocation` (the contract's pin name
+   `check_daemon_audit_model_routing_step` shipped inside it, together with the `DAEMON_AUDIT_STEPS`
+   step-name pin, the moved-step absence, `defaults`, the advisory bodies' sha256 pins and the `uses:`
+   prerequisites), `check_single_frontend_suite_owner`, `check_elixir_cache_sites`. Mutation rows M1,
+   M2, M3, M4, M4b, M5, M9, M11, M12, plus M6/M7/M8/M13's CI-side plants, are validated by the suite's
+   own mutation tests here and by `legacy-route-audit` in CI. `ACTION_STEPS`/`ACTION_CONDITIONS` are
+   updated for the deleted test step and the new cache step; `ADVISORY_STEPS` moves the two rows to
+   `daemon-audit`.
 
 ## Appended flake item (`control/test/symmetry_control/migrations/goal_0006_migration_test.exs:697`)
 
