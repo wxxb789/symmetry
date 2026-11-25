@@ -273,7 +273,7 @@ takes the classified fail-closed error instead, so no red→green transition is 
 ## 6. Class census (conductor ruling Q2, lesson 85)
 
 All `58` `platform.ProcessIdentity(` call sites in `daemon/**/*_test.go` (`38` in `e2e`, `20` in
-`daemon/internal`; plus the two value passes `witness_test:3664`, `core_test:1359`) were classified
+`daemon/internal`; plus the two value passes `witness_test:3668`, `core_test:1359`) were classified
 by whether the read can repeatedly straddle a reap. Full table with per-site reasons: plan D5.
 Result: the only repeated-read disappearance wait is `waitForLinuxWitnessIdentityGone` itself
 (`38` direct call sites); of the `25` `waitForLinuxWitnessProcessStopped` call sites, the `5` with
