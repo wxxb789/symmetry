@@ -21,10 +21,10 @@ site re-located by content:
 | Contract | Head | Content | Disposition |
 | --- | --- | --- | --- |
 | stop reader `:256-259` | `clone_cleanup_linux_test.go:256-259` | `_, waitErr := command.Process.Wait()` then `if waitErr == nil { t.Fatal("A cleanup caller exited without the requested parent-death signal") }` | converted in stage 2 only, after run 1 names the cause; the message text is kept as the predicate's leading clause |
-| stop renderer (worker) `:289` | `clone_cleanup_linux_test.go:289` | `t.Fatalf("parent test killed A cleanup owner but root call returned: %v", err)` | exempt: the worker is the killed caller; the fatal is only reachable if the kill never happened, and its text is out of the observed stop class |
+| stop renderer (worker) `:298` (the contract text's `:289` is base `t.Fatal(err)`) | `clone_cleanup_linux_test.go:298` (base) → `:353` (head) | `t.Fatalf("parent test killed A cleanup owner but root call returned: %v", err)` | exempt: the worker is the killed caller; the fatal is only reachable if the kill never happened, and its text is out of the observed stop class |
 | root-deleter observation `:262-270` | `clone_cleanup_linux_test.go:261-271` | `waitForPIDFDExit` readiness plus the two preserved-entry `Lstat` checks | stage 1 observes the same pidfd with `waitid` before the unchanged fatal; stage 2 under Q-C(a) replaces readiness with the `si_code`/`si_status` assertion |
-| sibling readers in the package | `clone_cleanup_linux.go:525,776` | `command.Process.Wait()` in the `Start` error path (`_` discard) and in `reapCleanupChildWithoutPIDFD` (error join only) | exempt: neither decides a pass condition, and neither is the worker's reaped status |
-| other package readers | `gate_lifecycle_linux.go:459,1205,1214` | launcher/gate wait paths | exempt: different producer, no relation to this stop |
+| sibling readers in the package | `clone_cleanup_linux.go:525,726,776` | `command.Process.Wait()` in the `Start` error path (`_` discard), `waitid(P_PIDFD)` in `waitReapCleanupChild`, and `reapCleanupChildWithoutPIDFD` (error join only) | exempt: none decides a pass condition, and none reads the worker's reaped status |
+| other package readers | `gate_lifecycle_linux.go:459,1205,1214,1403,1408`; `proc_identity_linux.go:520` | launcher/gate wait paths (`stopLauncher`'s `waitProcessFD` and error-checked reap); the pidfd liveness probe (`WNOWAIT`, expects `ECHILD`) | exempt: different producer, no relation to this stop |
 
 Characterization baseline (lesson 74, captured before any edit; WSL Ubuntu-24.04, Go 1.27.0,
 throwaway program at a scratch path outside the repo): `/bin/sh -c 'kill -9 $$'` reaped through
@@ -161,7 +161,9 @@ parallel phase (keeps the three lines exactly as mandated; changes only intra-bi
 Chosen: (b).
 
 Run mapping after the amendment (run 1's dispatch is invalidated as the observation-complete
-dispatch by this defect in the new diagnostic's emission shape; Q-E's probe-defect clause):
+dispatch by this diagnostics-visibility defect in the new diagnostic's emission shape — not a probe
+defect, so Q-E's "otherwise" branch applies and the final-literal requirement falls on the
+stage-2 bytes):
 run 1 = stage-1 dispatch 1 (partial lines; records the root values and the window arithmetic),
 run 2 = stage-1 dispatch 2 (three lines verbatim; names the cause), run 3 = stage-2 (the binding
 run, also the literal final run on the frozen subject bytes).
@@ -207,3 +209,27 @@ Panel: Sol review (`ghc/gpt-6.2-sol:xhigh`, packet under the GDD reviews root), 
 - **Security pass** — `No findings.` on the pre-review bytes (byte equality of the privileged set by
   content comparison against a base-pinned checkout; the session had no shell tool, so the four
   digests were not recomputed) plus a requested re-verification on the final bytes.
+
+## 10. Addendum (2026-11-25, fix stage) — second review round dispositions
+
+The conductor ruling on the second review round (contract, "Conductor ruling (2026-11-25, review
+MUST_FIX)") accepted six findings; all are applied in the fix stage, with no new scratch run — the
+binding run moves to the conductor's Bind worker on the PR head.
+
+- **SPEC-A01** — the census row paired base `clone_cleanup_linux_test.go:289` with the worker fatal;
+  base `:289` is `t.Fatal(err)` and the fatal sits at base `:298` / head `:353`. Re-addressed here
+  (§1) and in the evidence record.
+- **SPEC-A02** — the evidence record's per-run artifact/member cells named §3.1/§3.2 instead of an
+  artifact id; filled from the retained artifacts (`linux-v2-native-evidence-<run>-1` carrying
+  `shared/unprovisioned-owner-refusal.json`).
+- **SPEC-A03** — the census omitted `gate_lifecycle_linux.go:1403,1408` and
+  `proc_identity_linux.go:520`; added with the same exemption.
+- **SPEC-A04** — run 1's re-dispatch was attributed to Q-E's probe-defect clause; re-cited as the
+  diagnostics-visibility defect under Q-E's "otherwise" branch.
+- **STD-A01** — the subreaper reset cleanup discarded its error; it now reports through `t.Errorf`,
+  matching the five existing in-package sites.
+- **STD-A02** — `rootChildReaped` started `true` and flipped only after a successful observation, so
+  a failed observation left an adopted child unreaped; it now starts `false`.
+
+The test file is otherwise byte-identical to run 3's head: three hygiene edits (STD-A01, STD-A02 and
+one comment block shortened to the two-line cap); no assertion, message, closed value or bound moved.

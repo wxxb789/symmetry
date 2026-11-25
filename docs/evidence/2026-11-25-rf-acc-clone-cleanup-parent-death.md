@@ -8,14 +8,14 @@ amendment, §9 the review round).
 
 ## 1. Subject bytes
 
-| File | Stage-1b sha256 | Stage-2 / final sha256 |
-| --- | --- | --- |
-| `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go` | `133c5b7a69a379f354a9b33fe1a65829b27b7f6b1157c5641f3915fd1f4ed1a9` | `ab3c48ee8314f6028a65dc1793fd8457402749fd7afe9443889b8229f117a530` |
-| `daemon/native/linux-gate/protocol/clone_cleanup_linux.go` | `4fb65bb9874b1dfcd1beb3a16e18b4ff11fc3bb9a6910baa90c46c8e68d48dd7` (unchanged from base) | unchanged |
-| `daemon/cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | `709f7c18ef4174eb8e4b4e4b4c2e20975e064bb2c03409d40f85e473327ac8ab` (unchanged) | unchanged |
-| `daemon/internal/launchercore/main_linux_amd64.go` | `9a6d2cc67fc7ca52c5ec6400f59e0d3b6e2075f687241568f19932fc91e02e2c` (unchanged) | unchanged |
-| `daemon/cmd/symmetry-linux-launcher/main.go` | `05ce544b37f1094ab16beeab01a154a72ce718b9a4bbf8d7fb5bbefd41526a7e` (unchanged) | unchanged |
-| `docs/plans/2026-11-25-rf-acc-clone-cleanup-parent-death-plan.md` | `e47e4b3e…` (pre-§9) | `47418b0f8ddfff48ef8c042c2ffd628ebe5c96a263cad53da7ca8215bba0871a` |
+| File | Stage-1b sha256 | Stage-2 / final sha256 | Fix-round sha256 |
+| --- | --- | --- | --- |
+| `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go` | `133c5b7a69a379f354a9b33fe1a65829b27b7f6b1157c5641f3915fd1f4ed1a9` | `ab3c48ee8314f6028a65dc1793fd8457402749fd7afe9443889b8229f117a530` | `8a8fe30c0cbbce126a10e3adcebd0066b73d0c18f0892877947cc18884f8a622` |
+| `daemon/native/linux-gate/protocol/clone_cleanup_linux.go` | `4fb65bb9874b1dfcd1beb3a16e18b4ff11fc3bb9a6910baa90c46c8e68d48dd7` (unchanged from base) | unchanged | unchanged |
+| `daemon/cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | `709f7c18ef4174eb8e4b4e4b4c2e20975e064bb2c03409d40f85e473327ac8ab` (unchanged) | unchanged | unchanged |
+| `daemon/internal/launchercore/main_linux_amd64.go` | `9a6d2cc67fc7ca52c5ec6400f59e0d3b6e2075f687241568f19932fc91e02e2c` (unchanged) | unchanged | unchanged |
+| `daemon/cmd/symmetry-linux-launcher/main.go` | `05ce544b37f1094ab16beeab01a154a72ce718b9a4bbf8d7fb5bbefd41526a7e` (unchanged) | unchanged | unchanged |
+| `docs/plans/2026-11-25-rf-acc-clone-cleanup-parent-death-plan.md` | `e47e4b3e…` (pre-§9) | `47418b0f8ddfff48ef8c042c2ffd628ebe5c96a263cad53da7ca8215bba0871a` | `8b3de2ae0e9b4a2960a88656870be66b109193aa6c69d78bcdbcf44e31218540` |
 
 Scratch-only files (branch-only, deleted with the branch): `.github/workflows/scratch-rf-acc-clone-cleanup-parent-death.yml`, `scripts/ci/scratch-gh-shim` (sha256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`).
 
@@ -53,8 +53,8 @@ shim, `case_sets=(shared)`), `actionlint` v1.7.12 exit 0, deleted at the end (§
 
 | run | head | set | first failing check (owner-leg event gate) | closed values observed | artifact / member |
 | --- | --- | --- | --- | --- | --- |
-| `45595479247` | `cc22c107` | `shared` | `bad=…CloneCleanupParentDeathScratch=run:1,pass:0,skip:0`, `fail_events=4` | root `si_signo=17 si_code=2 si_status=9` (masks/caller lines displaced) | see §3.1 |
-| `45597242823` | `d64fe094` | `shared` | same `bad=` as run 1, `fail_events=4` | masks + caller `signaled=true signal=9 exit=-1 core=false wait_error=false` + root `si_signo=17 si_code=2 si_status=9` | see §3.2 |
+| `45595479247` | `cc22c107` | `shared` | `bad=…CloneCleanupParentDeathScratch=run:1,pass:0,skip:0`, `fail_events=4` | root `si_signo=17 si_code=2 si_status=9` (masks/caller lines displaced) | `linux-v2-native-evidence-45595479247-1` / `shared/unprovisioned-owner-refusal.json` sha256 `bf0ab0834340eb0dcae083ea1ef44b7680da0b0b16043ce5bda5a9e3981861b6` |
+| `45597242823` | `d64fe094` | `shared` | same `bad=` as run 1, `fail_events=4` | masks + caller `signaled=true signal=9 exit=-1 core=false wait_error=false` + root `si_signo=17 si_code=2 si_status=9` | `linux-v2-native-evidence-45597242823-1` / `shared/unprovisioned-owner-refusal.json` sha256 `36204b5e91b35301832ea67147e8e0b5571fb5cb5a2921842686fb0722787eb1` |
 | `45600764607` | `0e0b5486` | `shared` | `bad=TestInstalledLinuxOwnerBoundaryScratch=…; TestInstalledLinuxOwnerCloneCheckoutScratch=…`, `fail_events=3` (this test absent) | caller + root as above; `--- PASS` for this test | `linux-v2-native-evidence-45600764607-1` / `shared/unprovisioned-owner-refusal.json` sha256 `af31e696653318a50151e2196a67c075bc96be7e4c66f6990f1f1125148312db` |
 
 ### 3.1 Run 1 — stage-1 dispatch (`45595479247`, head `cc22c107`)
@@ -82,8 +82,10 @@ Observations: the fence fires on the caller's death (`si_signo=17 si_code=2 si_s
 SIGCHLD/CLD_KILLED/SIGKILL) and the unchanged fatal fires at its new line `:286` with its message
 verbatim. The masks and caller lines are absent: the printer's `lines[-10:]` window starts at the
 root line (plan §8). Disposition: run 1 is invalidated as the observation-complete dispatch by that
-emission-shape defect (Q-E probe-defect clause); it records the root values and the window
-arithmetic. The owner leg stops at the same three-test gate as the burndown's final run.
+diagnostics-visibility defect in the new emission shape — not a probe defect, so Q-E's "otherwise"
+branch applies (the three-run budget stands; the final-literal requirement falls on the stage-2
+bytes); it records the root values and the window arithmetic. The owner leg stops at the same
+three-test gate as the burndown's final run.
 
 ### 3.2 Run 2 — stage-1 corrected dispatch (`45597242823`, head `d64fe094`)
 
@@ -150,7 +152,8 @@ Export: `redacted evidence export failed: pi durability witness is unavailable:
 ack-loss-replay-checkout_ready.json`, so the run retained its private fixture and uploaded
 `linux-v2-native-evidence-45600764607-1` with the one allowlisted member
 `shared/unprovisioned-owner-refusal.json` (sha256
-`af31e696653318a50151e2196a67c075bc96be7e4c66f6990f1f1125148312db`, 607 bytes).
+`af31e696653318a50151e2196a67c075bc96be7e4c66f6990f1f1125148312db`; the 693-byte member inside the
+607-byte artifact upload).
 
 sha256 equality table — run 3's head vs the delivered tree (per file):
 
@@ -164,7 +167,9 @@ sha256 equality table — run 3's head vs the delivered tree (per file):
 two `A`); every other path in the head is byte-identical to the base (verified by construction: the
 scratch branch was cut from `6b2d4f8f` and only the three paths were committed). The plan, this
 record and `docs/TODO.md` were written after the run (docs only; no subject byte changed after
-`0e0b5486`).
+`0e0b5486`). The fix round (§11) then rewrote three hygiene lines of the test file: §1 carries the
+post-fix sha256 and §11 the delta, so the table above binds run 3's head to the pre-fix delivered
+bytes and the re-binding run for the delivered bytes is the conductor's Bind worker on the PR head.
 
 ### 3.4 Scratch branch deletion
 
@@ -193,10 +198,13 @@ The stage-2 gate triad was run on the final `ab3c48ee…` bytes.
 | Site (base address) | Content | Disposition |
 | --- | --- | --- |
 | `clone_cleanup_linux_test.go:256-259` (base) | the caller reap and the pass predicate | converted in stage 2 (asserts `signaled && signal == SIGKILL`) |
-| `clone_cleanup_linux_test.go:289` (base), the worker fatal | `parent test killed A cleanup owner but root call returned` | exempt: the worker is the killed caller; reachable only if the kill never happened |
+| `clone_cleanup_linux_test.go:298` (base) → `:353` (head), the worker fatal | `parent test killed A cleanup owner but root call returned` | exempt: the worker is the killed caller; reachable only if the kill never happened |
 | `clone_cleanup_linux.go:525` (base) | `command.Process.Wait()` in the `Start` error path, state discarded | exempt: reap-only, no pass condition |
+| `clone_cleanup_linux.go:726` (base, `waitReapCleanupChild`) | `waitid(P_PIDFD, WEXITED)` reap of the caller's root child; status validated for the child's exit class | exempt: the child's status, not the caller's; error path only |
 | `clone_cleanup_linux.go:776` (base, `reapCleanupChildWithoutPIDFD`) | `waitErr` joined into a terminal error | exempt: error path, not the caller's pass predicate |
-| `gate_lifecycle_linux.go:459,1205,1214` (base) | launcher/gate wait paths | exempt: different producer; no relation to this stop |
+| `clone_cleanup_linux_test.go:229` (base) → `:249` (head), the worker-kill cleanup | `Kill` + `Wait` of a caller that never reached its body reap; status discarded | exempt: cleanup path, no pass condition |
+| `gate_lifecycle_linux.go:459,1205,1214,1403,1408` (base) | launcher/gate wait paths (`stopLauncher`'s `waitProcessFD` and error-checked reap) | exempt: different producer; no relation to this stop |
+| `proc_identity_linux.go:520` (base) | pidfd liveness probe (`waitid(P_PIDFD\|WNOHANG\|WNOWAIT)`, expects `ECHILD`) | exempt: different producer; no relation to this stop |
 
 ## 6. Probes and mutants
 
@@ -308,3 +316,52 @@ Findings records (GDD findings root): `rf-acc-clone-cleanup-parent-death-sol-rev
   the digest, keep the mutant procedure off the deliverable path"; the freeze check after the round
   shows the file at `ab3c48ee…` with the intended field order and the diff byte-equal to the
   reviewed `diff-final.patch`. No other findings; the four privileged digests are recomputed in §1.
+
+## 11. Fix round (2026-11-25, second review round)
+
+The conductor ruling (contract, "Conductor ruling (2026-11-25, review MUST_FIX)") accepted six
+findings and authorized no new scratch run — the binding run moves to the conductor's Bind worker on
+the PR head. The test file's delta against run 3's head (`ab3c48ee…` → `8a8fe30c…`) is exactly three
+hygiene hunks, 8 insertions and 5 deletions; no assertion, message, closed value or bound moved:
+
+- **STD-A01** — the subreaper reset `t.Cleanup` now reports a failed reset through `t.Errorf`
+  (`restore parent-death scratch subreaper state: %v`), matching the five existing in-package sites
+  (`clone_integration_linux_test.go:72-76`); the discarded-error form is gone.
+- **STD-A02** — `rootChildReaped` starts `false` after `command.Start()`, so the cleanup's bounded
+  2 s `waitid(P_ALL, WEXITED|WNOHANG)` reap also covers a failed `waitForDirectCleanupChild` that
+  leaves a live root deleter (previously that path returned early, leaving an adopted child
+  unreaped until the binary exited).
+- The `waitidCleanupPidfdExit` comment block is two lines (contract comment policy).
+
+Records: SPEC-A01 (the census row re-addressed to base `:298` / head `:353`, here and in the plan
+§10), SPEC-A02 (the per-run artifact/member cells filled from the retained artifacts), SPEC-A03 (the
+omitted `gate_lifecycle_linux.go:1403,1408` and `proc_identity_linux.go:520` sites added with the
+same exemption), SPEC-A04 (run 1's re-dispatch re-cited as the diagnostics-visibility defect under
+Q-E's "otherwise" branch).
+
+Fix-round gates, run on the frozen `8a8fe30c…` test bytes (WSL Ubuntu-24.04, `-u accept`,
+`GOTOOLCHAIN=local`, Go 1.27.0, except the host row; `GOMAXPROCS=8` on the two load rows):
+
+| Gate | Command as run | Exit | Counts |
+| --- | --- | --- | --- |
+| gofmt | `(cd daemon && gofmt -l .)` | 0 | 0 files |
+| vet | `(cd daemon && GOOS=linux go vet ./...)` | 0 | no diagnostics |
+| package race | `(cd daemon && go test -race -count=1 ./native/linux-gate/protocol/)` | 0 | `ok 3.500s` |
+| host vet | `(cd daemon && go vet ./...)` windows/amd64 Go 1.27.4 | 0 | no diagnostics |
+| probe load | `(cd daemon && go test -race -count=200 -run 'TestCleanupWaitStatusCodesClassifiesReapedChildren\|TestWaitidCleanupPidfdExitReportsReapedChildren\|TestParseStatusSignalMasksGoldenText' ./native/linux-gate/protocol/)` | 0 | `ok 25.325s` |
+| package load | `(cd daemon && go test -race -count=20 ./native/linux-gate/protocol/)` | 0 | `ok 53.201s` |
+| Changed-path clone gate | `python scripts/ci/jscpd-changed.py --repo . --base 6b2d4f8f --head <gate commit>` (the four changed paths committed for this run) | 0 | `4 changed file(s), 1739 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new` |
+| Record cleanliness | `python scripts/ci/check-record-cleanliness.py --repo . --base 6b2d4f8f --head <gate commit>` (same commit) | 0 | `1 changed record(s) pass the root-only check` |
+| Citation existence | `python scripts/ci/check-citation-existence.py --repo . --base 6b2d4f8f --head <gate commit>` (same commit) | 0 | no audited document added or modified; nothing to check |
+
+The STD-A02 arm's mechanism was pinned by a throwaway WSL probe outside the repo (Go 1.27.0): under
+`PR_SET_CHILD_SUBREAPER`, `/bin/sh -c '/bin/sleep 30 & exit 0'` leaves the sleep adopted by the
+probe process (`/proc/self/task/<tid>/children` names it); `waitid(P_ALL, WEXITED|WNOHANG)` returns
+`signo=0` while it lives (the cleanup loop's continue arm) and reaps it after `SIGKILL` as
+`si_signo=17 si_code=2 si_status=9` — the loop's own call form. The STD-A01 `t.Errorf` arm has no
+constructible pin (a `PR_SET_CHILD_SUBREAPER` reset cannot be made to fail from the test); the five
+pre-existing sites carry the identical arm.
+
+Delivered bytes: the §3.3 equality table binds run 3's head to the pre-fix delivered bytes; §1's
+fix-round column carries the post-fix test and plan digests, and the conductor's Bind run on the PR
+head re-binds the delivered bytes.

@@ -220,7 +220,11 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
 		t.Fatalf("become the reaper of the orphaned root cleanup worker: %v", err)
 	}
-	t.Cleanup(func() { _ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) })
+	t.Cleanup(func() {
+		if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0); err != nil {
+			t.Errorf("restore parent-death scratch subreaper state: %v", err)
+		}
+	})
 	command := exec.Command(os.Args[0], "-test.run=^TestLinuxOwnerCleanupParentDeathWorker$")
 	command.Env = append(os.Environ(), cleanupParentDeathWorkerEnv+"=1")
 	command.Stdout = io.Discard
@@ -230,7 +234,7 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	}
 	workerPID := command.Process.Pid
 	workerWaited := false
-	rootChildReaped := true
+	rootChildReaped := false
 	masksLine := "read_error=1"
 	if status, readErr := os.ReadFile(fmt.Sprintf("/proc/%d/status", workerPID)); readErr == nil {
 		if sigCgt, sigBlk, sigIgn, parseErr := parseStatusSignalMasks(status); parseErr == nil {
@@ -579,9 +583,8 @@ type cleanupPidfdExit struct {
 	Status int32
 }
 
-// waitidCleanupPidfdExit waits for the pidfd bound, then reaps through waitid(P_PIDFD).
-// waitid only accepts a pidfd naming this process's own child, so an unreparented orphan
-// fails with ECHILD and no exit status is recoverable.
+// waitidCleanupPidfdExit waits for the pidfd bound, then reaps through waitid(P_PIDFD);
+// waitid needs one of this process's own children, so an unreparented orphan gets ECHILD.
 func waitidCleanupPidfdExit(pidfd int, timeout time.Duration) (cleanupPidfdExit, error) {
 	if err := waitForPIDFDExit(pidfd, timeout); err != nil {
 		return cleanupPidfdExit{}, err
