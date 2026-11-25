@@ -259,7 +259,7 @@ verified by them, not taken on trust:
   (`no_native_effects`, `aborted_no_target`, `recovered`), the pin was re-derived from the final
   source (2053 bytes, trailing `\n`, sha256 `7ad51a38…` = §2's pre-fix encoder digest), the e2e diff
   is empty, and no skip/removal/struct change was introduced.
-- `AuditIntegritySol` (delta re-check): **delta clean** — test-file diff = 99 added, 0 removed lines;
+- `AuditIntegritySol` (delta re-check): **delta clean** — test-file diff = 98 added, 0 removed lines (99 reproduces only with the `+++` header line counted);
   the byte pin re-derived from the final source (2053 bytes, `7ad51a38…`), the writer-error case still
   two-sided, no `Skip`, `gofmt -l` clean, and the focused command green on the anchored bytes with the
   anchors re-hashed afterwards; it confirmed the plan's reconciled wording matches the test table and
