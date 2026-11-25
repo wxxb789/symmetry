@@ -206,6 +206,7 @@ type linuxV2NativeWitnessClone struct {
 	CheckoutReady  bool   `json:"checkout_ready"`
 	CheckoutDevice uint64 `json:"checkout_device,omitempty"`
 	CheckoutInode  uint64 `json:"checkout_inode,omitempty"`
+	Retention      string `json:"retention,omitempty"`
 }
 
 type linuxV2NativeWitnessExit struct {
@@ -517,12 +518,20 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 				config: value, store: store, workspace: workspace.New(value.Workspaces), recoveryOnly: true,
 				background: ctx, running: make(map[state.RunKey]*runningRun),
 			}
-			if cleanupErr := cloneRecovery.cleanupRecoveredWorkspace(ctx, journal, false); cleanupErr != nil {
-				recoveryErr = cleanupErr
-			}
+			// A pre-checkout clone is either cleaned up or retained by design: the cleanup
+			// always runs, and only an unchanged durable row may be named as that retention.
+			preCleanup := journal
+			cleanupErr := cloneRecovery.cleanupRecoveredWorkspace(ctx, journal, false)
 			journal, err = store.LoadJournal(key)
 			if err != nil {
 				return fmt.Errorf("read no-checkout owner witness journal after clone cleanup: %w", err)
+			}
+			switch {
+			case cleanupErr == nil:
+			case linuxV2NativeWitnessCloneRetentionAfterRelease(preCleanup, journal):
+				witness.summary.Clone.Retention = linuxV2NativeWitnessCloneRetentionRetainedAfterRelease
+			default:
+				recoveryErr = cleanupErr
 			}
 			if err := validateLinuxV2NativeWitnessExistingJournal(journal, request); err != nil {
 				return err
@@ -733,6 +742,9 @@ func linuxV2NativeWitnessUnresolvedSummaryTripped(summary linuxV2NativeWitnessSu
 }
 
 func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
+	if err := linuxV2NativeWitnessCloneRetentionError(witness.request.Case, witness.summary); err != nil {
+		return err
+	}
 	if witness.request.Case == "codex_containment" || witness.request.Case == "claude_containment" {
 		if witness.summary.Containment == nil || !witness.summary.Containment.NativeOpenReached {
 			return errors.New("native containment witness did not reach the credential-free native Open boundary")
@@ -3066,6 +3078,40 @@ func linuxV2NativeWitnessJournalPhysicallyReleased(journal state.RunJournal) boo
 	}
 	return false
 }
+
+// linuxV2NativeWitnessCloneRetentionAfterRelease names the retention a normal release
+// leaves behind: the cleanup refused and left the durable pre-checkout row unchanged.
+func linuxV2NativeWitnessCloneRetentionAfterRelease(before, after state.RunJournal) bool {
+	if !linuxV2NativeWitnessCloneRetainedAfterRelease(after) {
+		return false
+	}
+	beforeBytes, beforeErr := json.Marshal(before)
+	afterBytes, afterErr := json.Marshal(after)
+	return beforeErr == nil && afterErr == nil && bytes.Equal(beforeBytes, afterBytes)
+}
+
+// linuxV2NativeWitnessCloneRetainedAfterRelease reports the exact pre-checkout shape
+// the state admission arm admits, so the witness naming cannot drift from it.
+func linuxV2NativeWitnessCloneRetainedAfterRelease(journal state.RunJournal) bool {
+	return state.LinuxV2ReleasedCloneRetainedAfterRelease(journal) && linuxV2NativeWitnessJournalPhysicallyReleased(journal)
+}
+
+// linuxV2NativeWitnessCloneRetentionError rejects a named retention that is not the
+// exact pre-checkout release this vocabulary covers.
+func linuxV2NativeWitnessCloneRetentionError(caseName string, summary linuxV2NativeWitnessSummary) error {
+	retention := summary.Clone.Retention
+	if retention == "" {
+		return nil
+	}
+	if retention != linuxV2NativeWitnessCloneRetentionRetainedAfterRelease || caseName != "stage_replay" ||
+		summary.RecoveryState != "released" || summary.JournalUnproven || summary.Clone.CheckoutReady ||
+		summary.Clone.IntentSHA256 == "" || summary.Clone.SeedDigest == "" {
+		return errors.New("clone retention outcome is not the exact retained pre-checkout release")
+	}
+	return nil
+}
+
+const linuxV2NativeWitnessCloneRetentionRetainedAfterRelease = "retained_after_release"
 
 func (witness *linuxV2NativeWitnessRun) runFresh(ctx context.Context, store journalStore) (resultErr error) {
 	profile := witness.config.AgentProfiles[witness.config.Runtime.AgentProfile]

@@ -1973,33 +1973,34 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       `45564071868`, four again in the binding run's bounded App stderr). `DECISION_NEEDED`, and the
       new goal `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling; per-arm entry above) routes
       from that arm. The four
-      `stale_journal_*` sets' green rows stay
-      `rf-acc-owner-loss-semantics`'s; their guard is now named
+      `stale_journal_*` sets' green rows belong to
+      `rf-acc-owner-loss-semantics` and are delivered there (binding acceptance run `45650762686`
+      on the PR-head bytes: the four ruled sets plus `stage_replay_launcher_bound`, all five sets
+      exit 0; the implement, apply and dedupe rounds `45608856419`, `45621915266` and `45628215703`
+      are superseded rounds): the guard this entry named
       (`refusal=journal_without_unresolved_authority reason=release_proof_present
-      recovery_error_class=recovery_failed`).
+      recovery_error_class=recovery_failed`) is consumed by the ruled d1b retention outcome. The two
+      `rf-acc-owner-loss-semantics` entries this goal carried (the F4 design question and the
+      owner-identity polish) are closed in `docs/archive/CLOSED-TODO.md`; the clone-row disposition
+      entry below stays open as designed.
 
-- [ ] rf-acc-owner-loss-semantics: F4 design question — owner-loss resolution versus the
-      unresolved-journal premise (2026-11-25, same goal and ruling; evidence record §4c): a parked
-      gate exits on owner loss by design (`daemon/native/linux-gate/c-gate/gate.c:731-757`) and the
-      un-released helper aborts the containment and exits
-      (`daemon/internal/platform/helper_v2_recovery.go:223-225`), so the same-RunKey recovery leg
-      refuses with `recover existing owner witness RunJournal without launch` where the test's
-      premise wants the unresolved journal to survive the SIGKILL. Either the product must let a
-      same-RunKey recovery consume the owner-loss receipt, or the test must assert the
-      resolved-by-owner-loss state; both change what the pre-existing product test proves. Needs a
-      consult before any change; the four stale-journal sets' guest-denial rows (run `45489336388`)
-      stay unproven until ruled.
-
-- [ ] rf-acc-owner-loss-semantics: owner-identity polish deferred from the rf-acc-witness-unresolved-exit
-      round-1 reviews (2026-11-25, same goal; evidence record §9 items 8-10): (a) a consistently
-      swapped owner set passes `linuxV2RequireSameOwnerIdentities` because `linuxV2JournalBindsOwnerSlot`
-      is a presence gate only — bind each bound slot's PID/identity to the journal value (security
-      review F1, LOW, pre-existing); (b) the table test does not exercise the handoff, authority,
-      release-proof or pre-gate branches of `linuxV2JournalBindsOwnerSlot` — add rows on
-      `ContainmentAuthority`-backed journals (DS audit F5); (c) the bound→different row changes PID
-      and identity together — add an equal-PID, different-identity row isolating pass 1's identity
-      term (Sol review P3). Deferred to keep the delivered e2e bytes frozen through the binding run
-      (`45548810398`, record §12).
+- [ ] rf-acc-owner-loss-semantics residual: no product disposition deletes a retained
+      pre-checkout clone row (2026-11-25, this goal's d1b ruling; evidence
+      `docs/evidence/rf-acc-owner-loss-semantics-2026-11-25.md`, runbook
+      `docs/runbooks/daemon-process-stop.md` §Retained pre-checkout clone after a normal release):
+      the same-RunKey recovery of a `handoff_committed` crash consumes the anchor-authenticated
+      owner-loss stop evidence, binds the ordinary v2 release proof, and leaves the row in its
+      retained shape (intent, seed, release proof; no checkout, abort or cleanup field). Admission
+      treats exactly that shape as retired for unrelated work while keeping the seed/target paths
+      and the cgroup leaf name reserved, but `LinuxCloneCleanupEligible`,
+      `ClearLinuxCloneNoTargetRetention` and `DeleteJournal` still refuse it by design: a normal
+      release proves that containment stopped, not that B never ran. The row, the A
+      seed bundle and the `refs/heads/symmetry/clone-v2/base/<hash>` ref stay on disk until an
+      explicitly authorized disposition command exists (the B target exists only once the clone
+      bootstrap has created it, and the pre-checkout crash point this retention is recovered from
+      precedes it: evidence record `docs/evidence/rf-acc-owner-loss-semantics-2026-11-25.md`
+      §7.5); building that command needs its own ruling (which
+      authority authorizes deletion and what evidence the disposition records).
 
 - [ ] Two retargeted case sets have an additional pre-existing stop of their own (2026-11-24, same
       goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its
