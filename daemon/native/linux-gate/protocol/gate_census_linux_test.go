@@ -40,19 +40,33 @@ func TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescriptors(t *testing.T) {
 	}
 }
 
-func buildGateFDCensusProbe(t *testing.T) string {
+func compileGateProbe(t *testing.T, source, probeName string) string {
 	t.Helper()
 	compiler, err := exec.LookPath("cc")
 	if err != nil {
-		t.Fatalf("current-source C census regression requires cc: %v", err)
+		t.Fatalf("current-source C %s regression requires cc: %v", probeName, err)
 	}
 	gateDirectory, err := filepath.Abs(filepath.Join("..", "c-gate"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	probeDirectory := t.TempDir()
-	probeSource := filepath.Join(probeDirectory, "gate-census-probe.c")
-	probe := filepath.Join(probeDirectory, "gate-census-probe")
+	probeSource := filepath.Join(probeDirectory, "gate-"+probeName+"-probe.c")
+	probe := filepath.Join(probeDirectory, "gate-"+probeName+"-probe")
+	if err := os.WriteFile(probeSource, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	compileContext, cancelCompile := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancelCompile()
+	compile := exec.CommandContext(compileContext, compiler, "-std=c11", "-O2", "-I", gateDirectory, "-o", probe, probeSource)
+	if output, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("compile current gate %s probe: %v\n%s", probeName, err, output)
+	}
+	return probe
+}
+
+func buildGateFDCensusProbe(t *testing.T) string {
+	t.Helper()
 	// Include the current gate in this test-owned translation unit to exercise
 	// its static helpers without adding a production mode or calling gate_run.
 	const source = `#define _GNU_SOURCE
@@ -188,16 +202,7 @@ int main(int argc, char **argv) {
   return 0;
 }
 `
-	if err := os.WriteFile(probeSource, []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	compileContext, cancelCompile := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelCompile()
-	compile := exec.CommandContext(compileContext, compiler, "-std=c11", "-O2", "-I", gateDirectory, "-o", probe, probeSource)
-	if output, err := compile.CombinedOutput(); err != nil {
-		t.Fatalf("compile current gate census probe: %v\n%s", err, output)
-	}
-	return probe
+	return compileGateProbe(t, source, "census")
 }
 
 func TestGateReleaseFenceOrdering(t *testing.T) {
@@ -222,20 +227,8 @@ func TestGateReleaseFenceOrdering(t *testing.T) {
 
 func buildGateReleaseFenceProbe(t *testing.T) string {
 	t.Helper()
-	compiler, err := exec.LookPath("cc")
-	if err != nil {
-		t.Fatalf("current-source C release-fence regression requires cc: %v", err)
-	}
-	gateDirectory, err := filepath.Abs(filepath.Join("..", "c-gate"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	probeDirectory := t.TempDir()
-	probeSource := filepath.Join(probeDirectory, "gate-release-fence-probe.c")
-	probe := filepath.Join(probeDirectory, "gate-release-fence-probe")
 	// Include the current gate in this test-owned translation unit and drive
-	// exec_as_b/exec_clone_bootstrap directly, so the release fence ordering is
-	// pinned without a user namespace or a real exec.
+	// exec_as_b/exec_clone_bootstrap directly, without a user namespace or a real exec.
 	const source = `#define _GNU_SOURCE
 #include <dirent.h>
 #include <elf.h>
@@ -269,10 +262,8 @@ func buildGateReleaseFenceProbe(t *testing.T) string {
 #include <time.h>
 #include <unistd.h>
 
-/* The release-fence probe calls the gate's own exec_as_b/exec_clone_bootstrap
- * in a forked child and records every kernel-visible boundary call into shared
- * memory, so the fence ordering is pinned without a user namespace or a real
- * exec. Only execveat and the two proc reads are answered by the probe. */
+/* The probe forks the gate's own exec_as_b/exec_clone_bootstrap and records
+ * every kernel-visible call; only execveat and the two proc reads are answered. */
 
 enum {
   CENSUS_EVENT_CAPACITY = 512,
@@ -939,8 +930,11 @@ static int census_scenario_exec_fence(void) {
   CENSUS_REQUIRE(post_send_guards >= 2,
       "post-send guard polls strictly between the attempt frame index %ld and execveat index %ld: %ld; want the check_exec_guard owner-pidfd and owner-pipe polls",
       attempt, execveat, post_send_guards);
-  CENSUS_REQUIRE(census_next_sendmsg(run.trace, execveat, EXEC_STATUS_FD, FRAME_EXEC_FAILURE) >= 0,
-      "no kind-%d failure frame follows the intercepted execveat", FRAME_EXEC_FAILURE);
+  long failure = census_next_sendmsg(run.trace, execveat, EXEC_STATUS_FD, FRAME_EXEC_FAILURE);
+  CENSUS_REQUIRE(failure >= 0, "no kind-%d failure frame follows the intercepted execveat", FRAME_EXEC_FAILURE);
+  CENSUS_REQUIRE(run.trace->events[failure].error_number == ENOEXEC,
+      "the failure frame after the intercepted execveat carries errno=%u; want ENOEXEC(%d)",
+      run.trace->events[failure].error_number, ENOEXEC);
   return 0;
 }
 
@@ -1048,9 +1042,8 @@ static int census_scenario_clone_drop_groups(void) {
       CLONE_FAILURE_GATE_DROP_GROUPS_STAGE, EPERM);
 }
 
-/* The bounding-set row denies the drop's own bounding-set step, which leaves the
- * IDs untouched: two facts are unsatisfied and the frame must name the first in
- * the drop's order. */
+/* The bounding-set row denies the drop's own step, leaving the IDs untouched:
+ * two facts are unsatisfied and the frame must name the first in drop order. */
 static int census_scenario_clone_drop_bounding_set(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_BOUNDING_SET,
       CLONE_FAILURE_GATE_DROP_BOUNDING_SET_STAGE, EPERM);
@@ -1076,9 +1069,8 @@ static int census_scenario_clone_drop_status(void) {
       CLONE_FAILURE_GATE_DROP_STATUS_STAGE, EPERM);
 }
 
-/* The unclassifiable row denies the ID step (the drop's own failing call) and
- * makes the classifier's bounding-set read fail, so the frame keeps the plain
- * guard stage and the failing call's errno. */
+/* The unclassifiable row denies the ID step and makes the classifier's
+ * bounding-set read fail: the frame keeps the plain guard stage and errno. */
 static int census_scenario_clone_drop_unclassified(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_UNCLASSIFIED,
       CLONE_FAILURE_GATE_DROP_STAGE, EPERM);
@@ -1086,7 +1078,8 @@ static int census_scenario_clone_drop_unclassified(void) {
 
 /* Each remaining pre-clone guard has its own row so no call site can swap two
  * guard stages unnoticed. */
-static int census_require_preclone_guard(int deny_release_close, int deny_parent_death, uint32_t want_stage) {
+static int census_require_preclone_guard(int deny_release_close, int deny_parent_death, uint32_t want_stage,
+    unsigned int want_errno) {
   struct census_child_setup setup;
   memset(&setup, 0, sizeof(setup));
   setup.clone_mode = 1;
@@ -1104,22 +1097,22 @@ static int census_require_preclone_guard(int deny_release_close, int deny_parent
   const struct census_event *frame = &run.trace->events[failure];
   CENSUS_REQUIRE(frame->version == CLONE_STATUS_WIRE_VERSION &&
       frame->kind == FRAME_CLONE_BOOTSTRAP_FAILURE && frame->size == CLONE_FAILURE_SIZE &&
-      frame->stage == want_stage,
-      "denied pre-clone guard sent version=%u kind=%u size=%llu stage=%u;"
-      " want version=%d kind=%d size=%d stage=%d",
-      frame->version, frame->kind, frame->size, frame->stage,
-      CLONE_STATUS_WIRE_VERSION, FRAME_CLONE_BOOTSTRAP_FAILURE, CLONE_FAILURE_SIZE, want_stage);
+      frame->stage == want_stage && frame->error_number == want_errno,
+      "denied pre-clone guard sent version=%u kind=%u size=%llu stage=%u errno=%u;"
+      " want version=%d kind=%d size=%d stage=%d errno=%u",
+      frame->version, frame->kind, frame->size, frame->stage, frame->error_number,
+      CLONE_STATUS_WIRE_VERSION, FRAME_CLONE_BOOTSTRAP_FAILURE, CLONE_FAILURE_SIZE, want_stage, want_errno);
   CENSUS_REQUIRE(census_first_prctl(run.trace, PR_CAPBSET_READ) < 0,
       "the credential-fact classifier ran although the guard failed before the drop");
   return 0;
 }
 
 static int census_scenario_clone_close_failed(void) {
-  return census_require_preclone_guard(1, 0, CLONE_FAILURE_GATE_CLOSE_STAGE);
+  return census_require_preclone_guard(1, 0, CLONE_FAILURE_GATE_CLOSE_STAGE, EBADF);
 }
 
 static int census_scenario_clone_parent_death_failed(void) {
-  return census_require_preclone_guard(0, 1, CLONE_FAILURE_GATE_PARENT_DEATH_STAGE);
+  return census_require_preclone_guard(0, 1, CLONE_FAILURE_GATE_PARENT_DEATH_STAGE, EINVAL);
 }
 
 /* A v1 release whose credential drop fails keeps the v1 frame, the failing
@@ -1230,14 +1223,5 @@ int main(int argc, char **argv) {
   return 2;
 }
 `
-	if err := os.WriteFile(probeSource, []byte(source), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	compileContext, cancelCompile := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancelCompile()
-	compile := exec.CommandContext(compileContext, compiler, "-std=c11", "-O2", "-I", gateDirectory, "-o", probe, probeSource)
-	if output, err := compile.CombinedOutput(); err != nil {
-		t.Fatalf("compile current gate release-fence probe: %v\n%s", err, output)
-	}
-	return probe
+	return compileGateProbe(t, source, "release-fence")
 }

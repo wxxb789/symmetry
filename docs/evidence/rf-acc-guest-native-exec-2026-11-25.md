@@ -13,16 +13,16 @@ bytes unless a row names another revision.
 | `wire_linux.go:530` | `:530-533` | truncated/oversized | `truncated_frame` typed |
 | `wire_linux.go:534` | `:534-538` | zero-length packet with `MSG_EOR` | `empty_packet` typed (input-unreachable on Linux AF_UNIX, §5) |
 | `wire_linux.go:539` | `:541-559` | magic/version mismatch; v1 gate frame recognized `:545-556` | `magic_or_version` / `gate_v1_frame` typed |
-| `wire_linux.go:559` (clean EOF) | `:583-585`, `:601-603`, `:619-621` | `n == 0` without `MSG_EOR` | `peer_closed_without_frame` typed, wraps `io.EOF` |
+| `wire_linux.go:559` (clean EOF) | `:585-586`, `:603-604`, `:621-622` | `n == 0` without `MSG_EOR` | `peer_closed_without_frame` typed, wraps `io.EOF` |
 | `wire.go:486` | `:526-533` (`validateCloneStatusFrame`) | version/type/size mismatch | `frame_header` typed |
 | `wire.go:492` | `:549-551` | inode 0 | `image_inode_missing` typed |
 | `wire.go:619-625` | `:677-687` | kind-24 malformed / code invalid | `guest_failure_malformed` / `guest_failure_code` typed |
 | `waitForStatus`/`recvmsg` | `wire_linux.go:512-520` | wait and receive errors | `wait_failed` / `recv_failed` typed |
-| `gate_lifecycle_linux.go:700-707` | `:698-708` | `ReleaseSubStepError` | gains `ReadClass` |
-| `gate_lifecycle_linux.go:739-751` | `:742-754` | `ReleaseWaitErrorClass` | unchanged |
-| `helper_v2_protocol.go:469-505` | `:467-505` | detail + `String()` | gains `read_class` after `wait_class` |
-| `helper_v2_protocol.go:508-566` | `:512-582` | `Validate()` | gains the closed read-class rule |
-| `helper_v2_protocol.go:570-591` | `:585-602` | `…DetailFor` | fills `ReadClass` |
+| `gate_lifecycle_linux.go:700-707` | `:712-722` | `ReleaseSubStepError` | gains `ReadClass` |
+| `gate_lifecycle_linux.go:739-751` | `:752-766` | `ReleaseWaitErrorClass` | unchanged |
+| `helper_v2_protocol.go:469-505` | `:467-510` | detail + `String()` | gains `read_class` after `wait_class` |
+| `helper_v2_protocol.go:508-566` | `:512-587` | `Validate()` | gains the closed read-class rule |
+| `helper_v2_protocol.go:570-591` | `:589-613` | `…DetailFor` | fills `ReadClass` |
 | `wire_linux.go:685`, four `stale_journal_*` rows, exit/unresolved contract, `daemon/e2e/**` | — | out of scope by contract | untouched |
 
 ## 2. Stage-1 changes (behavior-preserving diagnostics)
@@ -53,9 +53,9 @@ bytes unless a row names another revision.
 | `truncated_frame` | App read `:530-533` | frame larger than 64 KiB |
 | `empty_packet` | App read `:534-538` | a zero-length record (platform-unreachable, §5) |
 | `magic_or_version` | App read `:541-544`, `:558` | a frame outside the v1/v3 gate families |
-| `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1211-1217` → `send_exec_failure` `:1015-1023` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno; `check_zero_groups` sets none, so a nonzero count reports a stale errno) |
-| `gate_v1_frame` kind 7 | gate `exec_as_b` `:1273-1279` | 28 B: v1 kind 7, dev/inode (non-clone attempt frame; unreachable for a v3 clone release) |
-| `peer_closed_without_frame` | gate `gate_run` silent exits (`:1367-1384` adoption/release wait, `check_parent`, `read_release`) and any failure-send that also fails | none |
+| `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1273-1299` → `send_exec_failure` `:1026-1034` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno; `check_zero_groups` sets none, so a nonzero count reports a stale errno) |
+| `gate_v1_frame` kind 7 | gate `exec_as_b` attempt build/send `:1354-1362` | 28 B: v1 kind 7, dev/inode (non-clone attempt frame; unreachable for a v3 clone release) |
+| `peer_closed_without_frame` | gate `gate_run` silent exits (`:1449-1465` adoption/release wait, `check_parent`, `read_release`) and any failure-send that also fails | none |
 | `frame_header` | App decode `wire.go:526-533` | a v3 frame of the wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader) |
 | `image_inode_missing` | App decode `:549-551` | v3 kind 20 with inode 0 |
 | `guest_failure_malformed` / `guest_failure_code` | App decode `:677-687` | v3 kind 24 size ≠ 20, or stage outside 1..18 / errno 0 or > u31 |
@@ -79,7 +79,7 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
 
 ## 5. Probes (lesson 74)
 
-- `wire_linux_test.go`, `TestCloneStatusReadClassNamesEveryProducer` (18 rows): every closed
+- `wire_linux_test.go`, `TestCloneStatusReadClassNamesEveryProducer` (19 rows): every closed
   producer is driven through a real `AF_UNIX`/`SOCK_SEQPACKET` arm read and pins the exact class,
   the extracted errno and the unchanged rendered text; the v1 kind-8 row uses the golden literal
   `53594d4c41303031010008000d000000` and asserts it equals `EncodeExecFailure(13)`.
@@ -95,8 +95,9 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
   proof frame header, and the shape-gate negative), `…RendersTheReadClass` pins three literal
   renderings, `…CarriesTheReadClassOverTheWire` drives the real response codec + validator +
   client, `…ValidatesClosedVocabulary` gains five rows (closed class accepted, wrong-shape arm
-  refused, free-form refused, class without a sub-step refused), and `…RedactsFreeFormText` gains
-  a clone-read block whose payload carries a path and the raw frame text.
+  refused, free-form refused, class without a sub-step refused) plus an acceptance loop over all
+  twelve clone-read codes (§13), and `…RedactsFreeFormText` gains a clone-read block whose payload
+  carries a path and the raw frame text.
 - Platform finding (probe, throwaway program): Linux `AF_UNIX` `recvmsg` never reports `MSG_EOR`
   (empty sendmsg, peer `SHUT_WR`, peer close and an empty `SOCK_DGRAM` datagram all render
   `flags=0x40000000`, the echoed `MSG_CMSG_CLOEXEC`, with `MSG_EOR` clear), so the `:534` producer
@@ -331,13 +332,17 @@ contract does not own (follow-up goal `rf-acc-apparmor-userns-profile`).
 
 Run 3's head is the scratch commit `74efe85562d734576912249f5b78f78ba6edabbe`; `git show
 <head>:<path>` reproduces every digest above byte-for-byte. Every `daemon/**`, plan and script
-path in the worktree is byte-identical to that commit; the scratch workflow copy and its `gh` shim
-live only in that commit and are removed from the worktree (§7).
+path in the worktree is byte-identical to that commit, except the three test files the apply stage
+rewrote (§13); the scratch workflow copy and its `gh` shim live only in that commit and are
+removed from the worktree (§7).
 
 After run 3 — the last code-affecting action — only records changed, per the conductor ruling of
 2026-11-25 (the AppArmor-userns residual update): `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`
-and this record were finalized; no code, test or plan byte changed after run 3. The two TODO
-files' digests are not recorded here, per the owner comment policy.
+and this record were finalized. The apply stage then rewrote three test files (scaffolding and
+coverage only; §13) and refreshed this record's §1, §3 and §5 numbering; no production byte, wire
+byte, `gate.c` byte or plan byte changed after run 3, and run 3 remains the bound revision for
+every production row above. The two TODO files' digests are not recorded here, per the owner
+comment policy.
 
 Scratch cleanup proof (contract): `git ls-remote origin scratch/rf-acc-guest-native-exec` prints
 nothing; the only remaining `refs/heads/scratch/*` ref is `scratch/rf-acc-owner-loss-semantics`,
@@ -355,3 +360,52 @@ reason:
 | `rg -n "exec-status channel closed or carried ancillary data before a frame" daemon` | `wire_linux.go:706` plus two platform rows that pin the resulting `wait_class` | exempt: the non-clone native-status read is out of this goal's root cause by contract; its bytes and text are unchanged |
 | `rg -n "guest_stage\|GuestStage" daemon/internal/platform` | `helper_v2_protocol.go` (field, `String()`, `Validate()`, `DetailFor`) and its test file | converted: the closed stage vocabulary is validated on receipt and rendered verbatim |
 | `git diff --stat -- scripts/ .github/` | 0 lines | no script or real workflow byte changed by this goal (the scratch copy is branch-only) |
+
+## 13. Apply stage — accepted simplify findings (test-only delta after run 3)
+
+The goal's apply stage applied the accepted simplify findings. No production byte changed:
+`gate.c` `2bf552b4761c`, `wire.go` `771632ba99bd`, `wire_linux.go` `6205fe6310a2`,
+`gate_lifecycle_linux.go` `76f8a0ff803a`, `helper_v2_protocol.go` `4ac73de34f90` and
+`wire_test.go` `14f62c91bd51` stay at their §11 run-3 digests. Three test files changed;
+post-apply sha256, first 12 hex:
+
+| File | Change | sha256 |
+| --- | --- | --- |
+| `daemon/native/linux-gate/protocol/wire_linux_test.go` | the probe harness returns the read end from `prepare` (the fd-rewriting swap and the single-use `Keep` wrapper are deleted); the duplicated `attempt` closure is one shared helper | `d536eceda115` |
+| `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | one shared `compileGateProbe` fixture replaces the two copied compile blocks; four comment blocks compressed to the two-line policy; the clone-close, clone-parent-death and post-`execveat` rows now assert the failing call's own errno | `0ca1c1132f7e` |
+| `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | the closed-vocabulary validator test gains an acceptance loop over all twelve clone-read classes; one comment block compressed | `dbd644ae4968` |
+
+Applied: simplify findings 2, 3 (scaffolding), 4, 5 (coverage), 6, 7, 8 (the §1/§3/§5
+re-derivations above), plus finding 1's five test-file comment blocks. Not applied: finding 1's
+`gate.c:1057-1060` block — a `gate.c` byte change is frozen by the conductor ruling ("no further
+code change" after run 3) and would re-baseline the §11 digest of the bytes the run-3 audit trail
+binds.
+
+Every-class census for the new loop (the only new "every X" clause): the twelve
+`CloneReadClass*` constants are defined at `wire.go:494-505`; `Validate()`'s switch spans
+`helper_v2_protocol.go:560-567` with the twelve constants across four case lines; the loop binds
+all twelve against a `bootstrap_attempt` detail; no producer, literal or other consumer changed.
+
+### 13.1 Mutation row (scratch copy, restored byte-identical)
+
+| id | Mutation | Red probe (verbatim line) | Restored sha256 |
+| --- | --- | --- | --- |
+| M15 | `helper_v2_protocol.go`: delete `linuxgate.CloneReadClassTruncated` from `Validate()`'s read-class switch | `linux_owner_helper_v2_linux_test.go:1343: clone-read class "truncated_frame" is not closed-vocabulary: Linux owner helper release error detail has an unknown read class "truncated_frame"` | `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75` (mutated scratch digest `37ee37418c19bc03913d3ac5957d9e7c13bae34cc129dd8f813ef391be8f4fca`) |
+
+### 13.2 Local gates at the post-apply bytes
+
+WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| format | `gofmt -l .` | 0 | no file listed |
+| linux vet | `GOOS=linux go vet ./...` | 0 | clean |
+| contract gate (race) | `go test -race -count=1 -timeout 1200s ./native/linux-gate/protocol/ ./internal/platform/ ./internal/clonebootstrap/ ./internal/launchercore/ ./cmd/symmetry-linux-clone-bootstrap/ ./cmd/symmetry-linux-launcher/` | 0 | `ok protocol 6.926s`, `ok platform 65.448s`, `ok clonebootstrap 1.029s`, `ok launchercore 1.100s`, `no test files` (clone-bootstrap cmd), `ok launcher 1.028s` |
+| C census probe (15 scenarios) | `TestGateReleaseFenceOrdering` and the stdio census inside the protocol suite | 0 | all scenarios pass, including the three new errno assertions (`EBADF`, `EINVAL`, `ENOEXEC`) |
+| production C build | `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o <out> native/linux-gate/c-gate/gate.c` and the same for `cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | 0 / 0 | both static x86-64 ELF executables |
+| host vet | `go vet ./...` (Windows host, Go 1.27.4) | 0 | clean |
+| scripts | `git diff --stat -- scripts/ .github/` | — | empty |
+
+No new scratch run and no measurement harness: the run budget is closed by the conductor ruling,
+and this goal records gates and runs, not a benchmark. Run 3 remains the bound run for every
+production row; the apply delta is test scaffolding, coverage and this record.

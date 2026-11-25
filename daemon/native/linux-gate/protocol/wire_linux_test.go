@@ -578,10 +578,6 @@ func runCloneStatusReadProbes(t *testing.T, probes []cloneStatusReadProbe) {
 			defer local.Close()
 			defer peer.Close()
 			fd := test.prepare(t, peer, local)
-			// A frame written at one end of the pair is read at the other one.
-			if fd == int(peer.Fd()) {
-				fd = int(local.Fd())
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			runCloneStatusReadProbe(t, test, test.arm(ctx, fd))
@@ -619,17 +615,17 @@ func wireTestCloneStatusPair(t *testing.T) (*os.File, *os.File) {
 	return os.NewFile(uintptr(pair[0]), "clone-status-local"), os.NewFile(uintptr(pair[1]), "clone-status-peer")
 }
 
-func wireTestCloneStatusSend(t *testing.T, peer *os.File, packet []byte) int {
+func wireTestCloneStatusSend(t *testing.T, local, peer *os.File, packet []byte) int {
 	t.Helper()
 	if _, err := unix.SendmsgN(int(peer.Fd()), packet, nil, nil, 0); err != nil {
 		t.Fatalf("send clone-status probe frame: %v", err)
 	}
-	return int(peer.Fd())
+	return int(local.Fd())
 }
 
-func wireTestCloneStatusKeep(t *testing.T, local, peer *os.File) int {
-	t.Helper()
-	return int(local.Fd())
+func wireTestCloneStatusAttempt(ctx context.Context, fd int) error {
+	_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(5*time.Second))
+	return err
 }
 
 // wireTestCloneReadGateV1Failure is the gate's 16-byte v1 FRAME_EXEC_FAILURE
@@ -646,10 +642,7 @@ func wireTestCloneReadGateV1Failure(t *testing.T) []byte {
 // TestCloneStatusReadClassNamesEveryProducer drives each closed clone-read
 // producer through a real seqpacket arm and pins its class, errno and text.
 func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
-	attempt := func(ctx context.Context, fd int) error {
-		_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(5*time.Second))
-		return err
-	}
+	attempt := wireTestCloneStatusAttempt
 	receipt := func(ctx context.Context, fd int) error {
 		_, err := readCloneCheckoutReady(ctx, fd, time.Now().Add(5*time.Second))
 		return err
@@ -658,7 +651,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 		_, err := readCloneNativeExecResult(ctx, fd, time.Now().Add(5*time.Second))
 		return err
 	}
-	quiet := func(t *testing.T, peer, local *os.File) int { return wireTestCloneStatusKeep(t, local, peer) }
+	quiet := func(t *testing.T, peer, local *os.File) int { return int(local.Fd()) }
 	probes := []cloneStatusReadProbe{
 		{
 			name: "canceled wait",
@@ -716,7 +709,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 				t.Helper()
 				oversized := make([]byte, maxCloneStatusFrameSize+1)
 				copy(oversized, cloneStatusFrame(frameBootstrapExecAttempt, len(oversized)))
-				return wireTestCloneStatusSend(t, peer, oversized)
+				return wireTestCloneStatusSend(t, local, peer, oversized)
 			},
 			arm: attempt, wantClass: CloneReadClassTruncated, wantText: "clone status frame is truncated or oversized",
 		},
@@ -739,7 +732,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 				t.Helper()
 				mutated := EncodeBootstrapExecAttempt(7, 19)
 				mutated[0] = 'X'
-				return wireTestCloneStatusSend(t, peer, mutated)
+				return wireTestCloneStatusSend(t, local, peer, mutated)
 			},
 			arm: attempt, wantClass: CloneReadClassMagicOrVersion, wantText: "clone status frame magic or version is invalid",
 		},
@@ -749,7 +742,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 				t.Helper()
 				mutated := EncodeBootstrapExecAttempt(7, 19)
 				binary.LittleEndian.PutUint16(mutated[8:10], releaseWireVersion)
-				return wireTestCloneStatusSend(t, peer, mutated)
+				return wireTestCloneStatusSend(t, local, peer, mutated)
 			},
 			arm: attempt, wantClass: CloneReadClassMagicOrVersion, wantText: "clone status frame magic or version is invalid",
 		},
@@ -761,7 +754,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 				if !bytes.Equal(frame, EncodeExecFailure(13)) {
 					t.Fatalf("golden v1 gate failure frame differs from EncodeExecFailure(13)")
 				}
-				return wireTestCloneStatusSend(t, peer, frame)
+				return wireTestCloneStatusSend(t, local, peer, frame)
 			},
 			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantErrno: 13,
 			wantText: "clone status frame magic or version is invalid",
@@ -769,7 +762,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 		{
 			name: "v1 gate attempt frame",
 			prepare: func(t *testing.T, peer, local *os.File) int {
-				return wireTestCloneStatusSend(t, peer, EncodeExecAttempt(7, 19))
+				return wireTestCloneStatusSend(t, local, peer, EncodeExecAttempt(7, 19))
 			},
 			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantText: "clone status frame magic or version is invalid",
 		},
@@ -779,7 +772,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 				t.Helper()
 				frame := EncodeExecFailure(13)
 				binary.LittleEndian.PutUint32(frame[12:16], ^uint32(0))
-				return wireTestCloneStatusSend(t, peer, frame)
+				return wireTestCloneStatusSend(t, local, peer, frame)
 			},
 			arm: attempt, wantClass: CloneReadClassGateV1Frame,
 			wantText: "clone status frame magic or version is invalid",
@@ -820,7 +813,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 		{
 			name: "wrong frame kind",
 			prepare: func(t *testing.T, peer, local *os.File) int {
-				return wireTestCloneStatusSend(t, peer, EncodeNativeExecAttempt(11, 23))
+				return wireTestCloneStatusSend(t, local, peer, EncodeNativeExecAttempt(11, 23))
 			},
 			arm: attempt, wantClass: CloneReadClassFrameHeader,
 			wantText: "Linux clone status frame version, type, or size is invalid",
@@ -829,7 +822,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 			name: "wrong frame size",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameBootstrapExecAttempt, 12))
+				return wireTestCloneStatusSend(t, local, peer, cloneStatusFrame(frameBootstrapExecAttempt, 12))
 			},
 			arm: attempt, wantClass: CloneReadClassFrameHeader,
 			wantText: "Linux clone status frame version, type, or size is invalid",
@@ -837,7 +830,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 		{
 			name: "attempt frame without the image inode",
 			prepare: func(t *testing.T, peer, local *os.File) int {
-				return wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 0))
+				return wireTestCloneStatusSend(t, local, peer, EncodeBootstrapExecAttempt(7, 0))
 			},
 			arm: attempt, wantClass: CloneReadClassImageInode,
 			wantText: "Linux clone exec-attempt frame lacks an image inode",
@@ -846,7 +839,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 			name: "malformed guest failure frame",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
+				return wireTestCloneStatusSend(t, local, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
 			},
 			arm: attempt, wantClass: CloneReadClassGuestMalformed,
 			wantText: "Linux clone bootstrap failure frame is malformed",
@@ -855,7 +848,7 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 			name: "invalid guest failure code",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
+				return wireTestCloneStatusSend(t, local, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
 			},
 			arm: attempt, wantClass: CloneReadClassGuestCode,
 			wantText: "Linux clone bootstrap failure frame code is invalid",
@@ -867,16 +860,13 @@ func TestCloneStatusReadClassNamesEveryProducer(t *testing.T) {
 // TestCloneStatusReadClassSplitsNeighbouringProducers pins that each producer
 // never collapses onto the neighbouring class of the same read family.
 func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
-	attempt := func(ctx context.Context, fd int) error {
-		_, _, err := readCloneBootstrapExecAttempt(ctx, fd, time.Now().Add(5*time.Second))
-		return err
-	}
+	attempt := wireTestCloneStatusAttempt
 	probes := []cloneStatusReadProbe{
 		{
 			name: "v1 gate frame is not an unrecognized version",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, wireTestCloneReadGateV1Failure(t))
+				return wireTestCloneStatusSend(t, local, peer, wireTestCloneReadGateV1Failure(t))
 			},
 			arm: attempt, wantClass: CloneReadClassGateV1Frame, wantErrno: 13,
 			wantText: "clone status frame magic or version is invalid", mustNotClass: CloneReadClassMagicOrVersion,
@@ -887,7 +877,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 				t.Helper()
 				mutated := EncodeBootstrapExecAttempt(7, 19)
 				binary.LittleEndian.PutUint16(mutated[8:10], releaseWireVersion)
-				return wireTestCloneStatusSend(t, peer, mutated)
+				return wireTestCloneStatusSend(t, local, peer, mutated)
 			},
 			arm: attempt, wantClass: CloneReadClassMagicOrVersion,
 			wantText: "clone status frame magic or version is invalid", mustNotClass: CloneReadClassGateV1Frame,
@@ -895,7 +885,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 		{
 			name: "wrong frame kind is not a missing inode",
 			prepare: func(t *testing.T, peer, local *os.File) int {
-				return wireTestCloneStatusSend(t, peer, EncodeNativeExecAttempt(11, 23))
+				return wireTestCloneStatusSend(t, local, peer, EncodeNativeExecAttempt(11, 23))
 			},
 			arm: attempt, wantClass: CloneReadClassFrameHeader,
 			wantText: "Linux clone status frame version, type, or size is invalid", mustNotClass: CloneReadClassImageInode,
@@ -903,7 +893,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 		{
 			name: "missing inode is not a frame header mismatch",
 			prepare: func(t *testing.T, peer, local *os.File) int {
-				return wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 0))
+				return wireTestCloneStatusSend(t, local, peer, EncodeBootstrapExecAttempt(7, 0))
 			},
 			arm: attempt, wantClass: CloneReadClassImageInode,
 			wantText: "Linux clone exec-attempt frame lacks an image inode", mustNotClass: CloneReadClassFrameHeader,
@@ -912,7 +902,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 			name: "malformed guest failure is not an invalid guest code",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
+				return wireTestCloneStatusSend(t, local, peer, cloneStatusFrame(frameCloneBootstrapFailure, 16))
 			},
 			arm: attempt, wantClass: CloneReadClassGuestMalformed,
 			wantText: "Linux clone bootstrap failure frame is malformed", mustNotClass: CloneReadClassGuestCode,
@@ -921,7 +911,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 			name: "invalid guest code is not a malformed guest failure",
 			prepare: func(t *testing.T, peer, local *os.File) int {
 				t.Helper()
-				return wireTestCloneStatusSend(t, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
+				return wireTestCloneStatusSend(t, local, peer, cloneStatusFrame(frameCloneBootstrapFailure, cloneFailureSize))
 			},
 			arm: attempt, wantClass: CloneReadClassGuestCode,
 			wantText: "Linux clone bootstrap failure frame code is invalid", mustNotClass: CloneReadClassGuestMalformed,
@@ -932,7 +922,7 @@ func TestCloneStatusReadClassSplitsNeighbouringProducers(t *testing.T) {
 				t.Helper()
 				oversized := make([]byte, maxCloneStatusFrameSize+1)
 				copy(oversized, cloneStatusFrame(frameBootstrapExecAttempt, len(oversized)))
-				return wireTestCloneStatusSend(t, peer, oversized)
+				return wireTestCloneStatusSend(t, local, peer, oversized)
 			},
 			arm: attempt, wantClass: CloneReadClassTruncated,
 			wantText: "clone status frame is truncated or oversized", mustNotClass: CloneReadClassMagicOrVersion,
@@ -1005,7 +995,7 @@ func TestCloneStatusReadClassAbsentOnSuccess(t *testing.T) {
 	local, peer := wireTestCloneStatusPair(t)
 	defer local.Close()
 	defer peer.Close()
-	wireTestCloneStatusSend(t, peer, EncodeBootstrapExecAttempt(7, 19))
+	wireTestCloneStatusSend(t, local, peer, EncodeBootstrapExecAttempt(7, 19))
 	device, inode, err := readCloneBootstrapExecAttempt(context.Background(), int(local.Fd()), time.Now().Add(5*time.Second))
 	if err != nil || device != 7 || inode != 19 {
 		t.Fatalf("successful clone-status read = device=%d inode=%d err=%v, want 7/19 and no failure", device, inode, err)

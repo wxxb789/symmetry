@@ -955,8 +955,7 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm(t *testing.T) {
 }
 
 // TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass pins the read
-// class with literal renderings: a dropped sentinel (M3), a dropped errno (M5)
-// or a raw error text (M7) reddens here.
+// class with literal renderings (M3/M5/M7 redden here).
 func TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass(t *testing.T) {
 	rows := []struct {
 		subStep string
@@ -1327,6 +1326,24 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary(t *testin
 			}
 		})
 	}
+	t.Run("every clone-read class is accepted", func(t *testing.T) {
+		classes := []string{
+			linuxgate.CloneReadClassWait, linuxgate.CloneReadClassRecv, linuxgate.CloneReadClassAncillary,
+			linuxgate.CloneReadClassTruncated, linuxgate.CloneReadClassEmptyPacket,
+			linuxgate.CloneReadClassMagicOrVersion, linuxgate.CloneReadClassGateV1Frame,
+			linuxgate.CloneReadClassPeerClosed, linuxgate.CloneReadClassFrameHeader,
+			linuxgate.CloneReadClassImageInode, linuxgate.CloneReadClassGuestMalformed,
+			linuxgate.CloneReadClassGuestCode,
+		}
+		for _, class := range classes {
+			detail := &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other", ReadClass: class,
+			}
+			if err := detail.Validate(); err != nil {
+				t.Fatalf("clone-read class %q is not closed-vocabulary: %v", class, err)
+			}
+		}
+	})
 }
 
 func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesTheBoundedDetail(t *testing.T) {
