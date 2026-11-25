@@ -262,8 +262,8 @@ func buildGateReleaseFenceProbe(t *testing.T) string {
 #include <time.h>
 #include <unistd.h>
 
-/* The probe forks the gate's own exec_as_b/exec_clone_bootstrap and records
- * every kernel-visible call; only execveat and the two proc reads are answered. */
+/* Forks the gate's exec_as_b/exec_clone_bootstrap; interposes sendmsg/poll/prctl/syscall/open/close/getgroups,
+ * the res-ID calls and _exit; answers execveat and the two proc reads; read/recvmsg, clock_gettime, fcntl, dup2 and the lease compare stay unobserved. */
 
 enum {
   CENSUS_EVENT_CAPACITY = 512,
@@ -875,6 +875,43 @@ static long census_first_prctl(const struct census_trace *trace, unsigned int op
   return -1;
 }
 
+static long census_next_op(const struct census_trace *trace, long after, const char *operation) {
+  for (unsigned long long index = (unsigned long long)(after + 1); index < trace->count; ++index) {
+    if (strcmp(trace->events[index].op, operation) == 0) return (long)index;
+  }
+  return -1;
+}
+
+static long census_next_prctl(const struct census_trace *trace, long after, unsigned int option) {
+  for (unsigned long long index = (unsigned long long)(after + 1); index < trace->count; ++index) {
+    const struct census_event *event = &trace->events[index];
+    if (strcmp(event->op, "prctl") == 0 && event->kind == option) return (long)index;
+  }
+  return -1;
+}
+
+/* Pins the drop's own credential steps in order up to the capabilities write,
+ * so deleting a step from drop_to_b cannot stay green. */
+static int census_require_drop_step_order(const struct census_run_result *run) {
+  long step = census_find_op(run->trace, "getgroups");
+  CENSUS_REQUIRE(step >= 0, "the drop's zero-groups check was not observed");
+  step = census_next_prctl(run->trace, step, PR_CAPBSET_DROP);
+  CENSUS_REQUIRE(step >= 0, "the drop's bounding-set write was not observed");
+  step = census_next_prctl(run->trace, step, PR_SET_KEEPCAPS);
+  CENSUS_REQUIRE(step >= 0 && run->trace->events[step].value == 0,
+      "PR_SET_KEEPCAPS,0 was not observed after the bounding-set write");
+  step = census_next_op(run->trace, step, "setresgid");
+  CENSUS_REQUIRE(step >= 0, "setresgid was not observed after PR_SET_KEEPCAPS");
+  step = census_next_op(run->trace, step, "setresuid");
+  CENSUS_REQUIRE(step >= 0, "setresuid was not observed after setresgid");
+  step = census_next_prctl(run->trace, step, PR_SET_DUMPABLE);
+  CENSUS_REQUIRE(step >= 0 && run->trace->events[step].value == 0,
+      "PR_SET_DUMPABLE,0 was not observed after setresuid");
+  step = census_next_op(run->trace, step, "capset");
+  CENSUS_REQUIRE(step >= 0, "the capabilities write was not observed after PR_SET_DUMPABLE");
+  return 0;
+}
+
 static int census_is_guard_poll(const struct census_trace *trace, unsigned long long index) {
   const struct census_event *event = &trace->events[index];
   return strcmp(event->op, "poll") == 0 &&
@@ -1003,7 +1040,8 @@ static int census_scenario_clone_fence_expired(void) {
   return 0;
 }
 
-static int census_require_drop_classification(int drop_fact, uint32_t want_stage, uint32_t want_errno) {
+static int census_require_drop_classification(int drop_fact, uint32_t want_stage, uint32_t want_errno,
+    int require_drop_order) {
   struct census_child_setup setup;
   memset(&setup, 0, sizeof(setup));
   setup.clone_mode = 1;
@@ -1013,6 +1051,7 @@ static int census_require_drop_classification(int drop_fact, uint32_t want_stage
   struct census_run_result run;
   if (census_execute_child(&setup, &run) != 0) return 1;
   if (census_require_child_ok(&run) != 0) return 1;
+  if (require_drop_order && census_require_drop_step_order(&run) != 0) return 1;
   CENSUS_REQUIRE(census_find_op(run.trace, "execveat") < 0, "denied credential drop still reached execveat");
   long frames = census_count_frames(run.trace, EXEC_STATUS_FD, -1);
   CENSUS_REQUIRE(frames == 1, "credential fact %d sent %ld frames on fd %d; want exactly one",
@@ -1034,46 +1073,46 @@ static int census_require_drop_classification(int drop_fact, uint32_t want_stage
 
 static int census_scenario_clone_drop_denied(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_CREDENTIALS,
-      CLONE_FAILURE_GATE_DROP_CREDENTIALS_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_CREDENTIALS_STAGE, EPERM, 0);
 }
 
 static int census_scenario_clone_drop_groups(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_GROUPS,
-      CLONE_FAILURE_GATE_DROP_GROUPS_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_GROUPS_STAGE, EPERM, 0);
 }
 
 /* The bounding-set row denies the drop's own step, leaving the IDs untouched:
  * two facts are unsatisfied and the frame must name the first in drop order. */
 static int census_scenario_clone_drop_bounding_set(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_BOUNDING_SET,
-      CLONE_FAILURE_GATE_DROP_BOUNDING_SET_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_BOUNDING_SET_STAGE, EPERM, 0);
 }
 
 static int census_scenario_clone_drop_capabilities(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_CAPABILITIES,
-      CLONE_FAILURE_GATE_DROP_CAPABILITIES_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_CAPABILITIES_STAGE, EPERM, 1);
 }
 
 static int census_scenario_clone_drop_ambient(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_AMBIENT,
-      CLONE_FAILURE_GATE_DROP_AMBIENT_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_AMBIENT_STAGE, EPERM, 0);
 }
 
 static int census_scenario_clone_drop_no_new_privs(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_NO_NEW_PRIVS,
-      CLONE_FAILURE_GATE_DROP_NO_NEW_PRIVS_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_NO_NEW_PRIVS_STAGE, EPERM, 0);
 }
 
 static int census_scenario_clone_drop_status(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_STATUS,
-      CLONE_FAILURE_GATE_DROP_STATUS_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_STATUS_STAGE, EPERM, 0);
 }
 
 /* The unclassifiable row denies the ID step and makes the classifier's
  * bounding-set read fail: the frame keeps the plain guard stage and errno. */
 static int census_scenario_clone_drop_unclassified(void) {
   return census_require_drop_classification(CENSUS_DROP_FACT_UNCLASSIFIED,
-      CLONE_FAILURE_GATE_DROP_STAGE, EPERM);
+      CLONE_FAILURE_GATE_DROP_STAGE, EPERM, 0);
 }
 
 /* Each remaining pre-clone guard has its own row so no call site can swap two

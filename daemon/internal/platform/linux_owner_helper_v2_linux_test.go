@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1006,6 +1007,10 @@ func TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire(t *testin
 			Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other",
 			ReadClass: "gate_v1_frame", GuestStage: "exec", Errno: 13,
 		},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || !strings.Contains(string(encoded), `"read_class":"gate_v1_frame"`) {
+		t.Fatalf("raw helper response JSON = %s (err=%v), want the read_class key", encoded, err)
 	}
 	if err := writeLinuxOwnerHelperV2Response(server, response); err != nil {
 		t.Fatalf("write helper response with a read class: %v", err)

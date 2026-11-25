@@ -1853,10 +1853,12 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       (`A cleanup caller exited without the requested parent-death signal`) still has no named root.
       The sibling legs `clone_integration_linux_test.go:240` (`clone status frame magic or version is
       invalid`) and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE:
-      errno=1`) are root-named to the same pre-clone guard consumer as `migration`'s arm — runs
-      `45593856716`/`45601287283`/`45602546196` name the guard and its unsatisfied credential fact
-      (the AppArmor-userns entry below) — but stay open as residuals: the `shared` set never ran on
-      the fixed bytes, so neither leg's post-fix line is observed. They close with the
+      errno=1`) are root-named to the same pre-clone guard consumer as `migration`'s arm — run
+      `45593856716` names the guard (`read_class=gate_v1_frame errno=1`) and runs `45601287283`/
+      `45602546196` name its unsatisfied credential fact
+      (`guest_stage=gate_drop_bounding_set errno=1`) (the AppArmor-userns entry below) — but stay
+      open as residuals: the `shared` set never ran on the fixed bytes, so neither leg's post-fix
+      line is observed. They close with the
       AppArmor-userns fix (`rf-acc-apparmor-userns-profile`). No fixture change is proposed without
       a named root.
 

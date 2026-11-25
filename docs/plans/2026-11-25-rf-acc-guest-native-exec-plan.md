@@ -1,8 +1,11 @@
 # rf-acc-guest-native-exec — implement plan
 
 Contract: `goal-rf-acc-guest-native-exec.md` (GDD state root, external to the repository).
-Base revision `6b2d4f8f` (PR #285 merge, this goal's dispatch gate); the eight code files are
-byte-identical to `65bb41b1` (`git diff --stat 65bb41b1 6b2d4f8f -- daemon` is empty, sha256 §7.4 EQ).
+Base revision `6b2d4f8f` (PR #285 merge, this goal's dispatch gate); against `65bb41b1` that merge
+re-writes two daemon paths (`git diff --stat 65bb41b1 6b2d4f8f -- daemon` = 2 files, 18 insertions(+),
+38 deletions(-)): the owned `gate_lifecycle_linux.go` doc-comment rewrap and the R1–R4 fixture hoist in
+`internal/app/linux_owner_witness_linux_test.go` (test-only), so six of the parent record's eight
+§7.4 code rows stay EQ.
 Branch `refactor/rf-acc-guest-native-exec`. Conductor rulings carried: Q-A(a) (c-gate C source and
 the guest stage are owned, c-gate bytes need the Sol + DS + security-reviewer triple audit before a
 run binds them), Q-B(a) (one new closed field `read_class` plus the extracted errno on the existing
@@ -67,7 +70,7 @@ site that also sets `Errno`.
 | `magic_or_version` | `wire_linux.go:538-539` bad magic, or a version outside {1-recognized, 3} |
 | `gate_v1_frame` | `wire_linux.go:538-539` a v1 gate frame (§2.3); `Errno` for kind 8 |
 | `peer_closed_without_frame` | `wire_linux.go:563-565`, `:581-583`, `:599-601` `n == 0` without `MSG_EOR` (one semantic producer at each arm's EOF site; wraps `io.EOF`) |
-| `frame_header` | `wire.go:469-473` `validateCloneStatusFrame` version/type/size mismatch |
+| `frame_header` | `wire.go:469-473` `validateCloneStatusFrame` version/type/size mismatch; the `decodeCloneCheckoutReceipt` refusals (round-1 review F1) |
 | `image_inode_missing` | `wire.go:486-492` kind-20 frame with inode 0 |
 | `guest_failure_malformed` | `wire.go:619-620` kind-24 frame whose size is not 20 |
 | `guest_failure_code` | `wire.go:622-625` kind-24 frame with an invalid stage or errno |
@@ -119,7 +122,7 @@ the refusal behavior is unchanged.
 | `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1211-1217` → `send_exec_failure` `:1015-1023` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL/other; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno) |
 | `gate_v1_frame` kind 7 | gate `exec_as_b` `:1273-1279` (non-clone attempt) | 28 B: v1 kind 7, dev/inode — reachable only when the gate parsed a non-clone release; a clone release encodes v3 |
 | `peer_closed_without_frame` | gate `gate_run` silent exits (`:1367-1384`: adoption/release wait, `check_parent`, `read_release`) and any `send_packet` failure that also fails its failure frame | none |
-| `frame_header` | App decode `wire.go:469-473` | a v3 frame of the wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader) |
+| `frame_header` | App decode `wire.go:469-473` and `decodeCloneCheckoutReceipt` | a v3 frame the arm's own decoder refuses: wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader), bad field framing, a non-positive generation, a truncated or trailing image identity, or a receipt `Validate()` refusal |
 | `image_inode_missing` | App decode `wire.go:486-492` | v3 kind 20 with inode 0 |
 | `guest_failure_malformed` / `guest_failure_code` | App decode `wire.go:677-687` | v3 kind 24 with size ≠ 20, or stage outside 1..18 / errno 0 or > u31 |
 | decoded guest failure (`guest_stage`+`errno`) | gate `send_clone_bootstrap_failure` `gate.c:1036-1044` called at `:1197`, `:1203`, `:1216`, `:1224`, `:1238`, `:1256`, `:1268`; guest `cmd/symmetry-linux-clone-bootstrap/main.go:22-32` for every `RunBootstrap` failure | 20 B: v3 kind 24, u32 stage 1..18 (guest stages 1..7, gate-side guard and credential facts 8..18 per §8.1), u32 errno |
@@ -143,8 +146,11 @@ refutes the v1-frame hypothesis and names its own producer.
   carrying a path/secret renders no fragment), and one row per arm shape.
 - `gate_census_linux_test.go`: a compiled-C fence probe (scenarios `exec-fence`,
   `exec-fence-expired`, `clone-fence-expired`, `clone-attempt-fence`) that pins
-  `check_exec_guard` before and after every attempt-frame send and `PR_SET_PDEATHSIG SIGKILL`;
-  M8 (`gate.c`: move the post-send exec guard before the frame send) reddens it.
+  `check_exec_guard` before and after every v1 `exec_as_b` attempt-frame send (delivered
+  `gate.c:1347`, `:1367`) and `PR_SET_PDEATHSIG SIGKILL`; on the clone path it pins only the pre-send
+  poll (residual, §10). The `clone-drop-capabilities` row also pins the drop's ordered credential
+  steps (delivered `gate.c:1009-1013`), so deleting `setresgid` or `PR_SET_DUMPABLE` reddens it. M8 (`gate.c`: move
+  the post-send exec guard before the frame send) reddens `exec-fence`.
 - Mutants M1-M8 are applied to a copy of the delivered bytes and restored byte-identical (§ records).
 
 ## 6. Grep census (Change 7)
@@ -264,3 +270,8 @@ verbatim repo-file copies.
   `control/**`; the `shared`/`synthetic_goal_cleanup` sets' green rows.
 - `readCloneNativeExecResult`'s post-attempt follow-up text stays untyped (not an enumerated
   producer; recorded as a residual in the evidence record).
+- Residual (round-1 review F2): the clone path has no post-send fence. `exec_clone_bootstrap` guards
+  at delivered `gate.c:1220-1221` and then sends the kind-20 attempt frame (`:1235`) straight into
+  `execveat` (`:1265`); only the v1 `exec_as_b` path re-checks after its send (`:1367-1372`). The
+  census pins the clone path's pre-send poll only (`clone-attempt-fence`), and this increment does
+  not touch the clone send.

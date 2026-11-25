@@ -15,6 +15,7 @@ bytes unless a row names another revision.
 | `wire_linux.go:539` | `:541-559` | magic/version mismatch; v1 gate frame recognized `:545-556` | `magic_or_version` / `gate_v1_frame` typed |
 | `wire_linux.go:559` (clean EOF) | `:585-586`, `:603-604`, `:621-622` | `n == 0` without `MSG_EOR` | `peer_closed_without_frame` typed, wraps `io.EOF` |
 | `wire.go:486` | `:526-533` (`validateCloneStatusFrame`) | version/type/size mismatch | `frame_header` typed |
+| round-1 F1 (pre-fix `wire.go:601`/`:615`/`:640`; delivered `:609`/`:623`/`:648`) | `:595-601` (`decodeCloneCheckoutReceipt` wrapper; body `:603-656`) | every checkout-receipt decode refusal: header/size, field framing, generation, image identity, receipt `Validate()` | `frame_header` typed |
 | `wire.go:492` | `:549-551` | inode 0 | `image_inode_missing` typed |
 | `wire.go:619-625` | `:677-687` | kind-24 malformed / code invalid | `guest_failure_malformed` / `guest_failure_code` typed |
 | `waitForStatus`/`recvmsg` | `wire_linux.go:512-520` | wait and receive errors | `wait_failed` / `recv_failed` typed |
@@ -56,7 +57,7 @@ bytes unless a row names another revision.
 | `gate_v1_frame` kind 8, errno=E | gate `exec_as_b` pre-clone guard `gate.c:1273-1299` → `send_exec_failure` `:1026-1034` | 16 B: `SYMLA001`, v1, kind 8, u32 errno=E (`close` EBADF; `drop_to_b` EPERM/EINVAL; `PR_SET_PDEATHSIG` EINVAL/EPERM; `check_exec_guard` ETIMEDOUT/ESRCH/ECANCELED/EINVAL/poll errno; `check_zero_groups` sets none, so a nonzero count reports a stale errno) |
 | `gate_v1_frame` kind 7 | gate `exec_as_b` attempt build/send `:1354-1362` | 28 B: v1 kind 7, dev/inode (non-clone attempt frame; unreachable for a v3 clone release) |
 | `peer_closed_without_frame` | gate `gate_run` silent exits (`:1449-1465` adoption/release wait, `check_parent`, `read_release`) and any failure-send that also fails | none |
-| `frame_header` | App decode `wire.go:526-533` | a v3 frame of the wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader) |
+| `frame_header` | App decode `wire.go:526-533`, `wire.go:595-601` | a v3 frame the arm's own decoder refuses: wrong kind/size for this arm (21/23 to the attempt reader, 20 to the receipt reader), bad field framing, a non-positive generation, a truncated or trailing image identity, or a receipt `Validate()` refusal |
 | `image_inode_missing` | App decode `:549-551` | v3 kind 20 with inode 0 |
 | `guest_failure_malformed` / `guest_failure_code` | App decode `:677-687` | v3 kind 24 size ≠ 20, or stage outside 1..18 / errno 0 or > u31 |
 | decoded guest failure (`guest_stage`+`errno`) | gate `send_clone_bootstrap_failure` `gate.c:1036-1044` at `:1197`, `:1203`, `:1216`, `:1224`, `:1238`, `:1256`, `:1268`; guest `cmd/symmetry-linux-clone-bootstrap/main.go:22-32` for every `RunBootstrap` failure | 20 B: v3 kind 24, u32 stage 1..18 (guest 1..7, gate-side 8..18), u32 errno |
@@ -79,22 +80,27 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
 
 ## 5. Probes (lesson 74)
 
-- `wire_linux_test.go`, `TestCloneStatusReadClassNamesEveryProducer` (19 rows): every closed
+- `wire_linux_test.go`, `TestCloneStatusReadClassNamesEveryProducer` (21 rows): every closed
   producer is driven through a real `AF_UNIX`/`SOCK_SEQPACKET` arm read and pins the exact class,
   the extracted errno and the unchanged rendered text; the v1 kind-8 row uses the golden literal
-  `53594d4c41303031010008000d000000` and asserts it equals `EncodeExecFailure(13)`.
-- `TestCloneStatusReadClassSplitsNeighbouringProducers` (9 rows): each producer must not collapse
-  onto its neighbour of the same read family (v1 frame vs unrecognized version, frame header vs
-  missing inode, malformed vs invalid guest code, truncation vs header, zero-length record vs peer
-  close, peer close vs version mismatch).
-- `TestCloneStatusReadClassAbsentOnSuccess`: a completed read carries no sentinel, and a peer close
-  still renders `ReleaseWaitErrorClass` `peer_closed` (the wrapped `io.EOF` stays Is-comparable).
+  `53594d4c41303031010008000d000000` and asserts it equals `EncodeExecFailure(13)`; the two
+  checkout-receipt rows pin the F1 wrap (wrong-kind frame and oversized string field).
+- `TestCloneStatusReadClassSplitsNeighbouringProducers` (10 rows): each row asserts the neighbour
+  refusal (`Class != mustNotClass`) and errno without the exact-class equality (round-1 review F7:
+  the row previously re-asserted the class the first probe already pinned, so the refusal branch was
+  unreachable); the neighbours covered are v1 frame vs unrecognized version, frame header vs missing
+  inode, malformed vs invalid guest code, truncation vs header, zero-length record vs peer close,
+  peer close vs version mismatch, and the checkout-receipt wrong kind vs version mismatch.
+- `TestCloneStatusReadClassAbsentOnSuccess`: a completed attempt read and a completed
+  checkout-receipt read carry no sentinel, and a peer close still renders `ReleaseWaitErrorClass`
+  `peer_closed` (the wrapped `io.EOF` stays Is-comparable).
 - `TestCloneStatusReadClassVocabularyIsPinned`: all 12 codes pinned by literal, duplicates refused
   (this row is what mutant M2 reddens).
-- Platform carry: `…ClassifiesSubSteps` gains five rows (v1 frame + errno, receipt peer close,
+- Platform carry: `…ClassifiesSubSteps` gains four rows (v1 frame + errno, receipt peer close,
   proof frame header, and the shape-gate negative), `…RendersTheReadClass` pins three literal
   renderings, `…CarriesTheReadClassOverTheWire` drives the real response codec + validator +
-  client, `…ValidatesClosedVocabulary` gains five rows (closed class accepted, wrong-shape arm
+  client and asserts the raw marshalled response carries the literal `"read_class":"gate_v1_frame"`
+  key (round-1 review F9), `…ValidatesClosedVocabulary` gains five rows (closed class accepted, wrong-shape arm
   refused, free-form refused, class without a sub-step refused) plus an acceptance loop over all
   twelve clone-read codes (§13), and `…RedactsFreeFormText` gains a clone-read block whose payload
   carries a path and the raw frame text.
@@ -113,7 +119,10 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
   expired-lease v1 `FRAME_EXEC_FAILURE` with `ETIMEDOUT`, the clone attempt frame (v3 kind 20,
   pinned dev/ino) with its kind-24 stage-7 failure, the expired clone release's v3 kind-24
   stage-11 `gate_fence` frame with `ETIMEDOUT`, and one row per closed credential fact (12-18)
-  plus the unclassifiable fallback (stage 9) — see §10.
+  plus the unclassifiable fallback (stage 9) — see §10. The `clone-drop-capabilities` row also
+  asserts the drop's credential steps in order (zero-groups check, bounding-set write,
+  `PR_SET_KEEPCAPS,0`, `setresgid`, `setresuid`, `PR_SET_DUMPABLE,0`, capabilities write; round-1
+  review F8), so a deleted `setresgid` or `PR_SET_DUMPABLE` call reddens it (M17/M18).
 
 ## 6. Mutants (M1-M8; each applied to a scratch copy of the *stage-1* delivered bytes, restored byte-identical)
 
@@ -142,6 +151,24 @@ bytes have since gained the stage-2 changes of §10, whose own rows follow this 
 | M13 | `wire.go`: the kind-24 decoder range stops at the fence stage | `TestWireFrameRoundTrips`: seven failures, `clone_bootstrap_failure_gate_guard_12` … `_18` | `771632ba99bd…` |
 | M14 | `helper_v2_protocol.go`: the validator drops the credential-fact names | `TestLinuxOwnerHelperV2PrecloneGuardFailureNamesTheGateStage`: `pre-clone guard stage "gate_drop_credentials" is not closed-vocabulary: Linux owner helper release error detail has an unknown guest bootstrap stage "gate_drop_credentials"` | `4ac73de34f90…` |
 
+### Round-1 fix mutants (M16-M20; the round-1 delivered bytes, restored byte-identical)
+
+| id | Mutation | Red probe (verbatim line) | CI job / user | Restored sha256 |
+| --- | --- | --- | --- | --- |
+| M16 | `wire.go`: `decodeCloneCheckoutReceipt` returns the decoded body's error unwrapped (F1 wrap removed) | `TestCloneStatusReadClassNamesEveryProducer/checkout_receipt_with_the_attempt_frame`: `clone-status read failure is untyped: Linux clone checkout frame header or size is invalid`; `/checkout_receipt_with_an_oversized_string_field`: `clone-status read failure is untyped: length-prefixed command string is oversized or truncated`; `TestCloneStatusReadClassSplitsNeighbouringProducers/checkout_receipt_wrong_kind_is_not_a_version_mismatch`: the same untyped header line | `daemon` / non-root `runner` | `93a83daf1aa9…` |
+| M17 | `gate.c`: delete `setresgid(1, 1, 1)` from `drop_to_b` | `TestGateReleaseFenceOrdering/clone-drop-capabilities`: `reason=setresgid was not observed after PR_SET_KEEPCAPS` | `daemon` / non-root `runner` | `2bf552b4761c…` |
+| M18 | `gate.c`: delete `prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)` from `drop_to_b` | `…/clone-drop-capabilities`: `reason=PR_SET_DUMPABLE,0 was not observed after setresuid` | `daemon` / non-root `runner` | `2bf552b4761c…` |
+| M19 | `helper_v2_protocol.go`: rename the `read_class` JSON tag | `TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire`: `raw helper response JSON = {…"readclass":"gate_v1_frame"…} (err=<nil>), want the read_class key` | `daemon` / non-root `runner` | `4ac73de34f90…` |
+| M20 | `wire_linux.go`: the v1-frame branch returns `magic_or_version` (the M1 collapse on the round-1 bytes) | `…SplitsNeighbouringProducers/v1_gate_frame_is_not_an_unrecognized_version`: `clone-status read collapsed onto the neighbouring magic_or_version producer`, plus the three `…NamesEveryProducer` v1 rows via their exact-class assertion | `daemon` / non-root `runner` | `6205fe6310a2…` |
+
+Blind-spot baseline the F8 finding recorded before the ordered assertion existed: with the same two
+`gate.c` deletions (M17/M18) the pre-round-1 census stayed green on all fifteen scenarios
+(`ok github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol 2.559s` and `2.528s`). F7
+before-state, same collapse as M20 against the HEAD bytes: the split rows reddened only through the
+shared exact-class line (`clone-status read class = "magic_or_version" errno=13, want
+class="gate_v1_frame" errno=13`); the neighbour-refusal line was unreachable, which is what M20 now
+pins.
+
 ## 7. Scratch runs (dispatch-run rule: every listed case must pass; the runner verdict is global)
 
 Scratch transport: branch-only `scratch/rf-acc-guest-native-exec` in a disposable clone; the
@@ -158,12 +185,15 @@ Run 3 evidence artifacts: `linux-v2-native-evidence-45602546196-1` (id `15017315
 `c9fa79cd86c564fff99ffbf97c7acdad421c496498640c731b39069a9c8e4042`, 4359 B — the two case sets'
 manifests) and `linux-v2-host-prerequisite-45602546196-1` (id `15016576502`, sha256
 `cb7af6930a0c5c44b78ba2a2eaa2dd7d943df25bc24397a36db7096998673647`, 675 B); run head
-`74efe85562d734576912249f5b78f78ba6edabbe` carries the delivered bytes (§11).
+`74efe85562d734576912249f5b78f78ba6edabbe` carries the implementation's bound bytes (§11); the
+round-1 review delta is §14.
 
 Run 3 is the final literal run and the run that states the named root cause, verbatim:
 `release_outcome_unknown; stage=clone_bootstrap arm=bootstrap_attempt wait_class=other
 guest_stage=gate_drop_bounding_set errno=1` — the same named fact as run 2 — and the `stale_leaf`
-no-regression row is green. Nothing after run 3 changed a code byte.
+no-regression row is green. Nothing after run 3 changed a code byte until the round-1 review fix
+changed the `wire.go` checkout-receipt decoder under the conductor's 2026-11-25 ruling (§14); no
+scratch run followed that fix.
 
 Run 2 evidence artifacts: `linux-v2-native-evidence-45601287283-1` (id `15016660780`, sha256
 `c17ea0605086cf454de7c066bf79524aaae1795a7bf152e1871d8878d6044855`, 1568 B) and
@@ -228,6 +258,14 @@ leg is the only leg whose success the contract requires.
   enumerated producer of the split (recorded here, not fixed).
 - The `empty_packet` producer is unreachable from a Linux AF_UNIX send (§5): a zero-length record
   is indistinguishable from a peer close and renders `peer_closed_without_frame`.
+- The clone path has no post-send fence (round-1 review F2): `exec_clone_bootstrap` guards before
+  the kind-20 attempt send only, so after that send it goes straight to `execveat`; the census
+  covers the clone path's pre-send poll only, and this increment does not touch that send (the v1
+  `exec_as_b` path keeps its own post-send guard). Plan §10 carries the same residual.
+- `Validate()` accepts read-class values the arm cannot produce (`image_inode_missing` on
+  `checkout_receipt`, `empty_packet` on any arm): the vocabulary is bounded at read-family
+  granularity, as `wait_class` already is, and no execution path is affected (round-1 review F10,
+  recorded, not fixed).
 - **AppArmor-userns wall (conductor ruling 2026-11-25).** Three legs are recorded as residuals
   behind the named cause: `migration`'s `native_release` hold (still unreached on the final bytes,
   run `45602546196`, verbatim in §7); `synthetic_goal_cleanup`, which the credentialed `main` run
@@ -281,8 +319,13 @@ Run 1's sentinel (`read_class=gate_v1_frame errno=1`) selected plan §8.1. The d
    value renders as `errno` 0 instead of wrapping negative on a 32-bit build).
 
 Known labelling limits (recorded, not fixed): `PR_SET_KEEPCAPS,0` cannot fail for the constant
-arguments the gate passes and no read-only probe can reveal it, and a failed `PR_SET_DUMPABLE,0`
-would be labelled `gate_drop_capabilities`; both are unreachable in the delivered chain and neither
+arguments the gate passes and no read-only probe can reveal it; a failed `PR_SET_DUMPABLE,0` would
+be labelled `gate_drop_no_new_privs` (or `gate_drop_ambient` if ambient capabilities survived the
+credential switch), never `gate_drop_capabilities` — the classifier can only name a fact at or after
+the failing call (`gate.c:1061-1096` re-reads the drop's steps in `gate.c:1009-1013` order, which
+the `clone-drop-capabilities` census row now pins), and `PR_SET_NO_NEW_PRIVS` is set after
+`PR_SET_DUMPABLE` (round-1 review F4).
+Both failures are unreachable for the constant valid arguments the gate passes and neither
 can hide a failure (the frame, the errno and `_exit(1)` are unconditional). A gate and a daemon of
 different vintages would render `guest_failure_code` for stages 8-18 (no version negotiation); the
 installer ships both together.
@@ -314,7 +357,7 @@ routed the remaining cause to `DECISION_NEEDED` (§7): the guest's AppArmor `unp
 policy denies the gate's capability use, and its fix sits in the installer/fixture that this
 contract does not own (follow-up goal `rf-acc-apparmor-userns-profile`).
 
-## 11. Delivered-bytes equality (run 3's head vs the goal worktree)
+## 11. Run-3 head digests (the implementation's bound revision; round-1 deltas in §14)
 
 | File | sha256 (first 12 hex) |
 | --- | --- |
@@ -333,16 +376,17 @@ contract does not own (follow-up goal `rf-acc-apparmor-userns-profile`).
 Run 3's head is the scratch commit `74efe85562d734576912249f5b78f78ba6edabbe`; `git show
 <head>:<path>` reproduces every digest above byte-for-byte. Every `daemon/**`, plan and script
 path in the worktree is byte-identical to that commit, except the three test files the apply stage
-rewrote (§13); the scratch workflow copy and its `gh` shim live only in that commit and are
-removed from the worktree (§7).
+rewrote (§13) and the round-1 review delta (§14); the scratch workflow copy and its `gh` shim live
+only in that commit and are removed from the worktree (§7).
 
 After run 3 — the last code-affecting action — only records changed, per the conductor ruling of
 2026-11-25 (the AppArmor-userns residual update): `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`
 and this record were finalized. The apply stage then rewrote three test files (scaffolding and
-coverage only; §13) and refreshed this record's §1, §3 and §5 numbering; no production byte, wire
-byte, `gate.c` byte or plan byte changed after run 3, and run 3 remains the bound revision for
-every production row above. The two TODO files' digests are not recorded here, per the owner
-comment policy.
+coverage only; §13) and refreshed this record's §1, §3 and §5 numbering. The round-1 review fix
+(conductor ruling 2026-11-25) then changed the `wire.go` checkout-receipt decoder (F1) plus four
+test files and the records (§14); run 3 remains the bound revision for every row it names, and the
+conductor's Bind worker runs `migration` on the PR head to bind the round-1 `wire.go` bytes. The
+two TODO files' digests are not recorded here, per the owner comment policy.
 
 Scratch cleanup proof (contract): `git ls-remote origin scratch/rf-acc-guest-native-exec` prints
 nothing; the only remaining `refs/heads/scratch/*` ref is `scratch/rf-acc-owner-loss-semantics`,
@@ -356,7 +400,8 @@ reason:
 | Census | Hits | Disposition |
 | --- | --- | --- |
 | `rg -n "read_class\|ReadClass" daemon --glob '!*_test.go'` | exactly 4 files: `wire.go`, `wire_linux.go`, `gate_lifecycle_linux.go`, `helper_v2_protocol.go` | all four owned and converted (vocabulary type, producers, carry + arm shape, bounded detail/validator) |
-| `rg -c "cloneStatusReadFailure\|CloneStatusReadError"` | `wire.go` 10, `wire_linux.go` 12 | every clone-read producer is typed; `wire_linux.go` additionally bounds the v1 frame's errno to the signed 31-bit range |
+| `rg -c "cloneStatusReadFailure\|CloneStatusReadError"` | `wire.go` 11, `wire_linux.go` 12 (round-1: `wire.go` was 10) | every clone-read producer is typed, and since F1 every checkout-receipt decode exit crosses the `wire.go:595-601` wrapper; `wire_linux.go` additionally bounds the v1 frame's errno to the signed 31-bit range |
+| `rg -n "decodeCloneCheckoutReceipt" daemon --glob '!*_test.go'` | `wire.go:595` wrapper, `:596` body call, `:603` body, `:663`/`:672` the two `Decode*` entry points | converted: the body has exactly one caller (`:596`), so every error exit of `decodeCloneCheckoutReceiptFrame` is classified `frame_header` by construction (F1 class census) |
 | `rg -n "exec-status channel closed or carried ancillary data before a frame" daemon` | `wire_linux.go:706` plus two platform rows that pin the resulting `wait_class` | exempt: the non-clone native-status read is out of this goal's root cause by contract; its bytes and text are unchanged |
 | `rg -n "guest_stage\|GuestStage" daemon/internal/platform` | `helper_v2_protocol.go` (field, `String()`, `Validate()`, `DetailFor`) and its test file | converted: the closed stage vocabulary is validated on receipt and rendered verbatim |
 | `git diff --stat -- scripts/ .github/` | 0 lines | no script or real workflow byte changed by this goal (the scratch copy is branch-only) |
@@ -366,7 +411,8 @@ reason:
 The goal's apply stage applied the accepted simplify findings. No production byte changed:
 `gate.c` `2bf552b4761c`, `wire.go` `771632ba99bd`, `wire_linux.go` `6205fe6310a2`,
 `gate_lifecycle_linux.go` `76f8a0ff803a`, `helper_v2_protocol.go` `4ac73de34f90` and
-`wire_test.go` `14f62c91bd51` stay at their §11 run-3 digests. Three test files changed;
+`wire_test.go` `14f62c91bd51` stay at their §11 run-3 digests (true of the apply stage; the
+round-1 review fix later re-baselined `wire.go` alone, §14). Three test files changed;
 post-apply sha256, first 12 hex:
 
 | File | Change | sha256 |
@@ -392,6 +438,9 @@ all twelve against a `bootstrap_attempt` detail; no producer, literal or other c
 | --- | --- | --- | --- |
 | M15 | `helper_v2_protocol.go`: delete `linuxgate.CloneReadClassTruncated` from `Validate()`'s read-class switch | `linux_owner_helper_v2_linux_test.go:1343: clone-read class "truncated_frame" is not closed-vocabulary: Linux owner helper release error detail has an unknown read class "truncated_frame"` | `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75` (mutated scratch digest `37ee37418c19bc03913d3ac5957d9e7c13bae34cc129dd8f813ef391be8f4fca`) |
 
+The M15 line number is at the §13 post-apply test-file revision (`dbd644ae4968`); §14's F9
+assertion shifts that file by five lines and the restored digest above is unchanged.
+
 ### 13.2 Local gates at the post-apply bytes
 
 WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
@@ -409,3 +458,48 @@ WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
 No new scratch run and no measurement harness: the run budget is closed by the conductor ruling,
 and this goal records gates and runs, not a benchmark. Run 3 remains the bound run for every
 production row; the apply delta is test scaffolding, coverage and this record.
+
+## 14. Round-1 fix delta (review `symmetry-rf-acc-guest-native-exec-review`, conductor ruling 2026-11-25)
+
+The round-1 review returned MUST_FIX on F1-F8 and optional F9/F10; the conductor ruling lifted the
+run-3 code freeze for exactly those items and directs no new scratch run (the conductor's Bind
+worker runs `migration` on the PR head, binding the round-1 `wire.go` bytes). Delivered sha256
+after the fix:
+
+| File | Change | sha256 |
+| --- | --- | --- |
+| `daemon/native/linux-gate/protocol/wire.go` | F1: `decodeCloneCheckoutReceipt` classifies every checkout-receipt decode failure `frame_header`; the decoder body is `decodeCloneCheckoutReceiptFrame`; every error text unchanged | `93a83daf1aa980c5608cff2bf71b91a63f1012adc1a2beadc538a115a40329db` |
+| `daemon/native/linux-gate/protocol/wire_linux_test.go` | F1 probes: two checkout rows in `…NamesEveryProducer` plus the receipt success read in `…AbsentOnSuccess`; F7: the split rows assert the neighbour refusal and errno without the exact-class equality | `3ee1839bd4d9a21e9a79f9d764077910cbe217290f398d74130f77ac03cd76ab` |
+| `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | F8: the probe comment lists the interposed calls and the deliberately unobserved ones; `clone-drop-capabilities` asserts the drop's ordered credential steps | `d5e7dffda89321aaa3016b5ced539fa4d2ed3d5f009db7169ebe1097e130e909` |
+| `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | F9: `…CarriesTheReadClassOverTheWire` asserts the raw marshalled response carries the literal `"read_class":"gate_v1_frame"` | `38adfdabde20729312cfc9d2120afe0495ef8cee8ecca2ad3fd2e1a560a23008` |
+| `docs/plans/2026-11-25-rf-acc-guest-native-exec-plan.md` | F2 (the census sentence scoped to the v1 `exec_as_b` path; the clone-path residual in §10), F5 (the `65bb41b1` diff stated, no "is empty"), the F1/F8 producer rows | `3985d73e0e67fe02665d80b2138f5d40c177a59d1416056de1a005bb475bd88f` |
+
+F1-F9 are fixed; F10 is recorded as a residual only (§9); `docs/TODO.md` carries F6 (per-run
+attribution split) and its digest is not bound, per policy. Mutants M16-M19 (§6) pin the new
+branches, with the M17/M18 blind-spot baselines in that section. `gate.c`, `wire_linux.go`,
+`gate_lifecycle_linux.go`, `helper_v2_protocol.go` and `wire_test.go` keep their §11 run-3
+digests. The F1 before-state was observed on the HEAD copy: with the old `wire.go` and the new
+probe rows, both checkout rows failed untyped (`clone-status read failure is untyped: Linux clone
+checkout frame header or size is invalid` / `…length-prefixed command string is oversized or
+truncated`).
+
+### 14.1 Local gates at the round-1 bytes
+
+WSL Ubuntu-24.04 `-u accept`, from `daemon/`, Go 1.27.0, exit codes measured:
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| format | `gofmt -l .` | 0 | no file listed |
+| linux vet | `GOOS=linux go vet ./...` | 0 | clean |
+| contract gate (race) | `go test -race -count=1 -timeout 1200s ./native/linux-gate/protocol/ ./internal/platform/ ./internal/clonebootstrap/ ./internal/launchercore/ ./cmd/symmetry-linux-clone-bootstrap/ ./cmd/symmetry-linux-launcher/` | 0 | `ok protocol 6.405s`, `ok platform 70.087s`, `ok clonebootstrap 1.027s`, `ok launchercore 1.115s`, `no test files` (clone-bootstrap cmd), `ok launcher 1.027s` |
+| C census probe (15 scenarios, ordered drop-step assertion) | `TestGateReleaseFenceOrdering` inside the protocol suite | 0 | all 15 scenarios pass on the unmutated gate; M17/M18 redden `clone-drop-capabilities` |
+| production C build | `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o <out> native/linux-gate/c-gate/gate.c` and the same for `cmd/symmetry-linux-launcher/c-wrapper/wrapper.c` | 0 / 0 | both static x86-64 ELF executables |
+| host vet (cross) | `GOOS=windows go vet ./...` (WSL `-u accept`, from `daemon/`) | 0 | clean |
+| record sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | 0 | plan, this record and `docs/TODO.md` each exit 0; the control violation exits 1 |
+| test census | `go test -count=1 -v <pkg> \| grep -c '^=== RUN'` | 0 | protocol 296 (HEAD bytes) → 299; platform 531 → 531 (F9 adds an assertion, not a test) |
+| repeats under load | `GOMAXPROCS=8 go test -race -count=200 -run 'TestCloneStatusReadClass'` and `-run 'TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire'` and `-run 'TestGateReleaseFenceOrdering'` | 0 | `ok protocol 3.761s`, `ok platform 3.024s`, `ok protocol 553.767s` (2,000 probe rows, 2,000 platform wire rows, 3,000 census scenarios) |
+| clone gate | `python scripts/ci/jscpd-changed.py --base 30ed5ada… --head HEAD` (scratch clone with the delta committed, pinned jscpd 4.3.0) | 0 | 13 changed files, 1741 scanned sources, 1262 corpus clones, 0 tolerated among the added lines, none new; one notice: `docs/archive/CLOSED-TODO.md` is outside the jscpd scope |
+
+The pinned jscpd 4.3.0 reached the scratch clone through the host's configured npm feed; a direct
+registry fetch failed with a TLS handshake error, so the local install used the feed and the gate
+ran on the pinned version.

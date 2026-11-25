@@ -593,6 +593,14 @@ func encodeCloneCheckoutReceipt(kind uint16, receipt authority.LinuxCloneCheckou
 }
 
 func decodeCloneCheckoutReceipt(packet []byte, kind uint16) (authority.LinuxCloneCheckoutReceipt, error) {
+	receipt, err := decodeCloneCheckoutReceiptFrame(packet, kind)
+	if err != nil {
+		return authority.LinuxCloneCheckoutReceipt{}, cloneStatusReadFailure(CloneReadClassFrameHeader, err)
+	}
+	return receipt, nil
+}
+
+func decodeCloneCheckoutReceiptFrame(packet []byte, kind uint16) (authority.LinuxCloneCheckoutReceipt, error) {
 	var receipt authority.LinuxCloneCheckoutReceipt
 	if len(packet) < 12+4+4+1+8+4*6+16 || len(packet) > maxCloneStatusFrameSize ||
 		string(packet[:8]) != launchMagic ||
