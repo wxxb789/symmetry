@@ -269,7 +269,6 @@ func TestInstalledLinuxOwnerCloneCleanupParentDeathScratch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("observe direct transient root cleanup child: %v", err)
 	}
-	rootChildReaped = false
 	rootPIDFD, err := unix.PidfdOpen(rootPID, 0)
 	if err != nil {
 		t.Fatalf("pin root deleter before A parent death: %v", err)
@@ -423,6 +422,10 @@ func TestWaitidCleanupPidfdExitReportsReapedChildren(t *testing.T) {
 	if err := live.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_ = live.Process.Kill()
+		_, _ = live.Process.Wait()
+	})
 	livePIDFD, err := unix.PidfdOpen(live.Process.Pid, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -431,8 +434,6 @@ func TestWaitidCleanupPidfdExitReportsReapedChildren(t *testing.T) {
 	if _, err := waitidCleanupPidfdExit(livePIDFD, 100*time.Millisecond); !errors.Is(err, errCleanupPIDFDExitTimeout) {
 		t.Fatalf("live probe child did not time out exactly: %v", err)
 	}
-	_ = live.Process.Kill()
-	_, _ = live.Process.Wait()
 }
 
 func TestParseStatusSignalMasksGoldenText(t *testing.T) {
@@ -484,7 +485,9 @@ func waitForDirectCleanupChild(parentPID int, timeout time.Duration) (int, error
 		if pollErr != nil && !errors.Is(pollErr, unix.EINTR) {
 			return 0, fmt.Errorf("wait for cleanup caller while locating root child: %w", pollErr)
 		}
-		if count != 0 {
+		// EINTR returns -1: only a positive count proves the caller exited, so a
+		// signal-interrupted poll cannot be read as the caller's death.
+		if count > 0 {
 			return 0, errors.New("A cleanup caller exited before root child was identified")
 		}
 	}

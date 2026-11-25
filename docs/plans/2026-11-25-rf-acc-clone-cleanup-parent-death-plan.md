@@ -21,7 +21,7 @@ site re-located by content:
 | Contract | Head | Content | Disposition |
 | --- | --- | --- | --- |
 | stop reader `:256-259` | `clone_cleanup_linux_test.go:256-259` | `_, waitErr := command.Process.Wait()` then `if waitErr == nil { t.Fatal("A cleanup caller exited without the requested parent-death signal") }` | converted in stage 2 only, after run 1 names the cause; the message text is kept as the predicate's leading clause |
-| stop renderer (worker) `:298` (the contract text's `:289` is base `t.Fatal(err)`) | `clone_cleanup_linux_test.go:298` (base) → `:353` (head) | `t.Fatalf("parent test killed A cleanup owner but root call returned: %v", err)` | exempt: the worker is the killed caller; the fatal is only reachable if the kill never happened, and its text is out of the observed stop class |
+| stop renderer (worker) `:298` (the contract text's `:289` is base `t.Fatal(err)`) | `clone_cleanup_linux_test.go:298` (base) → `:356` (delivered bytes, re-derived by content; `:353` at the stage-2 head `0e0b5486`) | `t.Fatalf("parent test killed A cleanup owner but root call returned: %v", err)` | exempt: the worker is the killed caller; the fatal is only reachable if the kill never happened, and its text is out of the observed stop class |
 | root-deleter observation `:262-270` | `clone_cleanup_linux_test.go:261-271` | `waitForPIDFDExit` readiness plus the two preserved-entry `Lstat` checks | stage 1 observes the same pidfd with `waitid` before the unchanged fatal; stage 2 under Q-C(a) replaces readiness with the `si_code`/`si_status` assertion |
 | sibling readers in the package | `clone_cleanup_linux.go:525,726,776` | `command.Process.Wait()` in the `Start` error path (`_` discard), `waitid(P_PIDFD)` in `waitReapCleanupChild`, and `reapCleanupChildWithoutPIDFD` (error join only) | exempt: none decides a pass condition, and none reads the worker's reaped status |
 | other package readers | `gate_lifecycle_linux.go:459,1205,1214,1403,1408`; `proc_identity_linux.go:520` | launcher/gate wait paths (`stopLauncher`'s `waitProcessFD` and error-checked reap); the pidfd liveness probe (`WNOWAIT`, expects `ECHILD`) | exempt: different producer, no relation to this stop |
@@ -121,7 +121,8 @@ absent from `bad=`; (3) literal final run on the frozen bytes, its head compared
 the delivered worktree. Record `docs/evidence/2026-11-25-rf-acc-clone-cleanup-parent-death.md`
 (per-run table with run id, first failing check verbatim, closed values, artifact ids, head sha;
 the sha256 equality table; the census above; the mutant rows). `docs/TODO.md`: carve this stop's
-clause only, the sibling's two stops verbatim; no `CLOSED-TODO.md` entry.
+clause only, the sibling's two stops verbatim; the closed clause moves to
+`docs/archive/CLOSED-TODO.md` under its own heading (§11, R5).
 
 ## 6. Local gates
 
@@ -137,7 +138,9 @@ memory), and no measurement harness runs beside the suite.
 - The sibling's two stops (`clone_integration_linux_test.go`, `launcher_integration_linux_test.go`)
   and the pi-leg `pi_provider_action` consequence: owned by `rf-acc-guest-native-exec`.
 - `scripts/ci/**`, the real workflow, `daemon/e2e/**`, `daemon/internal/platform/**`,
-  `daemon/internal/state/**`, `docs/archive/CLOSED-TODO.md`: not owned.
+  `daemon/internal/state/**`: not owned. `docs/archive/CLOSED-TODO.md` is not a subject file; it
+  carries the closed clause's move (§11, R5) while the two sibling clauses stay open in
+  `docs/TODO.md`.
 - Any fixture change: none is proposed; stage 1 only observes.
 
 ## 8. Addendum (2026-11-25, after run 1) — the printer window and the parallel-phase amendment
@@ -194,7 +197,9 @@ Panel: Sol review (`ghc/gpt-6.2-sol:xhigh`, packet under the GDD reviews root), 
   (the kernel zeroes the siginfo when nothing is ready; `ECHILD` ends the loop), run only when the
   body did not reap it.
 - **Sol P3 — probe child cleanup on failure paths.** The probe helper registers `Kill`+`Wait`
-  immediately after `Start`, so an early `t.Fatal` no longer leaves `/bin/sh`/`/bin/sleep` running.
+  immediately after `Start`, so an early `t.Fatal` no longer leaves its `/bin/sh` children running;
+  the manually built live `/bin/sleep` child, which this bullet overstated, gained the same
+  registration in the PR #287 round-1 fix (§11, R1).
 - **DS P3 — readiness failures were rendered as reap failures.** `waitForPIDFDExit` now wraps
   non-EINTR poll errors (`wait for cleanup pidfd readiness: %w`) and the test renders the
   non-timeout failure as `observe the exact root cleanup worker exit after the parent-death fence`,
@@ -217,8 +222,9 @@ MUST_FIX)") accepted six findings; all are applied in the fix stage, with no new
 binding run moves to the conductor's Bind worker on the PR head.
 
 - **SPEC-A01** — the census row paired base `clone_cleanup_linux_test.go:289` with the worker fatal;
-  base `:289` is `t.Fatal(err)` and the fatal sits at base `:298` / head `:353`. Re-addressed here
-  (§1) and in the evidence record.
+  base `:289` is `t.Fatal(err)` and the fatal sits at base `:298` / delivered `:356` (`:353` at the
+  stage-2 head `0e0b5486`). Re-addressed here (§1) and in the evidence record; re-derived from the
+  delivered bytes in §11 (R4).
 - **SPEC-A02** — the evidence record's per-run artifact/member cells named §3.1/§3.2 instead of an
   artifact id; filled from the retained artifacts (`linux-v2-native-evidence-<run>-1` carrying
   `shared/unprovisioned-owner-refusal.json`).
@@ -233,3 +239,32 @@ binding run moves to the conductor's Bind worker on the PR head.
 
 The test file is otherwise byte-identical to run 3's head: three hygiene edits (STD-A01, STD-A02 and
 one comment block shortened to the two-line cap); no assertion, message, closed value or bound moved.
+
+## 11. Addendum (2026-11-25, PR #287 round 1) — findings and the re-bind
+
+Panel: Sol review, DS audit, security pass (findings records `287-opus-review-1.md`,
+`287-ds-audit-1.md`, `287-sec-review-1.md` under the GDD findings root) plus the conductor's Bind
+run report `287-binding-run.md`. The Bind run `45611900578` (head `76a36d5f` = `ac0fa101` + the two
+scratch files) printed `--- PASS` for this test, absent from `bad=`, and bound the `ac0fa101`
+delivered bytes; its run-table row is in the evidence record §3.
+
+- **R1** — the live timeout-probe child had no failure-path cleanup; the §9 bullet overstated the
+  fix. The `/bin/sleep` child now registers `Kill`+`Wait` through `t.Cleanup` immediately after
+  `Start` (mirroring the helper) and the trailing inline `Kill`/`Wait` pair is gone; §9's bullet is
+  corrected. Re-opens the binding requirement (the bytes change).
+- **R2** — `waitForDirectCleanupChild` tolerated `EINTR` at the poll and then read `count != 0`, so
+  an interrupted poll (`count=-1`) was rendered as the caller's exit; it now requires `count > 0`,
+  mirroring `waitForPIDFDExit`. The package's `unix.Poll` sites are censused with the grep command
+  and hit count in evidence §5.1.
+- **R3** — the dead store `rootChildReaped = false` (unobservable between the declaration and the
+  cleanup closure) is deleted.
+- **R4** — the worker-fatal census address is re-derived from the delivered bytes (§1): base
+  `:298` → delivered `:356` (`:353` at the stage-2 head; the fix round's `:357` moved by the R3
+  deletion above it).
+- **R5** — the closed parent-death clause moves to `docs/archive/CLOSED-TODO.md` under its own
+  heading; the two sibling clauses stay open in `docs/TODO.md`, which points at the archive entry.
+  Supersedes §5's "no `CLOSED-TODO.md` entry" and §7's blanket archive exclusion.
+
+R1/R2/R3 change the test bytes after the Bind run, so the conductor re-binds once on the new head
+(one `shared` run); the fix stage runs no scratch run. Local gates and the changed-doc sanitizer run
+on the frozen round-1 bytes (evidence record §12).
