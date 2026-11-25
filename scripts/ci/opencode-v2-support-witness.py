@@ -185,6 +185,15 @@ def redact(text, replacements):
     return text, counts
 
 
+def receipt_bytes(receipt, replacements, secrets):
+    """The receipt's write bytes: a secret spelling stops the write, and the replacements apply to what is written."""
+    text = json.dumps(receipt, ensure_ascii=True, indent=2) + "\n"
+    data = text.encode()
+    if any(secret.encode() in data for secret in secrets if secret):
+        raise RuntimeError("credential locality evidence refused")
+    return redact(text, replacements)[0].encode()
+
+
 def carries_credential(data, key):
     """An unset credential matches nothing; a set one refuses any carrier that holds it."""
     if not key:
@@ -280,7 +289,10 @@ def classify(receipt):
         )
         continuation["status"] = (
             "observed"
-            if reply.get("status") == 204 and continued and terminal.get("type") == "session.execution.succeeded"
+            if reply.get("status") == 204
+            and (reply.get("body") or {}).get("decision") == "once"
+            and continued
+            and terminal.get("type") == "session.execution.succeeded"
             else "run and failed"
         )
     else:
@@ -447,7 +459,7 @@ def command_observation(binary, arguments, environment):
     }
 
 
-def api_document(port, authorization, route="GET /openapi.json"):
+def api_document(port, authorization):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
     try:
         connection.request("GET", "/openapi.json", headers={"Authorization": authorization})
@@ -659,7 +671,6 @@ def main():
                 return {
                     "event": "session.tool.success",
                     "id": data.get("id"),
-                    "name": data.get("name"),
                     "executed": data.get("executed"),
                 }
         return None
@@ -668,7 +679,6 @@ def main():
         request("DELETE", "/api/session/" + session_id)
         request("GET", "/api/session/" + session_id)
 
-    deny_all = [{"action": "*", "resource": "*", "effect": "deny"}]
     allow_read = [
         {"action": "*", "resource": "*", "effect": "deny"},
         {"action": "read", "resource": str(root / "baseline.txt"), "effect": "allow"},
@@ -875,11 +885,10 @@ def main():
         receipt["credential_scan"] = {"files_scanned": len(files), "matches": matches}
         _, counts = redact(json.dumps(receipt, ensure_ascii=True, indent=2), replacements)
         receipt["redaction"] = {"occurrences": counts}
-        data = (json.dumps(receipt, ensure_ascii=True, indent=2) + "\n").encode()
-        if matches or any(secret.encode() in data for secret in (key, password, authorization, endpoint) if secret):
+        if matches:
             raise RuntimeError("credential locality evidence refused")
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_bytes(data)
+        args.out.write_bytes(receipt_bytes(receipt, replacements, (key, password, authorization, endpoint)))
         print(
             json.dumps(
                 {

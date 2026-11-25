@@ -65,7 +65,7 @@ tokens.
 | file | change |
 | --- | --- |
 | `scripts/ci/opencode-v2-support-witness.py` | per-platform pins (size/sha256/magic/asset) keyed by the running platform with refusals that name the platform; readiness identity extracted as an exact predicate and the startup race fixed; the route set re-anchored; the continuation leg now awaits the permission request and replies `{"decision":"once"}`; POSIX launch/cleanup with signals on the process group; platform-aware child environment; in-memory credential/relay-origin replacement with counts; `--mode` probe/full/provider-failure/truncation; the live prompt schema resolved by digest for the truncation verdict |
-| `scripts/ci/test-opencode-v2-support-witness.py` | 36 tests (was 11): per-platform pin and magic rows, readiness-equality rows, redaction/credential-locality rows, reply-bearing continuation rows, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, live-reader barrier, stream-reader join). No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
+| `scripts/ci/test-opencode-v2-support-witness.py` | 37 tests (was 18): per-platform pin and magic rows, readiness-equality rows, redaction/credential-locality rows including the written-receipt envelope, reply-bearing continuation rows including the non-`once` decision, prompt-schema/bounding-field rows, child-environment shape rows for both platforms, POSIX cleanup rows (terminate, escalate, live-reader barrier, stream-reader join). No existing row was deleted or relaxed; the platform-specific rows are guarded, so the suite is green on Windows and in WSL |
 | `daemon/internal/harness/testdata/opencode/2.4.1/**` | this evidence's records: README, two probe files, three pass receipts per platform |
 | `docs/plans/2026-11-25-rf-acc-opencode-reeval-plan.md` | the plan (protocol, route probe list, preflight, implementation choices, Phase 1 expectation) |
 | `docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` | this record |
@@ -104,6 +104,19 @@ plus the failed Linux preflight probe `probe-linux.json 9300275de27f20be5e106daa
 (which recorded a `503` readiness row and wrote no receipt of record). No fourth pass role was
 run on either platform. The committed file names and their raw/rendered sha256 pairs are in the
 2.4.1 README §2.
+
+**Apply pass (2026-11-25, after collection).** The simplification review accepted the
+post-collection edits now in the tree: the unused `deny_all` constant and the unread
+`api_document` route parameter were deleted, the structurally-null `tool_outcome.name` key was
+dropped (the tool name stays in the captured `session.tool.input.started` event), the
+continuation predicate now also requires the `{"decision":"once"}` reply body, and the written
+receipt now carries the replacements (the collecting revision computed the counts and wrote the
+un-replaced serialization; every committed receipt's `redaction.occurrences` is `{}` and no
+carrier held the origin, so no recorded byte changes). The apply-stage collector sha256 is
+`d987448b227e01a18b6001fe230ce961609c761792263aaccda82fb5ea145b4a` (suite
+`28c7bc1a866b4fe804f072db7b502ddfb88e7a32ec58b2bfe8fc262a2237eae9`); the receipts'
+`binding_sha256` (`56d6e602…`) remains the collecting revision, no receipt was re-rendered, and
+all eight committed records are unchanged. The refreshed gate numbers are in §12.
 
 ## 5. Class matrix
 
@@ -251,21 +264,23 @@ repository, with a copy of the final suite; the repository's
 
 | gate | command (from the repository root) | result |
 | --- | --- | --- |
-| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 36 tests`, `OK (skipped=4)` |
-| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 36 tests`, `OK (skipped=1)` |
+| suite, Windows (the `daemon-windows` self-test step's local equivalent) | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 37 tests`, `OK (skipped=4)` |
+| suite, WSL Ubuntu-24.04 | `python3 scripts/ci/test-opencode-v2-support-witness.py` | exit 0, `Ran 37 tests`, `OK (skipped=1)` |
 | render-then-check, every new record (8 files: 2 probes, 6 receipts) | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only < <record>` | exit 0 on all 8 |
-| record cleanliness over the change | `python3 scripts/ci/check-record-cleanliness.py --base 6b2d4f8f --head <scratch>` | exit 0 |
-| clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 6b2d4f8f --head <scratch>` | exit 0 — `13 changed file(s), 1740 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`, with the eight one-line records reported as below-threshold notices. Before the one-line form the same command refused 47 new clones (§10) |
+| record cleanliness over the change | `python3 scripts/ci/check-record-cleanliness.py --base 30ed5ada --head <scratch>` | exit 0 — `1 changed record(s) pass the root-only check` |
+| clone gate over the change | `python3 scripts/ci/jscpd-changed.py --base 30ed5ada --head <scratch>` | exit 0 — `13 changed file(s), 1742 scanned source(s), 1262 clone(s) in the corpus, 0 tolerated among the added lines, none new`, with the eight one-line records reported as below-threshold notices. Before the one-line form the same command refused 47 new clones (§10) |
 | parsed equality of each committed record against the renderer's output | `python3 -c "import json,sys; assert json.load(open(sys.argv[1])) == json.load(open(sys.argv[2]))" <render>/<record> daemon/internal/harness/testdata/opencode/2.4.1/<record>` | 8/8 equal |
-| frozen bytes | `git diff 6b2d4f8f -- daemon/internal/harness/opencode/ daemon/internal/harness/registry.go daemon/internal/app/ .github/workflows/ docs/design/harness.md docs/goals/ scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh daemon/internal/harness/testdata/opencode/2.3.0/` | empty |
-| credential census over added lines | `git diff --no-renames -U0 6b2d4f8f..<scratch> \| grep '^+'` over the added lines, fixed pattern `sk-[A-Za-z0-9_-]{16,}`, the bare prefix, the relay host derived at run time from the operator's provider entry (never hardcoded), and the credential value itself | key shape `0`; bare prefix `1` — the pattern's own occurrence in this row, justified as census methodology and permitted as the relay's prefix prose; **relay host `0`, relay base URL `0`** (Q-URL b); the credential value `0` |
+| frozen bytes | `git diff 30ed5ada -- daemon/internal/harness/opencode/ daemon/internal/harness/registry.go daemon/internal/app/ .github/workflows/ docs/design/harness.md docs/goals/ scripts/ci/linux-v2-native-acceptance.sh scripts/ci/linux-v2-native-tools.sh daemon/internal/harness/testdata/opencode/2.3.0/` | empty |
+| credential census over added lines | `git diff --no-renames -U0 30ed5ada..<scratch> \| grep '^+'` over the added lines, fixed pattern `sk-[A-Za-z0-9_-]{16,}`, the bare prefix, the relay host derived at run time from the operator's provider entry (never hardcoded), and the credential value itself | key shape `0`; bare prefix `1` — the pattern's own occurrence in this row, justified as census methodology and permitted as the relay's prefix prose; **relay host `0`, relay base URL `0`** (Q-URL b); the credential value `0` |
 | class-matrix derivation | `python3 - <<'PY' …` over `daemon/internal/harness/testdata/opencode/2.4.1/*.json` (the command in the plan §3) | the matrix in §5 |
 
 `<scratch>` is the change's tree read as a revision: the gates read the `--head` revision from
 Git, and the working tree is left uncommitted for verification, so the head was materialized
 with a temporary index (`GIT_INDEX_FILE` + `git write-tree` + `git commit-tree`) — no branch,
-ref, index or worktree state of the checkout was touched. A reviewer re-runs the same two
-commands with the pull request's own head commit.
+ref, index or worktree state of the checkout was touched. The refreshed rows (suite,
+cleanliness, clone, frozen, census) are the apply-stage re-run over `--base 30ed5ada`
+(`origin/main` after the `#286` merge); a reviewer re-runs the same commands with the pull
+request's own head commit.
 
 ## 13. Recommendation: partial — dispatch Phase 1, scoped
 

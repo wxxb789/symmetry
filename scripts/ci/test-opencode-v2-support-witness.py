@@ -24,7 +24,8 @@ witness = citest.load_gate(pathlib.Path(__file__).with_name("opencode-v2-support
 
 
 class ClassificationTests(unittest.TestCase):
-    def receipt(self, terminal_type):
+    @staticmethod
+    def receipt(terminal_type):
         terminal = {
             "id": "evt_terminal",
             "type": terminal_type,
@@ -133,6 +134,12 @@ class ClassificationTests(unittest.TestCase):
         accepted = copy.deepcopy(receipt)
         accepted["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": {"decision": "once"}}
         self.assertEqual(witness.classify(accepted)["classes"]["continuation_after_step"]["status"], "observed")
+        non_once = copy.deepcopy(receipt)
+        non_once["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": {"decision": "always"}}
+        self.assertEqual(witness.classify(non_once)["classes"]["continuation_after_step"]["status"], "run and failed")
+        bodiless = copy.deepcopy(receipt)
+        bodiless["classes"]["continuation_after_step"]["reply"] = {"status": 204, "body": None}
+        self.assertEqual(witness.classify(bodiless)["classes"]["continuation_after_step"]["status"], "run and failed")
 
     def test_cleanup_requires_tree_and_reader_barriers(self):
         receipt = self.receipt("session.execution.failed")
@@ -218,7 +225,7 @@ class PosixCleanupTests(unittest.TestCase):
         child.stderr.close()
 
     def classify_row(self, cleanup):
-        receipt = ClassificationTests.receipt(self, "session.execution.failed")
+        receipt = ClassificationTests.receipt("session.execution.failed")
         receipt["classes"]["cleanup"] = cleanup
         return receipt
 
@@ -347,6 +354,21 @@ class RedactionTests(unittest.TestCase):
         self.assertFalse(witness.carries_credential('{"text": "reply with PROBE"}', ""))
         self.assertTrue(witness.carries_credential(b"carrier fixture-secret", "fixture-secret"))
         self.assertFalse(witness.carries_credential(b"carrier fixture-secret", "fixture-other"))
+
+    def test_the_written_receipt_applies_the_replacements_and_refuses_a_secret(self):
+        replacements = witness.relay_replacements("https://relay.example.invalid/v1")
+        receipt = {"logs": {"stdout": "relay relay.example.invalid twice relay.example.invalid\n"}}
+        data = witness.receipt_bytes(receipt, replacements, ("",))
+        self.assertNotIn(b"relay.example.invalid", data)
+        self.assertEqual(data.count(witness.RELAY_HOST_TOKEN.encode()), 2)
+        with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+            witness.receipt_bytes({"logs": {"stdout": "fixture-credential-value\n"}}, replacements, ("fixture-credential-value",))
+        with self.assertRaisesRegex(RuntimeError, "credential locality evidence refused"):
+            witness.receipt_bytes(
+                {"logs": {"stdout": "https://relay.example.invalid/v1\n"}},
+                replacements,
+                ("https://relay.example.invalid/v1",),
+            )
 
 
 class SchemaTests(unittest.TestCase):

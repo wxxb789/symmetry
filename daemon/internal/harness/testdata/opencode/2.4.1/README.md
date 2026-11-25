@@ -74,6 +74,9 @@ Every committed receipt carries the collector binding
 `scripts/ci/source_subject.py` in its own `binding_sha256` field, and records
 `source_head 6b2d4f8f195a…` (the base commit; the collector changes are uncommitted at
 collection time, which is why the binding, not the head, is the byte identity of the tool).
+A later apply pass changed the collector and its suite after collection (deltas in
+`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md` §4); every receipt here keeps its
+collecting revision in `binding_sha256`, and none was re-rendered.
 
 Each committed record is produced from its raw receipt by two recorded steps (Q-RENDER a):
 the repository renderer's root-only pass, then a one-line JSON pass.
