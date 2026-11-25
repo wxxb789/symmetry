@@ -76,7 +76,8 @@ re-derive. The digest census hits that do exist are exempt rows:
 
 ## 4. The substitution is the only change
 
-Per receipt, the pre-change blob is read from Git, the claimed substitution is applied to it,
+Per receipt, the pre-change blob is read from Git at the pinned base revision
+`613999840a4e4bc1d1169a37d3775b1814671015`, the claimed substitution is applied to it,
 and the result must be byte-identical to the delivered file; additionally the parsed JSON must
 be equal under the same mapping and the recorded classifier verdicts (`classes`) must be equal
 object-for-object:
@@ -84,16 +85,21 @@ object-for-object:
 ```sh
 python3 - <<'PY'
 import pathlib, re, subprocess
+# pinned base revision: a re-run at the delivered commit must not compare the redacted bytes with themselves
+BASE = "613999840a4e4bc1d1169a37d3775b1814671015"
+VALUE_SOURCE = "daemon/internal/harness/testdata/opencode/2.3.0/windows-2026-11-14.json"
 FILES = ["daemon/internal/harness/testdata/opencode/2.3.0/linux-2026-11-14.json",
-         "daemon/internal/harness/testdata/opencode/2.3.0/windows-2026-11-14.json",
+         VALUE_SOURCE,
          "daemon/internal/harness/testdata/opencode/2.3.0/windows-2026-11-14-r1.json"]
-VALUE = re.search(rb'\\"hostname\\":\\"([^\\"]+)\\"', subprocess.run(
-    ["git", "show", f"HEAD:{FILES[1]}"], capture_output=True, check=True).stdout).group(1)
+def base_bytes(path):
+    return subprocess.run(["git", "show", f"{BASE}:{path}"], capture_output=True, check=True).stdout
+VALUE = re.search(rb'\\"hostname\\":\\"([^\\"]+)\\"', base_bytes(VALUE_SOURCE)).group(1)
 for path in FILES:
-    old = subprocess.run(["git", "show", f"HEAD:{path}"], capture_output=True, check=True).stdout
+    old = base_bytes(path)
+    assert old.count(VALUE) == 1, path
     new = pathlib.Path(path).read_bytes()
     assert old.replace(VALUE, b"<HOSTNAME>") == new, path
-print("mapped-old == new for all three receipts")
+print("mapped-old == new for all three receipts (1 occurrence each)")
 PY
 ```
 
@@ -154,7 +160,7 @@ carried by 8 pre-existing tree files before and after the change (the two Window
 own unchanged `provider` field, `opencode/2.3.0/provider-discovery.json`, the omo 5.1.69
 capture pair, two earlier evidence records and one archived goal); five pre-existing files
 carry `sk-`-shaped tokens (contract fixtures and recorded harness help text, not credentials
-of this change). Neither set is part of this change's bytes — the change's 241 added lines
+of this change). Neither set is part of this change's bytes — the change's 247 added lines
 carry 0 occurrences of either — and the contract's substitution clause forbids touching any
 other receipt byte, so they are recorded here rather than edited.
 
