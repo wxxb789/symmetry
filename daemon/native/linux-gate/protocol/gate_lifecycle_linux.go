@@ -661,7 +661,8 @@ const (
 	ReleaseArmNativeAwaitResult = "await_result"
 	ReleaseArmNativeErrno       = "exec_errno"
 	ReleaseArmNativeNoAttempt   = "no_exec_attempt"
-	ReleaseArmNativeImage       = "image_mismatch"
+	ReleaseArmNativeProcess     = "native_process"
+	ReleaseArmNativeReadback    = "exec_readback"
 	ReleaseArmNativeCloneProof  = "clone_exec_proof"
 
 	ReleaseArmRegisterProcess = "native_register"
@@ -724,7 +725,7 @@ func LookupReleaseArmShape(arm string) (ReleaseArmShape, bool) {
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true}, true
 	case ReleaseArmNativeCloneProof:
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true, GuestBootstrap: true}, true
-	case ReleaseArmNativeErrno, ReleaseArmNativeNoAttempt, ReleaseArmNativeImage:
+	case ReleaseArmNativeErrno, ReleaseArmNativeNoAttempt, ReleaseArmNativeProcess, ReleaseArmNativeReadback:
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec}, true
 	case ReleaseArmRegisterProcess, ReleaseArmRegisterWaiter:
 		return ReleaseArmShape{SubStep: ReleaseSubStepRegister}, true
@@ -772,11 +773,33 @@ func ReleaseGuestStageName(stage CloneBootstrapFailureStage) (string, bool) {
 	}
 }
 
-// NewReleaseSubStepError bounds one failed release arm: the closed sub-step and
-// arm plus, when the arm reads the exec-status channel, the wait-error class and
-// any guest-reported clone-bootstrap stage/errno. Unknown arms stay untyped
-// detail so the wire validator refuses them instead of carrying free text.
+// nativeExecProcessSideError labels verifyNativeImage's process-side failures
+// (pidfd, exit, identity, credentials, namespace, boot); Error stays verbatim.
+type nativeExecProcessSideError struct{ cause error }
+
+func (failure *nativeExecProcessSideError) Error() string { return failure.cause.Error() }
+
+func (failure *nativeExecProcessSideError) Unwrap() error { return failure.cause }
+
+// NativeExecProcessSide wraps a process-side verify failure; Error is verbatim.
+func NativeExecProcessSide(err error) error { return &nativeExecProcessSideError{cause: err} }
+
+// NativeExecVerifyArm names the bounded arm of a verifyNativeImage failure.
+func NativeExecVerifyArm(err error) string {
+	var processSide *nativeExecProcessSideError
+	if errors.As(err, &processSide) {
+		return ReleaseArmNativeProcess
+	}
+	return ReleaseArmNativeReadback
+}
+
+// NewReleaseSubStepError bounds one failed release arm and never re-labels an
+// already-labelled error; unknown arms stay untyped so the wire validator refuses them.
 func NewReleaseSubStepError(subStep, arm string, errno int, err error) *ReleaseSubStepError {
+	var existing *ReleaseSubStepError
+	if errors.As(err, &existing) {
+		return existing
+	}
 	failure := &ReleaseSubStepError{SubStep: subStep, Arm: arm, Errno: errno, Err: err}
 	shape, ok := LookupReleaseArmShape(arm)
 	if !ok {
@@ -980,7 +1003,7 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 		gate.state = gateUnresolved
 		gate.mu.Unlock()
 		abortErr := gate.Abort()
-		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, ReleaseArmNativeImage, 0,
+		return errors.Join(NewReleaseSubStepError(ReleaseSubStepNativeExec, NativeExecVerifyArm(err), 0,
 			fmt.Errorf("%w: verify same-PID native exec: %v", ErrOutcomeUnknown, err)), abortErr)
 	}
 	gate.state = gateReleased
@@ -1311,27 +1334,27 @@ func (gate *PreparedGate) verifyNativeImage(device, inode uint64, expected *pinn
 		return err
 	}
 	if gate.pidfd == nil {
-		return errors.New("native process pidfd is unavailable")
+		return NativeExecProcessSide(errors.New("native process pidfd is unavailable"))
 	}
 	if err := unix.PidfdSendSignal(int(gate.pidfd.Fd()), 0, nil, 0); err != nil {
-		return fmt.Errorf("native process exited before exec readback: %w", err)
+		return NativeExecProcessSide(fmt.Errorf("native process exited before exec readback: %w", err))
 	}
 	if err := expected.verifyCurrent(gate.config); err != nil {
 		return err
 	}
 	startTime, err := readProcessStartTime(gate.identity.PID)
 	if err != nil || startTime != gate.identity.StartTime {
-		return fmt.Errorf("native PID/start identity changed: start=%d err=%v", startTime, err)
+		return NativeExecProcessSide(fmt.Errorf("native PID/start identity changed: start=%d err=%v", startTime, err))
 	}
 	status, err := readProcessStatus(gate.identity.PID)
 	if err != nil {
-		return err
+		return NativeExecProcessSide(err)
 	}
 	if status.uids != [4]uint32{gate.config.BUID, gate.config.BUID, gate.config.BUID, gate.config.BUID} ||
 		status.gids != [4]uint32{gate.config.BGID, gate.config.BGID, gate.config.BGID, gate.config.BGID} || len(status.groups) != 0 ||
 		status.noNewPrivs != 1 || status.capEff != 0 || status.capPrm != 0 || status.capInh != 0 || status.capBnd != 0 || status.capAmb != 0 {
-		return fmt.Errorf("native exec credentials or privilege state differ: uid=%v gid=%v groups=%v nnp=%d caps=%x/%x/%x/%x/%x",
-			status.uids, status.gids, status.groups, status.noNewPrivs, status.capEff, status.capPrm, status.capInh, status.capBnd, status.capAmb)
+		return NativeExecProcessSide(fmt.Errorf("native exec credentials or privilege state differ: uid=%v gid=%v groups=%v nnp=%d caps=%x/%x/%x/%x/%x",
+			status.uids, status.gids, status.groups, status.noNewPrivs, status.capEff, status.capPrm, status.capInh, status.capBnd, status.capAmb))
 	}
 	actual, err := os.Stat(fmt.Sprintf("/proc/%d/exe", gate.identity.PID))
 	if err != nil {
@@ -1343,11 +1366,12 @@ func (gate *PreparedGate) verifyNativeImage(device, inode uint64, expected *pinn
 	}
 	namespace, err := readUserNamespace(gate.identity.PID)
 	if err != nil || namespace.device != gate.identity.UserNSDevice || namespace.inode != gate.identity.UserNSInode {
-		return fmt.Errorf("native user namespace changed across exec: dev=%d ino=%d err=%v", namespace.device, namespace.inode, err)
+		return NativeExecProcessSide(fmt.Errorf("native user namespace changed across exec: dev=%d ino=%d err=%v",
+			namespace.device, namespace.inode, err))
 	}
 	bootID, err := readBootID()
 	if err != nil || bootID != gate.identity.BootID {
-		return fmt.Errorf("native boot identity changed across exec: got=%q err=%v", bootID, err)
+		return NativeExecProcessSide(fmt.Errorf("native boot identity changed across exec: got=%q err=%v", bootID, err))
 	}
 	return nil
 }

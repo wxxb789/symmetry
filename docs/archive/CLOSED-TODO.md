@@ -5070,16 +5070,20 @@ still-open residual stays in `docs/TODO.md` under the same heading.
       vocabularies (21 wrap sites across `gate_authorize`, `clone_bootstrap`, `clone_checkout`,
       `native_exec`, `register`), the closed wait class of an exec-status read, the closed guest
       clone-bootstrap stage and errno, the sub-step's own errno, and the branch reason on a nil error
-      — that joins the error chain to App stderr, and the same-RunKey refusal names its guard, the deciding journal
+      — that joins the error chain to App stderr (the fix-stage F1 guard returns a labelled inner
+      sub-step unchanged, so the wrap never masks an `awaitCloneRelease` arm; the `native_exec` arm
+      splits into `native_process`/`exec_readback`), and the same-RunKey refusal names its guard, the deciding journal
       term and a bounded recovery error class and writes a minimal identity-only refusal document
       (no `Outcome`/`FailureCategory`/`Release`/`Stop`) so the recovery leg's structured read now
       succeeds; the `unresolved` summary validator names every tripped predicate and accepts the
       exact versioned physical-stop proof the e2e already accepts (the file's existing
-      `linuxV2NativeWitnessStopSummaryHasPhysicalProof`), keeping unversioned/partial receipts
-      tripped. `stale_leaf` is green (`run=1 pass=1 skip=0`, manifest `status=passed`, run
+      `linuxV2NativeWitnessStopSummaryHasPhysicalProof`), keeping inexact (versioned but incomplete)
+      receipts tripped; a version-0 receipt is intentionally untripped, matching the pre-existing
+      predicate and the e2e's own acceptance. `stale_leaf` is green (`run=1 pass=1 skip=0`, manifest `status=passed`, run
       `45557621798`); runs `45554251351` (base re-confirmation) and `45555828634` (the named causes)
       bound the before/after. The `migration` release arm (`stage=native_exec arm=await_result
-      wait_class=other`, run `45564071868` — a guest/gate-C producer) and the four `stale_journal_*`
+      wait_class=other`, run `45564071868` on the pre-F1 bytes) is pending the post-F1 binding run
+      before any producer is named, and the four `stale_journal_*`
       green rows remain open in `docs/TODO.md` under
       the heading above.
 

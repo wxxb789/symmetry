@@ -464,10 +464,8 @@ func readLinuxOwnerHelperV2Request(connection *net.UnixConn) (linuxOwnerHelperV2
 	return request, fds, nil
 }
 
-// LinuxOwnerHelperV2ReleaseErrorDetail is the bounded, redacted release
-// failure detail: closed sub-step and arm vocabularies, the closed wait-error
-// class and guest bootstrap stage when the arm carries one, an optional errno,
-// and the branch reason when the release never produced an error.
+// LinuxOwnerHelperV2ReleaseErrorDetail is the bounded, redacted release failure
+// detail: closed sub-step/arm/wait/guest vocabularies, an optional errno and branch reason.
 type LinuxOwnerHelperV2ReleaseErrorDetail struct {
 	Stage      string `json:"stage"`
 	Arm        string `json:"arm,omitempty"`
@@ -568,8 +566,7 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
 }
 
 // linuxOwnerHelperV2ReleaseErrorDetailFor reduces a failed release attempt to
-// the bounded detail the unresolved response carries; the raw error chain is
-// never serialized.
+// the bounded detail the unresolved response carries; the raw chain is never serialized.
 func linuxOwnerHelperV2ReleaseErrorDetailFor(err error, ownerLost, leaseLive, stopRequested bool) *LinuxOwnerHelperV2ReleaseErrorDetail {
 	detail := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: linuxOwnerHelperV2ReleaseStageNone}
 	var subStep *linuxgate.ReleaseSubStepError
@@ -657,6 +654,13 @@ func linuxOwnerHelperV2ResponseError(response linuxOwnerHelperV2Response) error 
 		if response.StopEvidence != nil {
 			copy := *response.StopEvidence
 			failure.Evidence = &copy
+		}
+		// The detail is never nil now, so the code-driven sentinel must stay in the chain.
+		switch response.ErrorCode {
+		case "owner_lost_during_release":
+			return errors.Join(failure, ErrLinuxOwnerHelperV2OwnerLost)
+		case "lease_expired_during_release":
+			return errors.Join(failure, fmt.Errorf("Linux owner helper rejected operation (%s)", response.ErrorCode))
 		}
 		return failure
 	}

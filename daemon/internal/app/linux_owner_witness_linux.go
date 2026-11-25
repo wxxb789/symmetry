@@ -711,8 +711,7 @@ func (witness *linuxV2NativeWitnessRun) updateHealth(update func(*linuxV2NativeW
 }
 
 // linuxV2NativeWitnessUnresolvedSummaryTripped names each tripped unresolved
-// predicate by property only; the e2e accepts an exact versioned physical-stop
-// proof here.
+// predicate by property only; the e2e accepts an exact versioned physical-stop proof here.
 func linuxV2NativeWitnessUnresolvedSummaryTripped(summary linuxV2NativeWitnessSummary) []string {
 	tripped := make([]string, 0, 4)
 	add := func(condition bool, name string) {
@@ -2985,8 +2984,8 @@ func (refusal linuxV2NativeWitnessRefusal) Validate() error {
 	return nil
 }
 
-// linuxV2NativeWitnessUnresolvedAuthorityRefusalReason names the present journal
-// term that decided the authority guard; absent terms cannot be the decision.
+// linuxV2NativeWitnessUnresolvedAuthorityRefusalReason names a present term when
+// one decided the authority guard, else reports no_unresolved_term.
 func linuxV2NativeWitnessUnresolvedAuthorityRefusalReason(journal state.RunJournal) string {
 	if journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
 		return linuxV2NativeWitnessRefusalReasonReleaseProof
@@ -3027,8 +3026,7 @@ func linuxV2NativeWitnessRecoveryErrorClass(err error) string {
 }
 
 // linuxV2NativeWitnessRecoveryRefusal returns refused=true when a failed
-// recovery may not launch; the journal terms that kept the authority are the
-// only reason the unresolved summary remains possible.
+// recovery may not launch; the journal terms that kept the authority are the only reason.
 func linuxV2NativeWitnessRecoveryRefusal(caseName string, journal state.RunJournal, recoveryErr error) (linuxV2NativeWitnessRefusal, bool) {
 	refusal := linuxV2NativeWitnessRefusal{RecoveryErrorClass: linuxV2NativeWitnessRecoveryErrorClass(recoveryErr)}
 	if caseName != "stage_replay" {

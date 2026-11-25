@@ -300,6 +300,9 @@ func (helper *linuxOwnerHelperV2) writeResponse(connection *net.UnixConn, operat
 // The unresolved release response is the only writer of the bounded release
 // error detail; every other response passes nil.
 func (helper *linuxOwnerHelperV2) writeResponseWithDetail(connection *net.UnixConn, releaseErrorDetail *LinuxOwnerHelperV2ReleaseErrorDetail, operation, status string, launcher *authority.LinuxCgroupProcessIdentity, gate *authority.LinuxCgroupGateIdentity, launcherExit *authority.LinuxCgroupExitProof, gateProcess *authority.LinuxCgroupProcessIdentity, gateOutcome *authority.LinuxCgroupGateProductionResult, leaseSequence uint64, evidence *LinuxOwnerHelperV2StopEvidence, errorCode string, fds ...int) error {
+	if err := releaseErrorDetail.Validate(); err != nil {
+		return fmt.Errorf("Linux owner helper release response detail: %w", err)
+	}
 	if helper.dropWitnessResponse(connection, operation, status, evidence) {
 		return nil
 	}

@@ -864,11 +864,17 @@ func TestLinuxV2NativeWitnessUnresolvedSummaryTrippedNamesPredicates(t *testing.
 			want: []string{"stop.receipt_version"},
 		},
 		{
-			name: "unversioned stop receipt",
+			name: "unknown stop receipt version",
 			mutate: func(s *linuxV2NativeWitnessSummary) {
 				s.Stop.ReceiptVersion = authority.SupervisorVersionV2 + 1
 			},
 			want: []string{"stop.receipt_version"},
+		},
+		{
+			name: "absent stop receipt version stays untripped",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop = linuxV2NativeWitnessStop{ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill"}
+			},
 		},
 		{
 			name: "versioned receipt without its physical flags",

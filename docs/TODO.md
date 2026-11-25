@@ -1851,21 +1851,25 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
       goal with guest-side debugging; no fixture change is proposed without a named root.
 
-- [ ] `migration`'s release fails in the guest exec-status producer — now named: `release_outcome_unknown;
-      stage=native_exec arm=await_result wait_class=other` (2026-11-25, goal
-      `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9, run `45564071868`): the
-      non-clone (reuse) release waits for the gate's `FRAME_EXEC_ATTEMPT`/`EXEC_FAILURE` result
-      (`daemon/native/linux-gate/c-gate/gate.c:1276`, sent before the exec) and the read fails with a
-      class that is neither a deadline nor a peer EOF; it is not the errno-reporting
-      `launcher_integration_linux_test.go:439` stop (`native exec failed after RELEASE: errno=1`,
-      arm `exec_errno`). The remaining producers are the gate C code and the reused guest, outside the
-      owning goal's set: `DECISION_NEEDED`, and the follow-up goal `rf-acc-guest-native-exec` (conductor
-      2026-11-25 ruling) owns it — its first probes split `wait_class=other` (the conflated
-      `exec-status channel closed or carried ancillary data before a frame` in the unowned
-      `daemon/native/linux-gate/protocol/wire_linux.go:685` needs its own sentinel). After the aborted
-      release the App cannot even measure a stop (`Linux v2 helper could not prove the exact run leaf
-      stopped: dial unixpacket: connect: connection refused`); the "no fixture change without a named
-      root" rule of the entry above is now satisfied on the naming half only.
+- [ ] `migration`'s release fails in the guest exec-status producer — the arm is pending the post-F1
+      run (2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record §7.5 and §9, run
+      `45564071868` plus the conductor's post-F1 binding run): the stage-3 observation
+      (`release_outcome_unknown; stage=native_exec arm=await_result wait_class=other`) may be a masked
+      arm — the review's F1 proved those bytes re-wrapped every labelled clone arm into `await_result`
+      — so the definitive arm is named by the post-F1 binding run on the PR head, never before it is
+      observed; it is not the errno-reporting `launcher_integration_linux_test.go:439` stop (`native
+      exec failed after RELEASE: errno=1`, arm `exec_errno`). The witness vehicle sets a `CloneGrant`,
+      so the release is not a reuse-only site, and the waiting release still waits for the gate's
+      `FRAME_EXEC_ATTEMPT`/`EXEC_FAILURE` result (`daemon/native/linux-gate/c-gate/gate.c:1276`, sent
+      before the exec). `DECISION_NEEDED`: the follow-up goal `rf-acc-guest-native-exec` (conductor
+      2026-11-25 ruling) routes from that observation — its first probes split `wait_class=other` (the
+      conflated `exec-status channel closed or carried ancillary data before a frame` in the unowned
+      `daemon/native/linux-gate/protocol/wire_linux.go:685` needs its own sentinel). The
+      aborted-release stop measurement is intermittent: `Linux v2 helper could not prove the exact run
+      leaf stopped: dial unixpacket: connect: connection refused` appears four times in run
+      `45555828634` and zero times in runs `45557621798` and `45564071868`. The "no fixture change
+      without a named root" rule of the entry above stays satisfied on the naming half only until the
+      post-F1 arm is observed.
 
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
@@ -1939,18 +1943,18 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       No clause (1) text above is deleted: the root-cause question it asks is answered by ruling Q1(a)
       and the fix is the behaviour it names.
 
-- [ ] rf-acc-release-recovery-diagnostics residual: the `migration` release arm (2026-11-25, goal
-      `rf-acc-release-recovery-diagnostics`; evidence record
+- [ ] rf-acc-release-recovery-diagnostics residual: the `migration` release arm is pending the post-F1
+      run (2026-11-25, goal `rf-acc-release-recovery-diagnostics`; evidence record
       `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md` §9, plan
-      `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md` §3): the diagnostics and the
-      `stale_leaf` validator alignment are closed (CLOSED-TODO, same heading), but the release that
-      must reach `migration`'s `native_release` hold fails with the now-named arm
-      `(release_outcome_unknown; stage=native_exec arm=await_result wait_class=other)` — the non-clone
-      (reuse) exec-status await, whose remaining producers are the gate C code and the reused guest
-      (run `45564071868`, the stage-3 rerun on the final bytes) — after which the App cannot prove the
-      stop (`Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket: connect:
-      connection refused`). No owned file can satisfy it: `DECISION_NEEDED`, and the new goal
-      `rf-acc-guest-native-exec` (conductor 2026-11-25 ruling; per-arm entry above) owns it. The four
+      `docs/plans/2026-11-25-rf-acc-release-recovery-diagnostics-plan.md` §3): the diagnostics, the
+      `stale_leaf` validator alignment and the fix-stage F1-F10 changes are applied (CLOSED-TODO, same
+      heading), but the release that must reach `migration`'s `native_release` hold still fails, and
+      the stage-3 arm `(release_outcome_unknown; stage=native_exec arm=await_result wait_class=other)`
+      (run `45564071868`, on the pre-F1 bytes) may be a masked clone arm — the post-F1 binding run on
+      the PR head names the definitive arm before any producer is named. The aborted-release stop
+      measurement is intermittent (four occurrences in run `45555828634`, zero in runs `45557621798`
+      and `45564071868`). `DECISION_NEEDED`, and the new goal `rf-acc-guest-native-exec` (conductor
+      2026-11-25 ruling; per-arm entry above) routes from that observation. The four
       `stale_journal_*` sets' green rows stay
       `rf-acc-owner-loss-semantics`'s; their guard is now named
       (`refusal=journal_without_unresolved_authority reason=release_proof_present

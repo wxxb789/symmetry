@@ -19,19 +19,22 @@ scope.
 | helper `:1126-1139` | `helper_v2_server.go:1126-1141` | gate authorization, lease recheck, `prepared.Release` | typed `gate_authorize`; lease recheck stays untyped (its code already names `lease_expired_during_release`) |
 | helper `:1073-1099` | `helper_v2_server.go:1073-1099` | clone grant / native command / reuse guards | untouched (pre-attempt rejections, not the unresolved path) |
 | helper `:1169-1173` | `helper_v2_server.go:1169-1175` | register + gate waiter | typed `register` |
-| `linux_owner_helper_v2_linux.go:301-317` | `:297-318` | `LinuxOwnerHelperV2ReleaseUnresolvedError` | extended with `Detail` |
+| `linux_owner_helper_v2_linux.go:301-317` | `:301-318` | `LinuxOwnerHelperV2ReleaseUnresolvedError` | extended with `Detail` |
 | `helper_v2_protocol.go:516-540` | `helper_v2_protocol.go:516-540` | `linuxOwnerHelperV2ResponseError` | carries the detail; typed for every release/unresolved response |
 | `linux_owner_v2_linux.go:1066` | `linux_owner_v2_linux.go:1066` | `one-use Linux v2 RELEASE result is unresolved: %w` | unchanged; `%w` carries the message |
 | `runner.go:864` | `runner.go:864` | `resume process %q: %w` | unchanged |
-| app `:3279` | `:3279` | `start native owner witness transport: %w` | unchanged |
-| app `:531-534` | `:531-534` | refusal collapses `recoveryErr` + authority into one string | converted (guard + reason + class + document) |
+| app `:3279` | `:3293` | `start native owner witness transport: %w` | unchanged |
+| app `:531-534` | `:531-533` | refusal collapses `recoveryErr` + authority into one string | converted (guard + reason + class + document) |
 | app `:2801-2811` | `:2815-2826` | `linuxV2NativeWitnessJournalHasUnresolvedAuthority` | unchanged predicate; companion reason function added |
-| app `:737-742` | `:737-742` | `unresolved` OR of ten predicates, names none | converted (tripped predicate names) |
-| app `:3211` | `:3412,:3426,:3444` | the `native_release` hold after a successful release | stage-2 target for `migration` |
+| app `:737-742` | `:738-742` | `unresolved` OR of ten predicates, names none | converted (tripped predicate names) |
+| app `:3211` | `:3193,:3207,:3225` | the `native_release` hold after a successful release | stage-2 target for `migration` |
 
 `git grep` census (Change 6) is recorded in the evidence record: `release_outcome_unknown` (helper
 `:1188`, its only writer), `recover existing owner witness RunJournal without launch` (app `:533`,
 its only site), every `validateFinalSummary` refusal.
+Every number in the table is at the dispatch head `48ef0982` (re-verified by content); the delivered
+bytes' census is the evidence record's §1, and the contract column is the `origin/main` `33ad88a9`
+number where the two differ.
 
 ## 2. Public/API shape (choices the contract leaves open)
 
@@ -99,7 +102,7 @@ its only site), every `validateFinalSummary` refusal.
    (`installed_bootstrap | bootstrap_attempt | bootstrap_image | bootstrap_process |
    leaf_membership`), `clone_checkout` (`checkout_receipt | checkout_receipt_mismatch |
    checkout_callback | checkout_ack_encode | checkout_ack_send`), `native_exec` (`await_result |
-   exec_errno | no_exec_attempt | image_mismatch | clone_exec_proof`) and `register`
+   exec_errno | no_exec_attempt | native_process | exec_readback | clone_exec_proof`) and `register`
    (`native_register | gate_waiter`); 21 wrap sites, all in owned files
    (`gate_lifecycle_linux.go` ×16, `helper_v2_server.go` ×5). One table
    (`LookupReleaseArmShape`) binds each arm to its sub-step and declares whether it reads the
@@ -122,22 +125,28 @@ its only site), every `validateFinalSummary` refusal.
 3. Stage 2: `stale_leaf` — the observed term is `stop.receipt_version` (run `45555828634`), so the
    predicate becomes `ReceiptVersion != 0 && !linuxV2NativeWitnessStopSummaryHasPhysicalProof(stop)`
    — the file's existing exact-proof predicate, which the response-loss branch already pins; every
-   inexact/unversioned receipt stays tripped (M4). No second convention is added.
+   inexact receipt (versioned but missing a physical flag) stays tripped (M4); a version-0 receipt
+   is intentionally untripped, matching the pre-existing predicate and the e2e's own acceptance.
+   No second convention is added.
    `migration` — fix the named sub-step cause only if it is staging in an owned script; a cause in
    the gate C code, `control/**` or the guest outside the owned scripts stops with `DECISION_NEEDED`
    and the verbatim detail. The observed detail is `stage=native_exec` without an errno, i.e. one of
-   the four non-errno `native_exec` sites inside the guest gate/bootstrap protocol
-   (`gate_lifecycle_linux.go:803,:823,:830,:949`) — the guest-side class the contract routes to
-   `DECISION_NEEDED`.
+   the four non-errno `native_exec` sites inside the gate/bootstrap protocol (delivered bytes
+   `gate_lifecycle_linux.go:979,:999,:1006,:1125`) — with the 2026-11-25 F1 ruling the stage-3
+   observation (`arm=await_result`) may be masked, so the arm stays pending the conductor's post-F1
+   binding run and the site class is not named before it is observed.
 4. Stage 3 (conductor ruling on the implement `DECISION_NEEDED`): §2.8's arm/wait/guest extension
    plus one literal `migration`-only scratch run on the final bytes — the stage-2 six-set run
    (`45557621798`) stays the proof of record for `stale_leaf` (green) and the four denial legs
    (named guard, handed to `rf-acc-owner-loss-semantics`), so no second six-set run is spent. The
-   run's verbatim detail goes to evidence §9; `migration` stays `DECISION_NEEDED` when the named arm
-   is outside the owned set, and the residual pointer names the exact arm.
+   run's verbatim detail goes to evidence §9 as the pre-F1 observation; the fix stage (F1-F10)
+   follows, and the post-F1 binding run on the PR head names the definitive arm: `migration` stays
+   `DECISION_NEEDED` when the named arm is outside the owned set, the residual pointer names the
+   exact arm, and the follow-up goal (`rf-acc-guest-native-exec`) routes from that observation only.
 5. Scratch budget: three runs total in the goal (base confirmation, stage-1, stage-2), plus the
-   stage-3 `migration`-only run; mutants M1-M7 are local (`daemon` job) and need no scratch run. If
-   a run clears no new class twice, stop.
+   stage-3 `migration`-only run, plus the conductor's post-F1 binding run (one `migration` plus one
+   `stale_leaf`); mutants M1-M12 are local (`daemon` job) and need no scratch run. If a run clears
+   no new class twice, stop.
 
 ## 4. Local probes (lesson 74, each with ≥1 positive and ≥1 negative case)
 
@@ -183,7 +192,7 @@ its only site), every `validateFinalSummary` refusal.
 
 `docs/evidence/rf-acc-release-recovery-diagnostics-2026-11-25.md`: the clause census, the per-set
 table (before line from the parent runs; after: run id, case set, boundary, exit status, first
-failing check, the verbatim named cause, artifact/manifest sha256), probe outputs, the M1-M7 rows
+failing check, the verbatim named cause, artifact/manifest sha256), probe outputs, the M1-M12 rows
 with restored blob hashes and the CI job that reddens, the sha256 equality table of the tested
 bytes, the greps of Change 6, and the refusal-document bytes verbatim. Stage 3 adds §2.8 (the
 arm/wait/guest vocabulary with the wrap-site table), the matching probe and mutant rows, §7.5 (the

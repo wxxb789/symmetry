@@ -656,7 +656,7 @@ func (client *LinuxOwnerHelperV2Client) releaseWithCheckoutReady(
 				if final.Status == "released" {
 					return errors.Join(callbackErr, errors.New("Linux owner helper released the Clone after checkout callback rejection"))
 				}
-				return callbackErr
+				return errors.Join(callbackErr, linuxOwnerHelperV2ResponseError(final))
 			}
 		case "release":
 			if response.Status != "released" {
