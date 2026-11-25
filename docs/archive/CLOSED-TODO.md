@@ -5180,3 +5180,23 @@ follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under 
       clone-cleanup set is byte-identical to the base). PR #287's round-1 findings R1-R5
       (live-probe cleanup, EINTR poll count, dead store, address re-derivation, this move) are
       applied on the branch; the re-bind on the round-1 head follows.
+
+## rf-acc-guest-native-exec: the `migration` clone-read arm is split and root-named (2026-11-25)
+
+- [x] `migration`'s `arm=bootstrap_attempt wait_class=other` line is split and root-named (opened
+      2026-11-25 by `rf-acc-release-recovery-diagnostics`; closed by goal
+      `rf-acc-guest-native-exec`, branch `refactor/rf-acc-guest-native-exec`): the clone read's
+      producers carry a closed `read_class` sentinel plus the v1 pre-clone failure frame's bounded
+      errno (run `45593856716`: `read_class=gate_v1_frame errno=1`), the gate's pre-clone guards
+      report the existing v3 kind-24 frame with a closed numeric stage and the failing call's own
+      errno, and a failed credential drop names its first unsatisfied fact (runs `45601287283` and
+      the final `45602546196`: `guest_stage=gate_drop_bounding_set errno=1`; the final run's
+      `stale_leaf` row is green). The observed cause — the guest's AppArmor `unprivileged_userns`
+      policy denies the gate's capability use — stays open in `docs/TODO.md` ("Linux v2 owner hosts
+      under the Ubuntu AppArmor userns restriction") and routes to follow-up goal
+      `rf-acc-apparmor-userns-profile`, because its fix (`scripts/install-linux-owner.sh` plus the
+      acceptance fixture) is outside this goal's owned set. The `migration` release,
+      `synthetic_goal_cleanup` and `shared`'s two pre-clone-guard legs
+      (`clone_integration_linux_test.go:240`, `launcher_integration_linux_test.go:439`) stand in
+      `docs/TODO.md` as residuals behind that wall. Evidence:
+      `docs/evidence/rf-acc-guest-native-exec-2026-11-25.md` §7, §9, §11.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -717,6 +718,7 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps(t *testing.T) {
 		err                                     error
 		ownerLost, leaseLive, stopReq           bool
 		wantStage, wantArm, wantWait, wantGuest string
+		wantRead                                string
 		wantErrno                               int
 		wantReason                              string
 	}{
@@ -731,6 +733,46 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps(t *testing.T) {
 			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, 0,
 				fmt.Errorf("receive same-PID B bootstrap attempt: %w", context.DeadlineExceeded)),
 			leaseLive: true, wantStage: "clone_bootstrap", wantArm: "bootstrap_attempt", wantWait: "deadline",
+		},
+		{
+			name: "clone bootstrap attempt names the v1 gate failure frame and its errno",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, 0,
+				fmt.Errorf("receive same-PID B bootstrap attempt: %w", &linuxgate.CloneStatusReadError{
+					Class: linuxgate.CloneReadClassGateV1Frame, Errno: 13,
+					Err: errors.New("clone status frame magic or version is invalid"),
+				})),
+			leaseLive: true, wantStage: "clone_bootstrap", wantArm: "bootstrap_attempt", wantWait: "other",
+			wantRead: "gate_v1_frame", wantErrno: 13,
+		},
+		{
+			name: "clone checkout receipt names its wait class and read class",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutReceipt, 0,
+				fmt.Errorf("receive B checkout-ready receipt: %w", &linuxgate.CloneStatusReadError{
+					Class: linuxgate.CloneReadClassPeerClosed, Err: io.EOF,
+				})),
+			leaseLive: true, wantStage: "clone_checkout", wantArm: "checkout_receipt", wantWait: "peer_closed",
+			wantRead: "peer_closed_without_frame",
+		},
+		{
+			name: "clone native exec proof names the frame header producer",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeCloneProof, 0,
+				fmt.Errorf("receive same-PID native exec proof: %w", &linuxgate.CloneStatusReadError{
+					Class: linuxgate.CloneReadClassFrameHeader,
+					Err:   errors.New("Linux clone status frame version, type, or size is invalid"),
+				})),
+			leaseLive: true, wantStage: "native_exec", wantArm: "clone_exec_proof", wantWait: "other",
+			wantRead: "frame_header",
+		},
+		{
+			// The read class is shape-gated: an arm that cannot read the clone
+			// channel never carries it, so no other arm's detail can be spoofed.
+			name: "native exec errno never carries a read class",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, 1,
+				&linuxgate.CloneStatusReadError{
+					Class: linuxgate.CloneReadClassGateV1Frame, Errno: 13,
+					Err: errors.New("clone status frame magic or version is invalid"),
+				}),
+			leaseLive: true, wantStage: "native_exec", wantArm: "exec_errno", wantErrno: 1,
 		},
 		{
 			name: "clone checkout receipt names the guest bootstrap failure",
@@ -844,9 +886,10 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps(t *testing.T) {
 			detail := linuxOwnerHelperV2ReleaseErrorDetailFor(test.err, test.ownerLost, test.leaseLive, test.stopReq)
 			if detail.Stage != test.wantStage || detail.Arm != test.wantArm ||
 				detail.WaitClass != test.wantWait || detail.GuestStage != test.wantGuest ||
+				detail.ReadClass != test.wantRead ||
 				detail.Errno != test.wantErrno || detail.Reason != test.wantReason {
-				t.Fatalf("release detail = %+v, want stage=%q arm=%q wait_class=%q guest_stage=%q errno=%d reason=%q",
-					*detail, test.wantStage, test.wantArm, test.wantWait, test.wantGuest, test.wantErrno, test.wantReason)
+				t.Fatalf("release detail = %+v, want stage=%q arm=%q wait_class=%q read_class=%q guest_stage=%q errno=%d reason=%q",
+					*detail, test.wantStage, test.wantArm, test.wantWait, test.wantRead, test.wantGuest, test.wantErrno, test.wantReason)
 			}
 			if err := detail.Validate(); err != nil {
 				t.Fatalf("classified release detail is not closed-vocabulary: %v", err)
@@ -909,6 +952,75 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm(t *testing.T) {
 			t.Fatalf("arms %q and %q render the same bounded detail %q", other, arm.arm, arm.want)
 		}
 		rendered[arm.want] = arm.arm
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseErrorDetailRendersTheReadClass(t *testing.T) {
+	rows := []struct {
+		subStep string
+		arm     string
+		read    *linuxgate.CloneStatusReadError
+		want    string
+	}{
+		{
+			subStep: linuxgate.ReleaseSubStepCloneBootstrap, arm: linuxgate.ReleaseArmBootstrapAttempt,
+			read: &linuxgate.CloneStatusReadError{Class: linuxgate.CloneReadClassGateV1Frame, Errno: 13,
+				Err: errors.New("clone status frame magic or version is invalid")},
+			want: "stage=clone_bootstrap arm=bootstrap_attempt wait_class=other read_class=gate_v1_frame errno=13",
+		},
+		{
+			subStep: linuxgate.ReleaseSubStepCloneCheckout, arm: linuxgate.ReleaseArmCheckoutReceipt,
+			read: &linuxgate.CloneStatusReadError{Class: linuxgate.CloneReadClassAncillary,
+				Err: errors.New("clone status channel carried unexpected descriptors")},
+			want: "stage=clone_checkout arm=checkout_receipt wait_class=other read_class=ancillary_data",
+		},
+		{
+			subStep: linuxgate.ReleaseSubStepNativeExec, arm: linuxgate.ReleaseArmNativeCloneProof,
+			read: &linuxgate.CloneStatusReadError{Class: linuxgate.CloneReadClassPeerClosed, Err: io.EOF},
+			want: "stage=native_exec arm=clone_exec_proof wait_class=peer_closed read_class=peer_closed_without_frame",
+		},
+	}
+	for _, row := range rows {
+		t.Run(row.want, func(t *testing.T) {
+			detail := linuxOwnerHelperV2ReleaseErrorDetailFor(
+				linuxgate.NewReleaseSubStepError(row.subStep, row.arm, 0,
+					fmt.Errorf("bounded probe wrap: %w", row.read)), false, true, false)
+			if got := detail.String(); got != row.want {
+				t.Fatalf("release detail rendered %q, want the literal %q", got, row.want)
+			}
+			if err := detail.Validate(); err != nil {
+				t.Fatalf("rendered release detail is not closed-vocabulary: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseDetailCarriesTheReadClassOverTheWire(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
+	response := linuxOwnerHelperV2Response{
+		Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+		ReleaseErrorDetail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+			Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other",
+			ReadClass: "gate_v1_frame", GuestStage: "exec", Errno: 13,
+		},
+	}
+	encoded, err := json.Marshal(response)
+	if err != nil || !strings.Contains(string(encoded), `"read_class":"gate_v1_frame"`) {
+		t.Fatalf("raw helper response JSON = %s (err=%v), want the read_class key", encoded, err)
+	}
+	if err := writeLinuxOwnerHelperV2Response(server, response); err != nil {
+		t.Fatalf("write helper response with a read class: %v", err)
+	}
+	decoded, rights, err := readLinuxOwnerHelperV2Response(client)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		t.Fatalf("read helper response with a read class: %v", err)
+	}
+	if got := decoded.ReleaseErrorDetail.String(); got != "stage=clone_bootstrap arm=bootstrap_attempt wait_class=other read_class=gate_v1_frame guest_stage=exec errno=13" {
+		t.Fatalf("wire release detail = %q, want the bounded read class unchanged", got)
+	}
+	if err := linuxOwnerHelperV2ResponseError(decoded); err == nil || !strings.Contains(err.Error(), "read_class=gate_v1_frame") {
+		t.Fatalf("unresolved release error lost the read class: %v", err)
 	}
 }
 
@@ -1022,6 +1134,38 @@ func TestLinuxOwnerHelperV2ReleaseGuestFailureDetailClosesTheVocabulary(t *testi
 	}
 }
 
+func TestLinuxOwnerHelperV2PrecloneGuardFailureNamesTheGateStage(t *testing.T) {
+	for _, stage := range []struct {
+		stage linuxgate.CloneBootstrapFailureStage
+		want  string
+	}{
+		{linuxgate.CloneFailureGateClose, "gate_close"},
+		{linuxgate.CloneFailureGateDrop, "gate_drop"},
+		{linuxgate.CloneFailureGateParentDeath, "gate_parent_death"},
+		{linuxgate.CloneFailureGateFence, "gate_fence"},
+		{linuxgate.CloneFailureGateDropGroups, "gate_drop_groups"},
+		{linuxgate.CloneFailureGateDropBoundingSet, "gate_drop_bounding_set"},
+		{linuxgate.CloneFailureGateDropCredentials, "gate_drop_credentials"},
+		{linuxgate.CloneFailureGateDropCapabilities, "gate_drop_capabilities"},
+		{linuxgate.CloneFailureGateDropAmbient, "gate_drop_ambient"},
+		{linuxgate.CloneFailureGateDropNoNewPrivs, "gate_drop_no_new_privs"},
+		{linuxgate.CloneFailureGateDropStatus, "gate_drop_status"},
+	} {
+		failure := linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap,
+			linuxgate.ReleaseArmBootstrapAttempt, 0,
+			fmt.Errorf("receive same-PID B bootstrap attempt: %w",
+				&linuxgate.CloneBootstrapFailureError{Stage: stage.stage, Errno: 1}))
+		detail := linuxOwnerHelperV2ReleaseErrorDetailFor(failure, false, true, false)
+		want := "stage=clone_bootstrap arm=bootstrap_attempt wait_class=other guest_stage=" + stage.want + " errno=1"
+		if detail.String() != want {
+			t.Fatalf("pre-clone guard stage %d rendered %q, want %q", stage.stage, detail.String(), want)
+		}
+		if err := detail.Validate(); err != nil {
+			t.Fatalf("pre-clone guard stage %q is not closed-vocabulary: %v", stage.want, err)
+		}
+	}
+}
+
 func TestLinuxOwnerHelperV2ReleaseErrorDetailRedactsFreeFormText(t *testing.T) {
 	raw := "/home/some-profile-user/secret\npid=4242 exec --lease-token=abcd1234"
 	detail := linuxOwnerHelperV2ReleaseErrorDetailFor(
@@ -1035,6 +1179,21 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailRedactsFreeFormText(t *testing.T) {
 	for _, fragment := range []string{"some-profile-user", "/home", "4242", "lease-token", "secret"} {
 		if strings.Contains(rendered, fragment) {
 			t.Fatalf("release detail leaked %q: %s", fragment, rendered)
+		}
+	}
+	cloneRaw := "/home/some-profile-user/secret\nclone status frame magic or version is invalid"
+	cloneDetail := linuxOwnerHelperV2ReleaseErrorDetailFor(
+		linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, 0,
+			fmt.Errorf("receive same-PID B bootstrap attempt: %w", &linuxgate.CloneStatusReadError{
+				Class: linuxgate.CloneReadClassGateV1Frame, Errno: 13, Err: errors.New(cloneRaw),
+			})),
+		false, true, false)
+	if rendered := cloneDetail.String(); rendered != "stage=clone_bootstrap arm=bootstrap_attempt wait_class=other read_class=gate_v1_frame errno=13" {
+		t.Fatalf("clone release detail rendered %q, want the closed read class and errno only", rendered)
+	}
+	for _, fragment := range []string{"some-profile-user", "/home", "secret", "magic"} {
+		if strings.Contains(cloneDetail.String(), fragment) {
+			t.Fatalf("clone release detail leaked %q: %s", fragment, cloneDetail.String())
 		}
 	}
 }
@@ -1093,6 +1252,39 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary(t *testin
 			wantErr: true,
 		},
 		{
+			name: "clone-read arm with its read class",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other",
+				ReadClass: "gate_v1_frame", Errno: 13,
+			},
+		},
+		{
+			name: "clone-read arm with the empty-packet class",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other", ReadClass: "empty_packet",
+			},
+		},
+		{
+			name: "read class on an arm that cannot read the clone channel",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "native_exec", Arm: "exec_errno", Errno: 1, ReadClass: "gate_v1_frame",
+			},
+			wantErr: true,
+		},
+		{
+			name: "free-form read class",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other",
+				ReadClass: "clone status frame magic or version is invalid",
+			},
+			wantErr: true,
+		},
+		{
+			name:    "read class without a sub-step",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", ReadClass: "gate_v1_frame"},
+			wantErr: true,
+		},
+		{
 			name:    "wait class on an arm that never waits",
 			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "exec_readback", WaitClass: "other"},
 			wantErr: true,
@@ -1135,6 +1327,24 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary(t *testin
 			}
 		})
 	}
+	t.Run("every clone-read class is accepted", func(t *testing.T) {
+		classes := []string{
+			linuxgate.CloneReadClassWait, linuxgate.CloneReadClassRecv, linuxgate.CloneReadClassAncillary,
+			linuxgate.CloneReadClassTruncated, linuxgate.CloneReadClassEmptyPacket,
+			linuxgate.CloneReadClassMagicOrVersion, linuxgate.CloneReadClassGateV1Frame,
+			linuxgate.CloneReadClassPeerClosed, linuxgate.CloneReadClassFrameHeader,
+			linuxgate.CloneReadClassImageInode, linuxgate.CloneReadClassGuestMalformed,
+			linuxgate.CloneReadClassGuestCode,
+		}
+		for _, class := range classes {
+			detail := &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "clone_bootstrap", Arm: "bootstrap_attempt", WaitClass: "other", ReadClass: class,
+			}
+			if err := detail.Validate(); err != nil {
+				t.Fatalf("clone-read class %q is not closed-vocabulary: %v", class, err)
+			}
+		}
+	})
 }
 
 func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesTheBoundedDetail(t *testing.T) {
