@@ -11,21 +11,23 @@ the repository or to the GDD state root.
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
-| `scripts/install-linux-owner.sh` | `605dd0ec6a1e44aa42389641c6c599ddacb705da94cadcc8a3e5b3521d94a975` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `cd71800daa842c05b6fec78be8856f64b4880cfc5001e6517095dde0f484c166` |
+| `scripts/install-linux-owner.sh` | `ab0780fc94468991f03844f1d3cbdb67fe60a84e6d9aaed5261de3f3af580b4b` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `e85c1c321e140874f6f211e2e73d024a749d9972c27e4aadff7ded559f17b9be` |
 | `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` |
-| `daemon/internal/linuxpreflight/preflight_linux.go` | `50d800f0d10f7830719ca68ecad905bef4f4e3feee5f3e082dd9aed9c1130d83` |
-| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `93c2c2191d6e53dfa90068f9baba8a0c9c0b48a18646ac80a22fde39c4180c9e` |
+| `daemon/internal/linuxpreflight/preflight_linux.go` | `da5b2caf3bfaa1fa4ef340e755cc9f1450346177ac07ce3d4dc203ce1f65f205` |
+| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `29dcfdb2c8c73eea6cccc0d14701dd5289bff6a9b7faac1a217bd8ecb4f69c03` |
 | `daemon/internal/linuxpreflight/preflight_unsupported.go` | `b7aaf81f43a53f39f6268c39f5b1be03753dd84783878f13387631962f095501` |
 | `daemon/cmd/symmetry-daemon/main.go` | `ad8547f13c0c080eb674f08799ca881be142cb549e292c2fa2b685176af73890` |
-| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `b9b524ff3bacea567aea6930a0c2e03117e39649c62ba17e201b4b66c685782e` |
-| `docs/runbooks/control-plane-and-daemon.md` | `9930b98bdbb4a4b6c88dc5b08c933722fc656f1ba5032bab26db9b8088c3b532` |
+| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `8fe8ef416dfcfdff77a3d899bc4de004cd041133e88032613939ff4a5f8ddbcb` |
+| `docs/runbooks/control-plane-and-daemon.md` | `06b6ae8762734b53c93f3c2dc638797c2741d48bc380fd5dccdbd18dc59dfa8d` |
 
-Run 3's head `ce3c30b9` (the amendment plus the round-2 hardening commits) is bound to the code
-digests by the §8 equality table; the plan's digest above is its final record revision (the plan
-and the three record files carry post-run record-only edits and are not run-bound code), and
-`docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are deliberately not hashed
-anywhere.
+Run 3's head `ce3c30b9` (the amendment plus the round-2 hardening commits) is bound to the
+run-3 code revisions by the §8 equality table; the apply-stage simplification (2026-11-26) then
+changed six of the files above, so the table carries the delivered post-apply revisions and
+§8's delta table records each change, its class and its re-run gates. The plan digest above is
+its final record revision (the plan and the record files carry post-run, record-only edits and
+are not run-bound code), and `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are
+deliberately not hashed anywhere.
 
 ## 2. Readback rule (amended after run 2; §2 of the plan carries the source evidence)
 
@@ -94,16 +96,16 @@ fail-closed state).
 
 ## 5. Fixture rows (Change 3)
 
-- `scripts/ci/linux-v2-native-acceptance.sh:968`: `--capability=CAP_MAC_ADMIN` — the container
+- `scripts/ci/linux-v2-native-acceptance.sh:967`: `--capability=CAP_MAC_ADMIN` — the container
   manager's default retained set plus exactly the load's missing capability
   (`nspawn.c` `arg_caps_retain`: the default already carries `CAP_SYS_ADMIN`, omits
   `CAP_MAC_ADMIN`; `--capability=` adds). The first draft's `--capability=all` was a round-1
   finding (P2-6/F4) and is not shipped.
-- `:1645-1651`: the securityfs guard uses the repository's own
+- `:1644-1649`: the securityfs guard uses the repository's own
   `findmnt --noheadings --output TARGET --target` pattern and then `mount -t securityfs` with a
   named failure; run 2 showed the first draft's `findmnt --quiet` is not a findmnt option, which
   made the guard dead and the mount unconditional (EBUSY on an already mounted guest).
-- `scripts/ci/linux-v2-native-rootfs-base.sh:69-72`: the pinned package set gains `apparmor`
+- `scripts/ci/linux-v2-native-rootfs-base.sh:70-72`: the pinned package set gains `apparmor`
   (the in-guest parser the load and the readback need) and masks the guest's own policy service
   so its boot does not reload the distro profile set into the shared kernel policy.
 - The installer's in-guest run and the in-guest `-verify-linux-owner-install` run remain the
@@ -229,8 +231,24 @@ scratch/rf-acc-apparmor-userns-profile` prints nothing. `daemon/native/linux-gat
 byte-identical to `61399984` (`git diff 61399984 -- daemon/native/linux-gate/` is empty — no
 `gate.c` byte, no protocol byte). The plan and the record files carry post-run, record-only
 edits (the plan: §1 anchors re-measured at the delivered bytes plus the run-3 outcome paragraph;
-this record: these run-3 rows), which is why the plan's digest in §1 is its record revision
-rather than a run-bound byte.
+this record: these run-3 rows and the apply-stage delta table below), which is why the plan's
+digest in §1 is its record revision rather than a run-bound byte.
+
+### Apply-stage deltas (post-run-3)
+
+The simplify review over `4440c5c0..9bf6ddc6` produced findings S1-S7 (under the GDD state
+root); the apply stage accepted and applied all seven. No accepted decision, profile-text byte,
+fence, credential readback or census count changes: `-print-userns-profile` still emits the
+fixed five lines, C1-C7 are identical (§4), and the gates are in §10.
+
+| file | run-3 sha256 | delivered sha256 (§1) | delta |
+| --- | --- | --- | --- |
+| `scripts/install-linux-owner.sh` | `605dd0ec6a1e44aa42389641c6c599ddacb705da94cadcc8a3e5b3521d94a975` | `ab0780fc94468991f03844f1d3cbdb67fe60a84e6d9aaed5261de3f3af580b4b` | S2: the removal path resolves the parser through `resolve_apparmor_parser` (optional-missing mode) and now carries its absolute-path and root-directory checks; S6: the readback strips the whole sysctl file's whitespace and requires exactly `0`/`1`; S3: two comment blocks compressed — behavior-strengthening, 18/18 local probe rows re-pinned |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `cd71800daa842c05b6fec78be8856f64b4880cfc5001e6517095dde0f484c166` | `e85c1c321e140874f6f211e2e73d024a749d9972c27e4aadff7ded559f17b9be` | S3: two comment blocks compressed — non-behavioral; the fixture still authors no policy text (C6 = 0) |
+| `daemon/internal/linuxpreflight/preflight_linux.go` | `50d800f0d10f7830719ca68ecad905bef4f4e3feee5f3e082dd9aed9c1130d83` | `da5b2caf3bfaa1fa4ef340e755cc9f1450346177ac07ce3d4dc203ce1f65f205` | S1: the write-only `linuxAppArmorLoadedProfile.directory` field removed; S3: five comment blocks compressed — non-behavioral, `verifyLinuxOwnerAppArmorUserns` now :441-470 |
+| `daemon/internal/linuxpreflight/preflight_linux_test.go` | `93c2c2191d6e53dfa90068f9baba8a0c9c0b48a18646ac80a22fde39c4180c9e` | `29dcfdb2c8c73eea6cccc0d14701dd5289bff6a9b7faac1a217bd8ecb4f69c03` | S4: a literal stanza pin added to `TestLinuxAppArmorProfileTextMatchesTheInstaller`; S3: one comment block compressed — coverage-only, root WSL run 5/5 `LinuxAppArmor*` PASS |
+| `docs/runbooks/control-plane-and-daemon.md` | `9930b98bdbb4a4b6c88dc5b08c933722fc656f1ba5032bab26db9b8088c3b532` | `06b6ae8762734b53c93f3c2dc638797c2741d48bc380fd5dccdbd18dc59dfa8d` | S5: removal is documented as unloading through its definition file, matching `unload_userns_profile` — documentation-only |
+| `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md` | `b9b524ff3bacea567aea6930a0c2e03117e39649c62ba17e201b4b66c685782e` | `8fe8ef416dfcfdff77a3d899bc4de004cd041133e88032613939ff4a5f8ddbcb` | S7: census corrections (C5 = 4, censuses cited to evidence §4) plus the §1 anchors re-measured — record-only |
 
 ## 9. Preflight rows on the runner
 
@@ -238,7 +256,7 @@ In-guest `-verify-linux-owner-install` (the fixture's second oracle) prints
 `apparmor_userns=<token>` beside `LinuxOwnerPreflightRuntimeBoundary`; the run-3 log row is the
 end-to-end evidence for the decision line. Refusal rows and their tokens are the 21 decision
 rows (§6) plus the installer's refusal rows (§7). Run 3, both sets, from the in-guest install and
-the installed daemon's own ExecStartPre verify (`daemon_verify_log`, fixture :1676-1683):
+the installed daemon's own ExecStartPre verify (`daemon_verify_log`, fixture :1674-1681):
 `Installing production owner artifacts inside the disposable systemd guest.` →
 `apparmor_userns=per_program` → `legacy Linux owners are drained; pending Goal deliveries may
 remain` → `Verified fixed Linux owner assets for A=symmetry-a(52000:52000)
@@ -254,7 +272,7 @@ decision).
 
 ## 10. Gates (commands, counts, exit codes)
 
-Re-run at the delivered bytes (delivered-file digests in §8):
+Re-run at the delivered bytes (delivered-file digests in §1; the run-3 binding is §8):
 
 - `bash -n` on the two changed bash scripts, `dash -n` and `sh -n` on the POSIX installer:
   exit 0 each.
@@ -269,16 +287,29 @@ Re-run at the delivered bytes (delivered-file digests in §8):
   there); the same host as root runs every `LinuxAppArmor*` test and they pass, including
   `TestLinuxAppArmorCompileRows` (compression disabled first, one plain compile after a rejected
   `-c0`, one `-c0` compile when accepted, the stub's digest). Both exits 0.
-- The stub probe (§6): 42 rows, 27 PASS assertions, 0 FAIL, exit 0.
+- The stub probe (§6): 42 rows, 27 PASS assertions, 0 FAIL, exit 0 (run at the run-3 bytes; the
+  apply probe in the last bullet re-pins the arms the apply stage changed).
 - Censuses: §4 counts, re-run at the delivered bytes (identical).
-- Anchors re-measured by content at the delivered bytes: installer
+- Anchors re-measured by content at the delivered bytes (each group cited by its §1 digest):
+  installer `ab0780fc…`
   `USERSNS_PROFILE_FILE=/etc/apparmor.d/symmetry-linux-owner-userns` :79, `USERSNS_ATTACH`
   :80, `verify_published_file` :324, `verify_existing_or_absent` :342, `publish_or_verify` :379,
-  `unload_userns_profile` :580, `install_userns_profile` :617, usage :59-60; preflight boundary
-  :43, `verifyInstalledLinuxOwnerAssets` :138-181, `verifyLinuxOwnerAppArmorUserns` :447-476;
-  `main.go` `apparmor_userns=` :266; fixture capability :968, securityfs guard :1648-1652,
-  installer run :1656-1667, verify :1676-1683, scratch group :3001; rootfs-base package :47,
-  mask :70-72; `daemon/native/linux-gate/**` byte-identical to `61399984`.
+  `read_userns_restriction` :491, `resolve_apparmor_parser` :516, `unload_userns_profile` :581,
+  `install_userns_profile` :617, `remove_userns_profile` :660, usage :59-60; preflight
+  `da5b2caf…` boundary :43, `verifyInstalledLinuxOwnerAssets` :138-181,
+  `verifyLinuxOwnerAppArmorUserns` :441-470; `main.go` `ad8547f1…` `apparmor_userns=` :266;
+  fixture `e85c1c32…` capability :967, securityfs guard :1644-1649, installer run :1654-1665,
+  verify :1674-1681, scratch group :2997-3001; rootfs-base `c8e49724…` package :47, mask :70-72;
+  `daemon/native/linux-gate/**` byte-identical to `61399984`.
+- Apply-stage re-runs (2026-11-26, post-apply bytes; §8 delta table): `bash -n`, `sh -n` and
+  `dash -n` exit 0; shellcheck finding sets identical to the pre-apply bytes (installer 2,
+  fixture 16); `gofmt -l .` empty; `GOOS=linux go vet` and `GOOS=windows go vet` exit 0; WSL
+  Ubuntu-24.04 `go test -count=1 ./internal/linuxpreflight/ ./cmd/symmetry-daemon/` `ok` as the
+  unprivileged user and as root (all five `LinuxAppArmor*` rows PASS as root, including the new
+  literal stanza pin); C1-C7 identical (§4); the changed installer arms re-pinned by a local
+  root probe, 18/18 rows, driver sha256
+  `f0d40c7076fcee65a0e3973715f2cf6bf2c061064db54b56a2ceba1a2d72cdee` (row output and
+  substitutions in the apply stage answer).
 - Run 3's own gates are the two acceptance case sets and the in-guest install/verify rows.
 
 ## 11. Reviews (rounds 1 and 2) and findings' dispositions
@@ -394,3 +425,9 @@ pinned on the runner.
   `TestInstalledLinuxOwnerCloneCleanupParentDeathScratch` (PR #287's row) passed in run 3.
 - The contract's Change 4 (the D3 `harness.md` / `0010-refactor-program.md` amendment) is
   proposed, not applied; the text is in plan §9.
+- The apply-stage deltas (§8) are not re-exercised by a runner acceptance: the run-3 binding
+  covers the pre-apply revisions, and the next acceptance run is the oracle for the
+  removal-path and readback deltas; the apply probe's 18/18 local rows stand in meanwhile.
+- The shell reader strips the whole sysctl file's ASCII whitespace while the Go reader's
+  `TrimSpace` also accepts Unicode-whitespace edges, so the shell side is strictly narrower; a
+  divergent input can only refuse an install, never accept one.

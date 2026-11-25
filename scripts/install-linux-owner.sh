@@ -491,7 +491,7 @@ run_legacy_drain() {
 read_userns_restriction() {
   if [ -e "$USERSNS_SYSCTL" ] || [ -L "$USERSNS_SYSCTL" ]; then
     [ -f "$USERSNS_SYSCTL" ] && [ ! -L "$USERSNS_SYSCTL" ] || fail 'the AppArmor unprivileged user-namespace sysctl is not a regular file'
-    value=$(/usr/bin/head -n 1 "$USERSNS_SYSCTL") || fail 'cannot read the AppArmor unprivileged user-namespace sysctl'
+    value=$(/usr/bin/tr -d '[:space:]' < "$USERSNS_SYSCTL") || fail 'cannot read the AppArmor unprivileged user-namespace sysctl'
     case "$value" in
       0|1) ;;
       *) fail 'the AppArmor unprivileged user-namespace sysctl is neither 0 nor 1' ;;
@@ -514,7 +514,11 @@ check_root_executable() {
 }
 
 resolve_apparmor_parser() {
-  parser=$(command -v apparmor_parser 2>/dev/null) || fail 'apparmor_parser is required while the AppArmor unprivileged user-namespace restriction is active'
+  parser=$(command -v apparmor_parser 2>/dev/null) || parser=
+  if [ -z "$parser" ]; then
+    [ "${1:-}" = optional ] || fail 'apparmor_parser is required while the AppArmor unprivileged user-namespace restriction is active'
+    return 0
+  fi
   case "$parser" in /*) ;; *) fail 'apparmor_parser did not resolve to an absolute path' ;; esac
   check_root_directory "${parser%/*}"
   check_root_executable "$parser" 'apparmor_parser'
@@ -539,10 +543,7 @@ scan_loaded_userns_profile_directory() {
 }
 
 # The same readback the installed preflight performs, against the exact staged bytes this run
-# loaded: the kernel's recorded policy hash is the compilation of those bytes with compression
-# disabled, whole or from byte 9 (the kernel hashes the decompressed policy; its `attach` file
-# reads <unknown> for DFA attachments on every tested parser, so it carries no path evidence).
-# Returns non-zero with a bounded reason instead of exiting, so the caller can roll back.
+# loaded: the kernel hashes the decompressed policy and the `attach` file carries no path evidence.
 verify_userns_profile_load() {
   staged=$1
   directory=$(scan_loaded_userns_profile_directory) || { report 'cannot enumerate the loaded AppArmor profiles'; return 1; }
@@ -592,9 +593,8 @@ unload_userns_profile() {
   return "$unload_status"
 }
 
-# Unload what this run loaded and discard its staged text. The published file is written only
-# after this verification, so it is never a half-published artifact. When a matching published
-# file already existed, its text is reloaded so a failed re-run leaves the host as it found it.
+# Unload what this run loaded and discard its staged text; a matching published file is reloaded
+# so a failed re-run leaves the host as it found it (publication happens only after verification).
 rollback_userns_profile() {
   unload_userns_profile || true
   if [ -n "${TMP_PROFILE:-}" ]; then
@@ -659,13 +659,8 @@ install_userns_profile() {
 # Removal mode: unload and remove the installed profile, proving it is gone.
 remove_userns_profile() {
   check_root_directory /etc
-  parser=
-  if command -v apparmor_parser >/dev/null 2>&1; then
-    parser=$(command -v apparmor_parser)
-    check_root_executable "$parser" 'apparmor_parser'
-  fi
-  if [ -n "$parser" ]; then
-    PARSER=$parser
+  PARSER=$(resolve_apparmor_parser optional)
+  if [ -n "$PARSER" ]; then
     unload_userns_profile || true
   fi
   if [ -d "$USERSNS_PROFILES_ROOT" ]; then

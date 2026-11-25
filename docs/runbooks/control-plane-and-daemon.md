@@ -275,8 +275,8 @@ A re-run whose staged text differs from the published file stops and asks for
 removal first. `install-linux-owner.sh -print-userns-profile` prints the exact
 profile text (the installer is the single source; the daemon preflight embeds
 the same five lines), and `install-linux-owner.sh -remove-userns-profile`
-unloads it by name, proves it is gone and removes the file. Removal is the
-rollback: while the restriction stays `1`, the daemon's
+unloads it through its definition file, proves it is gone and removes the
+file. Removal is the rollback: while the restriction stays `1`, the daemon's
 `-verify-linux-owner-install` ExecStartPre then refuses to start, and that
 refusal is the intended fail-closed state rather than a defect. The procedure
 does not prove anything about hosts whose sysctl is `0` (nothing is installed

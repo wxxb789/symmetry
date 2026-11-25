@@ -959,9 +959,8 @@ GOMODCACHE=$(go env GOMODCACHE)
 
 # The detached transient service has no interactive stdin; keep console output without forwarding EOF as a guest shutdown.
 guest_unit_attempted=1
-# The guest root must be able to load the policy interface the installed preflight verifies; the
-# container manager's default capability and bounding sets omit CAP_MAC_ADMIN and deny the load,
-# and no other capability is added because the load is the only operation that needs one.
+# The guest root must load the policy interface the installed preflight verifies; the default
+# capability and bounding sets omit CAP_MAC_ADMIN, the load's only missing capability.
 sudo systemd-run --system --quiet --unit="$machine" \
   --property=Delegate=yes --property=KillMode=mixed --property=TimeoutStopSec=90s \
   /usr/bin/systemd-nspawn --quiet --settings=no --private-users=off --machine="$machine" \
@@ -1642,9 +1641,8 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-owner.servi
 sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.service.in" \
   "$rootfs/root/symmetry-linux-owner-stage/symmetry-daemon.service.in"
 
-# The installer loads its policy through the guest's kernel security filesystem and reads the
-# loaded state back from it; an already present mount must not be remounted, because that mount
-# syscall fails with EBUSY and would abort the fixture.
+# The installer loads its policy through the guest's kernel security filesystem; an already
+# present mount must not be remounted (the mount syscall fails EBUSY and aborts the fixture).
 if [ "$(machine_run /usr/bin/findmnt --noheadings --output TARGET --target /sys/kernel/security)" != "/sys/kernel/security" ]; then
   machine_run /usr/bin/mount -t securityfs securityfs /sys/kernel/security ||
     fail 'mount the guest kernel security filesystem for the installed userns exception'

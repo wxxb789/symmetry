@@ -1162,6 +1162,9 @@ func TestLinuxAppArmorProfileTextMatchesTheInstaller(t *testing.T) {
 	if lines[2] != "profile "+linuxAppArmorProfileName+" "+linuxAppArmorGateAttachment+" flags=(unconfined) {" {
 		t.Fatalf("profile stanza must attach one exact installed path: %q", lines[2])
 	}
+	if lines[2] != "profile symmetry-linux-owner-userns /usr/libexec/symmetry/symmetry-linux-gate flags=(unconfined) {" {
+		t.Fatalf("profile stanza must carry the delivered name, path and flags literally: %q", lines[2])
+	}
 	if lines[3] != "  userns," || lines[4] != "}" {
 		t.Fatalf("profile body must be exactly the userns rule: %q", text)
 	}
@@ -1290,9 +1293,8 @@ func TestLinuxAppArmorHostStateRows(t *testing.T) {
 	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
 		t.Errorf("symlinked profile file: present = %t, valid = %t", present, valid)
 	}
-	// Content and directory checks need a root-owned path, so the production positive rows are
-	// the runner's own install and verify; the unprivileged test user only reaches the
-	// metadata refusals above.
+	// Content and directory checks need a root-owned path: the positive rows run on the runner's
+	// own install and verify; an unprivileged user only reaches the metadata refusals above.
 	linuxAppArmorInstallPath = filepath.Join(directory, "foreign-userns-profile")
 	if err := os.WriteFile(linuxAppArmorInstallPath, []byte("profile other /bin/true flags=(unconfined) {\n}\n"), 0o644); err != nil {
 		t.Fatal(err)

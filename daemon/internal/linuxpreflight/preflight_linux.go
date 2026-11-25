@@ -201,8 +201,7 @@ var (
 	linuxAppArmorParserPaths = []string{"/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"}
 )
 
-// Closed decision vocabulary of the AppArmor unprivileged-userns host precondition. The
-// success tokens are recorded on stdout next to LinuxOwnerPreflightRuntimeBoundary; a refusal
+// Closed decision vocabulary of the AppArmor unprivileged-userns host precondition; a refusal
 // is the decision line of the returned error and never carries a path, errno or free text.
 const (
 	LinuxAppArmorUsernsNotNeeded       = "not_needed"
@@ -251,9 +250,8 @@ type linuxAppArmorUsernsFacts struct {
 	loadedDuplicate    bool
 	loadedMode         string
 	loadedPolicyHash   string
-	// compiledHashes are the digests of the installed text compiled with compression disabled,
-	// whole and from byte 9; the kernel hashes the decompressed policy, so a compressed
-	// compilation (parser default) never matches and is only a fallback for parser < 5.
+	// compiledHashes: the installed text compiled with compression disabled, whole and from
+	// byte 9; the kernel hashes the decompressed policy, so a compressed compile never matches.
 	compiledHashes      []string
 	compiledUnavailable string // "", "missing" or "failed"
 }
@@ -369,7 +367,6 @@ func parseLinuxAppArmorLoadedProfiles(root string) (linuxAppArmorLoadedProfile, 
 			continue
 		}
 		matched = true
-		found.directory = directory
 		if value, err := readBoundedLinuxFile(directory+"/mode", 256); err == nil {
 			found.mode = strings.TrimSpace(string(value))
 		}
@@ -381,7 +378,6 @@ func parseLinuxAppArmorLoadedProfiles(root string) (linuxAppArmorLoadedProfile, 
 }
 
 type linuxAppArmorLoadedProfile struct {
-	directory  string
 	mode       string
 	policyHash string
 }
@@ -421,8 +417,7 @@ func verifyLinuxOwnerAppArmorProfileFile(a, b ACLSubject) (bool, bool) {
 }
 
 // verifyLockedRootDirectory is the root-owned, non-writable, no-untrusted-ACL-write and
-// no-unprivileged-effective-write requirement shared by the profile file, its directory and
-// the parser directory.
+// no-unprivileged-effective-write requirement shared by the install and parser directories.
 func verifyLockedRootDirectory(path string, a, b ACLSubject) bool {
 	directory, err := LstatCanonicalPath(path)
 	if err != nil || !directory.IsDir() {
@@ -442,8 +437,7 @@ func verifyLockedRootDirectory(path string, a, b ACLSubject) bool {
 }
 
 // verifyLinuxOwnerAppArmorUserns proves, read-only, that the exact installed gate path carries
-// the installed per-program userns exception exactly when the host restricts unprivileged user
-// namespaces; it never writes the sysctl and never loads, replaces or removes policy.
+// the installed userns exception exactly when the host restricts unprivileged user namespaces.
 func verifyLinuxOwnerAppArmorUserns(a, b ACLSubject) error {
 	facts := linuxAppArmorUsernsFacts{restriction: readLinuxAppArmorUsernsRestriction()}
 	if _, err := os.Lstat(linuxAppArmorProfilesRoot); err == nil {
@@ -475,10 +469,8 @@ func verifyLinuxOwnerAppArmorUserns(a, b ACLSubject) error {
 	return err
 }
 
-// compileLinuxAppArmorProfile runs the same side-effect-free compilation the installer verifies
-// against. apparmor_parser >= 5 compresses -S output (default level 10) and the kernel hashes
-// the decompressed policy, so compression is disabled first; a parser that rejects the option
-// (< 5) writes the policy uncompressed and is accepted through the same whole/byte-9 digests.
+// compileLinuxAppArmorProfile runs the same side-effect-free compilation the installer verifies:
+// -c0 disables compression because the kernel hashes the decompressed policy.
 func compileLinuxAppArmorProfile(a, b ACLSubject) ([]string, string) {
 	parser := ""
 	for _, candidate := range linuxAppArmorParserPaths {

@@ -14,18 +14,18 @@ choices it leaves open and records the probe evidence that closed them.
 | Contract clause | Dispatch head | Content |
 | --- | --- | --- |
 | Change 1 installer | `scripts/install-linux-owner.sh` | 9-argument install, root-only, marker/resume, `verify_published_file`/`publish_or_verify`/`verify_existing_or_absent` (delivered :324, :379, :342), fixed publish list, no service start/stop |
-| Change 2 preflight | `daemon/internal/linuxpreflight/preflight_linux.go` | `LinuxOwnerPreflightRuntimeBoundary` (delivered :43), `verifyInstalledLinuxOwnerAssets` (delivered :138-181), `verifyLinuxOwnerAppArmorUserns` (delivered :447-476) |
+| Change 2 preflight | `daemon/internal/linuxpreflight/preflight_linux.go` | `LinuxOwnerPreflightRuntimeBoundary` (delivered :43), `verifyInstalledLinuxOwnerAssets` (delivered :138-181), `verifyLinuxOwnerAppArmorUserns` (delivered :441-470) |
 | Change 2 decision line | `daemon/cmd/symmetry-daemon/main.go` | `-verify-linux-owner-install` prints the boundary line and `apparmor_userns=` (delivered :266) |
-| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :968), securityfs guard (delivered :1648-1652), in-guest installer run (delivered :1656-1667), in-guest `-verify-linux-owner-install` (delivered :1676-1683), installed-owner scratch group (delivered :3001) |
+| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :967), securityfs guard (delivered :1644-1649), in-guest installer run (delivered :1654-1665), in-guest `-verify-linux-owner-install` (delivered :1674-1681), installed-owner scratch group (delivered :2997-3001) |
 | Change 3 base package | `scripts/ci/linux-v2-native-rootfs-base.sh` | pinned `--include=` set (delivered :47) and the guest policy-service mask (delivered :70-72) |
 | Change 4 design text | `docs/design/harness.md`, `docs/goals/0010-refactor-program.md` | not owned; the amendment text is proposed in §9 and applied by the D3 amendment |
 
-Recorded censuses at the delivered bytes (all re-run; evidence record §6): C1 `grep -rln
+Recorded censuses at the delivered bytes (all re-run; evidence record §4): C1 `grep -rln
 "flags=(unconfined)" scripts/` = 3 files (the two cited CI exceptions plus the installer's emit
 mode); C2 `grep -rn "unshare(CLONE_NEWUSER)" daemon --include=*.c --include=*.go` = 1
 (`gate.c`); C3 `CLONE_NEWUSER` = 3 (the named non-creation sites unchanged); C4 the sysctl
 readers = the previous set plus the installer and the preflight, no writer; C5
-`install-linux-owner` = 2; C6 `grep -c apparmor scripts/ci/linux-v2-native-acceptance.sh` = 0
+`install-linux-owner` = 4; C6 `grep -c apparmor scripts/ci/linux-v2-native-acceptance.sh` = 0
 (the fixture authors no policy text and never names the parser, file or mode: it only uses the
 installer's own modes and kernel interfaces); C7 `-verify-linux-owner-install` entry points plus
 the new decision accessor.
