@@ -1837,13 +1837,15 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       set by that harness block. The alternative, exempting the witness from the shared clone-v2
       admission guard, would weaken a production guard (`daemon/internal/**`).
 
-- [ ] Root-cause the three product-test stops the installed-owner leg now reaches (2026-11-24, goal
-      `rf-acc-native-burndown`; run `45402706492`, evidence §3.15): `shared`'s leg
+- [ ] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
+      goal `rf-acc-native-burndown`; run `45402706492`, evidence §3.15): `shared`'s leg
       `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
-      passed `CloneCleanupScratch` and failed the other three —
-      `daemon/native/linux-gate/protocol/clone_cleanup_linux_test.go:259` (`A cleanup caller exited
-      without the requested parent-death signal`; run `45398550682` stopped one check earlier at
-      `:207`, cleared by the fixture's six-digit `z-later-` name fix, §3.14/§3.15),
+      passed `CloneCleanupScratch`; the parent-death clause is closed by goal
+      `rf-acc-clone-cleanup-parent-death` (branch `refactor/rf-acc-clone-cleanup-parent-death`, plan
+      `docs/plans/2026-11-25-rf-acc-clone-cleanup-parent-death-plan.md`, evidence
+      `docs/evidence/2026-11-25-rf-acc-clone-cleanup-parent-death.md`; run `45600764607` proves the
+      pass — the stop was the predicate's channel, `Process.Wait`'s nil error for a signal death,
+      now the exact reaped status) and the other two remain —
       `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
       the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
       and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`).
