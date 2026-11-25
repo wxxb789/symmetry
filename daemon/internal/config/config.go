@@ -146,8 +146,6 @@ type Workspace struct {
 	Cleanup    CleanupPolicy   `json:"cleanup"`
 }
 
-// defaultStateDir resolves the per-user platform state directory without
-// filesystem access; a missing absolute component is an error naming it.
 func defaultStateDir(goos string, getenv func(string) string) (string, error) {
 	switch goos {
 	case "linux":
@@ -174,8 +172,6 @@ func defaultStateDir(goos string, getenv func(string) string) (string, error) {
 	}
 }
 
-// windowsStateDirBase accepts a drive-absolute (X:\...) or UNC (\\...) value and
-// trims trailing separators; a relative value is refused, never joined to cwd.
 func windowsStateDirBase(value string) (string, bool) {
 	trimmed := strings.TrimRight(value, `\/`)
 	if len(value) >= 3 && isASCIILetter(value[0]) && value[1] == ':' && (value[2] == '\\' || value[2] == '/') {
@@ -193,18 +189,18 @@ func isASCIILetter(character byte) bool {
 
 // Load decodes a single, strictly-specified JSON configuration file and
 // validates it, resolving the per-user default state_dir when the file omits it.
-func Load(path string) (Config, error) {
-	return load(path, false)
+func Load(configPath string) (Config, error) {
+	return load(configPath, false)
 }
 
 // LoadInstalled loads the installed owner's configuration; the per-user state_dir
 // default never applies there, so a missing state_dir fails closed.
-func LoadInstalled(path string) (Config, error) {
-	return load(path, true)
+func LoadInstalled(configPath string) (Config, error) {
+	return load(configPath, true)
 }
 
-func load(path string, installed bool) (Config, error) {
-	file, err := os.Open(path)
+func load(configPath string, installed bool) (Config, error) {
+	file, err := os.Open(configPath)
 	if err != nil {
 		return Config{}, fmt.Errorf("open config: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -161,6 +162,29 @@ func TestLoadDefaultStateDirReSecuresAPermissiveStore(t *testing.T) {
 	}
 }
 
+func TestConfiguredOwnerCommandsRefuseAnAbsentStateDirWithoutOutput(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	configPath := writeStateDirCommandConfig(t, "")
+	for _, command := range []string{
+		"-verify-legacy-owner-drained",
+		"-verify-linux-owner-install",
+		"-recover-containment-only",
+	} {
+		t.Run(command, func(t *testing.T) {
+			output, runErr := captureStdout(t, func() error {
+				return runConfiguredOwnerCommand(command, []string{"-config", configPath})
+			})
+			if runErr == nil || !strings.Contains(runErr.Error(), "state_dir must be explicitly configured for the installed owner path") {
+				t.Fatalf("%s error = %v, want the installed-owner explicit requirement", command, runErr)
+			}
+			if output != "" {
+				t.Fatalf("%s wrote to stdout: %q", command, output)
+			}
+		})
+	}
+}
+
 func resolvedHostDefault(t *testing.T, base string) string {
 	t.Helper()
 	switch runtime.GOOS {
@@ -200,4 +224,30 @@ func writeStateDirCommandConfig(t *testing.T, stateDir string) string {
 		t.Fatal(err)
 	}
 	return configPath
+}
+
+func captureStdout(t *testing.T, run func() error) (string, error) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	original := os.Stdout
+	os.Stdout = writer
+	defer func() {
+		os.Stdout = original
+		_ = writer.Close()
+	}()
+	runErr := run()
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close captured stdout: %v", err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read captured stdout: %v", err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close captured stdout reader: %v", err)
+	}
+	return string(output), runErr
 }
