@@ -1835,7 +1835,7 @@ The clone-admission contradiction of this section's third item closed on 2026-11
 `rf-acc-containment-goal-admission`, branch `refactor/rf-acc-containment-goal-admission`, base
 `4440c5c0`); its text is in `docs/archive/CLOSED-TODO.md` under
 `## rf-acc-containment-goal-admission: the clone-admission contradiction (2026-11-26)`, and the
-goal's two new residuals are in the `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
+goal's new residuals are in the `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
 section below.
 
 - [ ] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,

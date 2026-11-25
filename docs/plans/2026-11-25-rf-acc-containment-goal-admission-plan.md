@@ -43,24 +43,29 @@ what is out of scope.
    admission branch key. `stage_replay_unprovisioned_refusal` stays out (legacy refusal target).
    The branch's three checks are unchanged; the legacy repository check stays for every other case.
 4. **e2e predicate.** One extracted function
-   `linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool`: the pi arm is
-   the literal `testCase.harness == "pi" && !testCase.providerActionRequired`; then
-   `providerActionRequired` → false; then harness `codex` / `claude_code` → true; else false
-   (opencode/generic/legacy carve-out). The branch calls it; the refusal message becomes
+   `linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool` keys on an
+   explicit map of the goal-routed (`harness`, `request_case`) pairs: `pi`+`stage_replay`,
+   `codex`/`claude_code`+`stage_replay` (the native-release kind legs), `codex`+
+   `codex_containment`, `claude_code`+`claude_containment`. Rows outside the map — the
+   opencode/generic/legacy carve-out and any new provider-free codex/claude row — take the
+   non-Goal refusal, so extending the goal route to a new case is an explicit edit (review fix
+   r1; §9). The branch calls the predicate; the refusal message becomes
    `fmt.Errorf("%s owner-witness claim must carry the Control admission for the exact Subject",
    testCase.harness)` (the F04 pattern beside it names the harness; the old text said
    `pi durability`).
-5. **Table probe target.** The extracted function is pure and text-extractable by
-   `awk '/^func linuxV2WitnessRequiresGoalAdmission/{f=1} f{print} f&&/^}$/{exit}'`, so P3 pins
-   the in-scope set with a generated `package probe` file, exactly like the pi campaign's
-   extracted-function probe.
+5. **Table probe target.** The predicate region (map, key type and function) is pure and
+   text-extractable by
+   `awk '/^\/\/ Goal-routed request cases/{f=1} f{print} f && /^func linuxV2WitnessRequiresGoalAdmission/{g=1} g && /^}$/{exit}'`,
+   so P3 pins the in-scope set with a generated `package probe` file, exactly like the pi
+   campaign's extracted-function probe.
 
 ## 3. Exact edge-case semantics the contract demands
 
-1. **Pi stays identical.** The four pi rows of this predicate (`stage_replay` + the eleven
+1. **Pi stays identical.** The twelve pi rows of this predicate (`stage_replay` + the eleven
    pi-durability replay/ack-loss rows, all `harness == "pi"` and provider-free) keep exactly the
-   pi arm's acceptance; the pi provider/crash rows (`providerActionRequired`) keep the legacy
-   `else` arm as today.
+   admission acceptance; the pi provider/crash rows (`pi_provider_action`,
+   `helper_sigkill_detached_child`, `daemon_sigkill_helper_survives_detached_child`) keep the
+   legacy `else` arm as today.
 2. **The carve-out is deliberate.** `opencode_native_health`, `stage_replay_unprovisioned_refusal`
    (fixture case with harness `opencode`) and `wsl2_denial` keep the `err != nil || admitted`
    refusal; M5's over-broad mutant must redden P3's negative rows.
@@ -184,6 +189,29 @@ three deltas by the ruling's first bullet.
 - **S4** — the predicate's row set is pinned in-repo by
   `TestLinuxV2WitnessRequiresGoalAdmissionRows` (5 positive / 6 negative rows) in the package's
   existing CI job; it supersedes the scratch extraction probe as the permanent pin while the
-  extraction keeps binding the delivered predicate text (evidence §4, §6).
+  extraction keeps binding the delivered predicate text (evidence §4, §6). The review fix r1
+  derives the rows from the case constructors the witness tests dispatch (§9).
 - **S3 is deferred** — the writer/fixture key-agreement check is recorded as a residual in
   `docs/TODO.md` (owner: a follow-up goal after PR #292 reshapes `ci.yml`), per the ruling.
+
+## 9. Review fix r1 executed (conductor ruling 2026-11-26, review MUST_FIX accepted)
+
+The review (`runs/2026-11-26/symmetry-rf-acc-containment-goal-admission-revie`) found one P1 and
+three P3 findings; the conductor accepted all four. The fix stage executed them without touching
+the run-input scripts:
+
+| Finding | Location (review-time) | Disposition |
+| --- | --- | --- |
+| STD-A01 | `docs/archive/CLOSED-TODO.md` | the closure claim now reads "both containment cases past the clone reserve" and names both `stage_replay_native_release_<kind>` legs as unexecuted (each set stops at its first failing leg); census of the false-claim family over TODO/CLOSED-TODO/evidence/plan: one hit, converted |
+| SPEC-A02 | this plan, §3.1 | the pi row count is twelve (`stage_replay` + the eleven pi-durability replay/ack-loss rows) |
+| SPEC-A03 | evidence §3 | the `gate_lifecycle_linux.go:696`/`:796-797` anchors moved beside the `guest_stage=gate_drop_bounding_set` clause; `release_outcome_unknown` now cites `helper_v2_server.go:1200` and the `LinuxOwnerHelperV2ReleaseUnresolvedError` conversion at `helper_v2_protocol.go:675` |
+| STD-A04 | the e2e predicate and its row test | the §2.4 map form plus constructor-derived rows: the row test builds every row from the same constructors the witness tests dispatch; the two rows without a single constructor (the matrix-wide `pi`+`stage_replay` shape and the writer-emitted `opencode`+`stage_replay` refusal shape) stay literal |
+
+Re-collected on the final bytes (evidence §4/§5): the extracted predicate passes the 11-row
+probe with the two hypothetical new provider-free codex/claude rows now `false`; M2's claude
+mutation reddens both claude rows and M5's `return true` reddens six rows (the four false-want
+rows plus the two hypotheticals); a harness change in the real codex constructor reddens the
+in-repo row test (`codex_containment: … = false, want true`), which the pre-fix pin did not
+observe. The predicate bytes are on the witness run path; its decision is unchanged for every
+real case (the 11-row pin and the writer's case table, evidence §7(b)), so the conductor's Bind
+run on the PR head binds the delivered bytes (evidence §6).

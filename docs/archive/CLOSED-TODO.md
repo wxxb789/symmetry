@@ -5292,13 +5292,17 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       pi-durability cases already use — the fixture routes them through `provision_goal_admission!`
       with the OpenCode repository resource, the writer keys its admission branch on the goal case
       set, the codex/claude claim runtimes carry native-harness adapter metadata, and the e2e
-      predicate `linuxV2WitnessRequiresGoalAdmission` keeps the pi arm byte-identical while adding
-      the codex/claude rows; `daemon/internal/**` stayed byte-identical and no assertion was
-      weakened outside the conductor ruling (`refactor/decision-witness-admission-2026-11-25.md`).
-      Scratch runs `45665341553`, `45668197894` and `45671784251` observe all four cases past the
-      clone reserve with zero `reserve owner witness clone` / `clone intent does not match`
-      refusals; the authorized one-line UMask arm (`production` joins `stage-replay|negative`)
-      cleared the fresh-leg umask wall in run `45671784251`, whose next stops (the codex release
-      class — the AppArmor userns wall, owned by `rf-acc-apparmor-userns-profile`; the Claude
-      fixed-argv bound wall, owned by `rf-claude-schema-argv`) are recorded in the goal's
-      residual entry in `docs/TODO.md`.
+      predicate `linuxV2WitnessRequiresGoalAdmission` keys the admission branch on the goal-routed
+      request cases (the pi-durability rows plus the codex/claude rows), leaving every other
+      provider-free row on the non-Goal refusal; `daemon/internal/**` stayed byte-identical and no
+      assertion was weakened outside the conductor ruling
+      (`refactor/decision-witness-admission-2026-11-25.md`).
+      Scratch runs `45665341553`, `45668197894` and `45671784251` observe both containment cases
+      (`codex_containment`, `claude_containment`) past the clone reserve with zero `reserve owner
+      witness clone` / `clone intent does not match` refusals; both
+      `stage_replay_native_release_<kind>` legs remain unexecuted, because each set stops at its
+      first failing leg. The authorized one-line UMask arm (`production` joins
+      `stage-replay|negative`) cleared the fresh-leg umask wall in run `45671784251`, whose next
+      stops (the codex release class — the AppArmor userns wall, owned by
+      `rf-acc-apparmor-userns-profile`; the Claude fixed-argv bound wall, owned by
+      `rf-claude-schema-argv`) are recorded in the goal's residual entry in `docs/TODO.md`.

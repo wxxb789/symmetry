@@ -12,12 +12,12 @@ host locations read `<worktree>` / `<scratch>`.
 
 | File | sha256 | Change |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `0eb1e20f05a1cc84a5b034980e58ba7f43ece4b09de701e248cd037c7f7552a9` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` (pi arm byte-identical; `codex`/`claude_code` rows join it); the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`); post-run-4 (S1/S4): the helper comment names the excluded provider-free opencode rows and `TestLinuxV2WitnessRequiresGoalAdmissionRows` pins the 11-row set in-repo |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` — an explicit map of goal-routed (`harness`, `request_case`) pairs; every other provider-free row keeps the non-Goal refusal; the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`); post-run-4 (S1/S4) plus review fix r1 (§9): the helper comment names the excluded provider-free opencode rows, and `TestLinuxV2WitnessRequiresGoalAdmissionRows` derives its 11 rows from the case constructors the witness tests dispatch |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | the four containment rows move to the goal route via the `:opencode_goal` repository role (open repository resource); `runtime_adapter_binding?/3` asserts `adapter.kind` = the case's harness for that role; `@expected_fixture_runs` stays 48 (43 goal: 39 pi-durability + 4 containment; 5 legacy) |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | the codex/claude claim runtimes gain `harness_kind`/`harness_version` (`0.168.0`/`2.1.323`, the pins at `linux-v2-native-acceptance.sh:1135-1136`)/`adapter_version`/`adapter_protocol_version` and the adapter operations block, mirroring the pi-durability spec; post-run-4 (S2): the three goal-assigned specs share one `goal_assigned_runtime_spec` builder and the emitted session payload is byte-identical (§4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | the admission branch keys on `GOAL_ADMISSION_CASES` (the five goal-routed writer cases) instead of `profile_name == "pi-durability"`; its three checks and the legacy repository check are unchanged |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | one line (conductor ruling 2026-11-26, W1): `production` joins the `stage-replay|negative` UMask arm — the fresh containment legs stand in for the installed daemon, whose units set UMask=0077 |
-| `docs/plans/2026-11-25-rf-acc-containment-goal-admission-plan.md` | `51cd3361787bcda9d4480c923a75409159c802ca2eb37f85e01ee6e29fe0035a` | implementation plan (this goal, incl. §6's post-B4 ownership record, §7's W1 amendment execution and §8's post-run-4 S1/S2/S4 record) |
+| `docs/plans/2026-11-25-rf-acc-containment-goal-admission-plan.md` | `8215c4bfad277fb67d9f222a37a67d020d52cfc3cb08c0530ce4a2793a3d6acd` | implementation plan (this goal, incl. §6's post-B4 ownership record, §7's W1 amendment execution, §8's post-run-4 S1/S2/S4 record and §9's review fix r1 disposition) |
 
 Not changed (byte-verified): `daemon/internal/state/linux_clone_journal.go`
 `5a8455b80ad1b2f53678fab1904056f6739357aa984fce8105340f98a2018ede` (the reserve stays the wall it
@@ -139,10 +139,14 @@ before `adapter.Start`:
 
 - **codex — the AppArmor userns wall, owned by `rf-acc-apparmor-userns-profile` (in flight;
   conductor ruling 2026-11-26 — not `rf-acc-guest-native-exec`, which merged as #289).** The
-  decoded v3 clone-bootstrap failure frame carries `guest_stage=gate_drop_bounding_set errno=1`:
-  the gate's `drop_capability_bounding_set` (`daemon/native/linux-gate/c-gate/gate.c:917`, called
-  from `drop_to_b` at `:1010`) failed with EPERM, and the release read reports
-  `release_outcome_unknown` (`gate_lifecycle_linux.go:696`, `:796-797`). That is the wall the
+  decoded v3 clone-bootstrap failure frame carries `guest_stage=gate_drop_bounding_set errno=1`
+  (the stage vocabulary at `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:696`,
+  numeric mapping `:796-797`): the gate's `drop_capability_bounding_set`
+  (`daemon/native/linux-gate/c-gate/gate.c:917`, called from `drop_to_b` at `:1010`) failed with
+  EPERM, and the release read reports `release_outcome_unknown`
+  (`daemon/internal/platform/helper_v2_server.go:1200`, converted to
+  `LinuxOwnerHelperV2ReleaseUnresolvedError` at `daemon/internal/platform/helper_v2_protocol.go:675`).
+  That is the wall the
   `docs/TODO.md` entry `## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction`
   records verbatim (`PR_CAPBSET_DROP` returns `EPERM` while the caller sits in the
   capability-denying `unprivileged_userns` profile), and the in-flight goal owns its fix (the
@@ -226,12 +230,25 @@ linux/amd64`: `--- PASS: TestGoalAdmissionInScope (0.00s)`. Positive rows: `stag
 `helper_sigkill_detached_child`, `daemon_sigkill_helper_survives_detached_child`,
 `opencode_native_health`, `stage_replay_unprovisioned_refusal` (harness `opencode`), `wsl2_denial`.
 
-The S4 post-run-4 amendment pins the same row set in-repo:
-`TestLinuxV2WitnessRequiresGoalAdmissionRows` (11 rows, `go test -count=1 -run
-"^TestLinuxV2WitnessRequiresGoalAdmissionRows$" ./e2e/` PASS on `go1.27.0 linux/amd64`, exit 0)
-runs in the package's existing CI job. The `awk` extraction of the delivered predicate re-hashes
-to `ebb846af82debf35700aa4ac62b7d7c1be23a147ce79a088ecf6444f470deb93` (`cmp` clean against the
-probe above), so this evidence keeps binding the delivered predicate text.
+The S4 post-run-4 amendment pinned the same row set in-repo:
+`TestLinuxV2WitnessRequiresGoalAdmissionRows` (11 rows) runs in the package's existing CI job;
+the review fix r1 re-collected it on the delivered bytes, where the rows derive from the case
+constructors the witness tests dispatch (`linuxV2CodexContainmentCase` and the kind-leg table):
+`go test -count=1 -run "^TestLinuxV2WitnessRequiresGoalAdmissionRows$" ./e2e/` PASS on `go1.26.8
+linux/amd64`, exit 0 (§9).
+
+The extraction rule for the delivered predicate region — the map, key type and function; the
+review fix made the map part of the decision — is `awk '/^\/\/ Goal-routed request cases/{f=1} f{print} f && /^func linuxV2WitnessRequiresGoalAdmission/{g=1} g && /^}$/{exit}'`. On the
+delivered bytes it produces `<scratch>/predicate-after-fix.txt` sha256
+`7fb32b9ff2acb55c557d3065f330c3681db02f21e120715fc4833ec80d7cbace`; with the probe header and
+struct the file is `<scratch>/p3-fix/predicate.go` sha256
+`70fef3a9c27c58212b0ab05a391418404d51aa8e55cb29912209c7b7d79055e7`, and its 11-row probe
+(`<scratch>/p3-fix/probe_test.go` sha256
+`16fa6f3686b863358524740a63d002ebed686c8c9433c23a80c1fc1f8089527a`) is PASS (exit 0, `go1.26.8
+linux/amd64`), including the two hypothetical new provider-free codex/claude rows, for which
+the pre-fix predicate returned `true` (`got true, want false`; pre-fix extraction sha256
+`11ab7377d43f8cda2eb3d91b20a64563439b6a8f0e69ab19efcc9a12de7f1892`). The earlier `ebb846af…`
+extraction bound the pre-review predicate text and is superseded by the re-collection above.
 
 ### S2 payload equivalence (post-run-4)
 
@@ -296,20 +313,21 @@ worktree>` exit 0 (no clone overlaps an added line); `check-record-cleanliness` 
 | id | mutation | observed red | restored |
 | --- | --- | --- | --- |
 | M1 | one containment case reverted to the legacy route (the pre-fix exs state, caught by the P1 probe before the fix existed): `stage_replay_native_release_codex` still legacy while its runtime carries adapter metadata | `** (RuntimeError) generic Control claim runtime did not match the exact Work profile/resource` (`provision…exs:262`) — the route assertion is load-bearing; the writer half: `stub-legacy` refused the legacy ClaimResponse with no request document | delivered exs restores the goal route; probe rows green |
-| M2 | e2e branch revert for one leg — extracted text `claude_code` → `claude_codex` | the two claude rows FAIL: `claude_containment: got false want true`, `stage_replay_native_release_claude: got false want true` | extracted file restored byte-identically (`ebb846af…` re-read after restore); probe passes again |
+| M2 | e2e branch revert for one leg — the extracted map's two `claude_code` keys → `claude_codex` (review fix r1 re-collection, §9) | the two claude rows FAIL: `claude containment: got false, want true`, `claude native_release leg: got false, want true` | extracted file restored byte-identically (`70fef3a9…`; transcript `<scratch>/m2-output.txt` sha256 `a81b3f7577aacfd304d490e213481b67c91fe47868b56c35d4a266615871055b`); probe passes again |
 | M3 | tamper the produced request's `provider_scope` | writer refuses (`stub-scope`: `goal-routed ClaimResponse admission carries a provider scope`), no request document | stub only; the loader's equality/scope assertions are byte-identical to the pi-proven branch, and no local guest fixture exists to re-drive them — the e2e half is covered by that precedent and the hosted mutant was not budgeted |
 | M4 | adapter metadata dropped from the codex registration | `** (RuntimeError) Control did not assign the exact isolated owner-witness Task` (30 s wait, `await_task_run!/2`) | delivered registration keeps the metadata; positive rows green |
-| M5 | over-broad relaxation — extracted predicate `return true` for all provider-free rows | the three opencode rows FAIL: `opencode_native_health`, `stage_replay_unprovisioned_refusal`, `wsl2_denial` | extracted file restored byte-identically; probe passes again |
+| M5 | over-broad relaxation — extracted predicate body → `return true` (review fix r1 re-collection, §9) | six rows FAIL: `opencode unprovisioned stage_replay`, `opencode native health`, `wsl2 denial`, `pi provider action` (all `got true, want false`) plus the two hypothetical new rows | extracted file restored byte-identically (`70fef3a9…`; transcript `<scratch>/m5-output.txt` sha256 `e2f6947e073e271d1dfae09a416c73f5595c642ccda889ac0485d47269b5c9a5`); probe passes again |
 
 ## 6. Binding equality table
 
 Run 4 (`45671784251`, head `b0ba269457057427d82c9d6c308b81f369a21563` = `180c0a21`'s tree + the
 authorized one-line UMask amendment) binds the walls on its own head bytes: zero reserve
-refusals, zero umask lines, both sets red on their containment witness. The conductor ruling
-2026-11-26 (apply S1-S6) then authorized the S1/S2/S4 amendments below; both deltas are off the
-witness run path, and the conductor's Bind run on the PR head (`codex_containment
-claude_containment`, one scratch run, expecting the same walls as run 4) binds the delivered
-bytes. Its row is left empty here:
+refusals, zero umask lines, both sets red on their containment witness. The conductor rulings
+2026-11-26 (apply S1-S6; review fix r1) then authorized the S1/S2/S4 amendments and the review
+fix below; S1/S2/S4 land off the witness run path, and the review fix changes predicate bytes on
+that path while leaving the decision unchanged for every real case (§9), so the conductor's Bind
+run on the PR head (`codex_containment claude_containment`, one scratch run, expecting the same
+walls as run 4) binds the delivered bytes. Its row is left empty here:
 
 | Bind run | Head | Case sets | Result |
 | --- | --- | --- | --- |
@@ -317,15 +335,16 @@ bytes. Its row is left empty here:
 
 | File | Run-4 head bytes | Delivered bytes | Equal? |
 | --- | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `0eb1e20f05a1cc84a5b034980e58ba7f43ece4b09de701e248cd037c7f7552a9` | no — post-run-4 S1/S4 delta (comment reword + row test); the predicate text re-extracts to `ebb846af…` (§4) |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `7f743b0fe7ed2c15cd9bff2091253ff81af71928963697916161d7fd6621b15c` | no — post-run-4 S1/S4 delta (comment reword + row test) plus review fix r1 (§9); the predicate region re-extracts to `7fb32b9f…` and the row test is green (§4) |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | yes |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | no — post-run-4 S2 delta (shared builder); emitted session payload byte-identical (`47bfd1c0…`, §4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | yes |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | yes |
 
 Run 3 (`45668197894`, head `180c0a21fdc6813e7517ef7d7e4f8dd903c20db8`, tree
-`887ace7c649a224d0a8a66332a53b852b124e2ee` = run 2's) carried the same four code-file hashes, so
-the P1/P2/P3 probes remain bound to the delivered bytes. The plan/evidence/TODO/CLOSED-TODO files
+`887ace7c649a224d0a8a66332a53b852b124e2ee` = run 2's) carried the same four code-file hashes as
+run 2, so P1/P2 stand on the delivered scripts (the S2 register payload is byte-identical, §4)
+and P3 was re-collected on the delivered predicate (§4). The plan/evidence/TODO/CLOSED-TODO files
 are not run inputs (documentation only) and are therefore excluded from this table; the
 branch-only scratch workflow and shim were deleted with the branch.
 
@@ -414,6 +433,65 @@ Residuals and known limits:
    (`:3021`; `shared` scheduled at `.github/workflows/linux-native-v2-acceptance.yml:122`) — are
    unobserved under `UMask=0077`; their coverage is the conductor-owned credentialed all-14
    dispatch (oracle gap).
-6. The delivered bytes carry the post-run-4 S1/S2/S4 amendments (§6): run 4 binds the walls, and
-   the conductor's Bind run on the PR head binds the delivered bytes; the Bind row slot in §6
-   stays empty until that run.
+6. The delivered bytes carry the post-run-4 S1/S2/S4 amendments plus the review fix r1 (§6, §9):
+   run 4 binds the walls, and the conductor's Bind run on the PR head binds the delivered bytes;
+   the Bind row slot in §6 stays empty until that run.
+
+## 9. Review fix r1 (2026-11-26, conductor ruling on the review MUST_FIX)
+
+The review (`runs/2026-11-26/symmetry-rf-acc-containment-goal-admission-revie`) accepted all
+four findings; the fix stage executed them on the delivered bytes:
+
+- **STD-A01** — the `docs/archive/CLOSED-TODO.md` closure claim now reads "both containment
+  cases past the clone reserve" and names both `stage_replay_native_release_<kind>` legs as
+  unexecuted (each set stops at its first failing leg). Census of the false-claim family over
+  `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`, this record and the plan: one hit before the
+  fix (the CLOSED-TODO claim), zero after.
+- **SPEC-A02** — the plan's §3.1 now counts twelve pi rows (`stage_replay` + the eleven
+  pi-durability replay/ack-loss rows).
+- **SPEC-A03** — the `guest_stage=gate_drop_bounding_set` clause now carries the
+  `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:696`/`:796-797` anchors, and
+  `release_outcome_unknown` cites `daemon/internal/platform/helper_v2_server.go:1200` plus the
+  `LinuxOwnerHelperV2ReleaseUnresolvedError` conversion at
+  `daemon/internal/platform/helper_v2_protocol.go:675` (each anchor re-read on the delivered
+  bytes).
+- **STD-A04** — the predicate keys on an explicit map of goal-routed (`harness`,
+  `request_case`) pairs and the in-repo row test derives its rows from the witness-case
+  constructors; §4/§5 carry the re-collected extraction probe and mutants. Before-state
+  characterization: on the pre-fix bytes a hypothetical new provider-free codex/claude row was
+  admitted by the predicate (`got true, want false`) and a harness change in the real
+  `codex_containment` case left the row pin green (exit 0); after the fix both observations flip
+  (§4 probe; the in-repo row test reddens `codex_containment:
+  linuxV2WitnessRequiresGoalAdmission = false, want true`).
+
+Re-collection artifacts (all under `<scratch>`; mutants restored byte-identically after each
+run):
+
+| Artifact | sha256 |
+| --- | --- |
+| `predicate-before-fix.txt` (pre-fix extraction) | `11ab7377d43f8cda2eb3d91b20a64563439b6a8f0e69ab19efcc9a12de7f1892` |
+| `predicate-after-fix.txt` (delivered extraction) | `7fb32b9ff2acb55c557d3065f330c3681db02f21e120715fc4833ec80d7cbace` |
+| `p3-fix/predicate.go` (probe header + delivered extraction) and its `.bak` | `70fef3a9c27c58212b0ab05a391418404d51aa8e55cb29912209c7b7d79055e7` |
+| `p3-fix/probe_test.go` (11-row probe, shared by both collections) | `16fa6f3686b863358524740a63d002ebed686c8c9433c23a80c1fc1f8089527a` |
+| `m2-output.txt`, `m5-output.txt` (mutant transcripts) | `a81b3f7577aacfd304d490e213481b67c91fe47868b56c35d4a266615871055b`, `e2f6947e073e271d1dfae09a416c73f5595c642ccda889ac0485d47269b5c9a5` |
+
+Mutations (deltas; each applied to `p3-fix/predicate.go` except the last, and restored from
+`p3-fix/predicate.go.bak`): M2 — the map's two `claude_code` keys → `claude_codex`; M5 — the
+predicate body → `return true`; in-repo — `linuxV2CodexContainmentCase`'s `harness: "codex"` →
+`harness: "opencode"` (restored; file sha256 `7f743b0f…`). The pre-fix counterparts: a harness
+change to the old literal left the old pin green (exit 0; file restored to `0eb1e20f…`).
+
+Final gates on the delivered bytes (the revision-scoped checks ran with
+`--base 9eb874bf22eace98399e54b25d00634b2bed5418` and `--head` = a dangling `commit-tree` of
+the delivered worktree state): `check-record-cleanliness` exit 0 (1 changed record);
+`check-citation-existence` exit 0 (1 changed document, 648 path citations, the same 3
+pre-existing gitignore notes as the review); `jscpd-changed` exit 0 (9 changed files, 1261
+clones in the corpus, none new); `model-routing-record-sanitize --check --root-only` exit 0 for
+`docs/TODO.md`, this record and the plan. `docs/archive/CLOSED-TODO.md` still fails that
+per-doc check on pre-existing 0008-series specimen lines (the renderer tokenizes only lines
+400-4099; the base revision fails identically, exit 1, and no line at or after 5250 is
+tokenizable), and the committed gate does not cover it (`docs/evaluations/**` and
+`docs/evidence/**` only); none of this fix's added lines there carries a host path. Go side:
+`gofmt -l .` in `daemon/` lists 0 files (exit 0); `GOTOOLCHAIN=auto GOOS=linux go vet ./e2e/`
+exit 0; the row test above PASS (exit 0) with its constructor mutant red (exit 1) and the
+restored file green again.
