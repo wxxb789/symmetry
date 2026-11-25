@@ -1849,26 +1849,33 @@ The clone-admission contradiction of this section's third item closed on 2026-11
 goal's new residuals are in the `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
 section below.
 
-- [ ] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
-      goal `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
-      `rf-acc-guest-native-exec`): `shared`'s leg
-      `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
-      passed `CloneCleanupScratch`; the parent-death clause closed on 2026-11-25 and moved to
-      `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death: the installed-owner
-      leg's parent-death stop (2026-11-25)`, and the other two remain —
-      `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
-      the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
-      and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`).
-      The two sibling legs are root-named to the same pre-clone guard consumer as `migration`'s
-      arm — run `45593856716` names the guard (`read_class=gate_v1_frame errno=1`) and runs
-      `45601287283`/`45602546196` name its unsatisfied credential fact
-      (`guest_stage=gate_drop_bounding_set errno=1`) (the AppArmor-userns entry below) — but stay
-      open as residuals: the `shared` set never ran on the fixed bytes, so neither leg's post-fix
-      line is observed. They close with the AppArmor-userns fix
-      (`rf-acc-apparmor-userns-profile`).
-      Both sit in `daemon/native/linux-gate/**` and were unreachable until the fifth leg's pin
-      was re-pointed (closure in `docs/archive/CLOSED-TODO.md`, stale-pin entry). Owner: a follow-up
-      goal with guest-side debugging; no fixture change is proposed without a named root.
+The two remaining product-test stops of this section's first item closed on 2026-11-26: the
+AppArmor-userns fix (`rf-acc-apparmor-userns-profile`, run 3 `45659523339`) cleared
+`clone_integration_linux_test.go:240` / `launcher_integration_linux_test.go:439`, and the
+root readback conversion (`rf-acc-b-process-readback`, this tree) clears the `environ` rows those
+runs then reached. The moved text and the closure statement are in `docs/archive/CLOSED-TODO.md`
+under `## rf-acc-native-burndown: the installed-owner legs' product-test stops (2026-11-26)`, and
+the conversion's residual is in `## rf-acc-b-process-readback: residual same-class e2e reads
+(2026-11-26)` below.
+
+## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)
+
+- [ ] Convert the same-class A→B reads this goal's census left outside its named `ns/*` surface
+      (`docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-10, branch
+      `refactor/rf-acc-b-process-readback`, base `8453da12`): the e2e
+      `linuxV2RequireNoWritableCgroupFDs*` fdinfo and leaf-descendant identity audit
+      (`daemon/e2e/production_linux_v2_native_witness_test.go`), `linuxV2CaptureDetachedChild`'s
+      child identity, `linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity` on a released B
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go`, literal-PID-reuse leg), and the
+      post-release helper-exit leaf audit
+      (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:466`). Each is ptrace-gated
+      (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none is reached by any
+      recorded run (the ten witness sets stop before the live capture). Trigger: the first run
+      that reaches one, plus the fixture's reader-step A capability readback row in that run — if
+      it prints `CapEff 0`, the next stop is one of these sites.
+      Conversion consumes the same `daemon/internal/linuxreadback` reader with an added per-FD
+      `flags`/`mnt_id` return and a leaf-wide per-PID capture loop, preserving each audit's race
+      tolerances. Owner: the next `rf-acc` acceptance increment that reaches the live e2e capture.
 
 - [ ] `migration`'s release now fails with a named cause inside the guest policy, not with an
       unnamed read (residual of the entry closed in `docs/archive/CLOSED-TODO.md` under goal

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxreadback"
 	"golang.org/x/sys/unix"
 )
 
@@ -1363,45 +1364,23 @@ func assertNativeBProcess(identity ProcessIdentity, config OwnerConfig, path str
 	if err := verifyOnlyFixedBMaps(identity.PID, config); err != nil {
 		return err
 	}
-	actual, err := os.Stat(fmt.Sprintf("/proc/%d/exe", identity.PID))
+	leaf, err := scratchLeafPath()
 	if err != nil {
 		return err
 	}
-	want, err := os.Stat(path)
+	capture, err := captureNativeBProcess(identity, path, leaf)
 	if err != nil {
 		return err
 	}
-	actualStat, actualOK := actual.Sys().(*syscall.Stat_t)
-	wantStat, wantOK := want.Sys().(*syscall.Stat_t)
-	if !actualOK || !wantOK || actualStat.Dev != wantStat.Dev || actualStat.Ino != wantStat.Ino {
-		return errors.New("native image differs from the pinned executable")
+	if err := linuxreadback.CheckEnvironment(capture, expectedEnv); err != nil {
+		return fmt.Errorf("native process environment differs from the explicit release vector: %w", err)
 	}
-	environ, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", identity.PID))
-	if err != nil {
-		return err
-	}
-	wantEnvironment := []byte(strings.Join(expectedEnv, "\x00"))
-	if len(expectedEnv) != 0 {
-		wantEnvironment = append(wantEnvironment, 0)
-	}
-	if !bytes.Equal(environ, wantEnvironment) {
-		return fmt.Errorf("native process environment differs from the explicit release vector: got=%q want=%q", environ, wantEnvironment)
-	}
-	fdDir := fmt.Sprintf("/proc/%d/fd", identity.PID)
-	entries, err := os.ReadDir(fdDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if entry.Name() != "0" && entry.Name() != "1" && entry.Name() != "2" {
-			return fmt.Errorf("native B inherited descriptor %s beyond stdio", entry.Name())
+	for _, descriptor := range capture.Descriptors {
+		if descriptor.Number != 0 && descriptor.Number != 1 && descriptor.Number != 2 {
+			return fmt.Errorf("native B inherited descriptor %d beyond stdio", descriptor.Number)
 		}
-		target, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
-		if err != nil {
-			return err
-		}
-		if strings.Contains(target, "cgroup") || target == "anon_inode:[pidfd]" || strings.HasPrefix(target, "socket:[") {
-			return fmt.Errorf("native B inherited A control or cgroup descriptor %q", target)
+		if strings.Contains(descriptor.Target, "cgroup") || descriptor.Target == "anon_inode:[pidfd]" || strings.HasPrefix(descriptor.Target, "socket:[") {
+			return fmt.Errorf("native B inherited A control or cgroup descriptor %q", descriptor.Target)
 		}
 	}
 	return nil

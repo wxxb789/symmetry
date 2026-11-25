@@ -25,6 +25,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/claude"
 	"github.com/wxxb789/symmetry/daemon/internal/harness/pi"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxreadback"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
@@ -3043,9 +3044,17 @@ func linuxV2CaptureLiveProcess(journal state.RunJournal, fixture linuxV2NativeFi
 	if err != nil {
 		return linuxV2ProcessSnapshot{}, false, err
 	}
-	identity, err := platform.ProcessIdentity(target.PID)
-	if err != nil || identity != target.Identity {
+	leafPath := linuxV2LeafPath(fixture.value, *reservation.LeafIdentity)
+	capture, err := linuxV2CaptureReadbackTarget(target, leafPath, []string{"user", "net"})
+	if err != nil {
+		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("root readback of the exact B native subject: %w", err)
+	}
+	if capture.Identity != target.Identity {
 		return linuxV2ProcessSnapshot{}, false, errors.New("live v2 target creation identity differs from the exact RunJournal identity")
+	}
+	userNamespace, networkNamespace := capture.Namespaces["user"], capture.Namespaces["net"]
+	if userNamespace.Inode == 0 || networkNamespace.Inode == 0 {
+		return linuxV2ProcessSnapshot{}, false, errors.New("exact B namespace identity is not available through nsfs")
 	}
 	pidfd, err := unix.PidfdOpen(target.PID, 0)
 	if errors.Is(err, unix.ESRCH) {
@@ -3072,31 +3081,6 @@ func linuxV2CaptureLiveProcess(journal state.RunJournal, fixture linuxV2NativeFi
 	if err != nil || pidfdPID != target.PID {
 		return linuxV2ProcessSnapshot{}, false, errors.New("test pidfd fdinfo did not identify the exact RunJournal target PID")
 	}
-	userNamespace, err := linuxV2OpenNamespace(target.PID, "user")
-	if err != nil {
-		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("open exact B user namespace identity: %w", err)
-	}
-	defer userNamespace.Close()
-	networkNamespace, err := linuxV2OpenNamespace(target.PID, "net")
-	if err != nil {
-		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("open exact B network namespace identity: %w", err)
-	}
-	defer networkNamespace.Close()
-	userInfo, err := userNamespace.Stat()
-	if err != nil {
-		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("stat exact B user namespace: %w", err)
-	}
-	networkInfo, err := networkNamespace.Stat()
-	if err != nil {
-		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("stat exact B network namespace: %w", err)
-	}
-	userStat, userOK := userInfo.Sys().(*syscall.Stat_t)
-	networkStat, networkOK := networkInfo.Sys().(*syscall.Stat_t)
-	if !userOK || !networkOK || userStat.Ino == 0 || networkStat.Ino == 0 ||
-		userStat.Mode&unix.S_IFMT != unix.S_IFREG || networkStat.Mode&unix.S_IFMT != unix.S_IFREG {
-		return linuxV2ProcessSnapshot{}, false, errors.New("exact B namespace identity is not available through nsfs")
-	}
-	leafPath := linuxV2LeafPath(fixture.value, *reservation.LeafIdentity)
 	clonePath := checkout.Target
 	if !linuxV2PathWithin(clonePath, fixture.workspace.Root) {
 		return linuxV2ProcessSnapshot{}, false, errors.New("B checkout target escaped the configured native clone Root")
@@ -3133,7 +3117,11 @@ func linuxV2CaptureLiveProcess(journal state.RunJournal, fixture linuxV2NativeFi
 	if err != nil {
 		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("read exact native leader process/session identity: %w", err)
 	}
-	if actual, err := platform.ProcessIdentity(target.PID); err != nil || actual != target.Identity {
+	recheck, err := linuxV2CaptureReadbackTarget(target, leafPath, nil)
+	if err != nil {
+		return linuxV2ProcessSnapshot{}, false, fmt.Errorf("recheck exact B process identity after leaf observation: %w", err)
+	}
+	if recheck.Identity != target.Identity {
 		return linuxV2ProcessSnapshot{}, false, errors.New("exact B process identity changed during namespace and leaf observation")
 	}
 	if err := linuxV2RequireLivePIDFD(pidfd); err != nil {
@@ -3144,8 +3132,8 @@ func linuxV2CaptureLiveProcess(journal state.RunJournal, fixture linuxV2NativeFi
 		PID: target.PID, Identity: target.Identity, ProcessGroup: processGroup, SessionID: sessionID,
 		PIDFDOpened: true, PIDFDInfoPID: pidfdPID,
 		RealUID: status.realUID, EffectiveUID: status.effectiveUID, RealGID: status.realGID, EffectiveGID: status.effectiveGID,
-		UserNamespaceDevice: userStat.Dev, UserNamespaceInode: userStat.Ino,
-		NetworkNamespaceDevice: networkStat.Dev, NetworkNamespaceInode: networkStat.Ino,
+		UserNamespaceDevice: userNamespace.Device, UserNamespaceInode: userNamespace.Inode,
+		NetworkNamespaceDevice: networkNamespace.Device, NetworkNamespaceInode: networkNamespace.Inode,
 		NoWritableCgroupFDs: noWritableCgroupFDs,
 		LeafMembership:      true, NativeCommand: true,
 		leafIdentity: *reservation.LeafIdentity,
@@ -3413,8 +3401,22 @@ func linuxV2RequireLivePIDFD(pidfd int) error {
 	return nil
 }
 
-func linuxV2OpenNamespace(pid int, name string) (*os.File, error) {
-	return os.Open(fmt.Sprintf("/proc/%d/ns/%s", pid, name))
+// linuxV2CaptureReadbackTarget observes B through the fixture's root reader:
+// the A-credentialed witness never opens a ptrace-gated /proc/<pid> entry.
+func linuxV2CaptureReadbackTarget(target authority.LinuxCgroupProcessIdentity, leafPath string, namespaces []string) (linuxreadback.Capture, error) {
+	channel, err := linuxreadback.ChannelFromEnv()
+	if err != nil {
+		return linuxreadback.Capture{}, err
+	}
+	parts, err := linuxV2ParseLinuxIdentity(target.Identity)
+	if err != nil || parts.pid != target.PID {
+		return linuxreadback.Capture{}, errors.New("RunJournal target identity does not encode its exact guest PID")
+	}
+	want := linuxreadback.Want{
+		PID: target.PID, StartTime: parts.start, BootID: parts.bootID, Identity: target.Identity,
+		Leaf: leafPath, Namespaces: namespaces,
+	}
+	return linuxreadback.Read(channel, want, 30*time.Second)
 }
 
 func linuxV2NativeCommandMatches(harnessKind string, commandLine []byte) bool {

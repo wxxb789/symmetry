@@ -3,7 +3,6 @@
 package protocol
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,13 +14,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/linuxreadback"
 	"golang.org/x/sys/unix"
 )
 
@@ -696,68 +695,43 @@ func assertCloneNativeBProcess(identity ProcessIdentity, config OwnerConfig, exe
 	if err := verifyOnlyFixedBMaps(identity.PID, config); err != nil {
 		return err
 	}
-	actual, err := os.Stat(fmt.Sprintf("/proc/%d/exe", identity.PID))
+	leaf, err := scratchLeafPath()
 	if err != nil {
 		return err
 	}
-	want, err := os.Stat(executable)
+	capture, err := captureNativeBProcess(identity, executable, leaf)
 	if err != nil {
 		return err
 	}
-	actualStat, actualOK := actual.Sys().(*syscall.Stat_t)
-	wantStat, wantOK := want.Sys().(*syscall.Stat_t)
-	if !actualOK || !wantOK || actualStat.Dev != wantStat.Dev || actualStat.Ino != wantStat.Ino {
-		return errors.New("clone native process is not the approved same-PID test image")
-	}
-	environment, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", identity.PID))
-	if err != nil {
-		return err
-	}
-	wantedEnvironment := []byte(strings.Join(expectedEnv, "\x00"))
-	if len(expectedEnv) != 0 {
-		wantedEnvironment = append(wantedEnvironment, 0)
-	}
-	if !bytes.Equal(environment, wantedEnvironment) {
-		return errors.New("clone native environment differs from the exact RELEASE vector")
+	if err := linuxreadback.CheckEnvironment(capture, expectedEnv); err != nil {
+		return fmt.Errorf("clone native environment differs from the exact RELEASE vector: %w", err)
 	}
 	ownerTarget, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", ownerPipe.Fd()))
 	if err != nil {
 		return fmt.Errorf("read A owner-pipe identity for FD-leak check: %w", err)
 	}
-	fdDir := fmt.Sprintf("/proc/%d/fd", identity.PID)
 	stdioTargets := make(map[string]struct{}, 3)
 	for fd := 0; fd <= 2; fd++ {
-		name, err := os.Readlink(filepath.Join(fdDir, strconv.Itoa(fd)))
-		if err != nil {
-			return fmt.Errorf("read clone native stdio fd %d: %w", fd, err)
+		name, ok := readbackDescriptorTarget(capture, fd)
+		if !ok {
+			return fmt.Errorf("root readback omitted clone native stdio fd %d", fd)
 		}
 		stdioTargets[name] = struct{}{}
 	}
-	entries, err := os.ReadDir(fdDir)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		fd, parseErr := strconv.Atoi(entry.Name())
-		if parseErr != nil {
-			return errors.New("clone native FD table contains a nonnumeric descriptor")
-		}
-		if fd <= 2 {
+	for _, descriptor := range capture.Descriptors {
+		if descriptor.Number <= 2 {
 			continue
 		}
-		name, err := os.Readlink(filepath.Join(fdDir, entry.Name()))
-		if err != nil {
-			return err
-		}
+		name := descriptor.Target
 		if _, duplicateStdio := stdioTargets[name]; duplicateStdio {
-			return fmt.Errorf("clone native process retained an extra stdio pipe descriptor %s -> %q", entry.Name(), name)
+			return fmt.Errorf("clone native process retained an extra stdio pipe descriptor %d -> %q", descriptor.Number, name)
 		}
 		if name == ownerTarget || name == "/usr/bin/git" ||
 			strings.Contains(name, "symmetry-linux-clone-bootstrap") ||
 			strings.Contains(name, "symmetry-clone-request") || name == seedPath ||
 			name == target || strings.HasPrefix(name, target+string(filepath.Separator)) ||
 			strings.Contains(name, "cgroup") || name == "anon_inode:[pidfd]" || strings.HasPrefix(name, "socket:[") {
-			return fmt.Errorf("clone native process inherited bootstrap authority FD %s -> %q", entry.Name(), name)
+			return fmt.Errorf("clone native process inherited bootstrap authority FD %d -> %q", descriptor.Number, name)
 		}
 	}
 	return nil

@@ -5329,3 +5329,35 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       verbatim in the evidence record §8; the conductor's Bind run `45688173130` bound
       `2d423748`, the round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds
       the delivered revisions (the record's §1 digest table is the delivered set).
+
+## rf-acc-native-burndown: the installed-owner legs' product-test stops (2026-11-26)
+
+- [x] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
+      goal `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
+      `rf-acc-guest-native-exec`): `shared`'s leg
+      `TestInstalledLinuxOwner(BoundaryScratch|CloneCheckoutScratch|CloneCleanupScratch|CloneCleanupParentDeathScratch)`
+      passed `CloneCleanupScratch`; the parent-death clause closed on 2026-11-25 and moved to
+      `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death: the installed-owner
+      leg's parent-death stop (2026-11-25)`, and the other two —
+      `clone_integration_linux_test.go:240` (`clone status frame magic or version is invalid`, with
+      the test's cleanup line `:113` `open exact scratch leaf cgroup.kill: bad file descriptor`)
+      and `launcher_integration_linux_test.go:439` (`native exec failed after RELEASE: errno=1`),
+      both root-named to the pre-clone guard consumer run `45593856716` names
+      (`read_class=gate_v1_frame errno=1`) with its unsatisfied credential fact
+      (`guest_stage=gate_drop_bounding_set errno=1`, runs `45601287283`/`45602546196`) — are now
+      fully closed by two goals. **Closed (2026-11-26, goal `rf-acc-apparmor-userns-profile`, branch
+      `refactor/rf-acc-apparmor-userns-profile`, base `61399984`; plan
+      `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
+      `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`):** the per-program AppArmor
+      userns exception cleared both rows (run 3 `45659523339` clears `:240`/`:439`; runs 3-5 then
+      stop at the test-only `environ` row). **Closed (2026-11-26, goal
+      `rf-acc-b-process-readback`, branch `refactor/rf-acc-b-process-readback`, base `8453da12`;
+      plan `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md`, record
+      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md`):** the fixture-level root reader
+      replaces the A-credentialed `/proc/<B>/environ`, `/proc/<B>/fd` and `/proc/<B>/exe` reads in
+      `assertCloneNativeBProcess` and `assertNativeBProcess` (and the e2e capture's `ns/*` and
+      identity reads) with a root-run, PID/start-time/identity/leaf-bound capture, so the two
+      failing rows (`clone_integration_linux_test.go:252`, `launcher_integration_linux_test.go:451`)
+      are no longer the stop; the e2e same-class reads this census deferred are the goal's
+      residual entry in `docs/TODO.md`, and the clearing of the two rows on the PR head is bound
+      by the conductor's Bind run on that head.
