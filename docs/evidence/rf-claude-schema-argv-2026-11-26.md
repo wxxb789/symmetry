@@ -18,7 +18,7 @@ all commands ran in WSL `Ubuntu-24.04`, kernel `6.18.58.1-microsoft-standard-WSL
 | `daemon/native/linux-gate/protocol/wire_linux_test.go` | `efcbaa5d2ffd217b8b98f946ca89e979c542985ca9f8bb5e2504089b6336f9ce` |
 | `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | `f9a771bb95b39a86d0d1b58ae2509b075e6dffb16aa1a6378a1d1bc087648064` |
 | `daemon/internal/harness/claude/adapter_cmdline_linux_test.go` | `e36b255e27363511a5231efba29427fd87c1e66c8a4140033b459e6dbcadca16` |
-| `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md` | `b2a486ce0db332f338fb9d38b56c021b99c151f35dc5ad9c699fa948ec3ff051` (record revision; not run-bound) |
+| `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md` | `ab4822753d83a0d7d1b3388d7233cff9b48c388fc1fa9d07938f4561506425d0` (record revision; not run-bound) |
 
 `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are record-only and deliberately
 not hashed. The working-tree inventory is exactly these files plus the two record edits
@@ -138,9 +138,16 @@ literal assert and at G1's 23881-byte payload.
   bytes — the closure text names it as pending, and a later stage re-binds the text (the
   apparmor precedent re-bound its closure after its Bind runs). This record claims no run that
   has not executed.
-- `docs/TODO.md:1022-1027` (deferred PR #198 mutant coverage): the new decode row kills the
-  `maxCommandString` bound named there (a single-point loosening of `wire.go:451` is refused at
-  cap+1 by G2); the item's other named checks stay open and the item is left in place.
+- Deferred PR #198 mutant coverage: the `docs/TODO.md` clause (the item opening "Cover the
+  linux-gate wire validations no test kills") is amended in the tracker (2026-11-26, review
+  REV-1) so `readWireString`'s `maxCommandString` bound leaves the surviving-mutant list,
+  covered by the decode row of `TestWireLinuxCommandStringBoundary`. Probed before amending: the
+  single-point mutant patch `wire.go:451` `length > maxCommandString` → `length > maxReleaseSize`
+  reddens exactly that row — `go test -race -count=1 ./native/linux-gate/protocol/` exits 1 with
+  `wire_linux_test.go:279: decode the cap-plus-one RELEASE refusal = Linux owner native argv
+  contains an empty, oversized, or NUL value` — and the restored file is byte-identical
+  (`0bb6b92c…`) with the row green again. The NUL check and the item's other named checks stay
+  open.
 
 ## 8. Residual risks and limits
 

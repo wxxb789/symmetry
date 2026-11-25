@@ -141,6 +141,7 @@ refusals), plus the whole protocol package.
 - The adapter's fixed argv, prompts, fixtures, `harness.md` (no amendment needed: no fixed
   design decision covers this shape guard).
 - Installed-owner launcher rows and the e2e case set (operator-gated / conductor-run).
-- `docs/TODO.md:1022-1027` (deferred PR #198 mutant-coverage item): the new decode row kills
-  the `maxCommandString` bound there, the other named checks stay open; the item is left as is
-  save for the evidence record's note.
+- The `docs/TODO.md` deferred PR #198 mutant-coverage item (the clause whose surviving-mutant
+  list named the `maxCommandString` bound): the tracker clause is amended (2026-11-26, review
+  REV-1) so that bound leaves the list, covered by the new decode row; the NUL check and the
+  other named checks stay open.

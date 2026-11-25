@@ -1024,10 +1024,14 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       pure move and kept them byte-identical). Single-point mutants of
       `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
       for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
-      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
-      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
-      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
-      per check in a separate maintenance slice.
+      NUL check, the receipt generation upper bound and minimum length, and
+      `encodeGuardedRelease`'s body and grant bounds. `readWireString`'s `maxCommandString` bound
+      left this list on 2026-11-26: `rf-claude-schema-argv` added
+      `TestWireLinuxCommandStringBoundary`, whose decode row refuses a `maxCommandString`+1 element
+      (`length-prefixed command string is oversized or truncated`, evidence record §7); the NUL
+      check stays open. The generation and minimum-length checks may be shadowed by later reads or
+      `receipt.Validate`; the rest are real gaps. Add one rejection test per check in a separate
+      maintenance slice.
 
 ## Deferred review findings (PR #205)
 
