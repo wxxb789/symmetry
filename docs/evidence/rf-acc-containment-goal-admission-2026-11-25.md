@@ -12,12 +12,12 @@ host locations read `<worktree>` / `<scratch>`.
 
 | File | sha256 | Change |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` (pi arm byte-identical; `codex`/`claude_code` rows join it); the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`) |
-| `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | the four containment rows move to the goal route via the `:opencode_goal` repository role (open repository resource); `runtime_adapter_binding?/3` asserts `adapter.kind` = the case's harness for that role; `@expected_fixture_runs` stays 48 (39 goal + 9 legacy) |
-| `scripts/ci/register-linux-v2-claim-machine.py` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | the codex/claude claim runtimes gain `harness_kind`/`harness_version` (`0.168.0`/`2.1.323`, the pins at `linux-v2-native-acceptance.sh:1135-1136`)/`adapter_version`/`adapter_protocol_version` and the adapter operations block, mirroring the pi-durability spec |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `0eb1e20f05a1cc84a5b034980e58ba7f43ece4b09de701e248cd037c7f7552a9` | the admission branch keys on the extracted `linuxV2WitnessRequiresGoalAdmission` (pi arm byte-identical; `codex`/`claude_code` rows join it); the refusal message names the harness (`%s owner-witness claim must carry the Control admission for the exact Subject`); post-run-4 (S1/S4): the helper comment names the excluded provider-free opencode rows and `TestLinuxV2WitnessRequiresGoalAdmissionRows` pins the 11-row set in-repo |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | the four containment rows move to the goal route via the `:opencode_goal` repository role (open repository resource); `runtime_adapter_binding?/3` asserts `adapter.kind` = the case's harness for that role; `@expected_fixture_runs` stays 48 (43 goal: 39 pi-durability + 4 containment; 5 legacy) |
+| `scripts/ci/register-linux-v2-claim-machine.py` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | the codex/claude claim runtimes gain `harness_kind`/`harness_version` (`0.168.0`/`2.1.323`, the pins at `linux-v2-native-acceptance.sh:1135-1136`)/`adapter_version`/`adapter_protocol_version` and the adapter operations block, mirroring the pi-durability spec; post-run-4 (S2): the three goal-assigned specs share one `goal_assigned_runtime_spec` builder and the emitted session payload is byte-identical (§4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | the admission branch keys on `GOAL_ADMISSION_CASES` (the five goal-routed writer cases) instead of `profile_name == "pi-durability"`; its three checks and the legacy repository check are unchanged |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | one line (conductor ruling 2026-11-26, W1): `production` joins the `stage-replay|negative` UMask arm — the fresh containment legs stand in for the installed daemon, whose units set UMask=0077 |
-| `docs/plans/2026-11-25-rf-acc-containment-goal-admission-plan.md` | `34cef1bab397d5c4b376c577c643c97e99a9b8991161d004c77510e9f5bc6da1` | implementation plan (this goal, incl. §6's post-B4 ownership record and §7's W1 amendment execution) |
+| `docs/plans/2026-11-25-rf-acc-containment-goal-admission-plan.md` | `51cd3361787bcda9d4480c923a75409159c802ca2eb37f85e01ee6e29fe0035a` | implementation plan (this goal, incl. §6's post-B4 ownership record, §7's W1 amendment execution and §8's post-run-4 S1/S2/S4 record) |
 
 Not changed (byte-verified): `daemon/internal/state/linux_clone_journal.go`
 `5a8455b80ad1b2f53678fab1904056f6739357aa984fce8105340f98a2018ede` (the reserve stays the wall it
@@ -182,7 +182,7 @@ a local Postgres, with Control served from `control/` on the same database. Subj
 probe: commit `4440c5c0712040ad9d1b87cafdbe66403f3115f1`, tree_digest
 `sha256:c4963a86fe5197a1fcfb8307688e5a243f9bdc0d582afe7724465425fc99e372`.
 
-P1 positive, all four cases (fixture `prepare` summary: 39 goal cases / 9 legacy work items;
+P1 positive, all four cases (fixture `prepare` summary: 43 goal cases (39 pi-durability + 4 containment) / 5 legacy work items;
 `schedule` assigned a run on the codex/claude-native runtime at the OpenCode repository; the
 writer accepted the Control ClaimResponse):
 
@@ -226,6 +226,25 @@ linux/amd64`: `--- PASS: TestGoalAdmissionInScope (0.00s)`. Positive rows: `stag
 `helper_sigkill_detached_child`, `daemon_sigkill_helper_survives_detached_child`,
 `opencode_native_health`, `stage_replay_unprovisioned_refusal` (harness `opencode`), `wsl2_denial`.
 
+The S4 post-run-4 amendment pins the same row set in-repo:
+`TestLinuxV2WitnessRequiresGoalAdmissionRows` (11 rows, `go test -count=1 -run
+"^TestLinuxV2WitnessRequiresGoalAdmissionRows$" ./e2e/` PASS on `go1.27.0 linux/amd64`, exit 0)
+runs in the package's existing CI job. The `awk` extraction of the delivered predicate re-hashes
+to `ebb846af82debf35700aa4ac62b7d7c1be23a147ce79a088ecf6444f470deb93` (`cmp` clean against the
+probe above), so this evidence keeps binding the delivered predicate text.
+
+### S2 payload equivalence (post-run-4)
+
+`<scratch>/s2-payload-check.py` sha256
+`dd317d8b3dce29c621f995550b92baeaeae322a060fd4ce74f8af92163e1513c` runs the pre-S2 register bytes
+(`06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7`, run 4's file) and the
+delivered bytes
+(`94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8`) against an in-process stub
+Control endpoint and captures each session `PUT` body: both captures are 2993 bytes with sha256
+`47bfd1c082a15f4a7771e0518e1ee9b18f1c9ac3730c0ea466775f1d76f18c23` (`cmp` clean, payload
+`PAYLOAD_EQUAL`), so Control registers byte-identical runtimes for the delivered script and the
+recorded P1/P2 runs stand.
+
 ### P4 — static
 
 | Check | Result |
@@ -264,6 +283,14 @@ Go file re-hashes to
 each) and the restored run green. P1/P2's original runs stand for the four code files whose bytes
 are unchanged (the §6 equality table).
 
+Apply-resume re-run on the post-run-4 delivered bytes (2026-11-26, S1/S2/S4): `gofmt -l daemon/` 0
+files (exit 0); `GOOS=linux go vet ./e2e/` exit 0 and the S4 row test PASS (exit 0) on `go1.27.0
+linux/amd64` (WSL, `GOTOOLCHAIN=auto`); `python -m py_compile` on the delivered register script
+exit 0; `ruff check` and `ruff format --check` (0.17.5, the repo `pyproject.toml`) on the delivered
+register script exit 0 each; `jscpd-changed --base 9eb874bf --head <snapshot of the delivered
+worktree>` exit 0 (no clone overlaps an added line); `check-record-cleanliness` and
+`check-citation-existence` over the same range exit 0.
+
 ## 5. Mutants
 
 | id | mutation | observed red | restored |
@@ -276,15 +303,23 @@ are unchanged (the §6 equality table).
 
 ## 6. Binding equality table
 
-The last scratch run is run 4 (`45671784251`), head
-`b0ba269457057427d82c9d6c308b81f369a21563` (= `180c0a21`'s tree + the authorized one-line UMask
-amendment). Every run-input file equals the delivered bytes:
+Run 4 (`45671784251`, head `b0ba269457057427d82c9d6c308b81f369a21563` = `180c0a21`'s tree + the
+authorized one-line UMask amendment) binds the walls on its own head bytes: zero reserve
+refusals, zero umask lines, both sets red on their containment witness. The conductor ruling
+2026-11-26 (apply S1-S6) then authorized the S1/S2/S4 amendments below; both deltas are off the
+witness run path, and the conductor's Bind run on the PR head (`codex_containment
+claude_containment`, one scratch run, expecting the same walls as run 4) binds the delivered
+bytes. Its row is left empty here:
+
+| Bind run | Head | Case sets | Result |
+| --- | --- | --- | --- |
+|  |  |  |  |
 
 | File | Run-4 head bytes | Delivered bytes | Equal? |
 | --- | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | yes |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `83c436c5c1656747285f66b1c90136b5e0d9dbf8b8e02993a21554559a90c5c4` | `0eb1e20f05a1cc84a5b034980e58ba7f43ece4b09de701e248cd037c7f7552a9` | no — post-run-4 S1/S4 delta (comment reword + row test); the predicate text re-extracts to `ebb846af…` (§4) |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | `f982ef7a59642fd4cce738bb59c4cf1ea6a4eaf79491385933b2eec494f34012` | yes |
-| `scripts/ci/register-linux-v2-claim-machine.py` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | yes |
+| `scripts/ci/register-linux-v2-claim-machine.py` | `06ef1f31a34252c7f2b5917a343aa85f3ba95c32ee3dd29de3e4d33eb7656ae7` | `94fccf0588b2f423ae2d59b63384ed7572514eb664950dc25aab1a95a76e42a8` | no — post-run-4 S2 delta (shared builder); emitted session payload byte-identical (`47bfd1c0…`, §4) |
 | `scripts/ci/write-linux-v2-owner-request.py` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | `5b9074374fc55119e8c8254b1a61f83585c4d745e8ec801caf67252e009e4196` | yes |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | `84ecd4777367b7c3622940d31a5e705134da4269cc342326d18c92777759020e` | yes |
 
@@ -292,7 +327,7 @@ Run 3 (`45668197894`, head `180c0a21fdc6813e7517ef7d7e4f8dd903c20db8`, tree
 `887ace7c649a224d0a8a66332a53b852b124e2ee` = run 2's) carried the same four code-file hashes, so
 the P1/P2/P3 probes remain bound to the delivered bytes. The plan/evidence/TODO/CLOSED-TODO files
 are not run inputs (documentation only) and are therefore excluded from this table; the
-branch-only scratch workflow and shim were deleted with the branch. No byte changed after run 4.
+branch-only scratch workflow and shim were deleted with the branch.
 
 ## 7. Stage-1 answers
 
@@ -342,11 +377,13 @@ finding and the three latent cases.
 - `docs/archive/CLOSED-TODO.md` `## rf-acc-containment-goal-admission: the clone-admission
   contradiction (2026-11-26)`: the moved text verbatim plus the closure statement (branch, base,
   plan, evidence record, the runs, and the residual pointer).
-- `docs/TODO.md` `## rf-acc-containment-goal-admission: residuals (2026-11-26)`, two bounded
+- `docs/TODO.md` `## rf-acc-containment-goal-admission: residuals (2026-11-26)`, three bounded
   entries: (1) the sets' post-W1 stops — the codex release class (`gate_drop_bounding_set`
   EPERM, owned by `rf-acc-apparmor-userns-profile`) and the Claude fixed-argv bound wall
   (owned by `rf-claude-schema-argv`); (2) the provider-scoped
-  admission for `pi_provider_action` plus the two crash legs (conductor ruling Q2).
+  admission for `pi_provider_action` plus the two crash legs (conductor ruling Q2);
+  (3) the writer/fixture key agreement has no permanent check (apply S3; owner: a follow-up goal
+  after PR #292 reshapes `ci.yml`).
 - `scripts/ci/check-record-cleanliness.py` and `scripts/ci/check-citation-existence.py` were run
   over the changed documents against worktree snapshot commits of the corrected records
   (`--base 4440c5c0`, head = a dangling `commit-tree` of the worktree state): both exit 0
@@ -370,3 +407,13 @@ Residuals and known limits:
 4. `pi_provider_action` and the two crash legs stay latent with the legacy claim shape;
    `synthetic_goal_cleanup`'s current stop is the release class owned by the release-wall rows
    (stage-1(a), §7(a)).
+5. The W1 UMask arm (`linux-v2-native-acceptance.sh:1859`) covers all six `production`-mode
+   owner-witness legs (`:2285`/`:2325`), but run 4 exercised only the two containment legs: the
+   `shared` set's four legs — `pi_provider_action` (`:3003`), `helper_sigkill_detached_child`
+   (`:3007`), `daemon_sigkill_helper_survives_detached_child` (`:3008`), `opencode_native_health`
+   (`:3021`; `shared` scheduled at `.github/workflows/linux-native-v2-acceptance.yml:122`) — are
+   unobserved under `UMask=0077`; their coverage is the conductor-owned credentialed all-14
+   dispatch (oracle gap).
+6. The delivered bytes carry the post-run-4 S1/S2/S4 amendments (§6): run 4 binds the walls, and
+   the conductor's Bind run on the PR head binds the delivered bytes; the Bind row slot in §6
+   stays empty until that run.

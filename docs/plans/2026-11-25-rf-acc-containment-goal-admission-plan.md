@@ -29,7 +29,8 @@ what is out of scope.
    becomes `repository_role in [:pi_durability, :opencode_goal]` → goal cases; every legacy case
    (including `:pi_provider`, `:opencode`, unprovisioned) keeps `launch_one_shot_work_item!`.
    `goal_case_specs` binds `:pi_durability` → `pi_durability_repository.id` and `:opencode_goal`
-   → `opencode_repository.id`. `@expected_fixture_runs` stays 48 (39 goal + 9 legacy).
+   → `opencode_repository.id`. `@expected_fixture_runs` stays 48
+   (43 goal: 39 pi-durability + 4 containment; 5 legacy).
 2. **Adapter assertion.** `runtime_adapter_binding?/2` becomes `runtime_adapter_binding?/3`
    (`runtime, repository_role, harness`): the `:pi_durability` arm stays
    `["adapter", "kind"] == "pi"`; the `:opencode_goal` arm is
@@ -165,3 +166,24 @@ element is 23 881 bytes, over the 16 KiB `maxCommandString` bound (`wire.go:53`,
 `rf-claude-schema-argv` (design pending). Conductor ruling 2026-11-26 (after run 4): the goal's
 own deliverable is met on these bytes, no further scratch run, and these two stops are the
 residuals. Details, verbatim stops and the sha256 equality table: evidence record §3 and §6.
+
+## 8. Post-run-4 amendments executed (conductor ruling 2026-11-26, apply S1-S6)
+
+The apply stage (resumed 2026-11-26) executed the accepted simplify findings exactly as the ruling
+specified; all three land after run 4 and off the witness run path, so run 4 still binds the walls
+on its head bytes and the conductor's Bind run on the PR head binds the delivered bytes (evidence
+§6; its row is left empty there). The §5 *Final bytes (lesson 86)* clause is superseded for these
+three deltas by the ruling's first bullet.
+
+- **S1** — the helper comment above `linuxV2WitnessRequiresGoalAdmission` now names the excluded
+  provider-free opencode rows, so it no longer suggests the M5 over-broad reading.
+- **S2** — the three goal-assigned runtime specs in `register-linux-v2-claim-machine.py` collapse
+  into one `goal_assigned_runtime_spec` builder parameterised by kind/version/identity;
+  `jscpd-changed` exits 0 on the delivered bytes, and the emitted session payload is
+  byte-identical to run 4's (stub-captured before/after, evidence §4).
+- **S4** — the predicate's row set is pinned in-repo by
+  `TestLinuxV2WitnessRequiresGoalAdmissionRows` (5 positive / 6 negative rows) in the package's
+  existing CI job; it supersedes the scratch extraction probe as the permanent pin while the
+  extraction keeps binding the delivered predicate text (evidence §4, §6).
+- **S3 is deferred** — the writer/fixture key-agreement check is recorded as a residual in
+  `docs/TODO.md` (owner: a follow-up goal after PR #292 reshapes `ci.yml`), per the ruling.

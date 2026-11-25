@@ -1920,6 +1920,14 @@ section below.
       e2e admission branch to a provider-scoped admission needs its own ruling (the provider-access
       assertions and the clone reserve would then both bind the same claim).
 
+- [ ] The writer/fixture key agreement has no permanent check (2026-11-26, simplify S3, recorded
+      by the apply stage; conductor ruling 2026-11-26): the writer's `GOAL_ADMISSION_CASES`
+      (`scripts/ci/write-linux-v2-owner-request.py`) and the fixture's goal-routing rows
+      (`scripts/ci/provision-linux-v2-control-claims.exs`) must agree exactly, but the only guards
+      were the deleted P1 probe and M1's local half, so a drift would surface only in a hosted
+      run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
+      needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
+
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 
 - [ ] Record the credentialed `linux-native-v2-acceptance` rows for the retargeted durability sets

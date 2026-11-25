@@ -40,6 +40,51 @@ def call_json(
         raise SystemExit("Control claim fixture endpoint returned invalid JSON") from None
 
 
+def goal_assigned_runtime_spec(
+    runtime_key: str,
+    name: str,
+    agent_profile: str,
+    repository_resource_id: str,
+    harness_kind: str,
+    harness_version: str,
+) -> dict:
+    # Goal assignment admits only native-harness runtimes with adapter operations
+    # (assignment.ex:332,:519-530), so the goal-assigned claim fixtures carry native metadata.
+    return {
+        "runtime_key": runtime_key,
+        "name": name,
+        "capacity": 64,
+        "agent_profile": agent_profile,
+        "workspace": "native",
+        "repository_resource_id": repository_resource_id,
+        "harness_kind": harness_kind,
+        "harness_version": harness_version,
+        "adapter_version": "symmetry-daemon:ci-linux-v2",
+        "adapter_protocol_version": 1,
+        "capabilities": {
+            "structured_input": True,
+            "adapter": {
+                "kind": harness_kind,
+                "native_version": harness_version,
+                "implementation_version": "symmetry-daemon:ci-linux-v2",
+                "protocol_version": 1,
+                "operations": {
+                    "start": True,
+                    "events": True,
+                    "cancel": True,
+                    "resume": False,
+                    "handoff": False,
+                    "guidance": "unsupported",
+                    "pause": "unsupported",
+                    "approval_response": False,
+                    "usage": "unknown",
+                    "hard_cost_limit": False,
+                },
+            },
+        },
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 8:
         print(
@@ -100,109 +145,30 @@ def main() -> int:
             "repository_resource_id": fixture["opencode_repository_resource_id"],
             "capabilities": {"structured_input": True},
         },
-        {
-            "runtime_key": "owner-witness-control-pi-durability-generic",
-            "name": "Isolated generic Control provider-free Pi durability claim fixture; goal-assigned",
-            "capacity": 64,
-            "agent_profile": "pi-durability",
-            "workspace": "native",
-            "repository_resource_id": fixture["pi_durability_repository_resource_id"],
-            # Goal assignment admits only native-harness runtimes with adapter operations
-            # (assignment.ex:332,:519-530), so this claim fixture carries the Pi metadata.
-            "harness_kind": "pi",
-            "harness_version": "1.5.2",
-            "adapter_version": "symmetry-daemon:ci-linux-v2",
-            "adapter_protocol_version": 1,
-            "capabilities": {
-                "structured_input": True,
-                "adapter": {
-                    "kind": "pi",
-                    "native_version": "1.5.2",
-                    "implementation_version": "symmetry-daemon:ci-linux-v2",
-                    "protocol_version": 1,
-                    "operations": {
-                        "start": True,
-                        "events": True,
-                        "cancel": True,
-                        "resume": False,
-                        "handoff": False,
-                        "guidance": "unsupported",
-                        "pause": "unsupported",
-                        "approval_response": False,
-                        "usage": "unknown",
-                        "hard_cost_limit": False,
-                    },
-                },
-            },
-        },
-        {
-            "runtime_key": "owner-witness-control-codex-generic",
-            "name": "Isolated generic Control provider-free codex containment-claim fixture; goal-assigned",
-            "capacity": 64,
-            "agent_profile": "codex-native",
-            "workspace": "native",
-            "repository_resource_id": fixture["opencode_repository_resource_id"],
-            # Goal assignment admits only native-harness runtimes with adapter operations
-            # (assignment.ex:332,:519-530), so this claim fixture carries the codex metadata.
-            "harness_kind": "codex",
-            "harness_version": "0.168.0",
-            "adapter_version": "symmetry-daemon:ci-linux-v2",
-            "adapter_protocol_version": 1,
-            "capabilities": {
-                "structured_input": True,
-                "adapter": {
-                    "kind": "codex",
-                    "native_version": "0.168.0",
-                    "implementation_version": "symmetry-daemon:ci-linux-v2",
-                    "protocol_version": 1,
-                    "operations": {
-                        "start": True,
-                        "events": True,
-                        "cancel": True,
-                        "resume": False,
-                        "handoff": False,
-                        "guidance": "unsupported",
-                        "pause": "unsupported",
-                        "approval_response": False,
-                        "usage": "unknown",
-                        "hard_cost_limit": False,
-                    },
-                },
-            },
-        },
-        {
-            "runtime_key": "owner-witness-control-claude-generic",
-            "name": "Isolated generic Control provider-free claude containment-claim fixture; goal-assigned",
-            "capacity": 64,
-            "agent_profile": "claude-native",
-            "workspace": "native",
-            "repository_resource_id": fixture["opencode_repository_resource_id"],
-            "harness_kind": "claude_code",
-            "harness_version": "2.1.323",
-            "adapter_version": "symmetry-daemon:ci-linux-v2",
-            "adapter_protocol_version": 1,
-            "capabilities": {
-                "structured_input": True,
-                "adapter": {
-                    "kind": "claude_code",
-                    "native_version": "2.1.323",
-                    "implementation_version": "symmetry-daemon:ci-linux-v2",
-                    "protocol_version": 1,
-                    "operations": {
-                        "start": True,
-                        "events": True,
-                        "cancel": True,
-                        "resume": False,
-                        "handoff": False,
-                        "guidance": "unsupported",
-                        "pause": "unsupported",
-                        "approval_response": False,
-                        "usage": "unknown",
-                        "hard_cost_limit": False,
-                    },
-                },
-            },
-        },
+        goal_assigned_runtime_spec(
+            "owner-witness-control-pi-durability-generic",
+            "Isolated generic Control provider-free Pi durability claim fixture; goal-assigned",
+            "pi-durability",
+            fixture["pi_durability_repository_resource_id"],
+            "pi",
+            "1.5.2",
+        ),
+        goal_assigned_runtime_spec(
+            "owner-witness-control-codex-generic",
+            "Isolated generic Control provider-free codex containment-claim fixture; goal-assigned",
+            "codex-native",
+            fixture["opencode_repository_resource_id"],
+            "codex",
+            "0.168.0",
+        ),
+        goal_assigned_runtime_spec(
+            "owner-witness-control-claude-generic",
+            "Isolated generic Control provider-free claude containment-claim fixture; goal-assigned",
+            "claude-native",
+            fixture["opencode_repository_resource_id"],
+            "claude_code",
+            "2.1.323",
+        ),
     )
     response = call_json(
         control_url.rstrip("/") + f"/api/v1/machines/{machine_id}/sessions/{session_id}",

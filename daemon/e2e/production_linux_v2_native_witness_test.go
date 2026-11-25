@@ -1739,8 +1739,8 @@ func linuxV2AckLossReplayStageSupported(stage string) bool {
 	return false
 }
 
-// The clone reserve parses the Claim's Work input as a goal admission
-// (linux_clone_journal.go:864-878), so every provider-free native-harness row must run on one.
+// The clone reserve parses the Claim's Work input as a goal admission (linux_clone_journal.go:864-878):
+// provider-free pi and codex/claude_code rows carry one; provider-free opencode rows keep the non-Goal refusal.
 func linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool {
 	if testCase.harness == "pi" && !testCase.providerActionRequired {
 		return true
@@ -1749,6 +1749,31 @@ func linuxV2WitnessRequiresGoalAdmission(testCase linuxV2NativeWitnessCase) bool
 		return false
 	}
 	return testCase.harness == "codex" || testCase.harness == "claude_code"
+}
+
+func TestLinuxV2WitnessRequiresGoalAdmissionRows(t *testing.T) {
+	rows := []struct {
+		name     string
+		testCase linuxV2NativeWitnessCase
+		want     bool
+	}{
+		{name: "stage_replay_pi_durability", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "stage_replay"}, want: true},
+		{name: "codex_containment", testCase: linuxV2NativeWitnessCase{harness: "codex", requestCase: "codex_containment", containmentRequired: true}, want: true},
+		{name: "claude_containment", testCase: linuxV2NativeWitnessCase{harness: "claude_code", requestCase: "claude_containment", containmentRequired: true}, want: true},
+		{name: "stage_replay_native_release_codex", testCase: linuxV2NativeWitnessCase{harness: "codex", requestCase: "stage_replay", barrierStage: "native_release"}, want: true},
+		{name: "stage_replay_native_release_claude", testCase: linuxV2NativeWitnessCase{harness: "claude_code", requestCase: "stage_replay", barrierStage: "native_release"}, want: true},
+		{name: "pi_provider_action", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "pi_provider_action", providerActionRequired: true}, want: false},
+		{name: "helper_sigkill_detached_child", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "helper_sigkill_detached_child", providerActionRequired: true, helperCrashWitness: true}, want: false},
+		{name: "daemon_sigkill_helper_survives_detached_child", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "daemon_sigkill_helper_survives_detached_child", providerActionRequired: true, daemonCrashWitness: true}, want: false},
+		{name: "opencode_native_health", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "opencode_native_health"}, want: false},
+		{name: "stage_replay_unprovisioned_refusal", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "stage_replay"}, want: false},
+		{name: "wsl2_denial", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "wsl2_denial", wsl2DenialRequired: true}, want: false},
+	}
+	for _, row := range rows {
+		if got := linuxV2WitnessRequiresGoalAdmission(row.testCase); got != row.want {
+			t.Errorf("%s: linuxV2WitnessRequiresGoalAdmission = %t, want %t", row.name, got, row.want)
+		}
+	}
 }
 
 func linuxV2WitnessClaimRequirementsMatch(testCase linuxV2NativeWitnessCase, actual map[string]bool) bool {
