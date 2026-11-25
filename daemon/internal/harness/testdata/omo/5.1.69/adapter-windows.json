@@ -7,14 +7,14 @@
   "architecture": "amd64",
   "kernel": "Microsoft Windows [Version 10.0.26300.9911]",
   "distribution": "Windows",
-  "binary_path": "C:/Users/lhan/.local/bin/omo.exe",
+  "binary_path": "C:/<HOST-PATH>/.local/bin/omo.exe",
   "binary_size": 202352128,
   "binary_digest": "sha256:04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464",
   "native_version": "5.1.69",
-  "retained_private_root": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474",
+  "retained_private_root": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474",
   "authorized_origin": "wxxb789/symmetry-0006h-provider-fixture",
   "local_only_source_repository": "Q:\\repos\\wt-0006k\\symmetry\\.tmp\\0006k-session\\repository",
-  "local_only_workspace": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\workspaces\\binding-native\\run-omo-native-acceptance\\generation-1",
+  "local_only_workspace": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\workspaces\\binding-native\\run-omo-native-acceptance\\generation-1",
   "subject": {
     "resource_id": "00000000-0000-4000-8000-00000000006b",
     "commit": "6adc9ef1a2f704590ee4172cecb4e0bb6c70408c",
@@ -38,12 +38,12 @@
       "local_handle_id": "236237a8-0d0d-4d29-b58b-094b7b448787",
       "local_only_handle": {
         "ID": "01a1d978-a4e1-7b43-9850-d53643f71fd5",
-        "Filename": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl"
+        "Filename": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl"
       },
-      "local_only_session_directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+      "local_only_session_directory": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
       "workspace_fingerprint": "sha256:2b8745498a06b7a6009392c00218d45e23305b28491ccb48ce24478e80ee1e36",
       "argv": [
-        "C:\\Users\\lhan\\.local\\bin\\omo.exe",
+        "C:\\<HOST-PATH>\\.local\\bin\\omo.exe",
         "--mode",
         "rpc",
         "--no-extensions",
@@ -56,7 +56,7 @@
         "--tools",
         "read,write",
         "--session-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+        "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
         "--provider",
         "tencent-litellm",
         "--model",
@@ -177,12 +177,12 @@
       "local_handle_id": "236237a8-0d0d-4d29-b58b-094b7b448787",
       "local_only_handle": {
         "ID": "01a1d978-a4e1-7b43-9850-d53643f71fd5",
-        "Filename": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl"
+        "Filename": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl"
       },
-      "local_only_session_directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+      "local_only_session_directory": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
       "workspace_fingerprint": "sha256:2b8745498a06b7a6009392c00218d45e23305b28491ccb48ce24478e80ee1e36",
       "argv": [
-        "C:\\Users\\lhan\\.local\\bin\\omo.exe",
+        "C:\\<HOST-PATH>\\.local\\bin\\omo.exe",
         "--mode",
         "rpc",
         "--no-extensions",
@@ -195,9 +195,9 @@
         "--tools",
         "read,write",
         "--session",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl",
+        "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-52-04-833Z_01a1d978-a4e1-7b43-9850-d53643f71fd5.jsonl",
         "--session-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+        "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
         "--provider",
         "tencent-litellm",
         "--model",
@@ -318,12 +318,12 @@
       "local_handle_id": "ecfc4b66-d31f-40b7-b1aa-823179f0cc5e",
       "local_only_handle": {
         "ID": "01a1d979-eda1-7e44-9add-aca86663d820",
-        "Filename": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-53-28-994Z_01a1d979-eda1-7e44-9add-aca86663d820.jsonl"
+        "Filename": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-53-28-994Z_01a1d979-eda1-7e44-9add-aca86663d820.jsonl"
       },
-      "local_only_session_directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+      "local_only_session_directory": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
       "workspace_fingerprint": "sha256:2b8745498a06b7a6009392c00218d45e23305b28491ccb48ce24478e80ee1e36",
       "argv": [
-        "C:\\Users\\lhan\\.local\\bin\\omo.exe",
+        "C:\\<HOST-PATH>\\.local\\bin\\omo.exe",
         "--mode",
         "rpc",
         "--no-extensions",
@@ -336,7 +336,7 @@
         "--tools",
         "read,write",
         "--session-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+        "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
         "--provider",
         "tencent-litellm",
         "--model",
@@ -457,12 +457,12 @@
       "local_handle_id": "de0817b8-c2bb-4783-a769-e75223fd22ba",
       "local_only_handle": {
         "ID": "01a1d97a-8035-7599-8c59-fe0f499ab5f3",
-        "Filename": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-54-06-517Z_01a1d97a-8035-7599-8c59-fe0f499ab5f3.jsonl"
+        "Filename": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions\\2026-11-14T09-54-06-517Z_01a1d97a-8035-7599-8c59-fe0f499ab5f3.jsonl"
       },
-      "local_only_session_directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+      "local_only_session_directory": "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
       "workspace_fingerprint": "sha256:2b8745498a06b7a6009392c00218d45e23305b28491ccb48ce24478e80ee1e36",
       "argv": [
-        "C:\\Users\\lhan\\.local\\bin\\omo.exe",
+        "C:\\<HOST-PATH>\\.local\\bin\\omo.exe",
         "--mode",
         "rpc",
         "--no-extensions",
@@ -475,7 +475,7 @@
         "--tools",
         "read,write",
         "--session-dir",
-        "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
+        "C:\\<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-omo-native-1150359474\\sessions",
         "--provider",
         "tencent-litellm",
         "--model",

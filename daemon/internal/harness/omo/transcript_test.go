@@ -44,7 +44,7 @@ func TestPinnedNativeTranscript(t *testing.T) {
 	case "windows":
 		expectedSystem = "Windows"
 		expectedBinary = transcriptBinary{
-			Path: "C:/Users/lhan/.local/bin/omo.exe", Size: 202352128,
+			Path: "C:/<HOST-PATH>/.local/bin/omo.exe", Size: 202352128,
 			SHA256: "04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464",
 		}
 	case "linux":
