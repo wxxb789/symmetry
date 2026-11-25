@@ -18,14 +18,14 @@ Working tree at the time of this record (all paths in scope; `git status --porce
 
 | path | pre-change sha256 (`HEAD`) | changed sha256 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | `a7d2d138475fd6397ec970e14e5d2b1ef2f013be3c67acff6ecde4cf5623c95c` | `5997f368ce8464db54f37c1bcfe03cf27ac8235c114c9b77d2af96ab86244197` |
+| `.github/workflows/ci.yml` | `a7d2d138475fd6397ec970e14e5d2b1ef2f013be3c67acff6ecde4cf5623c95c` | `34357934e67a2cbd98fbab43ff801b77642883f5ba338bd36b41cb9a4f484f29` |
 | `.github/actions/contracts-build/action.yml` | `2d36e663dc8b0f34eecfd44b0dc4e0758405c2797259f0d3671d3040dd505e55` | `5c49e6cea58e0b0516238378d9dcc0abd6b0382784e351d89a55f057d29f6767` |
 | `docs/design/quality.md` | `f34eca086f43ae1ad4751e1e92c59b69b222202dd4e76aa50fc5e9deedf9be41` | `04adc7faa77acb7831f7638c7ca4a243375de11547f81f0ce53a18b172e58b75` |
-| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `3cd77159258f8536ecd58c2c815606d6d284e1fd9ca480f1472b353c1dbde115` |
-| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | `d1392647d9cc1afa0fd65382ead4cefca229dd5f5408fd10eb50cea5dd37f0b9` | `fde9c590bc5ad4de35efc3949ff513eb88311d7b78096e1e963538f9abe097e7` |
-| `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` | new | `63b5626a25b6232cd90fdce430e53258f6322e7ee4669c6cea6f80b10373abf9` |
+| `scripts/ci/test-ci-structure-extraction.py` | `0f6ff3a0a459a3920cd93dcaef6f5a4b942201813f44ed4c2a2e1cabfe007bb5` | `485a7262dd67d595ce85907c8a640d720f6f99d4767933a7de1b80400b2b699c` |
+| `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` | `d1392647d9cc1afa0fd65382ead4cefca229dd5f5408fd10eb50cea5dd37f0b9` | `146c86cf0f8a477ab1ab31381e813ec60012dfd6d36929ff42a1ca82a4bdcbf7` |
+| `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` | new | `49783f6b97687d4e255ee1d009f5e419d2634cdfbcfdde2f7040ce4fb48699d4` |
 
-`ci.yml` is 2216 lines after the change (2158 before).
+`ci.yml` is 2215 lines after the change (2158 before).
 
 Fix r1 (2026-11-26, the round whose review is recorded in §5) re-measured the two files whose bytes changed
 again in this round; both hash equal in the working tree and in the scratch commit every fix-round gate ran
@@ -33,15 +33,21 @@ on — `scripts/ci/test-ci-structure-extraction.py` `3cd77159…`,
 `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` `fde9c590…`; §3 records the commands
 and §7 binds the migration test's bytes at its own run.
 
+Fix r2 (2026-11-26, the PR #292 CI-red round; conductor rulings R0-R7 in §5) changed four of the six
+paths again — `.github/workflows/ci.yml` `34357934…`, `scripts/ci/test-ci-structure-extraction.py`
+`485a7262…`, `control/test/symmetry_control/migrations/goal_0006_migration_test.exs` `146c86cf…` and
+`docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` `49783f6b…`; `action.yml` and `quality.md` are
+unchanged from the table above. §3 records every r2 gate with its exit code.
+
 ## 2. Censuses re-measured at `61399984`
 
 | id | command | result |
 | --- | --- | --- |
 | C1 | `grep -c "continue-on-error: true" .github/workflows/ci.yml` | 8 (before and after; the two advisories move job, none is added or removed) |
-| C2 | `grep -nE "^    timeout-minutes" .github/workflows/ci.yml` | before 5 (585, 637, 678, 705, 1353); after 16 — the five existing ceilings plus eleven job headers (`changes` 5, `record-cleanliness` 5, `citation-existence` 5, `contracts` 10, `control` 20, `daemon` 30, `daemon-audit` 20, `legacy-route-audit` 5, `integration` 10, `compose` 40, `browser-fixture-linux` 35) |
+| C2 | `grep -nE "^    timeout-minutes" .github/workflows/ci.yml` | before 5 (585, 637, 678, 705, 1353); after 16 — the five existing ceilings plus eleven job headers (`changes` 5, `record-cleanliness` 5, `citation-existence` 5, `contracts` 10, `control` 25, `daemon` 30, `daemon-audit` 20, `legacy-route-audit` 10, `integration` 10, `compose` 40, `browser-fixture-linux` 35; `control`/`legacy-route-audit` as amended by rulings R3/R4, fix round r2) |
 | C3 | `grep -nE "^  [a-z][a-z0-9-]*:$" .github/workflows/ci.yml` | before 16 (15 jobs + `on.push`); after 16 job headers inside `jobs:` + `on.push` = 17 matches (16 jobs) |
 | C4 | `grep -nE "^concurrency:" .github/workflows/ci.yml` | before 0; after 1 (line 15) |
-| C5 | `grep -n "mix deps.get" .github/workflows/ci.yml .github/actions/contracts-build/action.yml` | before 5 (ci.yml 195, 619, 787, 2012; action 44); after 5, each preceded by its cache step (ci.yml 206/636/810/2061, action 37) |
+| C5 | `grep -n "mix deps.get" .github/workflows/ci.yml .github/actions/contracts-build/action.yml` | before 5 (ci.yml 195, 619, 787, 2012; action 44); after 5, each preceded by its cache step (ci.yml 206/636/810/2060, action 37; the browser-fixture pair shifted by the fix-round r2 comment trim) |
 | C6 | `grep -nE "vitest\|@symmetry/frontend test" …` | before 4 (action 26 plain run; ci.yml 579, 689 comments, 691 coverage run); after 3 (ci.yml comments and the coverage run; the action's plain step is gone) |
 | C7 | `grep -rn "actions/cache" .github` | before 0; after 5 cache steps (`ci.yml` ×4, action ×1) |
 | C8 | `git ls-tree -r --name-only HEAD control/deps \| wc -l` | 0 (deps are not vendored; `.gitignore` lines 43-44 ignore `/control/_build/` and `/control/deps/`) |
@@ -75,14 +81,20 @@ Corrections the measurements force on the contract's own assumptions:
 | --- | --- | --- |
 | structure extraction | `python3 scripts/ci/test-ci-structure-extraction.py` | `Ran 70 tests`, `OK`, exit 0 (drafting baseline 40; this change adds 5 pins and 30 test methods — 8 in the fix round, all F2/F3/F4 witnesses; 52 of the 70 are mutation tests) |
 | F2/F3/F4 pin-gap probe (not a repo gate; the fix round's mutation inputs) | `python3 <scratch>/pin_gap_probe.py scripts/ci/test-ci-structure-extraction.py` | pre-fix: all six rows green; post-fix: all six rows red — `if: false` on the owner step, the golangci `if: always()` / `timeout-minutes: 12` drops, the govulncheck `continue-on-error: true` drop, the `working-directory: frontend` + `pnpm test` spelling, and the backslash-continued `run: \|` body |
-| goal_0006 migration test (scratch harness: Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6, run-local port; both match the CI control job) | `mix format --check-formatted`; `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686`; the same with `--repeat-until-failure 50`; then the §7 drop-membership mutant | format exit 0 (silent); single run `1 passed, 57 excluded`; repeat mode 51 runs (countdown 50→0), every one `1 passed, 57 excluded`; mutant: 1 failure at the new arm (`:709`) |
+| goal_0006 migration test (scratch harnesses: Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6, run-local port; both match the CI control job) | `mix format --check-formatted`; `MIX_ENV=test mix compile --warnings-as-errors`; `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs`; the same file at `:686` and with `--repeat-until-failure 50`; then the §7 drop-membership mutant | format exit 0 (silent); compile exit 0; the whole file `58 passed`, exit 0 (95.5 s); filtered `:686` run `1 passed, 57 excluded` exit 0; repeat mode 51 runs (countdown 50→0), every one `1 passed, 57 excluded`, exit 0; mutant: 1 failure at the new arm (`:709` on the r1 bytes, `:713` in the r2 mutant file) — all re-run on the fix-round r2 bytes |
+| fix-round r2 Credo strict ratchet (rulings R0/R1; the step `control` runs, `ci.yml:213-225`) | from `control/` with its deps fetched: `mix credo --strict 2>&1 \| tee <log>` then `python3 ../scripts/ci/assert-credo-strict-baseline.py --log <log>` | `credo_strict_exit_status=30` (a severity bitmask, ignored by the gate); ratchet exit 0 — `564 issue(s)` over `225 file(s)` and `70 check(s)`: 5 warnings, 326 refactoring opportunities, 160 code readability issues, 73 software design suggestions — every category equal to `scripts/ci/credo-strict-baseline.json` |
+| fix-round r2 python suites (re-run on the r2 bytes) | `python scripts/ci/test-ci-structure-extraction.py`; `python scripts/ci/test-ci-changed-path-classifier.py` | structure `Ran 70 tests`, `OK`, exit 0; classifier `Ran 37 tests`, `OK`, exit 0 |
+| fix-round r2 actionlint (the CI-pinned `1.7.12`, the advisory step's command shape) | `actionlint -shellcheck= -pyflakes= .github/workflows/ci.yml` | exit 0, no findings |
 | fix-round citation / record-cleanliness / sanitize gates (scratch clone holding the delivered bytes; `HEAD` = its scratch commit) | `python3 scripts/ci/check-citation-existence.py --repo . --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD`; `python3 scripts/ci/check-record-cleanliness.py --repo . --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD`; `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | citation exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))`; cleanliness exit 0 — `1 changed record(s) pass the root-only check`; sanitize exit 0 on `docs/design/quality.md`, `docs/plans/2026-11-25-rf-ci-wave1-hygiene-plan.md` and `docs/evidence/rf-ci-wave1-hygiene-2026-11-25.md` |
+| fix-round r2 citation / record-cleanliness / sanitize gates (scratch clone holding the r2 bytes; `HEAD` = its scratch commit) | `python3 scripts/ci/check-citation-existence.py --repo . --base 4440c5c0712040ad9d1b87cafdbe66403f3115f1 --head HEAD`; `python3 scripts/ci/check-record-cleanliness.py --repo . --base 4440c5c0712040ad9d1b87cafdbe66403f3115f1 --head HEAD`; `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | citation exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))`; cleanliness exit 0 — `1 changed record(s) pass the root-only check`; sanitize exit 0 on the plan, the evidence record and `quality.md` |
 | fix-round whitespace and host-path scan | `git diff --check origin/main...HEAD`; a case-insensitive scan of the same diff for the user-profile directory prefix | exit 0; 0 matches |
+| fix-round r2 whitespace and host-path scan | `git diff --check 4440c5c0712040ad9d1b87cafdbe66403f3115f1`; the same case-insensitive scan over the merge-base diff (`origin/main` has advanced since `61399984`, so the merge base is used) | exit 0; 0 matches |
 | fix-round jscpd gate (same scratch clone) | `python3 scripts/ci/jscpd-changed.py --base 613999840a4e4bc1d1169a37d3775b1814671015 --head HEAD` | exit 0 — `7 changed file(s), 1748 scanned source(s), 1263 clone(s) in the corpus, 1 tolerated among the added lines, none new`; the tolerated clone is the pre-existing `ci.yml` 603-636 / 169-202 pair, whose added lines held no content the file did not already hold |
+| fix-round r2 jscpd gate (scratch clone holding the r2 bytes; `HEAD` = its scratch commit) | `python scripts/ci/jscpd-changed.py --base $(git merge-base HEAD origin/main)` — resolved to `--base 4440c5c0712040ad9d1b87cafdbe66403f3115f1 --head HEAD` | exit 0 — `7 changed file(s), 1750 scanned source(s), 1262 clone(s) in the corpus, 1 tolerated among the added lines, none new`; the tolerated clone is the same pre-existing `ci.yml` 603-636 / 169-202 pair |
 | changed-path classifier | `python3 scripts/ci/test-ci-changed-path-classifier.py` | `Ran 37 tests`, `OK`, exit 0 (unmodified file) |
 | citation existence (amended `quality.md`) | `python3 scripts/ci/check-citation-existence.py --base HEAD^1 --head HEAD` in a scratch repository holding the head tree plus the amended document | exit 0 — `1 changed document(s) pass the path and symbol check (19 path citation(s))` |
 | record cleanliness (this new record) | `python3 scripts/ci/check-record-cleanliness.py --base HEAD^1 --head HEAD` in the same scratch repository | exit 0 — `1 changed record(s) pass the root-only check` |
-| YAML shape probe (not a repo gate; independent of the structure suite, which parses text) | `python3` + `yaml.safe_load` over both changed YAML files | parses; 16 jobs; all 16 job timeouts equal the contract's §2 table and the job sets match both ways; `concurrency` block equals the pinned three lines and cancels pull requests only; exactly one step runs `vitest` (`coverage-frontend`, pinned command); five `actions/cache@v6` steps, each with both paths and one key carrying `${{ runner.os }}`+`otp-29.0.6`+`elixir-1.20.4`+`${{ hashFiles('control/mix.lock') }}` and no `restore-keys`, each immediately preceding its `mix deps.get` step; `daemon-audit` steps exactly checkout, setup-go, golangci, govulncheck, model-routing |
+| YAML shape probe (not a repo gate; independent of the structure suite, which parses text) | `python3` + `yaml.safe_load` over both changed YAML files | parses; 16 jobs; all 16 job timeouts equal the amended table (`control` 25 and `legacy-route-audit` 10 are the R3/R4 rulings recorded in §5; the rest of the §2 table) and the job sets match both ways; `concurrency` block equals the pinned three lines and cancels pull requests only; exactly one step runs `vitest` (`coverage-frontend`, pinned command); five `actions/cache@v6` steps, each with both paths and one key carrying `${{ runner.os }}`+`otp-29.0.6`+`elixir-1.20.4`+`${{ hashFiles('control/mix.lock') }}` and no `restore-keys`, each immediately preceding its `mix deps.get` step; `daemon-audit` steps exactly checkout, setup-go, golangci, govulncheck, model-routing |
 | helper suites also run locally | `python3 scripts/ci/test-citest.py`, `test-go-test-durations.py`, `test-assert-go-coverage-floor.py`, `test-check-lockfile-registry.py`, `test-assert-folded-gates.py`, `test-assert-exunit-json.py`, `test-go-test-json-gate.py`, `test-assert-playwright-json.py`, `test-assert-runner-matches-target.py`, `assert-browser-suite-coverage.py` | all exit 0 (`OK`; `test-citest.py` and `test-go-test-json-gate.py` skip host-dependent cases) |
 | `test-no-legacy-routes-audit.py` | `python3 scripts/ci/test-no-legacy-routes-audit.py` | 11 failures, **pre-existing on this host**: the same 11 failures reproduce on an unmodified copy of the head tree (probe scratch repository on the local disk), all with `/bin/bash: <scratch>/scripts/audit-no-legacy-routes.sh: No such file or directory` (exit 127) — an environment boundary of this host's bash, not a defect of the change. CI runs this suite in `legacy-route-audit`. |
 
@@ -92,7 +104,8 @@ Corrections the measurements force on the contract's own assumptions:
 | --- | --- | --- | --- | --- |
 | §1 concurrency pinned, PR-only | `python3 scripts/ci/test-ci-structure-extraction.py` (`WorkflowHygieneTests::test_only_superseded_pull_request_runs_are_cancelled`) | 0 | §3; C4 = 1; block sits between `permissions:` and `jobs:` | mutation tests `test_mutation_cancelling_every_event_reddens_the_concurrency_pin` and `test_mutation_a_constant_concurrency_group_reddens_the_concurrency_pin` redden the same pin before the fix exists (M1, M2) |
 | §1 live cancel behaviour | *not run in this stage* (§8) | — | — | the pre-change tree has no `concurrency:` key (C4 = 0), so a second push to the same PR queues a full superseded run |
-| §2 every job has its ceiling | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_every_job_carries_its_pinned_ceiling_and_no_step_cap_meets_it` | 0 | §3; C2 = 16; YAML probe prints the table | mutations `test_mutation_deleting_the_daemon_ceiling_…` (M3), `test_mutation_raising_a_ceiling_…` (M4: 360), `test_mutation_a_ceiling_below_its_step_cap_…` (M4b: compose 15, now asserted on the cap message) and `test_mutation_a_step_cap_above_its_job_ceiling_…` (a 45-min step under a 40-min ceiling, the witness the first review's finding asked for) each redden the pin |
+| §2 every job has its ceiling | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_every_job_carries_its_pinned_ceiling_and_no_step_cap_meets_it` | 0 | §3; C2 = 16; YAML probe prints the table (`control` 25 and `legacy-route-audit` 10 are the R3/R4 amendments, §5) | mutations `test_mutation_deleting_the_daemon_ceiling_…` (M3), `test_mutation_raising_a_ceiling_…` (M4: 360), `test_mutation_a_ceiling_below_its_step_cap_…` (M4b: compose 15, now asserted on the cap message) and `test_mutation_a_step_cap_above_its_job_ceiling_…` (a 45-min step under a 40-min ceiling, the witness the first review's finding asked for) each redden the pin |
+| R0 (conductor) — the changed bytes sit exactly at the Credo strict baseline | the `control` step's ratchet (§3, fix-round r2 row) | 0 | §3: 564 issues / 225 files / 70 checks — 160 readability, 326 refactor, 73 design, 5 warning, every category equal to `scripts/ci/credo-strict-baseline.json`; no added line exceeds 98 columns | PR run `45672530392` failed `control` at 570 vs 564 (readability 166 vs 160; the six added lines at `goal_0006_migration_test.exs:697/698/701/704/710/713`); the r2 reflow returns the file to its two pre-existing issues |
 | §3 relocation, blocking step, no leftover | `python3 scripts/ci/test-ci-structure-extraction.py::…::test_the_daemon_audit_job_holds_the_moved_steps_and_the_blocking_model_routing_step` | 0 | §3; byte-identity check: the 72 removed lines of `daemon` (golangci 955-997 with its two comment lines, govulncheck 998-1018, model-routing 1061-1068 at `HEAD`) equal the 72 lines now in `daemon-audit` (`old == moved` → `True`; newline-joined span sha256 `589d57dcc0c92dae3646b8b50ea6d2cf94b723fe4e3ce178fc5c95ec95eb1eb1`); the reviewer's independent span digest is `5e8da0a309eac08db02690f068e0a558baff7fd4e25fc27749c25c595d655ac0`; C9/C10. The pin also now fixes the job's `uses:` prerequisites (`actions/checkout@v7`, `actions/setup-go@v7` with `go-version: 1.27.4` and `cache-dependency-path: daemon/go.sum`), its `defaults.run.working-directory: daemon`, and every defining command line of the two advisory bodies (version/digest/archive literals and the `GOOS=linux … run --config .golangci.yml` invocation for golangci-lint; `govulncheck_version='v1.10.0'` and the `./...` invocation for govulncheck) | mutations `test_mutation_marking_the_model_routing_step_advisory_…` (M5), `test_mutation_replacing_a_model_routing_invocation_with_exit_zero_…`, `test_mutation_emptying_a_moved_advisory_body_…` (golangci invocation → `exit 0`; the false-negative the second audit found), `test_mutation_pointing_the_moved_jobs_defaults_at_the_root_…` and `test_mutation_dropping_the_moved_jobs_setup_go_…` redden the pin; `daemon` no longer names any of the three steps |
 | §3 daemon-audit green / M6 / M7 | *not run in this stage* (§8) | — | — | the moved commands' pre-change green runs are the before-window rows (§6); `daemon` carried the same steps and passed (12-run evidence in the contract) |
 | §4 one vitest step | `python3 scripts/ci/test-ci-structure-extraction.py::…::test_one_step_owns_the_frontend_suite` | 0 | §3; C6: the action lost its plain test step (`ACTION_STEPS` pin), exactly one step in both files mentions `vitest` (ci.yml's coverage step) | mutations `test_mutation_restoring_the_plain_frontend_suite_reddens_the_owner_pin` (M9) reddens both the owner pin and `check_action`, and `test_mutation_re_adding_the_plain_frontend_suite_to_a_job_reddens_the_owner_pin` re-adds the suite inside a `ci.yml` job in the `run test` spelling (the second audit's counterexample to the first pattern); thresholds untouched (the classifier suite's `VITEST_COVERAGE_FLOORS` pin still passes, 37 tests OK) |
@@ -200,6 +213,40 @@ dispositions, each with its witness in §3/§4/§7:
   let the membership FK break silently. Fixed by the deterministic third arm; numbers, mutant and
   bytes in §7.
 
+### Fix round r2: PR #292 CI red (Sol `findings/292-opus-review-1.md`, DS `findings/292-ds-audit-1.md`; conductor rulings R0-R7)
+
+The wave PR's own run (`45672530392`, head `0283c9a8`) concluded `failure`: `control`'s step
+`Enforce the committed Credo strict baseline` held 570 issues against the baseline's 564 (readability
+166 vs 160), and every later `control` step was skipped. The DS audit's independent local repro agrees
+(origin/main 564, head 570, the only per-file delta `goal_0006_migration_test.exs` 2 → 8); the six
+added over-length lines are `697, 698, 701, 704, 710, 713`. The rulings and their dispositions:
+
+* **R0/R1 — reflow, and record the ratchet as a gate.** The two `%{…}` maps are broken one key per
+  line, the two comments rewrapped and the two-line "what" comment deleted (R5); no added line exceeds
+  98 columns, so the file returns to its two pre-existing issues. The ratchet reproduces the baseline
+  exactly — 564 issues over 225 files and 70 checks (160 readability, 326 refactor, 73 design,
+  5 warning), exit 0 (§3). The plan now carries the ratchet as a recorded local gate for any slice
+  touching `control/**`, with the Elixir gates' working directory stated.
+* **R2 — no change.** The `linux-native-v2-acceptance.yml` frontend-suite debt stays disclosed in §9.
+* **R3 — `legacy-route-audit` 5 → 10 minutes.** Re-derived with the contract's rule, counting the
+  three advisory downloads: each is bounded by curl `--retry-max-time 120` (2 min), so the largest
+  bounded step + 5 = 7, and the job's worst-case content (3 × 2 min of download budget plus its
+  0.40-0.52 min of observed work ≈ 6.5 min) needs a ceiling at least that large; both reads give the
+  rule's next 5-minute multiple, 10 (also ≥ 2.5 × the 0.4-min avg12 = 1 and ≥ the floor 5). The
+  `JOB_TIMEOUTS` pin, C2 and the YAML-probe row are updated.
+* **R4 — `control` 20 → 25 minutes.** The before-window maximum is 9.38 min, and the 40 %-of-ceiling
+  rule needs ≥ 9.38 / 0.40 = 23.45, rounded up on the contract's 5-minute grid to 25 (also ≥ 2.5 ×
+  the 8.0-min avg12 = 20 and ≥ the largest step cap 15 + 5 = 20). The two reportable before-window
+  runs (9.38 and 9.07 min) sit at 37.5 % and 36.3 % of the raised ceiling. Pin and rows updated.
+* **R5 — comment policy.** `daemon-audit`'s header is two lines; the test's two-line "what" comment is
+  deleted.
+* **R6 — stale reference.** The plan's flake-item heading cites `:686` (the test header) instead of
+  `:697`. The historical `docs/plans/2026-11-21-ci-quality-plane-plan.md` stays unedited (§9).
+* **R7 — the two residual FK alternations are order-robust.** `goal_0006_migration_test.exs:2190`
+  (the `DELETE FROM goals …` arm) and `:2233` (the repository-resource `UPDATE` arm) list their full
+  violated sets — three and two constraint names — so a report from any trigger-OID order still
+  matches; no code change (§9; the r1 coordinates were `:2184`/`:2227`).
+
 ## 6. Measurement windows
 
 Collection command (read-only, `wxxb789/symmetry`; a `per_page=20` scan of `event=pull_request` and
@@ -261,15 +308,15 @@ Per-site before-window baselines (minutes per run, oldest last):
 
 ### After window — first 5 completed `pull_request` runs whose head contains the wave merge
 
-Not collected in this stage (§8). The comparison to apply when it is: the same
-attempt-aware definitions above; wall (mean against 12.12 min), measured runner-minutes (mean against
-47.79), per-job durations as fractions of the §2 ceilings (report anything above 40 %), cancelled-run
-count, queue delay; item 3 attribution `daemon` ≥150 s below its 9.70 min before-window mean with
-`daemon-audit` ≤ `daemon`; item 4 attribution `contracts` below its 3.34 min mean and the composite step
-below its 1.67-2.10 min band; item 5 `Cache restored from key: …` present at all five sites; item 1 zero
-cancelled `push`-event runs. Before the wave PR opens, whichever 5 runs immediately precede it are the
-window of record — if newer runs land first, re-collect with the commands above rather than reusing this
-frozen set.
+Not collected in this stage (§8). The comparison to apply when it is: the same attempt-aware
+definitions above; wall (mean against 12.12 min), measured runner-minutes (mean against 47.79), per-job
+durations as fractions of the amended ceilings (`control` 25, `legacy-route-audit` 10; report anything
+above 40 %), cancelled-run count, queue delay; item 3 attribution `daemon` ≥150 s below its 9.70 min
+before-window mean with `daemon-audit` ≤ `daemon`; item 4 attribution `contracts` below its 3.34 min
+mean and the composite step below its 1.67-2.10 min band; item 5 `Cache restored from key: …` present
+at all five sites; item 1 zero cancelled `push`-event runs. Before the wave PR opens, whichever 5 runs
+immediately precede it are the window of record — if newer runs land first, re-collect with the
+commands above rather than reusing this frozen set.
 
 ## 7. Flake item — probe and fix verification
 
@@ -344,9 +391,10 @@ columns, the absent goal-revision FK) and confirmed the argument; §9 records th
 ### F5 fix-round arm, its repeat run, and the drop-membership mutant
 
 Delivered bytes of `control/test/symmetry_control/migrations/goal_0006_migration_test.exs`:
-`fde9c590bc5ad4de35efc3949ff513eb88311d7b78096e1e963538f9abe097e7` (the §3 harness copied exactly these
-bytes into its scratch tree). Harness: Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6 on a run-local port —
-both match the CI `control` job — with `POSTGRES_DB=symmetry_control_test` and the tree's migrations.
+`146c86cf0f8a477ab1ab31381e813ec60012dfd6d36929ff42a1ca82a4bdcbf7` (the fix-round r2 harness copied
+exactly these bytes into its scratch tree; the fix-round r1 bytes were `fde9c590…`). Harness: Elixir
+1.20.4 / OTP 29.0.6, PostgreSQL 18.6 on a run-local port — both match the CI `control` job — with
+`POSTGRES_DB=symmetry_control_test` and the tree's migrations.
 
 * The two work-item assertions now go through the helper `assert_deferred_ownership_insert_error!/2`,
   which inserts its row inside a transaction that defers `tasks_context_snapshot_ownership_fkey`.
@@ -355,17 +403,22 @@ both match the CI `control` job — with `POSTGRES_DB=symmetry_control_test` and
   `tasks_work_item_id_fkey` is satisfied and the deferred ownership FK cannot report before the insert
   fails; the only immediate FK left to report is `tasks_goal_work_item_membership_fkey`, independent of
   trigger OID order, and the assertion names it exactly (no alternation).
-* Runs: `mix format --check-formatted` exit 0 (silent); `mix test …:686` → `1 passed, 57 excluded`; the
-  same command with `--repeat-until-failure 50` → its countdown ran 50 → 0, 51 runs, every one
-  `1 passed, 57 excluded` (52 green runs including the single one).
+* Runs: `mix format --check-formatted` exit 0 (silent); `MIX_ENV=test mix compile --warnings-as-errors`
+  exit 0; `mix test …:686` → `1 passed, 57 excluded`; the same command with `--repeat-until-failure 50`
+  → its countdown ran 50 → 0, 51 runs, every one `1 passed, 57 excluded` (52 green runs including the
+  single one). Re-run on the r2 bytes: the same commands report identical results (format and compile
+  exit 0; 51 green repeat runs; §3).
 * Mutant: one inserted line, immediately after the `migrate_goal_up!()` call that follows the `:686`
   test header —
-  `Repo.query!("ALTER TABLE tasks DROP CONSTRAINT tasks_goal_work_item_membership_fkey")` — giving the
-  mutant file `<scratch>/goal_0006_mutant_drop_membership.exs`, sha256
-  `00069c47c4596aa669810d17ac4f68338c84b12928da5a97e1d44171f0b7414b` (the scratched file re-hashed to
-  the delivered value after the run). Result: the disjunctive arm stays green — with the constraint
-  dropped, that row's only reportable work-item violation is `tasks_work_item_id_fkey`, which its regex
-  accepts — and the test reds at the new arm (`:709` in the mutant file): expected
+  `Repo.query!("ALTER TABLE tasks DROP CONSTRAINT tasks_goal_work_item_membership_fkey")`. R1 built it
+  from the r1 bytes as `<scratch>/goal_0006_mutant_drop_membership.exs`, sha256
+  `00069c47c4596aa669810d17ac4f68338c84b12928da5a97e1d44171f0b7414b`; r2 rebuilt it from the r2
+  bytes as `<scratch>/goal_0006_mutant_drop_membership_r2.exs`, sha256
+  `a0fe0ecebab19c65aaafe72d556d61685711018602af377492b82e2c565cc9d8` (each scratched file re-hashed to
+  its delivered value after the run; the r2 restore is `146c86cf…`). Result in both rounds: the
+  disjunctive arm stays green — with the constraint dropped, that row's only reportable work-item
+  violation is `tasks_work_item_id_fkey`, which its regex accepts — and the test reds at the new arm
+  (`:709` in the r1 mutant file, `:713` in the r2 mutant file): expected
   `tasks_goal_work_item_membership_fkey`, actual `tasks_context_snapshot_ownership_fkey` (the insert
   otherwise succeeds and the deferred ownership check fires at commit). This is the review's
   counterexample, now red; the mutant is an oracle gap for CI — a schema mutation, not a suite pin.
@@ -378,7 +431,8 @@ repository. These goal-contract gates therefore remain open; each is handed over
 1. **Wave PR and its own green run.** Push `refactor/rf-ci-wave1-hygiene`, open a normal PR, and require
    the run on the final bytes to be green with 16 jobs and `daemon-audit` green (proves the moved
    commands run in the new home). Read the advisory actionlint log for new findings on the changed files
-   (the diff must add none).
+   (the diff must add none). The first PR run (`45672530392`, head `0283c9a8`) is red at `control`'s
+   Credo step (ruling R0, §5); the green run on the fix-round r2 bytes is the acceptance evidence.
 2. **Live concurrency check.** Two rapid pushes to the wave PR: the first run must conclude `cancelled`,
    the second green; then verify zero cancelled `push`-event runs of `ci.yml` in the after-window.
 3. **Plant dispatch (budget: 1).** Push `scratch/rf-ci-wave1-hygiene` = wave branch + one plant commit
@@ -427,18 +481,25 @@ repository. These goal-contract gates therefore remain open; each is handed over
   green with a failing frontend suite until a later wave gives it an owner.
 * `daemon-audit` costs one extra runner's checkout/setup/job-startup per run-heavy PR; the contract
   accepted that trade, and the after-window's measured runner-minutes are the only place it shows.
-* `legacy-route-audit`'s new 5-minute ceiling sits above three uncapped advisory steps (ruff, shellcheck,
-  actionlint downloads): a stalled advisory download can now fail the workflow's only unconditional job.
-  Observed 0.40-0.52 min; the value is contract-ratified (Q-D), so it is recorded rather than changed.
+* `legacy-route-audit`'s ceiling was raised to 10 minutes by ruling R3 (derivation in §5): the three
+  advisory steps' downloads (`ruff`, `shellcheck`, `actionlint`) each carry a 120 s curl retry budget,
+  so their 6-minute worst case plus the job's observed 0.40-0.52 min of work now fits inside the
+  ceiling instead of being able to consume it. The three steps stay uncapped, but a stalled download is
+  bounded by its own retry budget and no longer risks the workflow's only unconditional job.
 * `docs/plans/2026-11-21-ci-quality-plane-plan.md:39-40` still names `daemon` as the home of the two
   advisory readings; the contract's strict owned-file list excludes that historical plan, so the stale
   row is left for a follow-up (no programmatic consumer reads it).
+* The two residual FK-attribution alternations in the changed test file (ruling R7) —
+  `goal_0006_migration_test.exs:2190`, the `DELETE FROM goals …` arm, and `:2233`, the
+  repository-resource `UPDATE` arm (the r1 coordinates were `:2184`/`:2227`) — enumerate every
+  constraint their statements can violate (three and two names), so any trigger-OID report order still
+  matches; they are outcome-order-robust like the kept disjunctive arm (`:700`). No code change.
 * The probe cluster is PostgreSQL 17.11 (Alpine guest); CI runs 18.6. The mechanism (first failing RI
   check trigger by trigger name, names encoding OIDs) is version-stable; the exact reported name is
   not, which is the defect being fixed.
-* The WSL Elixir toolchain is 1.19.6/OTP 27 against CI's 1.20.4/OTP 29.0.6; `control/mix.exs` requires
-  `elixir: "~> 1.17"`, and the single migrated test is schema-level, so toolchain-version risk for the
-  fix is low, but the CI run is the version-of-record proof.
+* The fix-round r2 gates ran on the exact CI toolchain (Elixir 1.20.4 / OTP 29.0.6, PostgreSQL 18.6;
+  §3); the earlier mechanism probe used Elixir 1.19.6 / OTP 27 against PostgreSQL 17.11. The delivered
+  bytes' gates therefore carry no toolchain-version gap; the CI run remains the version-of-record proof.
 * `mix deps.get` step durations in the after-window will be dominated by cache-restore and Mix startup
   time, not by the download; the per-site restore lines are the discriminating evidence (§6).
 * The `daemon` after-window expectation (≥150 s lower) assumes the moved content stays off `daemon`;

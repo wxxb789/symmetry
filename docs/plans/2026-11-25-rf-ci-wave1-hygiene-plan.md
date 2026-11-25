@@ -34,7 +34,9 @@ item) and what was done instead, and the evidence plan.
    other step byte-identical. Job inserted between `daemon`'s last step and `legacy-route-audit`.
 2. **Job-timeout placement.** `    timeout-minutes: N` immediately after `runs-on:`, matching the five
    existing ceilings (`coverage-control`, `coverage-daemon`, `coverage-frontend`,
-   `pi-control-e2e-windows`, `daemon-windows`), none of which is touched.
+   `pi-control-e2e-windows`, `daemon-windows`), none of which is touched. The PR #292 CI-red rulings
+   R3/R4 revised two of this goal's new ceilings — `control` 25 and `legacy-route-audit` 10, derived
+   in the evidence record — and lowered no pre-existing ceiling.
 3. **Cache step shape.** Unnamed `- uses: actions/cache@v6` (the current `actions/cache` major;
    `refs/tags/v6` = `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` resolved with `git ls-remote` at
    implementation time), `with.path` a two-line block (`control/deps`, `control/_build`),
@@ -62,7 +64,7 @@ item) and what was done instead, and the evidence plan.
    updated for the deleted test step and the new cache step; `ADVISORY_STEPS` moves the two rows to
    `daemon-audit`.
 
-## Appended flake item (`control/test/symmetry_control/migrations/goal_0006_migration_test.exs:697`)
+## Appended flake item (`control/test/symmetry_control/migrations/goal_0006_migration_test.exs:686`)
 
 The instruction "make the row violate only the asserted FK" is **not satisfiable literally** under the
 `goal_0006` schema this test migrates to. Proved by probe on PostgreSQL 17.11 (reduced but faithful
@@ -108,6 +110,13 @@ Fix applied (transaction-local, no schema or assertion change, regex untouched):
 Run here: both local suites (structure extraction, changed-path classifier) plus each mutation row by
 direct invocation; the flake probe transcript; the branch-protection read (done: 404 "Branch not
 protected", `rulesets` = `[]`); the citation gate over the amended `quality.md` in a scratch clone.
+Added by the PR #292 CI-red conductor rulings (R1): the Credo strict ratchet is a recorded local gate
+for any slice touching `control/**`, run from `control/` with its deps fetched —
+`cd control && mix credo --strict 2>&1 | tee <log> && python3 ../scripts/ci/assert-credo-strict-baseline.py --log <log>`
+(the ratchet is exact: the per-category counts must equal `scripts/ci/credo-strict-baseline.json`,
+never merely stay below it). Every Elixir gate states its working directory: `mix format --check-formatted`
+and the targeted `mix test` also run from `control/`, never the repository root, where `mix format`
+has no `.formatter.exs` inputs and exits 0 vacuously.
 Also run here, and added after the reviews landed: the record-cleanliness gate over the new record, and
 two independent read-only reviews (an adversarial Sol review and a second audit) whose findings forced
 five more mutation witnesses and three pin-strengthening changes — the evidence record's §5 lists every

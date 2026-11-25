@@ -694,24 +694,30 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         insert_goal_task!(%{goal_id: goal_id})
       end
 
-      # PostgreSQL reports the first failing RI check trigger (a name-ordered `RI_ConstraintTrigger_c_<oid>`);
-      # deferring the ownership FK leaves only the two work-item foreign keys able to report on this row.
+      # PostgreSQL reports the first failing RI check trigger; RI triggers fire in name order.
+      # Deferring the ownership FK leaves only the two work-item FKs able to report.
       assert_deferred_ownership_insert_error!(
         ~r/tasks_(work_item_id|goal_work_item_membership)_fkey/i,
-        %{goal_id: goal_id, work_item_id: Ecto.UUID.bingenerate(), context_snapshot_id: Ecto.UUID.bingenerate()}
+        %{
+          goal_id: goal_id,
+          work_item_id: Ecto.UUID.bingenerate(),
+          context_snapshot_id: Ecto.UUID.bingenerate()
+        }
       )
 
-      # Deterministic counterpart: a valid work item no goal owns satisfies `tasks_work_item_id_fkey`, so on
-      # its deferred row only `tasks_goal_work_item_membership_fkey` can report.
+      # Deterministic counterpart: a work item no goal owns satisfies the work-item FK, so its
+      # deferred row can only report `tasks_goal_work_item_membership_fkey`.
       orphan_item_id = insert_work_item!(project_id)
 
       assert_deferred_ownership_insert_error!(
         ~r/tasks_goal_work_item_membership_fkey/i,
-        %{goal_id: goal_id, work_item_id: orphan_item_id, context_snapshot_id: Ecto.UUID.bingenerate()}
+        %{
+          goal_id: goal_id,
+          work_item_id: orphan_item_id,
+          context_snapshot_id: Ecto.UUID.bingenerate()
+        }
       )
 
-      # This row violates only the ownership FK: the work item and goal revision are valid while the
-      # snapshot belongs to a sibling work item.
       sibling_item_id = insert_goal_work_item!(project_id, goal_id)
       sibling_snapshot_id = insert_context_snapshot!(goal_id, sibling_item_id)
 
