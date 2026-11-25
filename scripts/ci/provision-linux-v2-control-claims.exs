@@ -181,8 +181,8 @@ defmodule LinuxV2ControlClaimFixture do
          }}
       end)
 
-    # The goal-routed cases get their WorkItem through Control's own Goal admission
-    # (schedule/5); their WorkItem must stay goal-owned for the clone fence.
+    # The goal-routed cases get their WorkItem through Control's own Goal admission (schedule/5); their
+    # WorkItem must stay goal-owned for the clone fence, and test-linux-v2-owner-request-keys.py pins this pair.
     goal_case_specs =
       Map.new(goal_cases, fn {case_name, profile, _harness, repository_role, description} ->
         repository_id =
