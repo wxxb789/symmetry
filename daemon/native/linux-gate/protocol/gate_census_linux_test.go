@@ -66,6 +66,10 @@ func compileGateProbe(t *testing.T, source, probeName string) string {
 	return probe
 }
 
+func censusGoCommandStringCapDefine() string {
+	return "#define CENSUS_GO_MAX_COMMAND_STRING " + strconv.Itoa(maxCommandString) + "\n"
+}
+
 func buildGateFDCensusProbe(t *testing.T) string {
 	t.Helper()
 	// Include the current gate in this test-owned translation unit to exercise
@@ -203,7 +207,7 @@ int main(int argc, char **argv) {
   return 0;
 }
 `
-	return compileGateProbe(t, "#define CENSUS_GO_MAX_COMMAND_STRING "+strconv.Itoa(maxCommandString)+"\n"+source+`
+	return compileGateProbe(t, censusGoCommandStringCapDefine()+source+`
 _Static_assert(MAX_COMMAND_STRING == 64 * 1024, "the gate C cap must be the ruled 64 KiB bound");
 _Static_assert(MAX_COMMAND_STRING == CENSUS_GO_MAX_COMMAND_STRING,
     "the gate C cap must track Go protocol.maxCommandString");
@@ -339,11 +343,9 @@ static int bound_run(int oversized) {
   close(release_sender);
   unsigned char *sealed = NULL;
   size_t sealed_size = 0;
-  struct owner_config config;
-  memset(&config, 0, sizeof(config));
   struct release_command command;
   memset(&command, 0, sizeof(command));
-  if (read_release(owner_pid, OWNER_PIDFD, &config, token, &sealed, &sealed_size, &command) != 0) {
+  if (read_release(owner_pid, OWNER_PIDFD, NULL, token, &sealed, &sealed_size, &command) != 0) {
     if (errno != EPROTO) {
       fprintf(stderr, "read_release refused with errno %d, want EPROTO\n", errno);
       return 18;
@@ -353,7 +355,7 @@ static int bound_run(int oversized) {
       return 18;
     }
     fprintf(stderr, "read_release refused an argv element of %zu bytes with EPROTO (the cap plus one)\n", element);
-  return 0;
+    return 0;
   }
   if (oversized) {
     fprintf(stderr, "read_release accepted an argv element of %zu bytes above the cap\n", element);
@@ -377,7 +379,7 @@ int main(int argc, char **argv) {
   return 1;
 }
 `
-	return compileGateProbe(t, "#define CENSUS_GO_MAX_COMMAND_STRING "+strconv.Itoa(maxCommandString)+"\n"+source, "command-string-bound")
+	return compileGateProbe(t, censusGoCommandStringCapDefine()+source, "command-string-bound")
 }
 
 // The hosted runner's true is a symlink, which the gate's O_NOFOLLOW refuses

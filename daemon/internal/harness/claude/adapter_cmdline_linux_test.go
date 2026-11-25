@@ -5,6 +5,7 @@ package claude
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -38,14 +39,13 @@ func TestClaudeCandidateLinuxCommandArgvFitsOwnerWireBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode the fixed Claude argv as a guarded RELEASE: %v", err)
 	}
-	schemaBytes := -1
-	for index, argument := range invocation.Args {
-		if index > 0 && invocation.Args[index-1] == "--json-schema" {
-			schemaBytes = len(argument)
-		}
-	}
-	if schemaBytes < 0 {
+	schemaIndex := slices.Index(invocation.Args, "--json-schema")
+	if schemaIndex < 0 || schemaIndex+1 >= len(invocation.Args) {
 		t.Fatal("the fixed Claude argv lost its --json-schema element")
+	}
+	schemaBytes := len(invocation.Args[schemaIndex+1])
+	if schemaBytes <= 16<<10 {
+		t.Fatalf("the fixed Claude argv --json-schema element = %d bytes, want above the pre-widening 16 KiB cap so the mutant clause stays red", schemaBytes)
 	}
 	t.Logf("Claude candidate --json-schema element = %d bytes, guarded RELEASE packet = %d bytes", schemaBytes, len(packet))
 }

@@ -16,13 +16,17 @@ all commands ran in WSL `Ubuntu-24.04`, kernel `6.18.58.1-microsoft-standard-WSL
 | `daemon/native/linux-gate/protocol/wire.go` | `0bb6b92c59ebc8b5e80b1c71add632dd7bf730cf71646ebf0fae14888bc54504` |
 | `daemon/native/linux-gate/c-gate/gate.c` | `e386c7f73e6fa955bcd569490b9d7e219ae266ff02b09c45e2e95a7a8dda2f2c` |
 | `daemon/native/linux-gate/protocol/wire_linux_test.go` | `efcbaa5d2ffd217b8b98f946ca89e979c542985ca9f8bb5e2504089b6336f9ce` |
-| `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | `943601707e94914aee6b71568952fef468a76187cc1222575d4011dac677c718` |
-| `daemon/internal/harness/claude/adapter_cmdline_linux_test.go` | `85cdec4b8d9e15c47dd33ff9dd5aa49bb7fdcbe43491be59da2cebe8b06abda0` |
-| `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md` | `60d2e7d998386d79678eeba23978473c20f74416d36963082377fb17b9c026ce` (record revision; not run-bound) |
+| `daemon/native/linux-gate/protocol/gate_census_linux_test.go` | `f9a771bb95b39a86d0d1b58ae2509b075e6dffb16aa1a6378a1d1bc087648064` |
+| `daemon/internal/harness/claude/adapter_cmdline_linux_test.go` | `e36b255e27363511a5231efba29427fd87c1e66c8a4140033b459e6dbcadca16` |
+| `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md` | `b2a486ce0db332f338fb9d38b56c021b99c151f35dc5ad9c699fa948ec3ff051` (record revision; not run-bound) |
 
 `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are record-only and deliberately
 not hashed. The working-tree inventory is exactly these files plus the two record edits
 (`git status --porcelain -uall --no-renames`: 4 modified, 2 untracked).
+
+The apply-stage simplification (2026-11-26) then changed `gate_census_linux_test.go`,
+`adapter_cmdline_linux_test.go` and one plan anchor row: the three digests above are re-derived
+at those apply bytes, and every §5 row was re-run there (same counts; refreshed durations).
 
 ## 2. The change
 
@@ -83,12 +87,12 @@ The delivered-form behaviour at the new cap (all green, exit 0):
 | Vet, linux | `go vet ./native/linux-gate/protocol/ ./internal/harness/claude/` | 0 | no output |
 | Vet, windows | `GOOS=windows GOARCH=amd64 go vet ./native/linux-gate/protocol/ ./internal/harness/claude/` | 0 | no output |
 | Vet, module | `GOOS=linux GOARCH=amd64 go vet ./...` | 0 | no output |
-| Gate C, production flags | `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o /tmp/rf-claude-schema-argv-gate-cc native/linux-gate/c-gate/gate.c` (the installer's line, `scripts/install-linux-owner.sh:29`, retargeted to a scratch output) | 0 | no output |
+| Gate C, production flags | `cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack -o <TMP>/rf-claude-schema-argv-apply-gate-cc native/linux-gate/c-gate/gate.c` (the installer's line, `scripts/install-linux-owner.sh:29`, retargeted to a scratch output) | 0 | no output |
 | Census/bound probe compile | `compileGateProbe` (`-std=c11 -O2`, unchanged) inside G3/G4 | 0 | both probes compile the current gate.c |
-| Protocol race | `go test -race -count=1 -timeout 25m -v ./native/linux-gate/protocol/` | 0 | `ok` 7.514s, 47 top-level PASS / 11 SKIP / 0 FAIL (settled bytes; subtests of both new rows PASS) |
-| Claude race | `go test -race -count=1 -timeout 25m -v ./internal/harness/claude/` | 0 | `ok` 6.968s, 74 top-level PASS / 5 SKIP / 0 FAIL |
-| Regression rows | `go test -race -count=1 -v -run "TestWireLinuxReleaseRefusals\|TestWireLinuxCloneBootstrapRefusals" ./native/linux-gate/protocol/` | 0 | both PASS; the `:233,260,372` oversized-frame and total-bound refusals are untouched (their line numbers shift by the 47 inserted lines) |
-| Twin runtime | `go test -race -count=1 -v -run TestClaudeCandidateLinuxCommandArgvFitsOwnerWireBound ./internal/harness/claude/` | 0 | PASS 0.11s (schema 23881 / packet 24317) |
+| Protocol race | `go test -race -count=1 -timeout 25m -v ./native/linux-gate/protocol/` | 0 | `ok` 7.843s, 47 top-level PASS / 11 SKIP / 0 FAIL (settled bytes; subtests of both new rows PASS) |
+| Claude race | `go test -race -count=1 -timeout 25m -v ./internal/harness/claude/` | 0 | `ok` 6.907s, 74 top-level PASS / 5 SKIP / 0 FAIL |
+| Regression rows | `go test -race -count=1 -v -run "TestWireLinuxReleaseRefusals\|TestWireLinuxCloneBootstrapRefusals" ./native/linux-gate/protocol/` | 0 | both PASS; the dispatch-head `:233,260,372` oversized-frame and total-bound refusals are untouched (`:233` stays; `:260`/`:372` are `:307`/`:419` after the 47 inserted lines) |
+| Twin runtime | `go test -race -count=1 -v -run TestClaudeCandidateLinuxCommandArgvFitsOwnerWireBound ./internal/harness/claude/` | 0 | PASS 0.10s (schema 23881 / packet 24317) |
 
 The 11 protocol skips are the pre-existing installed-owner/credential-gated tests
 (`TestInstalledLinuxOwner*Scratch`, `TestLinuxOwner*Worker`/`Helper`,

@@ -1902,7 +1902,8 @@ section below.
       `docs/archive/CLOSED-TODO.md`: `codex_containment`'s AppArmor userns wall by
       `rf-acc-apparmor-userns-profile` (#293; its record §8 names the rows that clear the wall
       and the runs' next stops — the migration turn wait and the `shared` `/proc/<pid>/environ`
-      identity rows — as next-goal territory), and `claude_containment`'s fixed
+      identity rows — and its §12 frames them as next-goal territory), and
+      `claude_containment`'s fixed
       `--json-schema` argv wall by `rf-claude-schema-argv` (closure under
       `## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg
       (2026-11-26)`; its binding run — the conductor's Bind scratch run of `claude_containment`
