@@ -1842,26 +1842,12 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
 `6b2d4f8f`); its text is in `docs/archive/CLOSED-TODO.md` under
 `## rf-acc-clone-cleanup-parent-death: the installed-owner leg's parent-death stop (2026-11-25)`.
 
-- [ ] Decide the Linux v2 native owner witness's clone-admission contradiction (2026-11-24, goal
-      `rf-acc-native-containment-witness`; evidence
-      `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §7.2, runs `45452357027`,
-      `45455325059`, `45458181149`): with the captured App stderr now visible, both containment
-      sets stop after the claim seed with `reserve owner witness clone before source Git effects:
-      Linux clone intent does not match the current admitted Subject`. The witness requires a
-      `git_clone_v2` workspace (`daemon/internal/app/linux_owner_witness_linux.go:2981`) whose
-      reservation demands an admitted Control Subject
-      (`daemon/internal/state/linux_clone_journal.go:208-216,864-878`), while the witness request
-      validation refuses a claim that carries an admission
-      (`daemon/e2e/production_linux_v2_native_witness_test.go:1565-1567`: `owner-witness claim must
-      be a real non-Goal Control task`) and Control's `tasks_goal_fields_all_or_none` forbids goal
-      fields on a goal-less task (`scripts/ci/provision-linux-v2-control-claims.exs:415-421`); no
-      fixture claim satisfies both, so the rows never reach the credential-dependent step. Smallest
-      proposed fix: run the witness on a Goal-backed admitted claim whose admission Subject equals
-      the request Subject — relax the harness check to `present && admission.Subject ==
-      request.Subject` and provision the fixture's tasks through the Goal/admission flow (pattern
-      `scripts/ci/omo-control-native-fixture.exs:190,262-284,297-303,376`) — which grows the owned
-      set by that harness block. The alternative, exempting the witness from the shared clone-v2
-      admission guard, would weaken a production guard (`daemon/internal/**`).
+The clone-admission contradiction of this section's third item closed on 2026-11-26 (goal
+`rf-acc-containment-goal-admission`, branch `refactor/rf-acc-containment-goal-admission`, base
+`4440c5c0`); its text is in `docs/archive/CLOSED-TODO.md` under
+`## rf-acc-containment-goal-admission: the clone-admission contradiction (2026-11-26)`, and the
+goal's new residuals are in the `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
+section below.
 
 - [ ] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
       goal `rf-acc-native-burndown`; run `45402706492`, evidence §3.15; split 2026-11-25 by goal
@@ -1904,6 +1890,64 @@ The parent-death stop of this section's second item closed on 2026-11-25 (goal
       no refusal. Declared fragment/drop-in `Before=` edges to the daemon stay refused
       (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
       residual explicitly.
+
+## rf-acc-containment-goal-admission: residuals (2026-11-26)
+
+- [ ] The containment sets' next stops after the W1 umask fix (2026-11-26, goal
+      `rf-acc-containment-goal-admission`; evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §3, run `45671784251`):
+      both sets now pass the clone reserve and the fresh-leg umask wall (the authorized one-line
+      `production` UMask arm is in; runs `45665341553`/`45668197894` red at the wall, run 4 zero
+      `… are 05` lines) and stop at, verbatim, `codex_containment` — `start native owner witness
+      transport: resume process "/usr/local/bin/codex": one-use Linux v2 RELEASE result is
+      unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown;
+      stage=clone_bootstrap arm=bootstrap_attempt wait_class=other
+      guest_stage=gate_drop_bounding_set errno=1)` (the same pre-clone credential fact the
+      `## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction` entry above records;
+      the AppArmor userns wall, owned by the in-flight goal `rf-acc-apparmor-userns-profile` per
+      the conductor ruling 2026-11-26 — not `rf-acc-guest-native-exec`, which merged as #289);
+      `claude_containment` — `start native owner witness transport: start
+      "/usr/local/bin/claude": validate native command and three Runner pipes before cgroup
+      reservation: Linux owner native argv contains an empty, oversized, or NUL value` (root
+      cause measured: the Claude adapter's fixed `--json-schema` element is 23 881 bytes,
+      `daemon/internal/harness/claude/adapter.go:160-180`, over the 16 KiB `maxCommandString`
+      bound, `daemon/native/linux-gate/protocol/wire.go:53`, refused at `wire_linux.go:450-452`
+      via `daemon/internal/execution/linux_owner_v2_linux.go:182`; owner `rf-claude-schema-argv`,
+      a new conductor goal whose design is pending: raise the argv bound, shrink the schema
+      argument, or move the schema off argv). Both sets'
+      `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
+      failing leg).
+
+- [ ] `pi_provider_action` and the two crash legs still need a provider-scoped admission
+      (2026-11-26, goal `rf-acc-containment-goal-admission`, stage-1(b); evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §7(b)): Control composes
+      `provider_scope` (`resource_ids`, `operations_by_resource` → `["resource.sync"]`,
+      `change_target: nil`) iff `"resource.sync"` is in both `authority_policy.allowed_actions` and
+      `execution_policy.allowed_actions` (`control/lib/symmetry_control/goals/admission.ex:1218-1268`,
+      `:1304-1307`) and then adds `provider_access: true` (`:333-335`); the containment fixture's
+      goals set `allowed_actions: []` and stay provider-free by design. `pi_provider_action`,
+      `helper_sigkill_detached_child` and `daemon_sigkill_helper_survives_detached_child` keep the
+      legacy claim shape and stay latent behind the `shared` set's owner-leg stops; widening the
+      e2e admission branch to a provider-scoped admission needs its own ruling (the provider-access
+      assertions and the clone reserve would then both bind the same claim).
+
+- [ ] The writer/fixture key agreement has no permanent check (2026-11-26, simplify S3, recorded
+      by the apply stage; conductor ruling 2026-11-26): the writer's `GOAL_ADMISSION_CASES`
+      (`scripts/ci/write-linux-v2-owner-request.py`) and the fixture's goal-routing rows
+      (`scripts/ci/provision-linux-v2-control-claims.exs`) must agree exactly, but the only guards
+      were the deleted P1 probe and M1's local half, so a drift would surface only in a hosted
+      run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
+      needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
+
+- [ ] Bind-run observation: codex post-wall cleanup race (2026-11-26, goal
+      `rf-acc-containment-goal-admission`; evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §6, Bind run `45689981952`):
+      the codex set's stderr carries 12 `dial unixpacket: connect: connection refused` lines,
+      6 verbatim as `Linux v2 helper could not prove the exact run leaf stopped: dial unixpacket:
+      connect: connection refused` (`daemon/internal/execution/linux_owner_v2_linux.go:1292`;
+      file sha256 `c5da521d…`, identical at both heads); run 4 had 0 such lines. Post-wall
+      cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
+      conductor.
 
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 

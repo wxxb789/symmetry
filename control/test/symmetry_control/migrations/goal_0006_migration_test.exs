@@ -694,11 +694,38 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
         insert_goal_task!(%{goal_id: goal_id})
       end
 
-      assert_raise Postgrex.Error, ~r/tasks_(work_item_id|goal_work_item_membership)_fkey/i, fn ->
-        insert_goal_task!(%{
+      # PostgreSQL reports the first failing RI check trigger; RI triggers fire in name order.
+      # Deferring the ownership FK leaves only the two work-item FKs able to report.
+      assert_deferred_ownership_insert_error!(
+        ~r/tasks_(work_item_id|goal_work_item_membership)_fkey/i,
+        %{
           goal_id: goal_id,
           work_item_id: Ecto.UUID.bingenerate(),
           context_snapshot_id: Ecto.UUID.bingenerate()
+        }
+      )
+
+      # Deterministic counterpart: a work item no goal owns satisfies the work-item FK, so its
+      # deferred row can only report `tasks_goal_work_item_membership_fkey`.
+      orphan_item_id = insert_work_item!(project_id)
+
+      assert_deferred_ownership_insert_error!(
+        ~r/tasks_goal_work_item_membership_fkey/i,
+        %{
+          goal_id: goal_id,
+          work_item_id: orphan_item_id,
+          context_snapshot_id: Ecto.UUID.bingenerate()
+        }
+      )
+
+      sibling_item_id = insert_goal_work_item!(project_id, goal_id)
+      sibling_snapshot_id = insert_context_snapshot!(goal_id, sibling_item_id)
+
+      assert_raise Postgrex.Error, ~r/tasks_context_snapshot_ownership_fkey/i, fn ->
+        insert_goal_task!(%{
+          goal_id: goal_id,
+          work_item_id: work_item_id,
+          context_snapshot_id: sibling_snapshot_id
         })
       end
 
@@ -4502,6 +4529,18 @@ defmodule SymmetryControl.Migrations.Goal0006MigrationTest do
     )
 
     id
+  end
+
+  defp assert_deferred_ownership_insert_error!(pattern, attrs) do
+    assert_raise Postgrex.Error, pattern, fn ->
+      Repo.transaction(fn ->
+        Repo.query!(
+          "ALTER TABLE tasks ALTER CONSTRAINT tasks_context_snapshot_ownership_fkey DEFERRABLE INITIALLY DEFERRED"
+        )
+
+        insert_goal_task!(attrs)
+      end)
+    end
   end
 
   defp insert_goal_task_with_snapshot!(goal_id, work_item_id, allowed_runtime_ids) do

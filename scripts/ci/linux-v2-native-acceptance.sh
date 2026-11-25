@@ -1913,7 +1913,7 @@ run_go_test() {
   # The bundle-based witnesses stand in for the installed daemon, whose units set UMask=0077;
   # without it the clone seed's new A-owned refs are B-accessible and its own revalidation refuses.
   case "$test_mode" in
-    stage-replay|negative) command+=(--property=UMask=0077) ;;
+    stage-replay|negative|production) command+=(--property=UMask=0077) ;;
   esac
   case "$test_mode" in
     pi-baseline)
