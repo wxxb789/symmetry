@@ -52,9 +52,9 @@ parse. The same stderr warning appears on `app-server --help` and does not
 affect the transport-help or schema gates.
 
 Environment for every invocation below: `CODEX_HOME` = `SYMMETRY_CODEX_*_HOME`
-= `SYMMETRY_CODEX_*`/`HOME`/`USERPROFILE` = `C:\Users\lhan\.codex`,
+= `SYMMETRY_CODEX_*`/`HOME`/`USERPROFILE` = `<HOST-PATH>\.codex`,
 `SYMMETRY_CODEX_*_EXECUTABLE` =
-`C:\Users\lhan\AppData\Local\mise\installs\codex\0.168.0\bin\codex.exe`.
+`<HOST-PATH>\AppData\Local\mise\installs\codex\0.168.0\bin\codex.exe`.
 Interpolation is by the isolated smoke environment; no secret is recorded here.
 
 ## Contained transport

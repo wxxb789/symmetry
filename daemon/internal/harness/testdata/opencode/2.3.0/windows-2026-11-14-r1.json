@@ -1,7 +1,7 @@
 {
   "decision": "unsupported",
   "binary": {
-    "path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "path": "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
     "size": 257553288,
     "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
   },
@@ -18,7 +18,7 @@
     "--out",
     ".tmp\\opencode-v2-windows-final.json"
   ],
-  "workspace": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7",
+  "workspace": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7",
   "operations": [
     {
       "method": "GET",
@@ -26,7 +26,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"version\":\"2.3.0\",\"pid\":54612,\"hostname\":\"<HOSTNAME>\",\"urls\":[\"http://127.0.0.1:58214\"],\"paths\":{\"tmp\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
+      "body": "{\"version\":\"2.3.0\",\"pid\":54612,\"hostname\":\"<HOSTNAME>\",\"urls\":[\"http://127.0.0.1:58214\"],\"paths\":{\"tmp\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\tmp\\\\opencode\"},\"capabilities\":{\"persistentPty\":true}}",
       "credential_redacted_before_write": false
     },
     {
@@ -53,7 +53,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
+      "body": "{\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"},\"data\":[{\"id\":\"deepseek-v4.1-flash-fast\",\"modelID\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"name\":\"DeepSeek V4.1 Flash Fast\",\"package\":\"@opencode/ai/providers/openai-compatible\",\"settings\":{\"apiKey\":\"<operator credential redacted>\",\"baseURL\":\"https://<RELAY_HOST>/v1\",\"provider\":\"tencent-litellm\",\"reasoningEffort\":\"high\"},\"capabilities\":{\"tools\":true,\"input\":[\"text\"],\"output\":[\"text\"]},\"variants\":[{\"id\":\"none\",\"settings\":{\"reasoningEffort\":\"none\"}},{\"id\":\"minimal\",\"settings\":{\"disabled\":true}},{\"id\":\"low\",\"settings\":{\"reasoningEffort\":\"low\"}},{\"id\":\"medium\",\"settings\":{\"disabled\":true}},{\"id\":\"high\",\"settings\":{\"reasoningEffort\":\"high\"}},{\"id\":\"xhigh\",\"settings\":{\"disabled\":true}},{\"id\":\"max\",\"settings\":{\"reasoningEffort\":\"max\"}}],\"time\":{\"released\":0},\"cost\":[],\"status\":\"active\",\"enabled\":true,\"limit\":{\"context\":1000000,\"output\":384000}}]}",
       "credential_redacted_before_write": true
     },
     {
@@ -62,7 +62,7 @@
       "authenticated": true,
       "payload": {
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
         },
         "model": {
           "providerID": "tencent-litellm",
@@ -76,13 +76,13 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
             "effect": "allow"
           }
         ]
       },
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646112753,\"updated\":1794646112753},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646112753,\"updated\":1794646112753},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -114,7 +114,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00013499999999999997,\"tokens\":{\"input\":1336,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646113989,\"busy\":1794646112809,\"idle\":1794646114000},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00013499999999999997,\"tokens\":{\"input\":1336,\"output\":14,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646113989,\"busy\":1794646112809,\"idle\":1794646114000},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -137,7 +137,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00018198,\"tokens\":{\"input\":1510,\"output\":108,\"reasoning\":29,\"cache\":{\"read\":1728,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646115056,\"busy\":1794646114026,\"idle\":1794646115064},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e26c18617ffesu9W95jNcRQihb\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00018198,\"tokens\":{\"input\":1510,\"output\":108,\"reasoning\":29,\"cache\":{\"read\":1728,\"write\":0}},\"outcome\":\"succeeded\",\"time\":{\"created\":1794646112753,\"updated\":1794646115056,\"busy\":1794646114026,\"idle\":1794646115064},\"title\":\"OPENCODE_NATIVE_SUCCESS reply\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -146,7 +146,7 @@
       "authenticated": true,
       "payload": {
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
         },
         "model": {
           "providerID": "tencent-litellm",
@@ -160,13 +160,13 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
             "effect": "allow"
           }
         ]
       },
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646115088,\"updated\":1794646115088},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0,\"tokens\":{\"input\":0,\"output\":0,\"reasoning\":0,\"cache\":{\"read\":0,\"write\":0}},\"time\":{\"created\":1794646115088,\"updated\":1794646115088},\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -198,7 +198,7 @@
       "authenticated": true,
       "payload": null,
       "status": 200,
-      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00001234,\"tokens\":{\"input\":76,\"output\":9,\"reasoning\":0,\"cache\":{\"read\":384,\"write\":0}},\"outcome\":\"interrupted\",\"time\":{\"created\":1794646115088,\"updated\":1794646115498,\"busy\":1794646115119,\"idle\":1794646115488},\"title\":\"Output integers 1 to 10000\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"C:\\\\Users\\\\lhan\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
+      "body": "{\"data\":{\"id\":\"ses_e26c17cf7ffegguBWCuK8lSRF0\",\"projectID\":\"68047b52c73ca345773d0b1ed5c43a9974e987ce\",\"model\":{\"id\":\"deepseek-v4.1-flash-fast\",\"providerID\":\"tencent-litellm\",\"variant\":\"default\"},\"cost\":0.00001234,\"tokens\":{\"input\":76,\"output\":9,\"reasoning\":0,\"cache\":{\"read\":384,\"write\":0}},\"outcome\":\"interrupted\",\"time\":{\"created\":1794646115088,\"updated\":1794646115498,\"busy\":1794646115119,\"idle\":1794646115488},\"title\":\"Output integers 1 to 10000\",\"permissions\":[{\"action\":\"*\",\"resource\":\"*\",\"effect\":\"deny\"},{\"action\":\"read\",\"resource\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\\\\baseline.txt\",\"effect\":\"allow\"}],\"location\":{\"directory\":\"<HOST-PATH>\\\\AppData\\\\Local\\\\Temp\\\\symmetry-0006g-witness-bhnp_kp7\"}}}",
       "credential_redacted_before_write": false
     },
     {
@@ -249,7 +249,7 @@
       "created": 1794646112753,
       "type": "session.created",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -257,7 +257,7 @@
         "version": "2.3.0",
         "projectID": "68047b52c73ca345773d0b1ed5c43a9974e987ce",
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
         },
         "subpath": "",
         "permissions": [
@@ -268,7 +268,7 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
             "effect": "allow"
           }
         ],
@@ -288,7 +288,7 @@
       "created": 1794646112802,
       "type": "session.inbox.enqueued",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "inboxID": "msg_351faa83320d0462591ff0dc",
@@ -330,7 +330,7 @@
       },
       "type": "session.instructions.updated",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -350,7 +350,7 @@
       "created": 1794646112830,
       "type": "session.inbox.delivered",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -385,7 +385,7 @@
       "created": 1794646113943,
       "type": "session.renamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -402,7 +402,7 @@
       "created": 1794646113958,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -426,7 +426,7 @@
       "created": 1794646113964,
       "type": "session.step.first-token",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -443,7 +443,7 @@
       "created": 1794646113971,
       "type": "session.text.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -461,7 +461,7 @@
       "created": 1794646113977,
       "type": "session.text.delta",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -475,7 +475,7 @@
       "created": 1794646113977,
       "type": "session.text.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -494,7 +494,7 @@
       "created": 1794646113984,
       "type": "session.step.streamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -511,7 +511,7 @@
       "created": 1794646113989,
       "type": "session.step.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -571,7 +571,7 @@
       "created": 1794646114021,
       "type": "session.inbox.enqueued",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "inboxID": "msg_0e2175d4ab9e8ed6aaeb0f4b",
@@ -608,7 +608,7 @@
       "created": 1794646114036,
       "type": "session.inbox.delivered",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -625,7 +625,7 @@
       "created": 1794646114382,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -649,7 +649,7 @@
       "created": 1794646114387,
       "type": "session.step.first-token",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -666,7 +666,7 @@
       "created": 1794646114391,
       "type": "session.tool.input.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -685,7 +685,7 @@
       "created": 1794646114437,
       "type": "session.tool.input.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -704,7 +704,7 @@
       "created": 1794646114442,
       "type": "session.tool.called",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -726,7 +726,7 @@
       "created": 1794646114447,
       "type": "session.step.streamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -743,7 +743,7 @@
       "created": 1794646114457,
       "type": "session.tool.failed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -766,7 +766,7 @@
       "created": 1794646114461,
       "type": "session.step.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -813,7 +813,7 @@
       "created": 1794646114795,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -837,7 +837,7 @@
       "created": 1794646114802,
       "type": "session.step.first-token",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -854,7 +854,7 @@
       "created": 1794646114810,
       "type": "session.reasoning.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -875,7 +875,7 @@
       "created": 1794646114884,
       "type": "session.reasoning.delta",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -889,7 +889,7 @@
       "created": 1794646114884,
       "type": "session.text.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -907,7 +907,7 @@
       "created": 1794646114991,
       "type": "session.text.delta",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -921,7 +921,7 @@
       "created": 1794646115040,
       "type": "session.reasoning.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -943,7 +943,7 @@
       "created": 1794646115046,
       "type": "session.text.delta",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -957,7 +957,7 @@
       "created": 1794646115046,
       "type": "session.text.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -976,7 +976,7 @@
       "created": 1794646115051,
       "type": "session.step.streamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -993,7 +993,7 @@
       "created": 1794646115056,
       "type": "session.step.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c18617ffesu9W95jNcRQihb",
@@ -1053,7 +1053,7 @@
       "created": 1794646115088,
       "type": "session.created",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1061,7 +1061,7 @@
         "version": "2.3.0",
         "projectID": "68047b52c73ca345773d0b1ed5c43a9974e987ce",
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
         },
         "subpath": "",
         "permissions": [
@@ -1072,7 +1072,7 @@
           },
           {
             "action": "read",
-            "resource": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
+            "resource": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7\\baseline.txt",
             "effect": "allow"
           }
         ],
@@ -1092,7 +1092,7 @@
       "created": 1794646115115,
       "type": "session.inbox.enqueued",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "inboxID": "msg_6542ad29793fa543d79759c5",
@@ -1134,7 +1134,7 @@
       },
       "type": "session.instructions.updated",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1154,7 +1154,7 @@
       "created": 1794646115129,
       "type": "session.inbox.delivered",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1171,7 +1171,7 @@
       "created": 1794646115453,
       "type": "session.step.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1195,7 +1195,7 @@
       "created": 1794646115457,
       "type": "session.step.first-token",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1212,7 +1212,7 @@
       "created": 1794646115462,
       "type": "session.reasoning.started",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1233,7 +1233,7 @@
       "created": 1794646115475,
       "type": "session.reasoning.delta",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1247,7 +1247,7 @@
       "created": 1794646115476,
       "type": "session.reasoning.ended",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1269,7 +1269,7 @@
       "created": 1794646115480,
       "type": "session.step.streamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1286,7 +1286,7 @@
       "created": 1794646115483,
       "type": "session.step.failed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1339,7 +1339,7 @@
       "created": 1794646115498,
       "type": "session.renamed",
       "location": {
-        "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+        "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
       },
       "data": {
         "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1419,7 +1419,7 @@
         "created": 1794646115457,
         "type": "session.step.first-token",
         "location": {
-          "directory": "C:\\Users\\lhan\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
+          "directory": "<HOST-PATH>\\AppData\\Local\\Temp\\symmetry-0006g-witness-bhnp_kp7"
         },
         "data": {
           "sessionID": "ses_e26c17cf7ffegguBWCuK8lSRF0",
@@ -1524,12 +1524,12 @@
   "provider": {
     "id": "tencent-litellm",
     "model": "deepseek-v4.1-flash-fast",
-    "base_url": "https://litellm-proxy-hk.graydune-4a6be1e2.eastasia.azurecontainerapps.io/v1",
-    "discovered_from": "C:\\Users\\lhan\\.config\\opencode\\opencode.json",
+    "base_url": "https://<RELAY_HOST>/v1",
+    "discovered_from": "<HOST-PATH>\\.config\\opencode\\opencode.json",
     "credential": "environment:TENCENT_GLM_API_KEY"
   },
   "server_command": [
-    "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
     "serve",
     "--hostname",
     "127.0.0.1",

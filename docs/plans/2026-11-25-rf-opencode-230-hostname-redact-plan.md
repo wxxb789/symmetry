@@ -47,3 +47,24 @@ frozen 2.3.0 receipts.
   `docs/design/harness.md`, the CI assertions and the acceptance script (D-5, D-6).
 - Any new test file: the contract's owned set holds no Go source, and no committed test reads
   these data files (D-4); the censuses and the equality proof are the evidence instrument.
+
+## Fix pass (2026-11-26, conductor ruling after review round 1)
+
+The goal contract's conductor ruling (review round `DECISION_NEEDED`) widens the scope from the
+hostname value to whole-tree hygiene of three classes — the machine hostname, the relay host and
+host absolute paths carrying the user-profile name — and settles W1-W5. This fix pass delivers
+that widening, so the "Out of scope" list above and D-3/D-4/D-6 describe the implement pass only.
+
+- W1 substitution: hostname value to `<HOSTNAME>`, relay host to `<RELAY_HOST>`, profile-name path
+  prefix to `<HOST-PATH>`; each changed file proves its pre-change bytes map onto the delivered
+  bytes under that one rule.
+- Amendment with the exact conflict: the OmO Windows transcript fixture must keep holding absolute
+  paths. `decodeSessionState` refuses a non-absolute `sessionFile`
+  (`daemon/internal/harness/omo/rpc.go:289`) and `TestPinnedNativeTranscript` compares the
+  fixture's binary path against its Go literal, so dropping the drive root reddens that test; the
+  two Windows fixtures, the fixture README and the two Go files that pin the path keep the drive
+  root and replace only the account-home run. Every other file replaces the whole prefix.
+- W2-W5: the digest census, the old-to-new table, the frozen-record rationale and the supersede
+  pointers are in the evidence note; the 2.4.1 README and the reeval record §14 are corrected in
+  place.
+- Residual: the opt-in native acceptance pin is tracked in `docs/TODO.md`.

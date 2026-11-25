@@ -31,7 +31,7 @@ pin above and start the goal's 12-hour bound):
 
 - **The pin advances to OpenCode V2 `2.3.0`**, the latest stable client per the
   2026-11-11 directive. The exact installed binary is
-  `C:\Users\lhan\AppData\Local\mise\installs\aqua-anomalyco-opencode\latest\opencode.exe`
+  `<HOST-PATH>\AppData\Local\mise\installs\aqua-anomalyco-opencode\latest\opencode.exe`
   (`opencode v2.3.0`, 257,553,288 bytes, dated 2026-11-13). Every observation
   names that blob's path, size and digest; `1.18.x` observations remain
   historical and cannot satisfy this goal.

@@ -397,7 +397,7 @@ the approved relay model `tencent-litellm/deepseek-v4.1-flash-fast`; sanitized r
 
 | Class | Receipt record |
 | --- | --- |
-| Approved-catalog provenance | `approved_catalog_provenance`: credential referenced as `TENCENT_GLM_API_KEY`, endpoint `litellm-proxy-hk…/v1`, approved model exactly once |
+| Approved-catalog provenance | `approved_catalog_provenance`: credential referenced as `TENCENT_GLM_API_KEY`, endpoint `<RELAY_HOST>…/v1`, approved model exactly once |
 | Adapter restart with lost acknowledgement | `adapter_restart_lost_ack`: `helper_exit 73`, `durable_completion_reconciled true`, `old_turn_replayed false`, real native handle, `native_version 18.20.0` |
 | Retained resume | `retained_resume`: `retained_context_challenge passed`, `same_id_and_file true`, `prior_artifact_unchanged true` |
 | Fresh handoff | `fresh_handoff` with its own, non-reused native identity |

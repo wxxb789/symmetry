@@ -11,7 +11,7 @@ not evidence of a real provider or model execution.
 | Item | Value |
 | --- | --- |
 | OpenCode version | `1.18.30` |
-| Windows executable | `C:\Users\lhan\AppData\Local\mise\installs\opencode\1.18.30\opencode.exe` |
+| Windows executable | `<HOST-PATH>\AppData\Local\mise\installs\opencode\1.18.30\opencode.exe` |
 | Windows executable SHA-256 | `C1BDBB18767048E1853AF4238311B3F7E16FF2F91B68FB4C7CED3C5175347EEA` |
 | Windows platform | Windows amd64 |
 | Linux archive | `opencode-linux-x64-baseline.tar.gz` |

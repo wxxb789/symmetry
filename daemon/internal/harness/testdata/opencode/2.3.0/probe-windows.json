@@ -1,6 +1,6 @@
 {
   "binary": {
-    "path": "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+    "path": "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
     "size": 257553288,
     "sha256": "38153a142354634c82b5cfe6c00b19df15a71e6cf8c17ef5f5c1a4cc684a6917"
   },
@@ -13,7 +13,7 @@
   "observations": [
     {
       "command": [
-        "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+        "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
         "--version"
       ],
       "exit_code": 0,
@@ -22,7 +22,7 @@
     },
     {
       "command": [
-        "C:\\Users\\lhan\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
+        "<HOST-PATH>\\AppData\\Local\\mise\\installs\\aqua-anomalyco-opencode\\latest\\opencode.exe",
         "serve",
         "--help"
       ],

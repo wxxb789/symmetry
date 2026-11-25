@@ -191,7 +191,7 @@ func TestNativeAcceptance(t *testing.T) {
 	var expectedSize int64
 	switch runtime.GOOS {
 	case "windows":
-		expectedPath, expectedSize = `C:/Users/lhan/.local/bin/omo.exe`, 202352128
+		expectedPath, expectedSize = `C:/<HOST-PATH>/.local/bin/omo.exe`, 202352128
 		expectedDigest = "sha256:04338dd63b24c53156492e1a0777d996034416c4131a26e1ba48eb07b5429464"
 		kernel, commandErr := command("cmd.exe", "/d", "/c", "ver")
 		require(commandErr == nil, "windows_kernel_identity_failed")
