@@ -1910,10 +1910,11 @@ section below.
       `claude_containment`'s fixed
       `--json-schema` argv wall by `rf-claude-schema-argv` (closure under
       `## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg
-      (2026-11-26)`; its binding run — the conductor's Bind scratch run of `claude_containment`
-      on the PR head — is pending at the delivered bytes, so the claude set's next stop is
-      unmeasured). Both sets' `stage_replay_native_release_<kind>` legs remain unexecuted (each
-      set stops at its first failing leg).
+      (2026-11-26)`; its Bind run `45710455914` on `72f8d01e` shows zero `oversized` refusals
+      and the claude transport reaching its first native stage, and the set's next stop is
+      recorded in the `## rf-claude-schema-argv: residuals` section below). Both sets'
+      `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
+      failing leg).
 
 - [ ] `pi_provider_action` and the two crash legs still need a provider-scoped admission
       (2026-11-26, goal `rf-acc-containment-goal-admission`, stage-1(b); evidence record
@@ -1945,6 +1946,24 @@ section below.
       file sha256 `c5da521d…`, identical at both heads); run 4 had 0 such lines. Post-wall
       cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
       conductor.
+
+## rf-claude-schema-argv: residuals (2026-11-26)
+
+- [ ] The `claude_containment` set's next stop beyond the argv wall (2026-11-26, Bind run
+      `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): verbatim `positive owner witness
+      lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` [INFERENCE:
+      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Owner:
+      TBD, a new conductor goal; the stop is the owner witness's durable-stage summary check
+      (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
+      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`).
+
+- [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
+      `daemon/internal/platform/linux_supervisor_protocol_linux.go:19`) carries the command's
+      Args/Env as JSON and would refuse a 23 881-byte element (`errLinuxSupervisorFrameTooLarge`,
+      `supervisor_linux_client.go:79,219-224`). It is not on the linux-v2 path that
+      `claude_containment` takes (`linuxV2Requested()` dispatches first). Owner: platform, if a
+      claude-like leg ever takes that route. No code change.
 
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 

@@ -27,7 +27,7 @@ func TestClaudeCandidateLinuxCommandArgvFitsOwnerWireBound(t *testing.T) {
 	executable := "/home/runneradmin/.local/share/mise/installs/claude-code/" + testedVersion + "/claude"
 	stdin, stdout, stderr, owner := candidateLinuxOwnerWirePipes(t)
 	command := linuxgate.NativeCommand{
-		Path: executable, Dir: request.Workspace, Args: invocation.Args, Env: invocation.Env,
+		Path: executable, Dir: request.Workspace, Args: append([]string{executable}, invocation.Args...), Env: invocation.Env,
 		Stdin: stdin, Stdout: stdout, Stderr: stderr,
 	}
 	if err := command.Validate(); err != nil {

@@ -5346,12 +5346,16 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       `daemon/native/linux-gate/c-gate/gate.c:91` `MAX_COMMAND_STRING = 64 * 1024`), the Linux
       twin of `adapter_cmdline_windows_test.go` proves the real fixed argv passes
       `linuxgate.NativeCommand.Validate()` and `EncodeRelease` (schema 23 881 bytes, guarded
-      RELEASE packet 24 317 bytes), the boundary pair (exactly-cap accepted, cap+1 refused)
+      RELEASE packet ≈24 392 bytes — the fixture's temporary workspace path moves it by a byte
+      or two), the boundary pair (exactly-cap accepted, cap+1 refused)
       holds on Go validate, Go decode and the gate's real `read_release`, and the census probe
       carries the literal 64 KiB assert plus a compile-time tie to Go's `maxCommandString`; both
       single-sided mutants were observed red and then restored byte-identically (record §6). No
       `maxReleaseSize`/`maxCommandVector`/frame/version change, no schema or adapter change, and
       the 16 KiB-vintage gate refuses the new frame fail-closed with `EPROTO` at `read_span`.
-      The binding run is the conductor's Bind scratch run of the `claude_containment` case set
-      on the PR head — pending at the delivered bytes, so a later stage re-binds this text, as
-      with the apparmor closure; the base red it removes is run `45671784251`.
+      The conductor's Bind scratch run of the `claude_containment` case set ran as `45710455914`
+      on `72f8d01e` plus the two scratch-only files: zero `oversized` refusals, the transport's
+      first native stage reached (`native_open_reached`, live B process verified), exit 1 at the
+      owner witness's durable-stage summary check — whose verbatim stop and `initial_lease_acked`
+      inference are recorded in the goal's residual entry in `docs/TODO.md`; the base red it
+      removes is run `45671784251`.

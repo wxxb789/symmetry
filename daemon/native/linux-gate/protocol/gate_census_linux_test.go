@@ -214,8 +214,6 @@ _Static_assert(MAX_COMMAND_STRING == CENSUS_GO_MAX_COMMAND_STRING,
 `, "census")
 }
 
-// The rows take their element size from the Go cap, so a C-only revert turns the
-// at-cap row red while a drift in either constant reds the census pin.
 func TestGateCommandStringBound(t *testing.T) {
 	probe := buildGateCommandStringBoundProbe(t)
 	for _, scenario := range []string{"at-cap-accepted", "cap-plus-one-refused"} {
@@ -233,8 +231,6 @@ func TestGateCommandStringBound(t *testing.T) {
 
 func buildGateCommandStringBoundProbe(t *testing.T) string {
 	t.Helper()
-	// Call the gate's real read_release over a real SOCK_SEQPACKET release channel
-	// with a real parent pidfd; no production mode or user namespace is added.
 	const source = `#define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>

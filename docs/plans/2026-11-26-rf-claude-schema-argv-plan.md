@@ -109,7 +109,7 @@ Red first, at the delivered test bytes with the base constants:
 | G1 Linux argv twin | `go test -race -count=1 -run TestClaudeCandidateLinuxCommandArgv ./internal/harness/claude/` | FAIL: `Validate()` refuses the 23881-byte element |
 | G2 Go boundary pair | `go test -race -count=1 -run TestWireLinuxCommandStringBoundary ./native/linux-gate/protocol/` | PASS: the pair is cap-relative (`maxCommandString`); its red is M1 |
 | G3 C boundary pair | `go test -race -count=1 -run TestGateCommandStringBound ./native/linux-gate/protocol/` | PASS at base (element size follows the Go cap, 16 KiB both sides); its red is M2 |
-| G4 drift oracle | `go test -race -count=1 -run TestGateFDCensusAllowsStdio ./native/linux-gate/protocol/` | PASS (both sides 16 KiB); red only under drift |
+| G4 drift oracle | `go test -race -count=1 -run TestGateFDCensusAllowsStdio ./native/linux-gate/protocol/` | FAIL at base constants (the literal 64 KiB assert does not compile): `static assertion failed: "the gate C cap must be the ruled 64 KiB bound"`; green at the delivered bytes; red under either single-sided drift (M1/M2) |
 
 The base-time red for the absolute cap is carried by G1's 23881-byte element (refusal quoted in
 §1); G2/G3 pin the boundary *shape* at whichever cap is compiled, and the mutant
