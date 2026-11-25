@@ -420,12 +420,11 @@ func validLinuxV2AdmissionFence(key RunKey, fence protocol.Fence) bool {
 		validRequiredString(fence.ClaimID, 4096) && validRequiredString(fence.LeaseToken, 65536)
 }
 
-// linuxV2RetainedReleaseNamesLeaf keeps a retained pre-checkout clone's leaf name
-// reserved: its release proof still names the parent path and leaf a new
-// reservation must not reuse.
+// linuxV2RetainedReleaseNamesLeaf keeps a retained pre-checkout clone's leaf name reserved:
+// its release proof still names the parent path and leaf a new reservation must not reuse.
 func linuxV2RetainedReleaseNamesLeaf(journal RunJournal, reservation LinuxCgroupReservation) bool {
 	proof := journal.ContainmentCgroupReleaseProof
-	return proof != nil && proof.CgroupIdentity != nil && linuxV2ReleasedCloneRetainedAfterRelease(journal) &&
+	return proof != nil && proof.CgroupIdentity != nil && LinuxV2ReleasedCloneRetainedAfterRelease(journal) &&
 		proof.CgroupIdentity.Parent.Path == reservation.Parent.Path &&
 		proof.CgroupIdentity.LeafName == reservation.LeafName
 }

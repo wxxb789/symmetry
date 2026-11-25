@@ -936,7 +936,7 @@ func retainStateReleasedPreCheckoutClone(t *testing.T, store *Store, runID strin
 		t.Fatal(err)
 	}
 	retained := loadStateJournal(t, store, journal.Key())
-	if !linuxV2ReleasedCloneRetainedAfterRelease(retained) {
+	if !LinuxV2ReleasedCloneRetainedAfterRelease(retained) {
 		t.Fatal("the production release mutations did not persist the retained pre-checkout shape")
 	}
 	return retained
@@ -969,9 +969,7 @@ func saveLinuxV2AdmissionTarget(t *testing.T, store *Store, runID string) (RunJo
 }
 
 // TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease pins the d1b clone-retention
-// ruling: a normal release whose clone never checked out stops blocking unrelated
-// foreign native admission while its intent keeps the seed/target paths and its cgroup
-// leaf name reserved. Every other shape stays blocking.
+// ruling: the admitted shape keeps seed/target and leaf reserved; every other shape blocks.
 func TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease(t *testing.T) {
 	t.Parallel()
 	requireLinuxCloneAMD64(t)

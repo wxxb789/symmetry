@@ -376,13 +376,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 				if anchorPIDFD == nil || helperPIDFD == nil {
 					t.Fatal("the held setup boundary did not pin its exact anchor and helper PIDFDs")
 				}
-				if err := linuxV2ValidateRootWitnessFile(freshConfigPath, fixture.owner); err != nil {
-					t.Fatalf("validate root-controlled unresolved-guard config: %v", err)
-				}
-				freshValue, err := config.Load(freshConfigPath)
-				if err != nil {
-					t.Fatalf("load root-controlled unresolved-guard config: %v", err)
-				}
+				freshFixture, freshRequest, freshValue := linuxV2FreshRequestFixture(t, fixture, freshConfigPath, freshRequestPath, "fresh-unresolved-request-response.json")
 				if freshValue.StateDir != fixture.stateDir || freshValue.Runtime.HarnessKind != "pi" ||
 					freshValue.Runtime.HarnessVersion != fixture.value.Runtime.HarnessVersion ||
 					freshValue.Runtime.AdapterVersion != fixture.value.Runtime.AdapterVersion ||
@@ -390,16 +384,6 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 					freshValue.Runtime.Workspace != fixture.value.Runtime.Workspace ||
 					freshValue.Runtime.AgentProfile != fixture.value.Runtime.AgentProfile {
 					t.Fatal("fresh-run config does not preserve the exact installed native runtime and shared StateDir")
-				}
-				freshCase := linuxV2NativeWitnessCase{
-					harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
-					requestEnvironment: linuxV2UnresolvedJournalGuardFreshRequestEnvironment,
-					requestCase:        "stage_replay", barrierStage: "handoff_committed",
-					markerDirectory: "negative-stale_journal_run_key-setup",
-				}
-				freshRequest, err := linuxV2ReadOwnerWitnessRequest(freshRequestPath, freshCase, freshValue, fixture.owner)
-				if err != nil {
-					t.Fatalf("fresh request is not an authentic, non-replay native claim: %v", err)
 				}
 				if freshRequest.RunKey == fixture.request.RunKey || freshRequest.Claim.TaskID == fixture.request.Claim.TaskID ||
 					freshRequest.Claim.ClaimID == fixture.request.Claim.ClaimID ||
@@ -431,8 +415,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 					marker.Owners.Gate.Identity != staged.Journal.ContainmentCgroup.Gate.Process.Identity {
 					t.Fatal("setup RunJournal does not bind the exact live anchor/helper/gate identities")
 				}
-				// A parked gate exits on owner loss by design (gate.c wait_for_release polls the owner
-				// pidfd) and the un-released helper exits through its owner-loss fail-safe; only the
+				// A parked gate and an un-released helper both exit on owner loss by design; only the
 				// resident anchor must survive, and the marker/RunJournal comparison binds the rest.
 				if err := linuxV2RequireLivePIDFD(int(anchorPIDFD.Fd())); err != nil {
 					t.Fatalf("A anchor was not live before the fresh request: %v", err)
@@ -470,19 +453,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 				}
 				assertNoHookMarkers()
 				verifyLinuxV2ProductionInstall(t, binary, freshConfigPath, fixture.artifactDir)
-				profile, ok := freshValue.AgentProfiles[freshValue.Runtime.AgentProfile]
-				if !ok {
-					t.Fatal("fresh-run config omitted the installed native profile")
-				}
-				workspace, ok := freshValue.Workspaces[freshValue.Runtime.Workspace]
-				if !ok {
-					t.Fatal("fresh-run config omitted the installed native workspace")
-				}
 				// Avoid the fixture preflight here; the production CLI must reject this unresolved row.
-				freshFixture := fixture
-				freshFixture.value, freshFixture.configPath, freshFixture.requestPath = freshValue, freshConfigPath, freshRequestPath
-				freshFixture.request, freshFixture.profile, freshFixture.workspace = freshRequest, profile, workspace
-				freshFixture.responsePath = filepath.Join(fixture.artifactDir, "fresh-unresolved-request-response.json")
 				command := startLinuxV2OwnerWitnessCommand(t, binary, freshFixture)
 				if err := waitLinuxV2OwnerWitnessCommand(command, 30*time.Second, true); err != nil {
 					t.Fatalf("fresh production request did not promptly reject the foreign unresolved RunJournal: %v", err)
@@ -532,41 +503,16 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 	if err := linuxV2RequireRetainedPreCheckoutClone(final.Journal); err != nil {
 		t.Fatalf("setup recovery did not retain its exact pre-checkout clone: %v", err)
 	}
+	if err := linuxV2RequireRetainedCloneArtifacts(fixture, final.Journal); err != nil {
+		t.Fatalf("setup recovery did not keep its retained clone artifacts on disk: %v", err)
+	}
 	// The retained row no longer blocks unrelated work: the same fresh request the
 	// unresolved row denied must now be admitted and reach its own boundary.
 	t.Run("fresh_request_admitted", func(t *testing.T) {
 		t.Helper()
 		assertDaemonServiceStopped(t)
 		freshRequestPath := strings.TrimSpace(os.Getenv(linuxV2UnresolvedJournalGuardFreshRequestEnvironment))
-		freshCase := linuxV2NativeWitnessCase{
-			harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
-			requestEnvironment: linuxV2UnresolvedJournalGuardFreshRequestEnvironment,
-			requestCase:        "stage_replay", barrierStage: "handoff_committed",
-			markerDirectory: "negative-stale_journal_run_key-setup",
-		}
-		if err := linuxV2ValidateRootWitnessFile(freshConfigPath, fixture.owner); err != nil {
-			t.Fatalf("validate root-controlled unresolved-guard config: %v", err)
-		}
-		freshValue, err := config.Load(freshConfigPath)
-		if err != nil {
-			t.Fatalf("load root-controlled unresolved-guard config: %v", err)
-		}
-		freshRequest, err := linuxV2ReadOwnerWitnessRequest(freshRequestPath, freshCase, freshValue, fixture.owner)
-		if err != nil {
-			t.Fatalf("fresh request is not an authentic, non-replay native claim: %v", err)
-		}
-		profile, ok := freshValue.AgentProfiles[freshValue.Runtime.AgentProfile]
-		if !ok {
-			t.Fatal("fresh-run config omitted the installed native profile")
-		}
-		workspaceBinding, ok := freshValue.Workspaces[freshValue.Runtime.Workspace]
-		if !ok {
-			t.Fatal("fresh-run config omitted the installed native workspace")
-		}
-		freshFixture := fixture
-		freshFixture.value, freshFixture.configPath, freshFixture.requestPath = freshValue, freshConfigPath, freshRequestPath
-		freshFixture.request, freshFixture.profile, freshFixture.workspace = freshRequest, profile, workspaceBinding
-		freshFixture.responsePath = filepath.Join(fixture.artifactDir, "fresh-admitted-response.json")
+		freshFixture, freshRequest, _ := linuxV2FreshRequestFixture(t, fixture, freshConfigPath, freshRequestPath, "fresh-admitted-response.json")
 		freshKey := state.RunKey{RunID: freshRequest.RunKey.RunID, Generation: freshRequest.RunKey.Generation}
 		freshBarrierEntries, err := os.ReadDir(freshRequest.Barrier.Directory)
 		if err != nil || len(freshBarrierEntries) != 0 {
@@ -620,6 +566,9 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 		if err := linuxV2RequireRetainedPreCheckoutClone(admittedFinal.Journal); err != nil {
 			t.Fatalf("admitted fresh recovery did not retain its pre-checkout clone: %v", err)
 		}
+		if err := linuxV2RequireRetainedCloneArtifacts(fixture, admittedFinal.Journal); err != nil {
+			t.Fatalf("admitted fresh recovery did not keep its retained clone artifacts on disk: %v", err)
+		}
 		journalsAfter, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
 		if err != nil {
 			t.Fatalf("snapshot shared State after the admitted fresh run: %v", err)
@@ -632,6 +581,40 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 			t.Fatal("the admitted fresh run changed the retained setup RunJournal")
 		}
 	})
+}
+
+func linuxV2FreshRequestFixture(t *testing.T, fixture linuxV2NativeFixture, freshConfigPath, freshRequestPath, responseName string) (linuxV2NativeFixture, linuxV2OwnerWitnessRequest, config.Config) {
+	t.Helper()
+	if err := linuxV2ValidateRootWitnessFile(freshConfigPath, fixture.owner); err != nil {
+		t.Fatalf("validate root-controlled unresolved-guard config: %v", err)
+	}
+	freshValue, err := config.Load(freshConfigPath)
+	if err != nil {
+		t.Fatalf("load root-controlled unresolved-guard config: %v", err)
+	}
+	freshCase := linuxV2NativeWitnessCase{
+		harness: "pi", configEnvironment: linuxV2OpenCodeConfigEnvironment,
+		requestEnvironment: linuxV2UnresolvedJournalGuardFreshRequestEnvironment,
+		requestCase:        "stage_replay", barrierStage: "handoff_committed",
+		markerDirectory: "negative-stale_journal_run_key-setup",
+	}
+	freshRequest, err := linuxV2ReadOwnerWitnessRequest(freshRequestPath, freshCase, freshValue, fixture.owner)
+	if err != nil {
+		t.Fatalf("fresh request is not an authentic, non-replay native claim: %v", err)
+	}
+	profile, ok := freshValue.AgentProfiles[freshValue.Runtime.AgentProfile]
+	if !ok {
+		t.Fatal("fresh-run config omitted the installed native profile")
+	}
+	workspace, ok := freshValue.Workspaces[freshValue.Runtime.Workspace]
+	if !ok {
+		t.Fatal("fresh-run config omitted the installed native workspace")
+	}
+	freshFixture := fixture
+	freshFixture.value, freshFixture.configPath, freshFixture.requestPath = freshValue, freshConfigPath, freshRequestPath
+	freshFixture.request, freshFixture.profile, freshFixture.workspace = freshRequest, profile, workspace
+	freshFixture.responsePath = filepath.Join(fixture.artifactDir, responseName)
+	return freshFixture, freshRequest, freshValue
 }
 
 func linuxV2AssertStaleRequestVariant(caseName, harnessKind string, setup, stale linuxV2OwnerWitnessRequest) error {

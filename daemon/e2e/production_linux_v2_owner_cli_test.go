@@ -1984,6 +1984,9 @@ func runProductionLinuxV2StageCrashReplayCase(
 		if err := linuxV2RequireRetainedPreCheckoutClone(final.Journal); err != nil {
 			t.Fatalf("stage %s release did not retain its exact pre-checkout clone: %v", stage, err)
 		}
+		if err := linuxV2RequireRetainedCloneArtifacts(fixture, final.Journal); err != nil {
+			t.Fatalf("stage %s release did not keep its retained clone artifacts on disk: %v", stage, err)
+		}
 	}
 	if normalStop != nil {
 		initialReceipt := initial.Journal.ContainmentAuthority.StopReceipt
@@ -2287,6 +2290,28 @@ func linuxV2RequireRetainedPreCheckoutClone(journal state.RunJournal) error {
 	return nil
 }
 
+// linuxV2RequireRetainedCloneArtifacts asserts the retained row's durable A-side artifacts:
+// the seed bundle exists and the per-run base ref resolves (the B target may not exist yet).
+func linuxV2RequireRetainedCloneArtifacts(fixture linuxV2NativeFixture, journal state.RunJournal) error {
+	intent := journal.LinuxCloneIntent
+	if intent == nil {
+		return errors.New("retained clone artifacts checked without a clone intent")
+	}
+	if _, err := os.Lstat(intent.SeedPath); err != nil {
+		return fmt.Errorf("retained clone seed bundle: %w", err)
+	}
+	baseRef, err := authority.LinuxCloneBaseRef(intent.RunID, intent.Generation)
+	if err != nil {
+		return fmt.Errorf("resolve retained clone base ref: %w", err)
+	}
+	command := exec.Command("git", "-C", fixture.workspace.Repository, "show-ref", "--verify", "--quiet", baseRef)
+	command.Env = linuxV2SafeHostEnvironment()
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("retained clone base ref absent from the A repository: %w", err)
+	}
+	return nil
+}
+
 // linuxV2RequireRetainedCloneOutcome requires the named retention outcome for a
 // released replay whose clone never checked out.
 func linuxV2RequireRetainedCloneOutcome(response linuxV2OwnerWitnessResponse) error {
@@ -2360,6 +2385,74 @@ func TestLinuxV2RetainedPreCheckoutClonePredicates(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("retained clone artifacts on disk", func(t *testing.T) {
+		build := func(t *testing.T) (linuxV2NativeFixture, authority.LinuxCloneIntent, string, func(...string)) {
+			t.Helper()
+			root := t.TempDir()
+			artifactIntent := intent
+			artifactIntent.SeedPath = filepath.Join(root, "seeds", "generation-1.bundle")
+			artifactIntent.Target = filepath.Join(root, "workspaces", "generation-1")
+			repository := filepath.Join(root, "repository")
+			runGit := func(arguments ...string) {
+				t.Helper()
+				command := exec.Command("git", arguments...)
+				command.Env = linuxV2SafeHostEnvironment()
+				if output, err := command.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v: %s", arguments, err, output)
+				}
+			}
+			runGit("init", "-q", repository)
+			runGit("-C", repository, "-c", "user.email=e2e@example.invalid", "-c", "user.name=e2e", "commit", "-q", "--allow-empty", "-m", "fixture")
+			if err := os.MkdirAll(artifactIntent.Target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(artifactIntent.SeedPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(artifactIntent.SeedPath, []byte("seed bundle"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			baseRef, err := authority.LinuxCloneBaseRef(artifactIntent.RunID, artifactIntent.Generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runGit("-C", repository, "update-ref", baseRef, "HEAD")
+			return linuxV2NativeFixture{workspace: config.Workspace{Repository: repository}}, artifactIntent, baseRef, runGit
+		}
+		fixture, artifactIntent, _, _ := build(t)
+		journal := retained
+		journal.LinuxCloneIntent = &artifactIntent
+		if err := linuxV2RequireRetainedCloneArtifacts(fixture, journal); err != nil {
+			t.Fatalf("the exact retained clone artifacts were refused: %v", err)
+		}
+		if err := linuxV2RequireRetainedCloneArtifacts(fixture, state.RunJournal{}); err == nil {
+			t.Fatal("a row without a clone intent passed the retained clone artifact predicate")
+		}
+		for _, test := range []struct {
+			name   string
+			mutate func(t *testing.T, artifactIntent authority.LinuxCloneIntent, baseRef, repository string, runGit func(...string))
+		}{
+			{name: "A seed bundle removed", mutate: func(t *testing.T, artifactIntent authority.LinuxCloneIntent, baseRef, repository string, runGit func(...string)) {
+				if err := os.Remove(artifactIntent.SeedPath); err != nil {
+					t.Fatal(err)
+				}
+			}},
+			{name: "base ref removed", mutate: func(t *testing.T, artifactIntent authority.LinuxCloneIntent, baseRef, repository string, runGit func(...string)) {
+				runGit("-C", repository, "update-ref", "-d", baseRef)
+			}},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				fixture, artifactIntent, baseRef, runGit := build(t)
+				journal := retained
+				journal.LinuxCloneIntent = &artifactIntent
+				test.mutate(t, artifactIntent, baseRef, fixture.workspace.Repository, runGit)
+				if err := linuxV2RequireRetainedCloneArtifacts(fixture, journal); err == nil {
+					t.Fatal("a retained row missing its disk artifacts passed the retention artifact predicate")
+				}
+			})
+		}
+	})
 
 	named := linuxV2OwnerWitnessResponse{
 		RecoveryState: "released",
@@ -3591,6 +3684,17 @@ func linuxV2CleanupPIDReuseReplacement(
 	return errors.New("root helper did not publish exact PID-reuse kill/reap response")
 }
 
+// linuxV2StartProductionWitnessCommand builds and verifies the production witness binary,
+// records it on the witness document, and starts the owner-witness command.
+func linuxV2StartProductionWitnessCommand(t *testing.T, fixture linuxV2NativeFixture, witness *linuxV2NativeWitness) (*linuxV2OwnerWitnessCommand, string) {
+	t.Helper()
+	binary := buildProductionDaemonWitness(t, fixture.artifactDir)
+	witness.DaemonSHA256, _ = linuxWitnessSHA256(binary)
+	verifyLinuxV2ProductionInstall(t, binary, fixture.configPath, fixture.artifactDir)
+	witness.InstalledOwnerVerified = true
+	return startLinuxV2OwnerWitnessCommand(t, binary, fixture), binary
+}
+
 func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 	t.Helper()
 	if !filepath.IsAbs(caseRoot) || filepath.Clean(caseRoot) != caseRoot || !linuxV2PathWithin(caseRoot, "/opt/symmetry-owner-test") ||
@@ -3616,11 +3720,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("ACK-loss replay requires the active A systemd owner anchor: %v", err)
 	}
-	binary := buildProductionDaemonWitness(t, fixture.artifactDir)
-	witness.DaemonSHA256, _ = linuxWitnessSHA256(binary)
-	verifyLinuxV2ProductionInstall(t, binary, fixture.configPath, fixture.artifactDir)
-	witness.InstalledOwnerVerified = true
-	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
+	command, binary := linuxV2StartProductionWitnessCommand(t, fixture, &witness)
 	barrierReleased := false
 	var targetPIDFD *os.File
 	defer func() {
@@ -3790,11 +3890,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 	if err := linuxV2RequireActiveOwnerService(); err != nil {
 		t.Fatalf("helper response-loss witness requires the active A systemd owner anchor: %v", err)
 	}
-	binary := buildProductionDaemonWitness(t, fixture.artifactDir)
-	witness.DaemonSHA256, _ = linuxWitnessSHA256(binary)
-	verifyLinuxV2ProductionInstall(t, binary, fixture.configPath, fixture.artifactDir)
-	witness.InstalledOwnerVerified = true
-	command := startLinuxV2OwnerWitnessCommand(t, binary, fixture)
+	command, binary := linuxV2StartProductionWitnessCommand(t, fixture, &witness)
 	barrierReleased := false
 	var targetPIDFD *os.File
 	defer func() {

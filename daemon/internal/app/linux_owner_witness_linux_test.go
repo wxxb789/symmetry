@@ -1586,6 +1586,7 @@ func testLinuxV2NativeWitnessRetainedCloneJournal(t *testing.T) state.RunJournal
 	journal.LinuxCloneIntent = &intent
 	journal.LinuxCloneSeedReceipt = &seed
 	journal.WorkspacePath = intent.Target
+	journal.WorkspaceBindingKey = intent.BindingKey
 	journal.WorkspaceRecoveryRequired = true
 	journal.PID, journal.ProcessIdentity, journal.StartedAt = 0, "", time.Time{}
 	journal.ContainmentCgroup = nil
@@ -1660,6 +1661,65 @@ func TestLinuxV2NativeWitnessCloneRetentionNamesOnlyTheRetainedRelease(t *testin
 			name: "the retained seed receipt is missing",
 			after: func(journal state.RunJournal) state.RunJournal {
 				journal.LinuxCloneSeedReceipt = nil
+				return journal
+			},
+		},
+		{
+			name: "the row no longer requires workspace recovery",
+			before: func(journal state.RunJournal) state.RunJournal {
+				journal.WorkspaceRecoveryRequired = false
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.WorkspaceRecoveryRequired = false
+				return journal
+			},
+		},
+		{
+			name: "the row's workspace binding differs from its clone intent",
+			before: func(journal state.RunJournal) state.RunJournal {
+				journal.WorkspaceBindingKey = "other-binding"
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.WorkspaceBindingKey = "other-binding"
+				return journal
+			},
+		},
+		{
+			name: "the row carries a clone reuse grant",
+			before: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneReuseGrant = &authority.LinuxCloneReuseGrant{}
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.LinuxCloneReuseGrant = &authority.LinuxCloneReuseGrant{}
+				return journal
+			},
+		},
+		{
+			name: "the row requires native usage recovery",
+			before: func(journal state.RunJournal) state.RunJournal {
+				journal.NativeUsageRecoveryRequired = true
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				journal.NativeUsageRecoveryRequired = true
+				return journal
+			},
+		},
+		{
+			name: "the row's clone intent is no longer journal-valid",
+			before: func(journal state.RunJournal) state.RunJournal {
+				intent := *journal.LinuxCloneIntent
+				intent.BindingKey = ""
+				journal.LinuxCloneIntent = &intent
+				return journal
+			},
+			after: func(journal state.RunJournal) state.RunJournal {
+				intent := *journal.LinuxCloneIntent
+				intent.BindingKey = ""
+				journal.LinuxCloneIntent = &intent
 				return journal
 			},
 		},

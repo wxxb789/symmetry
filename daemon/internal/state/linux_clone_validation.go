@@ -41,7 +41,7 @@ func linuxV2ReleasedCloneStateSafe(journal RunJournal) bool {
 			linuxCloneCleanupIntentMatchesJournal(journal, *journal.LinuxCloneCleanupIntent) &&
 			journal.WorkspacePath == "" && !journal.WorkspaceRecoveryRequired && !journal.RetainWorkspace
 	}
-	if linuxV2ReleasedCloneRetainedAfterRelease(journal) {
+	if LinuxV2ReleasedCloneRetainedAfterRelease(journal) {
 		return true
 	}
 	return journal.LinuxCloneCleanupIntent == nil && journal.LinuxCloneTargetRemovalProof == nil &&
@@ -50,11 +50,9 @@ func linuxV2ReleasedCloneStateSafe(journal RunJournal) bool {
 		journal.WorkspacePath == journal.LinuxCloneIntent.Target && journal.WorkspaceRecoveryRequired && journal.RetainWorkspace
 }
 
-// linuxV2ReleasedCloneRetainedAfterRelease reports the exact shape a normal release
-// deliberately retains: a pre-checkout clone whose seed and target reservation stay
-// armed because no product disposition deletes them. Every term is required; every
-// other shape keeps blocking foreign native admission.
-func linuxV2ReleasedCloneRetainedAfterRelease(journal RunJournal) bool {
+// LinuxV2ReleasedCloneRetainedAfterRelease reports the exact pre-checkout shape a normal
+// release retains; every term is required and every other shape keeps blocking.
+func LinuxV2ReleasedCloneRetainedAfterRelease(journal RunJournal) bool {
 	intent := journal.LinuxCloneIntent
 	return intent != nil && intent.ValidateForJournal() == nil && journal.LinuxCloneSeedReceipt != nil &&
 		journal.LinuxCloneCheckoutReceipt == nil && journal.LinuxClonePromotionIntent == nil &&

@@ -31,7 +31,7 @@ is out of scope.
    `validateFinalSummary` against `case == stage_replay`, `recovery_state == released`,
    `clone.checkout_ready == false`, non-empty `clone.intent_sha256`/`seed_digest`, and
    `journal_unproven == false`.
-2. **The d1b shape predicate** (state): `linuxV2ReleasedCloneRetainedAfterRelease(journal RunJournal) bool`
+2. **The d1b shape predicate** (state): `LinuxV2ReleasedCloneRetainedAfterRelease(journal RunJournal) bool`
    in `daemon/internal/state/linux_clone_validation.go`, next to `linuxV2ReleasedCloneStateSafe`,
    which calls it as one more arm. Exact terms (all of them; anything else stays blocking): valid
    `LinuxCloneIntent` (`ValidateForJournal`), non-nil seed receipt, `LinuxCloneCheckoutReceipt == nil`
@@ -43,11 +43,13 @@ is out of scope.
    (`linuxV2ForeignJournalIsSafelyRetired`, release branch) already supplies the release-proof,
    leaf-disposition, `ContainmentCgroup == nil` and no-live-authority terms.
 3. **The witness-side classifier** (app): `linuxV2NativeWitnessCloneRetentionAfterRelease(before, after state.RunJournal) bool`
-   takes the pre-attempt and post-attempt journals. It requires the post-attempt shape (intent,
-   seed, no checkout/promotion/abort/cleanup fields, `WorkspacePath`/`WorkspaceRecoveryRequired`,
-   and `linuxV2NativeWitnessJournalPhysicallyReleased`), plus identity equality between the two
-   (intent, seed, release proof, workspace path/binding, `RetainWorkspace`) so a cleanup that
-   mutated anything can never be classified as retention.
+   takes the pre-attempt and post-attempt journals. It requires the post-attempt shape — the exact
+   pre-checkout shape of §2.2, delegated through the exported
+   `state.LinuxV2ReleasedCloneRetainedAfterRelease` (apply round: the five state-arm terms were the
+   missing half; dedupe round: §2.2's predicate is exported so the two arms cannot drift apart) —
+   plus `linuxV2NativeWitnessJournalPhysicallyReleased` — plus identity equality between the two (intent,
+   seed, release proof, workspace path/binding, `RetainWorkspace`) so a cleanup that mutated
+   anything can never be classified as retention.
 4. **Admission leaf closure** (state): inside the existing per-foreign-row loop
    (`scaPlayerLinuxV2NativeAdmissionLocked`), the `reservation != nil` branch gains an `else if` arm:
    when the foreign row is the d1b shape and its release proof carries `CgroupIdentity`, refuse a
@@ -81,7 +83,9 @@ is out of scope.
    the d1b ruling's "their tests, the e2e files" owns it, and no production file changes for it.
 5. **e2e acceptance semantics** (ruling §4): the four `stale_journal_*` sets assert, on the recovered
    row, the `released` outcome, the physical release proof, the retained pre-checkout clone (intent +
-   seed, no checkout/promotion/abort/cleanup) and exit 0. `stale_journal_run_key` additionally runs
+   seed, no checkout/promotion/abort/cleanup) with its durable A-side disk artifacts asserted (A
+   seed bundle, per-run base ref; the B target is created post-handoff, so it is not asserted;
+   apply round) and exit 0. `stale_journal_run_key` additionally runs
    the same, already-staged fresh request twice: before the setup recovery it must be denied on the
    durable unresolved row (existing leg), after the recovery it must be admitted and reach its own
    `handoff_committed` boundary, then be killed and recovered to the same released retained shape

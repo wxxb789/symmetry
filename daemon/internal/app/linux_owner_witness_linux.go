@@ -520,8 +520,8 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 			}
 			// A pre-checkout clone is either cleaned up or retained by design: the cleanup
 			// always runs, and only an unchanged durable row may be named as that retention.
-			cleanupErr := cloneRecovery.cleanupRecoveredWorkspace(ctx, journal, false)
 			preCleanup := journal
+			cleanupErr := cloneRecovery.cleanupRecoveredWorkspace(ctx, journal, false)
 			journal, err = store.LoadJournal(key)
 			if err != nil {
 				return fmt.Errorf("read no-checkout owner witness journal after clone cleanup: %w", err)
@@ -3090,17 +3090,10 @@ func linuxV2NativeWitnessCloneRetentionAfterRelease(before, after state.RunJourn
 	return beforeErr == nil && afterErr == nil && bytes.Equal(beforeBytes, afterBytes)
 }
 
-// linuxV2NativeWitnessCloneRetainedAfterRelease reports the released pre-checkout
-// clone itself: intent and seed kept, no checkout, promotion, abort or cleanup field.
+// linuxV2NativeWitnessCloneRetainedAfterRelease reports the exact pre-checkout shape
+// the state admission arm admits, so the witness naming cannot drift from it.
 func linuxV2NativeWitnessCloneRetainedAfterRelease(journal state.RunJournal) bool {
-	intent := journal.LinuxCloneIntent
-	return intent != nil && linuxV2NativeWitnessJournalPhysicallyReleased(journal) &&
-		journal.LinuxCloneSeedReceipt != nil && journal.LinuxCloneCheckoutReceipt == nil &&
-		journal.LinuxClonePromotionIntent == nil && journal.LinuxClonePromotionReceipt == nil &&
-		!journal.LinuxCloneAbortPending && journal.LinuxCloneAbortProof == nil &&
-		!journal.LinuxCloneCleanupPending && journal.LinuxCloneCleanupIntent == nil &&
-		journal.LinuxCloneTargetRemovalProof == nil && journal.LinuxCloneCleanupProof == nil &&
-		journal.WorkspacePath == intent.Target
+	return state.LinuxV2ReleasedCloneRetainedAfterRelease(journal) && linuxV2NativeWitnessJournalPhysicallyReleased(journal)
 }
 
 // linuxV2NativeWitnessCloneRetentionError rejects a named retention that is not the
