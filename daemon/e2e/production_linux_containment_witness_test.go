@@ -3524,6 +3524,10 @@ func readLinuxWitnessProcessSnapshot(pid int) (linuxWitnessProcessSnapshot, erro
 	if err != nil {
 		return linuxWitnessProcessSnapshot{}, err
 	}
+	return parseLinuxWitnessProcessSnapshot(raw)
+}
+
+func parseLinuxWitnessProcessSnapshot(raw []byte) (linuxWitnessProcessSnapshot, error) {
 	fields, err := linuxWitnessProcStatFields(raw)
 	if err != nil {
 		return linuxWitnessProcessSnapshot{}, err
@@ -4004,6 +4008,19 @@ func TestLinuxWitnessIdentityGoneDeniedReadDecisions(t *testing.T) {
 		}
 	})
 
+	t.Run("probe_esrch_is_gone", func(t *testing.T) {
+		esrchProbe := func(int) (linuxWitnessProcessSnapshot, error) {
+			return linuxWitnessProcessSnapshot{}, syscall.ESRCH
+		}
+		started := time.Now()
+		if err := waitForLinuxWitnessIdentityGoneWith(live.pid, live.identity, timeout, linuxWitnessDeniedIdentityRead("stat namespace link", live.pid), esrchProbe); err != nil {
+			t.Fatalf("process %d with identity %q and an ESRCH probe = %v, want gone", live.pid, live.identity, err)
+		}
+		if elapsed := time.Since(started); elapsed >= time.Second {
+			t.Fatalf("ESRCH probe for process %d took %s to classify as gone", live.pid, elapsed)
+		}
+	})
+
 	t.Run("zombie_state_is_gone", func(t *testing.T) {
 		zombie := startLinuxWitnessDeniedIdentityChild(t)
 		if err := zombie.command.Process.Kill(); err != nil {
@@ -4126,6 +4143,53 @@ func TestLinuxWitnessIdentityGoneDeniedReadDecisions(t *testing.T) {
 			t.Fatalf("empty-identity wait read the identity %d time(s), want a repeated-read poll", reads)
 		}
 	})
+}
+
+func TestLinuxWitnessProcessSnapshotPayloadDecisions(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want linuxWitnessProcessSnapshot
+		fail string
+	}{
+		{
+			name: "complete_payload_parses",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 12345 109 110",
+			want: linuxWitnessProcessSnapshot{Exists: true, State: "S", PGRP: 2, Session: 3, StartTime: 12345},
+		},
+		{
+			name: "short_payload_is_rejected",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18",
+			fail: "short /proc stat",
+		},
+		{
+			name: "missing_closing_parenthesis_is_rejected",
+			raw:  "7 (u S 1",
+			fail: "malformed /proc stat",
+		},
+		{
+			name: "non_decimal_starttime_is_rejected",
+			raw:  "7 (u) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 abc 109 110",
+			fail: "malformed /proc stat",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			snapshot, err := parseLinuxWitnessProcessSnapshot([]byte(c.raw))
+			if c.fail != "" {
+				if err == nil || err.Error() != c.fail {
+					t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) error = %v, want %q", c.raw, err, c.fail)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) error = %v", c.raw, err)
+			}
+			if snapshot != c.want {
+				t.Fatalf("parseLinuxWitnessProcessSnapshot(%q) = %#v, want %#v", c.raw, snapshot, c.want)
+			}
+		})
+	}
 }
 
 func waitForLinuxWitnessProcessStopped(pid int, identity string, timeout time.Duration) error {

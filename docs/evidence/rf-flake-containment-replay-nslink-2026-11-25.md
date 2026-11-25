@@ -4,14 +4,15 @@ Goal: classify the procfs reap-race `EACCES` in the containment identity-gone wa
 Contract: `goal-rf-flake-containment-replay-nslink.md` (GDD state root, external to the
 repository). Plan: `docs/plans/2026-11-25-rf-flake-containment-replay-nslink-plan.md`.
 Base revision: `3b23dead` (dispatch HEAD). Subject: `daemon/e2e/production_linux_containment_witness_test.go`,
-sha256 `8db3a21e6993d34a7889b994de1b082229e20a43d73c182cecd266f468cdbed7`
-(`git diff --numstat 3b23dead` `471 20`, of which the 2026-11-25 apply pass is `103 60` on top of
-`f5e9ea7d`; `git diff --check` clean).
+sha256 `00cdad06fd7d020dcef380f8267c7a2bb928452fb0bf61b4f0b4d8bb0324af76`
+(`git diff --numstat 3b23dead` `535 20`, of which the 2026-11-25 apply pass is `103 60` on top of
+`f5e9ea7d` and the fix round `64 0` on top of `919a0902`; `git diff --check` clean).
 
 Environment: WSL `Ubuntu-24.04`, user `accept` (uid 1000, non-root, 16 CPUs), Go `go1.27.0
 linux/amd64`, kernel `6.18.58.1-microsoft-standard-WSL2`. Scratch root `<scratch>` (`base/` = base
-tree + K1 only, `head/` = head tree + pins, `logs/`, `scripts/`); worktree `<worktree>`. Every run
-is foreground and sequential.
+tree + K1 only, `head/`/`apply/`/`fix/` = stage copies of the module, `logs/` and `logs-fix/`,
+`scripts/` and `scripts-fix/`, plus a native ext4 copy of the fix tree for the mutant harness and
+the load repeat); worktree `<worktree>`. Every run is foreground and sequential.
 
 ## 1. The classification rule (contract clause 5)
 
@@ -20,7 +21,10 @@ unexpected-error return; the F2 `waitForLinuxWitnessIdentityGoneWith` seam with 
 the single `/proc/<pid>/stat` parse shared by the probe and `linuxWitnessProcessSnapshotAt`; pins K1
 and K2 with the re-exec child mode. No production file changed. The 2026-11-25 apply pass then
 simplified the helper and pins, closed the probe-parse gap (plan D10) and added two probe-failure
-rows plus a read counter; the decision table below is unchanged.
+rows plus a read counter; the fix round then pinned the gone arm's ESRCH half
+(`probe_esrch_is_gone`), split the payload parse into the pure `parseLinuxWitnessProcessSnapshot`
+and pinned it (`TestLinuxWitnessProcessSnapshotPayloadDecisions`). The decision table below is
+unchanged throughout.
 
 `waitForLinuxWitnessIdentityGoneWith(pid, identity, timeout, read, probe)` — the shared
 identity-gone wait — decides absence on `errors.Is(err, syscall.EACCES)` from the identity read
@@ -40,9 +44,12 @@ Classified error text (observed in K1):
 on a probe failure the `shows …` clause is `probe failed: <err>`. It never returns `nil`, never
 repeats the raw syscall error, never claims the process `remained live`.
 
-Product semantics untouched: `ProcessIdentity` keeps EACCES as unproven and
-`ProvePersistedProcessGroupAbsent` never reads the target ns link. No product file was edited
-(the mutants below live only in `<scratch>/head` and are restored byte-identical).
+Product semantics untouched: `ProcessIdentity` (`daemon/internal/platform/identity_linux.go:75/:113`)
+returns the wrapped syscall error for a denied ns-link read, the helper's denial classification is
+only `errors.Is(err, syscall.EACCES)`, and the `ErrPersistedProcessGroupUnproven` sentinel is
+produced by `ProvePersistedProcessGroupAbsent` (`:259`), which never reads the target ns link. No
+product file was edited (the mutants below live only in the scratch copies and are restored
+byte-identical).
 
 ## 2. Base census (lesson 73): K1 red on base
 
@@ -54,17 +61,17 @@ any part of the fix). Command (literal):
 cd <scratch>/base/daemon && go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v
 ```
 
-`exit=1`, `red_rows=1` (`<scratch>/logs/base-census.log`), exactly K1:
+`exit=1`, `red_rows=1` (`<scratch>/logs-fix/final-base-census.log`), exactly K1:
 
 ```
 === RUN   TestLinuxWitnessIdentityGoneDeniedChildProcess
     production_linux_containment_witness_test.go:3684: child mode only: … spawn this test binary with SYMMETRY_LINUX_WITNESS_DENIED_IDENTITY_CHILD=1
 --- SKIP: TestLinuxWitnessIdentityGoneDeniedChildProcess (0.00s)
 === RUN   TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed
-    production_linux_containment_witness_test.go:3844: unreadable live process 94044 classified after 0s: read process 94044 PID namespace: readlink /proc/94044/ns/pid: permission denied
-    production_linux_containment_witness_test.go:3853: classified unreadable-identity error "read process 94044 PID namespace: readlink /proc/94044/ns/pid: permission denied" does not name "is unreadable after a denied identity read"
---- FAIL: TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed (0.05s)
-FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.092s
+    production_linux_containment_witness_test.go:3844: unreadable live process 153283 classified after 0s: read process 153283 PID namespace: readlink /proc/153283/ns/pid: permission denied
+    production_linux_containment_witness_test.go:3853: classified unreadable-identity error "read process 153283 PID namespace: readlink /proc/153283/ns/pid: permission denied" does not name "is unreadable after a denied identity read"
+--- FAIL: TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed (0.06s)
+FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.089s
 ```
 
 The red also proves the denial leg: the real `PR_SET_DUMPABLE 0` denial fails the **readlink** leg
@@ -72,22 +79,23 @@ The red also proves the denial leg: the real `PR_SET_DUMPABLE 0` denial fails th
 
 ## 3. Pins green on the shipping bytes
 
-Command (literal, post-apply worktree; the same command ran in `<scratch>/apply/daemon`):
+Command (literal, post-fix worktree; the fix-round re-run of the contract's pin command):
 
 ```
 cd <worktree>/daemon && go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v
 ```
 
-`exit=0`, `red_rows=0` (`<scratch>/logs/apply-pins.log`):
+`exit=0`, `red_rows=0`, `k2sub=10` (`<scratch>/logs-fix/final-pins.log`):
 
 ```
 --- SKIP: TestLinuxWitnessIdentityGoneDeniedChildProcess (0.00s)
 === RUN   TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed
-    production_linux_containment_witness_test.go:3973: unreadable live process 124460 classified after 0s: process 124460 identity "linux:v2:3a843c9a-0118-4f5f-95b7-0d7a3d8b805c:4026532213:124460:8781707" is unreadable after a denied identity read: /proc/124460/stat shows state=S starttime=8781707
+    production_linux_containment_witness_test.go:3977: unreadable live process 153480 classified after 0s: process 153480 identity "linux:v2:3a843c9a-0118-4f5f-95b7-0d7a3d8b805c:4026532213:153480:9036504" is unreadable after a denied identity read: /proc/153480/stat shows state=S starttime=9036504
 --- PASS: TestLinuxWitnessIdentityGoneUnreadableLiveProcessFailsClosed (0.02s)
 === RUN   TestLinuxWitnessIdentityGoneDeniedReadDecisions
-    production_linux_containment_witness_test.go:4066: identity read failure record: read process 124467 start time: input/output error (identity read failure: leg=read process start time errno=5(input/output error) poll=1 elapsed=0s; /proc/124467/stat probe: exists=true state=S starttime=8781709 err=<nil>)
+    production_linux_containment_witness_test.go:4083: identity read failure record: read process 153486 start time: input/output error (identity read failure: leg=read process start time errno=5(input/output error) poll=1 elapsed=0s; /proc/153486/stat probe: exists=true state=S starttime=9036506 err=<nil>)
     --- PASS: …/reaped_pid_probe_missing_is_gone (0.02s)
+    --- PASS: …/probe_esrch_is_gone (0.00s)
     --- PASS: …/zombie_state_is_gone (0.03s)
     --- PASS: …/doctored_starttime_is_gone (0.00s)
     --- PASS: …/live_pid_real_identity_stat_namespace_link_fails_closed (0.00s)
@@ -95,12 +103,19 @@ cd <worktree>/daemon && go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWit
     --- PASS: …/non_denial_error_carries_the_probe_record (0.00s)
     --- PASS: …/denied_read_probe_failure_fails_closed (0.00s)
     --- PASS: …/non_denial_error_records_probe_failure (0.00s)
-    --- PASS: …/empty_identity_keeps_polling (0.53s)
-ok  	github.com/wxxb789/symmetry/daemon/e2e	0.647s
+    --- PASS: …/empty_identity_keeps_polling (0.51s)
+ok  	github.com/wxxb789/symmetry/daemon/e2e	0.624s
 ```
 
-`wsl -d Ubuntu-24.04 -u accept -- bash <scratch>/scripts/apply-gates.sh` → `pins exit=0 red=0
-subtests=9`.
+The fix round's unit pin runs in the same package:
+
+```
+cd <worktree>/daemon && go test -count=1 -timeout 120s ./e2e -run "^TestLinuxWitnessProcessSnapshotPayloadDecisions$" -v
+```
+
+`exit=0`, `red_rows=0`, `rows=4` (`<scratch>/logs-fix/final-parse.log`):
+`complete_payload_parses`, `short_payload_is_rejected`, `missing_closing_parenthesis_is_rejected`,
+`non_decimal_starttime_is_rejected` — all PASS (`ok … 0.043s`).
 
 ### 3a. Implement-stage observation: one over-specified pin assertion, fixed before sealing
 
@@ -110,34 +125,43 @@ row pinned the child's `/proc/<pid>/stat` *state letter* captured at row entry (
 probe inside the P1 record read the child mid-wake (`state=R`). The child is a blocked Go test
 process; its transient scheduler state is not part of the contract. The row now pins the record's
 field presence and the stable values (`exists=true state=` … ` starttime=<N> err=<nil>`), exactly as
-the classified-error rows already did. All runs in §3, §4, §7 and §8 are on the fixed bytes
-(implement-stage sha256 `55fd6949…`; the apply pass then rewrote the helper and pins, and
-§3/§4/§7/§8 below were re-run on the apply bytes `8db3a21e…`); the failing run is kept in the log
-as the reproduction.
+the classified-error rows already did. All runs in §3, §4, §7 and §8 are on the shipping bytes
+(implement-stage sha256 `55fd6949…`; the apply pass then rewrote the helper and pins, and the fix
+round rewrote them again — §3/§4/§7/§8 below were re-run on the fix-round bytes `00cdad06…`); the
+failing run is kept in the log as the reproduction.
 
-## 4. Mutants (scratch copy; rows name the CI job that must redden: `daemon`)
+## 4. Mutants (scratch copies; rows name the CI job that must redden: `daemon`, non-root runner)
 
-Each mutation is applied to `<scratch>/apply/daemon/e2e/production_linux_containment_witness_test.go`,
-the pins run (`apply-mutant.sh <id>`), then the pristine blob is restored from
+Each mutation is applied to the fix scratch copy
+(`<scratch>/fix/daemon/e2e/production_linux_containment_witness_test.go` or its native ext4 twin)
+with `patch` (`scripts-fix/mutants/M<id>.patch`; the applied diff is captured verbatim as
+`<scratch>/logs-fix/mutant-M<id>.patch.diff`), the pins and the payload pin run
+(`run-mutants-native.sh`, one id per row), then the pristine blob is restored from
 `production_linux_containment_witness_test.go.pristine`; the sha256 after every restore equals the
-pristine value `8db3a21e6993d34a7889b994de1b082229e20a43d73c182cecd266f468cdbed7`.
+pristine value `00cdad06fd7d020dcef380f8267c7a2bb928452fb0bf61b4f0b4d8bb0324af76`. M1-M5 are the
+apply-pass mutations re-applied to the fix bytes (same mutation text); M6-M8 are the fix round's.
 
 | id | mutation (diff vs pristine) | command | exit | observed reds |
 | --- | --- | ---: | --- | --- |
-| M1 | delete the EACCES decision (+ its 2 comment lines); EACCES falls into the unexpected-error return | `apply-mutant.sh M1` | 1 | 9 rows: K1, K2, `reaped_pid_probe_missing_is_gone`, `zombie_state_is_gone`, `doctored_starttime_is_gone`, both real-identity rows, `denied_read_probe_failure_fails_closed`, `empty_identity_keeps_polling` |
-| M2 | `return nil` on EACCES, no probe | `apply-mutant.sh M2` | 1 | 6 rows: K1, K2, both real-identity rows, `denied_read_probe_failure_fails_closed`, `empty_identity_keeps_polling` |
-| M3 | decision condition `err != nil && strings.Contains(err.Error(), "stat namespace link")` | `apply-mutant.sh M3` | 1 | 4 rows: K1, K2, `live_pid_real_identity_readlink_fails_closed`, `doctored_starttime_is_gone` |
-| M4 | decision case negated: starttime **equal** → `nil` (`!linuxWitnessIdentityStartTimeDiffers(...)`) | `apply-mutant.sh M4` | 1 | 5 rows: K1, K2, both real-identity rows, `doctored_starttime_is_gone` |
-| M5 | `identity == ""` + readable live + EACCES → `return nil` | `apply-mutant.sh M5` | 1 | 2 rows: K2, `empty_identity_keeps_polling` |
+| M1 | delete the EACCES decision (+ its 2 comment lines); EACCES falls into the unexpected-error return | `run-mutants-native.sh M1` | 1 | 10 rows: K1, K2, `reaped_pid_probe_missing_is_gone`, `probe_esrch_is_gone`, `zombie_state_is_gone`, `doctored_starttime_is_gone`, both real-identity rows, `denied_read_probe_failure_fails_closed`, `empty_identity_keeps_polling` |
+| M2 | `return nil` on EACCES, no probe | `run-mutants-native.sh M2` | 1 | 6 rows: K1, K2, both real-identity rows, `denied_read_probe_failure_fails_closed`, `empty_identity_keeps_polling` |
+| M3 | decision condition `err != nil && strings.Contains(err.Error(), "stat namespace link")` | `run-mutants-native.sh M3` | 1 | 4 rows: K1, K2, `live_pid_real_identity_readlink_fails_closed`, `doctored_starttime_is_gone` |
+| M4 | decision case negated: starttime **equal** → `nil` (`!linuxWitnessIdentityStartTimeDiffers(...)`) | `run-mutants-native.sh M4` | 1 | 5 rows: K1, K2, both real-identity rows, `doctored_starttime_is_gone` |
+| M5 | `identity == ""` + readable live + EACCES → `return nil` | `run-mutants-native.sh M5` | 1 | 2 rows: K2, `empty_identity_keeps_polling` |
+| M6 | gone arm: drop `|| errors.Is(probeErr, syscall.ESRCH)` | `run-mutants-native.sh M6` | 1 | 2 rows: K2, `probe_esrch_is_gone` |
+| M7 | parse: the starttime `ParseUint` failure branch sets `startTime = 0` and falls through (no error) | `run-mutants-native.sh M7` | 1 | 2 rows: `TestLinuxWitnessProcessSnapshotPayloadDecisions`, `non_decimal_starttime_is_rejected` |
+| M8 | parse: `short /proc stat` returns `nil` instead of the error | `run-mutants-native.sh M8` | 1 | 2 rows: `TestLinuxWitnessProcessSnapshotPayloadDecisions`, `short_payload_is_rejected` |
 
 Every contract-listed row reddens; the extra reds are the same mutant truncating other branches
-(the contract's cells name the deciding rows, not an upper bound). Logs:
-`<scratch>/logs/apply-mutant-{M1,M2,M3,M4,M5}.log`. The `non_denial_error_carries_the_probe_record` row
-stays green under M1-M5 by construction (it injects EIO, not EACCES).
+(the contract's cells name the deciding rows, not an upper bound; M6-M8 each red exactly their
+deciding row plus its parent). Logs: `<scratch>/logs-fix/mutant-M{1..8}.log`. The
+`non_denial_error_carries_the_probe_record` row stays green under M1-M8 by construction (it injects
+EIO, not EACCES); the four payload rows stay green under M1-M6 (the parse is untouched).
 
 Mutation patches, verbatim (against the pristine blob
-`sha256 8db3a21e6993d34a7889b994de1b082229e20a43d73c182cecd266f468cdbed7`; M1 removes the block,
-M2 replaces it with the two-line `return nil` form, M3-M5 are the single-line edits shown):
+`sha256 00cdad06fd7d020dcef380f8267c7a2bb928452fb0bf61b4f0b4d8bb0324af76`; M1 removes the block,
+M2 replaces it with the two-line `return nil` form, M3-M5 are the single-line edits shown; the
+fix-round diffs exactly as applied are `<scratch>/logs-fix/mutant-M{1..8}.patch.diff`):
 
 ```
 M1 (delete):
@@ -170,6 +194,10 @@ M2 (replacement):
 M3: `if errors.Is(err, syscall.EACCES) {` → `if err != nil && strings.Contains(err.Error(), "stat namespace link") {`
 M4: `case linuxWitnessIdentityStartTimeDiffers(identity, snapshot.StartTime):` → `case !linuxWitnessIdentityStartTimeDiffers(identity, snapshot.StartTime):`
 M5: `case identity == "":` body `time.Sleep(25 * time.Millisecond); continue` → `return nil`
+
+M6: `case errors.Is(probeErr, os.ErrNotExist) || errors.Is(probeErr, syscall.ESRCH):` → `case errors.Is(probeErr, os.ErrNotExist):`
+M7: `if err != nil {` body `return linuxWitnessProcessSnapshot{}, errors.New("malformed /proc stat")` → `startTime = 0`
+M8: `if len(fields) <= 19 {` body `return linuxWitnessProcessSnapshot{}, errors.New("short /proc stat")` → `return linuxWitnessProcessSnapshot{}, nil`
 ```
 
 ### 4a. Apply-pass scratch unit proof of the starttime predicate (not shipped)
@@ -263,32 +291,34 @@ file outside the owned set needed an edit, so the ruling's routing is satisfied 
 | gate | command | exit | result |
 | --- | --- | ---: | --- |
 | base census | `<scratch>/base/daemon: go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` | 1 | exactly K1 red (§2) |
-| pins | `<worktree>/daemon` (post-apply): same command | 0 | §3 |
+| pins | `<worktree>/daemon` (post-fix): same command | 0 | §3, K2 `10` rows |
+| payload pin | `<worktree>/daemon: go test -count=1 -timeout 120s ./e2e -run "^TestLinuxWitnessProcessSnapshotPayloadDecisions$" -v` | 0 | §3, `4` rows |
+| load repeat | fix scratch copy: `GOMAXPROCS=8 go test -race -count=200 -timeout 3600s ./e2e -run "^(TestLinuxWitnessIdentityGone\|TestLinuxWitnessProcessSnapshotPayloadDecisions)" -v` | 0 | `3400` PASS rows, `0` FAIL, `0` `DATA RACE`, `ok … 179.399s` |
 | format | `gofmt -l .` (`<worktree>/daemon`) | 0 | 0 files listed |
 | vet | `go vet ./...` (`<worktree>/daemon`) | 0 | 0 findings |
-| suite | `go test -count=1 -timeout 900s ./...` (`<worktree>/daemon`) | 0 | 30 `ok`, 0 `FAIL`; pins included |
-| race, changed package | `go test -race -count=1 -timeout 600s ./e2e` (`<worktree>/daemon`) | 0 | `ok … 1.944s` |
-| race, pins | `go test -race -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` | 0 | `ok … 1.784s`, K1 `0.05s`, K2 `0.68s`, 0 red rows, 0 stray child processes |
-| race, full module | `go test -race -count=1 -timeout 900s ./...` (implement-stage `<scratch>/head/daemon`) | 1 | per-binary budget expired in the untouched `internal/app` (panic after 15m0s while the running test had 42s); not re-run in the apply pass; see §8 |
-| diff hygiene | `git diff --check` (worktree) | 0 | clean; `git diff --numstat 3b23dead` = `471 20` |
-| mutants | §4 | 1 × 5 | every contract-listed row red |
+| suite | `go test -count=1 -timeout 900s ./...` (`<worktree>/daemon`) | 0 | 30 `ok`, 0 `FAIL`; pins + payload pin included |
+| race, changed package | `go test -race -count=1 -timeout 600s ./e2e` (`<worktree>/daemon`) | 0 | `ok … 3.996s` |
+| race, pins | `go test -race -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` | 0 | `ok … 2.129s`, `12` PASS rows, `red_rows=0`, 0 stray child processes |
+| race, full module | `go test -race -count=1 -timeout 900s ./...` (implement-stage `<scratch>/head/daemon`) | 1 | per-binary budget expired in the untouched `internal/app` (panic after 15m0s while the running test had 42s); not re-run in the apply or fix rounds; see §8 |
+| diff hygiene | `git diff --check` (worktree) | 0 | clean; `git diff --numstat 3b23dead` = `535 20` |
+| mutants | §4 | 1 × 8 | every contract-listed row red; M6-M8 red exactly their deciding row |
 | `daemon` CI job | CI-owned on the PR head (pins run in `go test -race … ./...`, `ci.yml:1096-1105`) | — | not runnable here (no push); local equivalents above |
 | `integration` witness matrix | CI-owned on the PR head (`ci.yml:1659`) | — | not runnable here; the flake cannot be forced to red (plan D6), the pins are the mutant oracle |
 
 ## 8. Suite and race runs
 
-Plain suite on the shipping bytes (`scripts/apply-gates.sh`, `<scratch>/logs/apply-suite.log`):
+Plain suite on the shipping bytes (fix-round final gate batch, `<scratch>/logs-fix/final-suite.log`):
 `go test -count=1 -timeout 900s ./...` → `suite exit=0`; 30 `ok` lines and 0 `FAIL` lines
-(`e2e` `1.628s`, `internal/app` `241.007s`, `internal/platform` `74.034s`). This is the local
+(`e2e` `1.089s`, `internal/app` `198.144s`, `internal/platform` `45.574s`). This is the local
 equivalent of the `daemon` job's aggregate (that job runs the same tree under `-race`, which CI owns).
 
-Race runs (`<scratch>/logs/apply-race-e2e.log`, `apply-race-pins.log`; the full-module row below is
-the implement-stage `final-race.log`, not re-run in the apply pass):
+Race runs (`<scratch>/logs-fix/final-race-e2e.log`, `final-race-pins.log`; the full-module row below
+is the implement-stage `final-race.log`, not re-run in the apply or fix rounds):
 
-- changed package: `go test -race -count=1 -timeout 600s ./e2e` → exit 0, `ok … 1.944s`;
+- changed package: `go test -race -count=1 -timeout 600s ./e2e` → exit 0, `ok … 3.996s`;
 - pins: `go test -race -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` →
-  exit 0, `ok … 1.784s`, K1 `0.05s`, K2 `0.68s`, `red_rows=0`; `pgrep -f e2e.test` = 0, so the
-  re-exec children do not leak;
+  exit 0, `ok … 2.129s`, `red_rows=0`; `pgrep -f e2e.test` = 0, so the re-exec children do not
+  leak;
 - full module: `go test -race -count=1 -timeout 900s ./...` → exit 1, `panic: test timed out after
   15m0s` in `internal/app` (900.262s) with `TestDurablePiProviderBridgeExecutorReservesCompletionCapacityBeforeDispatch`
   at 42s — the package was still progressing when the per-binary budget expired. `internal/app` is
@@ -324,9 +354,67 @@ the implement-stage `final-race.log`, not re-run in the apply pass):
    does not parse returns the `malformed /proc stat` probe error, and a probe error takes the
    classified `probe failed:` path — never `nil` (this was the one latent fail-closed gap against
    contract F1). The branch is unreachable from kernel-generated stat files (always decimal), so it
-   is covered by inspection plus the `denied_read_probe_failure_fails_closed` /
-   `non_denial_error_records_probe_failure` pins, not by a real-input pin.
+   is documented as unreachable there; since the fix round the parse is the pure
+   `parseLinuxWitnessProcessSnapshot` and the branch is pinned by the table-driven
+   `TestLinuxWitnessProcessSnapshotPayloadDecisions` (`non_decimal_starttime_is_rejected`, with
+   `short_payload_is_rejected` / `missing_closing_parenthesis_is_rejected` on the sibling guards;
+   mutant rows M7/M8). The `denied_read_probe_failure_fails_closed` /
+   `non_denial_error_records_probe_failure` pins exercise the decision layer's probe-error handling,
+   not this parse path.
 9. The P1 leg classifier matches test-authored copies of the product wrapper messages
    (`daemon/internal/platform/identity_linux.go:75/:113`); a product reword would degrade the record
    to `leg=unknown` with nothing red. Diagnostic only; the product files are outside the owned set
    (contract Q1(a)).
+
+## 10. Fix stage (2026-11-25, review findings STD-A01–STD-A03)
+
+Review receipt: `ce-code-review` `mode:agent`, focused path, `status: complete`, verdict "Ready with
+fixes" (run `20261125-114841-`), range `a9e97747..919a0902`, scope `3` changed files, no peer (the
+invocation was declared local-only; the adversarial lens was a separately dispatched read-only
+in-process reviewer). All three findings were applied inside the owned set; none invalid. The fix
+round re-ran the mutant oracle on the apply bytes and put every figure above on the fix bytes
+(sha256 `00cdad06…`).
+
+| finding | severity | file | change |
+| --- | --- | --- | --- |
+| STD-A01 | P2 | `daemon/e2e/production_linux_containment_witness_test.go` | the gone arm's ESRCH half had no oracle — a baseline mutant dropping `\|\| errors.Is(probeErr, syscall.ESRCH)` left K1 + all `9` K2 rows green on the apply bytes (`exit=0`, `red_rows=0`, `<scratch>/logs/prefix-esrch-drop-baseline.log`). K2 gained `probe_esrch_is_gone` (stub probe → `syscall.ESRCH`, expects `nil`), the oracle gained M6 (removing that clause reds exactly this row), and the row is in the load repeat |
+| STD-A02 | P2 | `docs/plans/2026-11-25-rf-flake-containment-replay-nslink-plan.md` (§ D1) | the paragraph claimed `ProcessIdentity` reports EACCES as `ErrPersistedProcessGroupUnproven`; it now names the real mechanism, sourced from `daemon/internal/platform/identity_linux.go:75/:113` (`ProcessIdentity` returns the wrapped syscall error; the helper's denial classification is only `errors.Is(err, syscall.EACCES)`) and `:259` (the sentinel belongs to `ProvePersistedProcessGroupAbsent`) |
+| STD-A03 | P3 | this record (§9.8) | the claim that the two probe-failure pins covered the non-decimal starttime parse branch overstated their reach (they inject a failing probe function and exercise the decision layer, not the parse). Taken at the stronger arm: the parse became the pure `parseLinuxWitnessProcessSnapshot`, pinned by the table-driven `TestLinuxWitnessProcessSnapshotPayloadDecisions`, with mutant rows M7/M8 |
+
+### 10.1 The new pins and their oracle
+
+- `probe_esrch_is_gone` (K2 row): injected stat-leg EACCES + a probe stub returning `syscall.ESRCH`
+  → `nil` inside `1 s`. Before the fix, with the clause dropped, the baseline above shows the arm
+  was unobserved; after the fix it is green in §3 and red under M6 only.
+- `TestLinuxWitnessProcessSnapshotPayloadDecisions` (unit pin, `4` rows): green in §3 and in the
+  suite; red under M7 (`non_decimal_starttime_is_rejected`) and M8 (`short_payload_is_rejected`).
+
+### 10.2 Fix-round gates
+
+Every row in §7/§8 is the fix-round re-run on the fix bytes: the worktree gates ran as one
+foreground script (`scripts-fix/final-gates.sh`, `<scratch>/logs-fix/`), the mutants as §4, the
+load repeat with `GOMAXPROCS=8 -race -count=200`, and the base census against the unchanged
+`<scratch>/base` copy. The blocking CI rows stay CI-owned.
+
+### 10.3 Hashes, run-head equality, citation shifts
+
+- Delivered `daemon/e2e/production_linux_containment_witness_test.go`: sha256
+  `00cdad06fd7d020dcef380f8267c7a2bb928452fb0bf61b4f0b4d8bb0324af76`; `git diff --numstat
+  3b23dead` `535 20`, `git diff --numstat 919a0902` `64 0`.
+- Run-head equality: the gate batch printed the file's sha256 before the runs and after them — both
+  `00cdad06…` — and equals the delivered bytes; no code edit followed the batch. The mutant scratch
+  copies were restored byte-identical after every run (M1-M8, `00cdad06…` after each).
+- Citation shift: the parse split (`+4` lines) and the two pin insertions (`+12`, `+46`) move every
+  witness-file line reference below `:3527`; plan D5's census cites were updated to the fix bytes
+  (`3668`, `3653`, `4221/4270`, `3906`, `3963`), and the quoted logs keep the line numbers of the
+  tree they ran on (the base copy in §2, the fix tree in §3).
+
+### 10.4 Record hygiene
+
+- Each changed record is clean under
+  `python scripts/ci/model-routing-record-sanitize.py --check --root-only <record>` → exit 0; the
+  committed `record-cleanliness` gate (`ci.yml` job `record-cleanliness`, which guards
+  `docs/evidence/**`) passes against a synthetic commit carrying the fix bytes.
+- Added-line scan of the diff against `origin/main` for the account name, drive-letter prefixes and
+  the guest/temporary path prefixes (the `/mnt`, `/home`, `/tmp`, `/var` spellings), plus the
+  profile-directory spelling filter: `0` hits; `git diff --check` clean; `0` added comment lines.

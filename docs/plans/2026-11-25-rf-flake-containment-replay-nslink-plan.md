@@ -18,13 +18,14 @@ restored byte-identical (`sha256 8db3a21e…` verified after each).
 
 | file | change |
 | --- | --- |
-| `daemon/e2e/production_linux_containment_witness_test.go` | F1 EACCES decision in the shared identity-gone wait; P1 probe record on the unexpected-error return; F2 `waitForLinuxWitnessIdentityGoneWith` seam; one parse path for the `/proc/<pid>/stat` snapshot; pins K1/K2 with the re-exec child mode |
+| `daemon/e2e/production_linux_containment_witness_test.go` | F1 EACCES decision in the shared identity-gone wait; P1 probe record on the unexpected-error return; F2 `waitForLinuxWitnessIdentityGoneWith` seam; one parse path for the `/proc/<pid>/stat` snapshot; pins K1/K2 with the re-exec child mode; fix round: the gone arm's ESRCH half pinned (`probe_esrch_is_gone`) and the payload parse split into the pure `parseLinuxWitnessProcessSnapshot` with the `TestLinuxWitnessProcessSnapshotPayloadDecisions` table pin |
 | `docs/plans/2026-11-25-rf-flake-containment-replay-nslink-plan.md` | this plan |
 | `docs/evidence/rf-flake-containment-replay-nslink-2026-11-25.md` | the evidence record (commands, census, hashes, verbatim reds/greens, mutant rows) |
 
-No committed production change; the diff is one test file (`471` insertions, `20` deletions vs
-`3b23dead`; the 2026-11-25 apply pass is the last `103`/`60` of it, subject sha256
-`8db3a21e6993d34a7889b994de1b082229e20a43d73c182cecd266f468cdbed7`).
+No committed production change; the diff is one test file (`535` insertions, `20` deletions vs
+`3b23dead`; the 2026-11-25 apply pass is `103`/`60` of it and the fix round `64`/`0` on top of
+`919a0902`, subject sha256
+`00cdad06fd7d020dcef380f8267c7a2bb928452fb0bf61b4f0b4d8bb0324af76`).
 
 ## D1. The decision (F1): absence from the recorded starttime, never from the errno
 
@@ -53,9 +54,11 @@ sleeps, and the deadline message (`process %d with identity %q remained live`) a
 unchanged. One 1-2 line comment sits beside the decision (the kernel ambiguity and the starttime
 rule); no other comment was added.
 
-Product semantics are untouched (conductor Q1 (a)): `ProcessIdentity` still reports EACCES as
-`ErrPersistedProcessGroupUnproven`, and `ProvePersistedProcessGroupAbsent` never reads the target's
-ns link.
+Product semantics are untouched (conductor Q1 (a)): `ProcessIdentity`
+(`daemon/internal/platform/identity_linux.go:75/:113`) returns the wrapped syscall error for a
+denied ns-link read, and the helper classifies a denial solely by
+`errors.Is(err, syscall.EACCES)`; the `ErrPersistedProcessGroupUnproven` sentinel is produced by
+`ProvePersistedProcessGroupAbsent` (`:259`), which never reads the target's ns link.
 
 ## D2. The probe record (P1) rides the unexpected-error return
 
@@ -106,6 +109,8 @@ independent of the product builder.
 - K2 `TestLinuxWitnessIdentityGoneDeniedReadDecisions`: injected reader, real probe. Rows:
   `reaped_pid_probe_missing_is_gone` (stat-leg EACCES over a reaped pid → `nil`, asserted inside
   `1 s` — measured `0.03 s`; the bound is recorded here per the apply pass),
+  `probe_esrch_is_gone` (fix round: stat-leg EACCES + a stub probe returning `syscall.ESRCH` →
+  `nil`, asserted inside `1 s`; pins the gone arm's ESRCH half — mutant row M6),
   `zombie_state_is_gone` (injected EACCES + visible zombie + empty identity → `nil`, pinning the Z
   rule's precedence over the empty-identity poll), `doctored_starttime_is_gone` (readlink-leg EACCES +
   a starttime bumped by one → `nil`), both legs with the real identity → classified failure inside
@@ -118,6 +123,11 @@ independent of the product builder.
   coverage), `empty_identity_keeps_polling` (`nil`-free deadline error, exact base text,
   `elapsed ≥ 400 ms`, and a counting reader proves ≥ `2` identity reads; apply-pass coverage).
 
+The fix round adds one unit pin beside K2: `TestLinuxWitnessProcessSnapshotPayloadDecisions`
+(table-driven, `4` rows) exercises the pure `parseLinuxWitnessProcessSnapshot` split out of
+`readLinuxWitnessProcessSnapshot` — `complete_payload_parses`, `short_payload_is_rejected`,
+`missing_closing_parenthesis_is_rejected`, `non_decimal_starttime_is_rejected`; mutant rows M7/M8.
+
 ## D5. Class census (conductor ruling Q2, lesson 85)
 
 Criterion: a poll that *waits for disappearance* repeatedly reads identity across a reap and can
@@ -126,17 +136,17 @@ from a vantage point outside the window — before it (live-process assertion: E
 fail-closed) or after it (post-reap assertion: `release_task` retired the dentries before the read
 started, so ENOENT is deterministic). Census of all `58` `platform.ProcessIdentity(` call sites in
 `daemon/**/*_test.go` (`38` in `e2e`, `20` in `daemon/internal`), plus the two function-value
-passes (`witness_test:3664`, `core_test:1359`), with per-site reason:
+passes (`witness_test:3668`, `core_test:1359`), with per-site reason:
 
 | site (file:line) | function | decision |
 | --- | --- | --- |
-| witness_test:3664 | `platform.ProcessIdentity` value pass into `waitForLinuxWitnessIdentityGone` (`:3663`) | routed: the one repeated-read disappearance wait; now carries the decision |
-| witness_test:3649 | `assertLinuxWitnessProcessLive` | stays: live assertion, EACCES must fail closed |
-| witness_test:4157, 4206 | `waitForLinuxWitnessAllThreadsStopped` | stays: stop proof across a paused process, never a reap; identity revalidation gates the success return |
+| witness_test:3668 | `platform.ProcessIdentity` value pass into `waitForLinuxWitnessIdentityGone` (`:3667`) | routed: the one repeated-read disappearance wait; now carries the decision |
+| witness_test:3653 | `assertLinuxWitnessProcessLive` | stays: live assertion, EACCES must fail closed |
+| witness_test:4221, 4270 | `waitForLinuxWitnessAllThreadsStopped` | stays: stop proof across a paused process, never a reap; identity revalidation gates the success return |
 | witness_test:2750, 2761 | `openLinuxWitnessPIDFD` | stays: pidfd binding before/after, one-shot |
 | witness_test:1586 | `runLinuxHelperCrashMirrorWitness` | stays: daemon creation identity, one-shot |
-| witness_test:3902 | `linuxWitnessCanonicalIdentity` (pin) | stays: fixture cross-check before the denial, one-shot |
-| witness_test:3959 | K1 prerequisite (pin) | stays: requires EACCES, one-shot |
+| witness_test:3906 | `linuxWitnessCanonicalIdentity` (pin) | stays: fixture cross-check before the denial, one-shot |
+| witness_test:3963 | K1 prerequisite (pin) | stays: requires EACCES, one-shot |
 | core_test:1348 | `assertLivePersistedProcess` | stays: live assertion |
 | core_test:1359 | `platform.ProcessIdentity` value pass into `retiredProcessIdentityError` (`:1364`, from `assertRetiredProcessIdentity` `:1357`) | stays: one-shot retirement assertion whose `isProcessIdentityNotFoundError` predicate is `os.ErrNotExist || syscall.Errno(87)` (Windows `ERROR_INVALID_PARAMETER`; no ESRCH) — house precedent cited by the contract; not a wait and not a poll |
 | core_test:1441 | `assertStoppedProcessOrRecoveryConstraint` | stays: one-shot read beside the recovery-constraint assertion; not a wait |
@@ -159,7 +169,8 @@ timeout wait would change their semantics).
 The flake cannot be forced to red on demand — the reap straddle is sub-microsecond and not
 reproducible (contract probe matrix: ~390k kill/reap polls, 0 EACCES). The mutant oracle is
 therefore the pins; this plan claims no witness repeat. The `integration` witness matrix
-(`ci.yml:1659`) runs on the PR head and is CI-owned; the `daemon` job runs the pins inside
+(`ci.yml:1659`) runs on the PR head and is CI-owned; the `daemon` job (ubuntu-latest, non-root
+runner, `ci.yml:1096-1105`) runs the pins — and the fix round's payload pin — inside
 `go test -race ./...`.
 
 | id | mutation | expected red |
@@ -169,6 +180,9 @@ therefore the pins; this plan claims no witness repeat. The `integration` witnes
 | M3 | match `stat namespace link` text instead of `errors.Is(syscall.EACCES)` | K1 + K2 readlink-leg rows (the real denial is the readlink leg — the base census proves it) |
 | M4 | invert the starttime rule (equal → gone) | K1 + K2 real-identity rows |
 | M5 | `identity == ""` + readable live + EACCES → `nil` | K2 empty-identity row |
+| M6 | gone arm: drop `|| errors.Is(probeErr, syscall.ESRCH)` | K2 `probe_esrch_is_gone` |
+| M7 | parse: a starttime `ParseUint` failure returns a zero starttime and `nil` | payload pin `non_decimal_starttime_is_rejected` |
+| M8 | parse: `short /proc stat` returns `nil` instead of the error | payload pin `short_payload_is_rejected` |
 
 ## D7. Out of scope
 
@@ -182,22 +196,26 @@ therefore the pins; this plan claims no witness repeat. The `integration` witnes
 
 All Go gates run in WSL `Ubuntu-24.04` as user `accept` (uid 1000, non-root, 16 CPUs). Scratch root
 `<scratch>` with `base/` (base tree + K1 only), `head/` (implement-stage head tree), `apply/`
-(apply-stage copy of the post-apply tree plus the `.pristine` test-file blob), `logs/`, `scripts/`;
-the worktree is `<worktree>`. Runs are foreground and sequential (the sequencing rule: no
-measurement harness beside the suite; no benchmark harness exists in this increment). The rows
-below are the post-apply bytes (`8db3a21e…`) except the base census; the apply-stage re-run
-replaced the implement-stage figures, which survive only in the GDD run records.
+and `fix/` (apply-/fix-stage copies of the tree plus each `.pristine` test-file blob; the fix
+round's mutant harness and load repeat ran on a native ext4 twin of `fix/`), `logs/` and
+`logs-fix/`, `scripts/` and `scripts-fix/`; the worktree is `<worktree>`. Runs are foreground and
+sequential (the sequencing rule: no measurement harness beside the suite; no benchmark harness
+exists in this increment). The rows below are the fix-round bytes (`00cdad06…`) except the base
+census; the fix round re-ran every row, and the apply- and implement-stage figures survive only in
+the GDD run records.
 
 | row | command | exit | result |
 | --- | --- | ---: | --- |
-| base census | `<scratch>/base/daemon: go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` | 1 | exactly one red: K1 on the message assertion, verbatim base error `read process 94044 PID namespace: readlink /proc/94044/ns/pid: permission denied`; the child-mode test skips |
-| pins (worktree, post-apply) | `<worktree>/daemon: same command` | 0 | K1 green with the classified message; K2 + 9 rows green, `ok … 0.647s`; 1 child-mode skip |
+| base census | `<scratch>/base/daemon: go test -count=1 -timeout 300s ./e2e -run "^TestLinuxWitnessIdentityGone" -v` | 1 | exactly one red: K1 on the message assertion, verbatim base error `read process 153283 PID namespace: readlink /proc/153283/ns/pid: permission denied`; the child-mode test skips |
+| pins (worktree, post-fix) | `<worktree>/daemon: same command` | 0 | K1 green with the classified message; K2 + 10 rows green, `ok … 0.624s`; 1 child-mode skip |
+| payload pin (fix round) | `<worktree>/daemon: go test -count=1 -timeout 120s ./e2e -run "^TestLinuxWitnessProcessSnapshotPayloadDecisions$" -v` | 0 | 4 rows green, `ok … 0.043s` |
+| load repeat (fix round) | fix scratch copy: `GOMAXPROCS=8 go test -race -count=200 -timeout 3600s ./e2e -run "^(TestLinuxWitnessIdentityGone\|TestLinuxWitnessProcessSnapshotPayloadDecisions)" -v` | 0 | 3400 PASS rows, 0 FAIL, 0 `DATA RACE`, `ok … 179.399s` |
 | hygiene | `gofmt -l .`; `go vet ./...` | 0 | 0 files listed; 0 findings |
-| daemon suite | `go test -count=1 -timeout 900s ./...` (WSL, worktree) | 0 | 30 `ok`, 0 `FAIL` (e2e `1.628s`, `internal/app` `241.007s`, `internal/platform` `74.034s`) — the local equivalent of the `daemon` job aggregate |
-| race, changed package | `go test -race -count=1 -timeout 600s ./e2e`; pins with `-race … -run "^TestLinuxWitnessIdentityGone" -v` | 0 / 0 | `ok … 1.944s`; pins `ok … 1.784s`, K1 `0.05s`, K2 `0.68s`, 0 red, 0 stray children |
-| race, full module | `go test -race -count=1 -timeout 900s ./...` | 1 | per-binary budget expired in the untouched `internal/app` while it was still progressing (race overhead ~5-9x on this host); not re-run in the apply pass; the `daemon` CI job owns the full `-race ./...` verdict |
-| mutants M1-M5 | `apply-mutant.sh <id>` on `<scratch>/apply/daemon`, file restored from `.pristine` after each | 1 | red rows M1 `9` / M2 `6` / M3 `4` / M4 `5` / M5 `2` (rows as D6); the file's sha256 after every restore is `8db3a21e…` (byte-identical) |
-| diff hygiene | `git diff --check` (worktree) | 0 | clean; `git diff --numstat 3b23dead` = `471 20` (`103 60` of it the apply pass) |
+| daemon suite | `go test -count=1 -timeout 900s ./...` (WSL, worktree) | 0 | 30 `ok`, 0 `FAIL` (e2e `1.089s`, `internal/app` `198.144s`, `internal/platform` `45.574s`) — the local equivalent of the `daemon` job aggregate |
+| race, changed package | `go test -race -count=1 -timeout 600s ./e2e`; pins with `-race … -run "^TestLinuxWitnessIdentityGone" -v` | 0 / 0 | `ok … 3.996s`; pins `ok … 2.129s`, 0 red, 0 stray children |
+| race, full module | `go test -race -count=1 -timeout 900s ./...` | 1 | per-binary budget expired in the untouched `internal/app` while it was still progressing (race overhead ~5-9x on this host); not re-run in the apply or fix rounds; the `daemon` CI job owns the full `-race ./...` verdict |
+| mutants M1-M8 | `run-mutants-native.sh <id>` on `<scratch>/fix/daemon` (native twin), file restored from `.pristine` after each | 1 | red rows M1 `10` / M2 `6` / M3 `4` / M4 `5` / M5 `2` / M6 `2` / M7 `2` / M8 `2` (rows as D6); the file's sha256 after every restore is `00cdad06…` (byte-identical) |
+| diff hygiene | `git diff --check` (worktree) | 0 | clean; `git diff --numstat 3b23dead` = `535 20` (`103 60` apply + `64 0` fix round) |
 
 CI-owned rows (not runnable here; no push): the `daemon` job (pins inside `go test -race ./...`,
 `ci.yml:1096-1105`), the `integration` job's witness matrix (`ci.yml:1659`).
@@ -233,3 +251,28 @@ Record-only: PD-4 (the `1 s` reaped-pid bound is recorded in D4), PD-5 (census c
 the `isProcessIdentityNotFoundError` predicate corrected here and in the evidence record), PD-6 (the
 leg-classifier limit is disclosed in evidence section 9). Gate re-runs on these bytes: D8/evidence
 section 7; the mutant oracle re-ran on these bytes (evidence section 4).
+
+## D11. Fix stage (2026-11-25, review findings STD-A01–STD-A03)
+
+Dispositioned by the conductor's fix brief against the `ce-code-review` focused receipt (verdict
+"Ready with fixes"; 2 P2 + 1 P3). All three applied inside the owned set; none invalid; the fix
+round's bytes are the subject sha256 `00cdad06…` (`git diff --numstat 919a0902` = `64 0`).
+
+- STD-A01 (P2, the gone arm's ESRCH half had no oracle): proven before the fix — dropping
+  `|| errors.Is(probeErr, syscall.ESRCH)` on the apply bytes left K1 + all 9 K2 rows green
+  (`exit=0 red_rows=0`). K2 gained `probe_esrch_is_gone` (stub probe → `syscall.ESRCH`, expects
+  `nil`), the oracle gained M6 (that clause removed reds exactly this row), and the row ran in the
+  `-race -count=200` load repeat. D4, D6, D8, evidence §10.
+- STD-A02 (P2, D1 stated a false mechanism): the paragraph now names the real mechanism
+  (`ProcessIdentity` returns the wrapped syscall error; the helper's denial classification is only
+  `errors.Is(err, syscall.EACCES)`; the sentinel belongs to `ProvePersistedProcessGroupAbsent`,
+  `daemon/internal/platform/identity_linux.go:259`), sourced from those files. Evidence §10.
+- STD-A03 (P3, evidence §9.8 overstated the two probe-failure pins' reach): taken at the stronger
+  arm — the payload parse is now the pure `parseLinuxWitnessProcessSnapshot`, pinned by the
+  table-driven `TestLinuxWitnessProcessSnapshotPayloadDecisions` (`non_decimal_starttime_is_rejected`
+  plus the short/malformed rows) with mutant rows M7/M8; the sentence now reads as the decision
+  layer's probe-error handling vs the parse pin. D4, D6, evidence §9.8/§10.
+
+Re-run gates on the fix bytes: D8 and evidence §7/§8 (base census, pins + payload pin, load repeat,
+suite, race, mutants M1-M8, diff hygiene); every mutant restore was byte-identical. The witness-file
+citation shift from the two insertions is recorded in evidence §10.3.
