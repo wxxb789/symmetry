@@ -5256,3 +5256,55 @@ follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under 
       swap row and the equal-PID row verbatim. (b) the table gains the handoff, authority,
       release-proof and pre-gate rows (`production_linux_v2_owner_identity_test.go`, phase table).
       (c) the equal-PID, different-identity row isolates the identity term.
+
+## rf-acc-containment-goal-admission: the clone-admission contradiction (2026-11-26)
+
+Moved 2026-11-26 from `docs/TODO.md`'s `## rf-acc-native-burndown: Linux v2 native acceptance
+follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `docs/TODO.md` under
+`## rf-acc-containment-goal-admission: residuals (2026-11-26)`.
+
+- [ ] Decide the Linux v2 native owner witness's clone-admission contradiction (2026-11-24, goal
+      `rf-acc-native-containment-witness`; evidence
+      `docs/evidence/rf-acc-native-containment-witness-2026-11-24.md` §7.2, runs `45452357027`,
+      `45455325059`, `45458181149`): with the captured App stderr now visible, both containment
+      sets stop after the claim seed with `reserve owner witness clone before source Git effects:
+      Linux clone intent does not match the current admitted Subject`. The witness requires a
+      `git_clone_v2` workspace (`daemon/internal/app/linux_owner_witness_linux.go:2981`) whose
+      reservation demands an admitted Control Subject
+      (`daemon/internal/state/linux_clone_journal.go:208-216,864-878`), while the witness request
+      validation refuses a claim that carries an admission
+      (`daemon/e2e/production_linux_v2_native_witness_test.go:1565-1567`: `owner-witness claim must
+      be a real non-Goal Control task`) and Control's `tasks_goal_fields_all_or_none` forbids goal
+      fields on a goal-less task (`scripts/ci/provision-linux-v2-control-claims.exs:415-421`); no
+      fixture claim satisfies both, so the rows never reach the credential-dependent step. Smallest
+      proposed fix: run the witness on a Goal-backed admitted claim whose admission Subject equals
+      the request Subject — relax the harness check to `present && admission.Subject ==
+      request.Subject` and provision the fixture's tasks through the Goal/admission flow (pattern
+      `scripts/ci/omo-control-native-fixture.exs:190,262-284,297-303,376`) — which grows the owned
+      set by that harness block. The alternative, exempting the witness from the shared clone-v2
+      admission guard, would weaken a production guard (`daemon/internal/**`).
+      **Closed (2026-11-26, goal `rf-acc-containment-goal-admission`, branch
+      `refactor/rf-acc-containment-goal-admission`, base `4440c5c0`; plan
+      `docs/plans/2026-11-25-rf-acc-containment-goal-admission-plan.md`, evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md`):** the four containment
+      cases (`codex_containment`, `claude_containment`, `stage_replay_native_release_codex`,
+      `stage_replay_native_release_claude`) now run on the same Control-composed Goal admission the
+      pi-durability cases already use — the fixture routes them through `provision_goal_admission!`
+      with the OpenCode repository resource, the writer keys its admission branch on the goal case
+      set, the codex/claude claim runtimes carry native-harness adapter metadata, and the e2e
+      predicate `linuxV2WitnessRequiresGoalAdmission` keys the admission branch on the goal-routed
+      request cases (the pi-durability rows plus the codex/claude rows), leaving every other
+      provider-free row on the non-Goal refusal; `daemon/internal/**` stayed byte-identical and no
+      assertion was weakened outside the conductor ruling
+      (`refactor/decision-witness-admission-2026-11-25.md`).
+      Scratch runs `45665341553` and `45668197894` (earlier rounds, their own bytes) observe both
+      containment cases (`codex_containment`, `claude_containment`) past the clone reserve with
+      zero `reserve owner witness clone` / `clone intent does not match` refusals; the Bind run
+      `45689981952` on the delivered bytes (one scratch run on the PR head) re-observes both past
+      the clone reserve and the umask wall with zero such refusals and zero umask lines. Both
+      `stage_replay_native_release_<kind>` legs remain unexecuted, because each set stops at its
+      first failing leg. The authorized one-line UMask arm (`production` joins
+      `stage-replay|negative`) cleared the fresh-leg umask wall in run `45671784251`; that
+      earlier round's walls (the codex release class — the AppArmor userns wall, owned by
+      `rf-acc-apparmor-userns-profile`; the Claude fixed-argv bound wall, owned by
+      `rf-claude-schema-argv`) are recorded in the goal's residual entry in `docs/TODO.md`.
