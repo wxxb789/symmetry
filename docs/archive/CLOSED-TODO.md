@@ -5271,7 +5271,9 @@ follow-ups (2026-11-24)` (PR #287); the two sibling stops stay open there under 
       (`grep -c apparmor scripts/ci/linux-v2-native-acceptance.sh` stays 0). Relaxing the sysctl and
       a fixture-only exception were rejected; the gate, the two existing CI exceptions and the
       marker/resume semantics of the installer are unchanged. What stays open is only the
-      owner-gated amendment application itself, recorded in `docs/TODO.md`. On the delivered bytes
-      the run-3 rows clear the wall (installer/preflight `apparmor_userns=per_program`, the
-      migration transport start, the two `shared` checks) and the runs' next stops are named
-      verbatim in the evidence record §8.
+      owner-gated amendment application itself, recorded in `docs/TODO.md`. On run 3's head
+      (`ce3c30b9`) the rows clear the wall (installer/preflight `apparmor_userns=per_program`,
+      the migration transport start, the two `shared` checks) and the runs' next stops are named
+      verbatim in the evidence record §8; the apply and fix stages' revisions are re-bound by
+      the conductor's Bind run on the PR head (the record's §1 digest table is the delivered
+      set).

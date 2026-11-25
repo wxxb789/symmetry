@@ -1221,12 +1221,27 @@ func TestLinuxAppArmorLoadedProfileScan(t *testing.T) {
 	}
 }
 
+// firstInstalledApparmorParser returns the host parser path; the rows copy it into their own
+// tree, because production compiles as the unprivileged owner, not as the parser's root owner.
+func firstInstalledApparmorParser() string {
+	for _, candidate := range append([]string{"/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"}, linuxAppArmorParserPaths...) {
+		if info, err := os.Lstat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // The host-state readers must keep the closed decision vocabulary on real file state: the
 // sysctl reader, the profile-file verifier and the compression-disabled compile.
 func TestLinuxAppArmorHostStateRows(t *testing.T) {
 	previousSysctl, previousPath, previousDir := linuxAppArmorSysctlPath, linuxAppArmorInstallPath, linuxAppArmorPolicyPath
+	previousIncludes, previousUID, previousGID := linuxAppArmorIncludePaths, linuxAppArmorInstallerUID, linuxAppArmorInstallerGID
+	previousParsers := linuxAppArmorParserPaths
 	t.Cleanup(func() {
 		linuxAppArmorSysctlPath, linuxAppArmorInstallPath, linuxAppArmorPolicyPath = previousSysctl, previousPath, previousDir
+		linuxAppArmorIncludePaths, linuxAppArmorInstallerUID, linuxAppArmorInstallerGID = previousIncludes, previousUID, previousGID
+		linuxAppArmorParserPaths = previousParsers
 	})
 	directory := t.TempDir()
 	linuxAppArmorSysctlPath = filepath.Join(directory, "restrict_unprivileged_userns")
@@ -1269,19 +1284,39 @@ func TestLinuxAppArmorHostStateRows(t *testing.T) {
 
 	linuxAppArmorPolicyPath = directory
 	linuxAppArmorInstallPath = filepath.Join(directory, linuxAppArmorProfileName)
-	minor := ACLSubject{UID: 4242, GID: 4242}
-	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); present || valid {
-		t.Errorf("absent profile file: present = %t, valid = %t", present, valid)
+	// The rows substitute a tree owned by the invoking identity so the trusted-path arms run
+	// unprivileged; every fixture stays inside t.TempDir().
+	linuxAppArmorInstallerUID = uint32(os.Geteuid())
+	linuxAppArmorInstallerGID = uint32(os.Getegid())
+	abiDirectory, tunablesDirectory := filepath.Join(directory, "abi"), filepath.Join(directory, "tunables")
+	abiPath, tunablesPath := filepath.Join(abiDirectory, "4.0"), filepath.Join(tunablesDirectory, "global")
+	for _, includeDirectory := range []string{abiDirectory, tunablesDirectory} {
+		if err := os.Mkdir(includeDirectory, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
+	for _, includePath := range []string{abiPath, tunablesPath} {
+		if err := os.WriteFile(includePath, []byte("# include\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linuxAppArmorIncludePaths = []string{abiPath, tunablesPath}
+	minor := ACLSubject{UID: 4242, GID: 4242}
+	expectProfileFile := func(name string, present, valid bool) {
+		t.Helper()
+		gotPresent, gotValid := verifyLinuxOwnerAppArmorProfileFile(minor, minor)
+		if gotPresent != present || gotValid != valid {
+			t.Errorf("%s: present = %t, valid = %t; want %t, %t", name, gotPresent, gotValid, present, valid)
+		}
+	}
+	expectProfileFile("absent profile file", false, false)
 	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(linuxAppArmorInstallPath, 0o666); err != nil {
 		t.Fatal(err)
 	}
-	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
-		t.Errorf("group/world-writable profile file: present = %t, valid = %t", present, valid)
-	}
+	expectProfileFile("group/world-writable profile file", true, false)
 	if err := os.Chmod(linuxAppArmorInstallPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1290,34 +1325,69 @@ func TestLinuxAppArmorHostStateRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	linuxAppArmorInstallPath = symlink
-	if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
-		t.Errorf("symlinked profile file: present = %t, valid = %t", present, valid)
-	}
-	// Content and directory checks need a root-owned path: the positive rows run on the runner's
-	// own install and verify; an unprivileged user only reaches the metadata refusals above.
+	expectProfileFile("symlinked profile file", true, false)
 	linuxAppArmorInstallPath = filepath.Join(directory, "foreign-userns-profile")
 	if err := os.WriteFile(linuxAppArmorInstallPath, []byte("profile other /bin/true flags=(unconfined) {\n}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if os.Geteuid() == 0 {
-		if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || valid {
-			t.Errorf("foreign profile text as root: present = %t, valid = %t", present, valid)
-		}
-		if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if present, valid := verifyLinuxOwnerAppArmorProfileFile(minor, minor); !present || !valid {
-			t.Errorf("exact profile text as root: present = %t, valid = %t", present, valid)
-		}
+	expectProfileFile("foreign profile text", true, false)
+	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	expectProfileFile("exact profile text", true, true)
+	secondLink := filepath.Join(directory, "second-userns-profile-link")
+	if err := os.Link(linuxAppArmorInstallPath, secondLink); err != nil {
+		t.Fatal(err)
+	}
+	expectProfileFile("multiply-linked profile file", true, false)
+	if err := os.Remove(secondLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(abiPath); err != nil {
+		t.Fatal(err)
+	}
+	expectProfileFile("missing include file", true, false)
+	if err := os.WriteFile(abiPath, []byte("# include\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(abiPath, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	expectProfileFile("group/world-writable include file", true, false)
+	if err := os.Chmod(abiPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tunablesDirectory, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	expectProfileFile("group/world-writable include directory", true, false)
+	if err := os.Chmod(tunablesDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expectProfileFile("restored include closure", true, true)
 
 	linuxAppArmorInstallPath = filepath.Join(directory, "staged-userns-profile")
 	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Production compiles as the unprivileged owner, so the row runs the real parser from a
+	// t.TempDir copy owned by the invoking identity and leaves the host file untouched.
+	parser := firstInstalledApparmorParser()
+	if parser == "" {
+		t.Skip("no apparmor_parser on this host")
+	}
+	parserBytes, err := os.ReadFile(parser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parserCopy := filepath.Join(directory, "apparmor_parser")
+	if err := os.WriteFile(parserCopy, parserBytes, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linuxAppArmorParserPaths = []string{parserCopy}
 	hashes, unavailable := compileLinuxAppArmorProfile(minor, minor)
 	if unavailable != "" || len(hashes) == 0 {
-		t.Skipf("no usable apparmor_parser on this host: unavailable = %q", unavailable)
+		t.Skipf("the real parser could not compile the profile text on this host: unavailable = %q", unavailable)
 	}
 	for _, hash := range hashes {
 		if len(hash) != linuxAppArmorPolicyHashHexLength || !isLowerHex(hash) {
@@ -1329,24 +1399,30 @@ func TestLinuxAppArmorHostStateRows(t *testing.T) {
 // The compile order is the readback's core: compression is disabled first, and only a parser
 // that rejects -c0 (the parser < 5 shape) gets the plain compilation.
 func TestLinuxAppArmorCompileRows(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("the parser identity and directory checks require root")
-	}
 	previousPaths, previousInstall := linuxAppArmorParserPaths, linuxAppArmorInstallPath
-	t.Cleanup(func() { linuxAppArmorParserPaths, linuxAppArmorInstallPath = previousPaths, previousInstall })
+	previousUID, previousGID := linuxAppArmorInstallerUID, linuxAppArmorInstallerGID
+	t.Cleanup(func() {
+		linuxAppArmorParserPaths, linuxAppArmorInstallPath = previousPaths, previousInstall
+		linuxAppArmorInstallerUID, linuxAppArmorInstallerGID = previousUID, previousGID
+	})
 	directory := t.TempDir()
 	calls := filepath.Join(directory, "parser-calls.log")
+	rejectMarker := filepath.Join(directory, "reject-c0")
 	linuxAppArmorInstallPath = filepath.Join(directory, "profile")
 	if err := os.WriteFile(linuxAppArmorInstallPath, []byte(linuxAppArmorProfileText()), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	stub := filepath.Join(directory, "apparmor_parser")
-	stubText := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$APPARMOR_STUB_CALLS\"\ncase \" $* \" in\n  *\" -c0 \"*) [ \"$APPARMOR_STUB_MODE\" = reject-c0 ] && exit 0 ;;\nesac\nprintf 'stub-policy-bytes\\n'\n"
+	// The parser runs with a sanitized environment, so the stub resolves its own witness paths.
+	stubText := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"${0%/*}/parser-calls.log\"\n" +
+		"[ -z \"${PROBE_ENV_CANARY:-}\" ] || printf '%s\\n' \"$PROBE_ENV_CANARY\" >> \"${0%/*}/env-canary.log\"\n" +
+		"case \" $* \" in\n  *\" -c0 \"*) [ -f \"${0%/*}/reject-c0\" ] && exit 0 ;;\nesac\nprintf 'stub-policy-bytes\\n'\n"
 	if err := os.WriteFile(stub, []byte(stubText), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	linuxAppArmorParserPaths = []string{stub}
-	t.Setenv("APPARMOR_STUB_CALLS", calls)
+	linuxAppArmorInstallerUID = uint32(os.Geteuid())
+	linuxAppArmorInstallerGID = uint32(os.Getegid())
 	minor := ACLSubject{UID: 4242, GID: 4242}
 	expected := sha256.Sum256([]byte("stub-policy-bytes\n"))
 	readCalls := func() []string {
@@ -1358,7 +1434,9 @@ func TestLinuxAppArmorCompileRows(t *testing.T) {
 		return strings.Split(strings.TrimSpace(string(logged)), "\n")
 	}
 
-	t.Setenv("APPARMOR_STUB_MODE", "reject-c0")
+	if err := os.WriteFile(rejectMarker, []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	hashes, unavailable := compileLinuxAppArmorProfile(minor, minor)
 	if unavailable != "" || len(hashes) == 0 {
 		t.Fatalf("a rejecting -c0 parser must still compile: unavailable = %q, hashes = %v", unavailable, hashes)
@@ -1377,12 +1455,117 @@ func TestLinuxAppArmorCompileRows(t *testing.T) {
 	if err := os.Remove(calls); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("APPARMOR_STUB_MODE", "accept-c0")
+	if err := os.Remove(rejectMarker); err != nil {
+		t.Fatal(err)
+	}
 	if hashes, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "" || len(hashes) == 0 {
 		t.Fatalf("an accepting -c0 parser must compile: unavailable = %q, hashes = %v", unavailable, hashes)
 	}
 	if lines = readCalls(); len(lines) != 1 || !strings.Contains(lines[0], "-c0") {
 		t.Errorf("an accepting -c0 parser must be compiled exactly once with -c0: %v", lines)
+	}
+
+	linuxAppArmorInstallerUID = uint32(os.Geteuid()) + 1
+	if _, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "missing" {
+		t.Errorf("a parser owned by another identity must be refused: unavailable = %q", unavailable)
+	}
+	linuxAppArmorInstallerUID = uint32(os.Geteuid())
+	if err := os.Chmod(directory, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "missing" {
+		t.Errorf("a parser inside a group/world-writable directory must be refused: unavailable = %q", unavailable)
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	// The parser environment is sanitized: a canary set in this process must not reach it,
+	// and the direct control run proves the canary mechanism can leak at all.
+	canary := filepath.Join(directory, "env-canary.log")
+	t.Setenv("PROBE_ENV_CANARY", "leaked")
+	if _, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "" {
+		t.Errorf("a trusted stub parser must compile: unavailable = %q", unavailable)
+	}
+	if _, err := os.Stat(canary); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the parser environment leaked the canary: stat error = %v", err)
+	}
+	control := exec.Command(stub)
+	control.Env = append(os.Environ(), "PROBE_ENV_CANARY=leaked")
+	if err := control.Run(); err != nil {
+		t.Fatalf("run the canary control: %v", err)
+	}
+	if _, err := os.Stat(canary); err != nil {
+		t.Errorf("the canary control did not leak: %v", err)
+	}
+
+	// Output beyond the compile bound is a bounded refusal, never a partial digest.
+	oversizeStub := filepath.Join(directory, "apparmor_parser_oversize")
+	oversizeText := "#!/bin/sh\npayload='" + strings.Repeat("x", 4096) + "'\n" +
+		"index=0\nwhile [ \"$index\" -lt 1025 ]; do printf '%s' \"$payload\"; index=$((index + 1)); done\n"
+	if err := os.WriteFile(oversizeStub, []byte(oversizeText), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linuxAppArmorParserPaths = []string{oversizeStub}
+	if _, unavailable = compileLinuxAppArmorProfile(minor, minor); unavailable != "failed" {
+		t.Errorf("a parser emitting more than the compile bound must be refused: unavailable = %q", unavailable)
+	}
+}
+
+// A different attachment path or profile name must compile to a different policy hash: that
+// inequality is what makes the readback's hash equality prove the exact installed attachment.
+func TestLinuxAppArmorAttachmentSensitivePolicyHash(t *testing.T) {
+	parser := firstInstalledApparmorParser()
+	if parser == "" {
+		t.Skip("no apparmor_parser on this host")
+	}
+	directory := t.TempDir()
+	fixedPath := filepath.Join(directory, "fixed")
+	attachmentPath := filepath.Join(directory, "attachment")
+	namePath := filepath.Join(directory, "name")
+	text := linuxAppArmorProfileText()
+	for path, value := range map[string]string{
+		fixedPath:      text,
+		attachmentPath: strings.Replace(text, linuxAppArmorGateAttachment, linuxAppArmorGateAttachment+"-other", 1),
+		namePath:       strings.Replace(text, linuxAppArmorProfileName, linuxAppArmorProfileName+"-other", 1),
+	} {
+		if err := os.WriteFile(path, []byte(value), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compile := func(path string) string {
+		t.Helper()
+		for _, prefix := range [][]string{{"-c0"}, {}} {
+			arguments := append(append([]string{}, prefix...), "-Q", "-S", "-K", "-T", "--skip-bad-cache", path)
+			output, err := exec.Command(parser, arguments...).Output()
+			if err != nil || len(output) == 0 {
+				continue
+			}
+			whole := sha256.Sum256(output)
+			return hex.EncodeToString(whole[:])
+		}
+		t.Fatalf("compile %s: no parser invocation produced policy bytes", filepath.Base(path))
+		return ""
+	}
+	fixedHash := compile(fixedPath)
+	if compile(attachmentPath) == fixedHash {
+		t.Error("changing the attachment path must change the compiled policy hash")
+	}
+	if compile(namePath) == fixedHash {
+		t.Error("changing the profile name must change the compiled policy hash")
+	}
+}
+
+// A failed verify must not keep reporting an earlier call's AppArmor userns decision.
+func TestLinuxAppArmorDecisionResetsPerVerify(t *testing.T) {
+	previous := linuxOwnerAppArmorUsernsDecision
+	t.Cleanup(func() { linuxOwnerAppArmorUsernsDecision = previous })
+	linuxOwnerAppArmorUsernsDecision = LinuxAppArmorUsernsPerProgram
+	if err := VerifyLinuxOwnerInstallation(config.Config{}); err == nil {
+		t.Fatal("an empty Linux owner configuration must not verify")
+	}
+	if got := LinuxOwnerAppArmorUsernsDecision(); got != LinuxAppArmorUsernsNotNeeded {
+		t.Errorf("after a failed verify the decision = %q, want the reset %q token", got, LinuxAppArmorUsernsNotNeeded)
 	}
 }
 

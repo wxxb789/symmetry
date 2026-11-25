@@ -5,6 +5,7 @@ package linuxpreflight
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/config"
@@ -63,6 +65,7 @@ func VerifyLegacyLinuxOwnersDrained(value config.Config) (result error) {
 // The installed A/B mapping comes only from the strict root-owned owner configuration;
 // the cgroup path and socket come from daemon config and must match the live anchor.
 func VerifyLinuxOwnerInstallation(value config.Config) (result error) {
+	linuxOwnerAppArmorUsernsDecision = LinuxAppArmorUsernsNotNeeded
 	if err := value.Validate(); err != nil {
 		return fmt.Errorf("validate Linux owner daemon configuration: %w", err)
 	}
@@ -191,34 +194,24 @@ const (
 	linuxAppArmorCompileMaxBytes     = 4 << 20
 	linuxAppArmorListMaxEntries      = 4096
 	linuxAppArmorPolicyHashHexLength = 64
+	linuxAppArmorABIPath             = "/etc/apparmor.d/abi/4.0"
+	linuxAppArmorTunablesPath        = "/etc/apparmor.d/tunables/global"
 )
 
-// Test seams: the fixed production paths, overridable only by this package's tests.
+// Test seams: the fixed production paths, the policy include closure and the trusted installer
+// identity (root:root in production), overridable only by this package's tests.
 var (
-	linuxAppArmorSysctlPath  = linuxAppArmorUsernsSysctl
-	linuxAppArmorPolicyPath  = linuxAppArmorPolicyDir
-	linuxAppArmorInstallPath = linuxAppArmorProfilePath
-	linuxAppArmorParserPaths = []string{"/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"}
+	linuxAppArmorSysctlPath   = linuxAppArmorUsernsSysctl
+	linuxAppArmorPolicyPath   = linuxAppArmorPolicyDir
+	linuxAppArmorInstallPath  = linuxAppArmorProfilePath
+	linuxAppArmorParserPaths  = []string{"/usr/sbin/apparmor_parser", "/usr/bin/apparmor_parser"}
+	linuxAppArmorIncludePaths = []string{linuxAppArmorABIPath, linuxAppArmorTunablesPath}
+	linuxAppArmorInstallerUID = uint32(0)
+	linuxAppArmorInstallerGID = uint32(0)
 )
 
-// Closed decision vocabulary of the AppArmor unprivileged-userns host precondition; a refusal
-// is the decision line of the returned error and never carries a path, errno or free text.
-const (
-	LinuxAppArmorUsernsNotNeeded       = "not_needed"
-	LinuxAppArmorUsernsPerProgram      = "per_program"
-	LinuxAppArmorUsernsSysctlInvalid   = "sysctl_invalid"
-	LinuxAppArmorUsernsStateUnreadable = "apparmor_state_unreadable"
-	LinuxAppArmorUsernsUnexpected      = "unexpected_profile"
-	LinuxAppArmorUsernsAbsent          = "profile_absent"
-	LinuxAppArmorUsernsFileMismatch    = "profile_file_mismatch"
-	LinuxAppArmorUsernsNotLoaded       = "profile_not_loaded"
-	LinuxAppArmorUsernsLoadedMismatch  = "profile_loaded_mismatch"
-	LinuxAppArmorUsernsParserAbsent    = "parser_absent"
-	LinuxAppArmorUsernsParserFailed    = "parser_failed"
-)
-
-// linuxOwnerAppArmorUsernsDecision is what LinuxOwnerAppArmorUsernsDecision reports for the
-// most recent VerifyLinuxOwnerInstallation call; the CLI prints it beside the boundary line.
+// linuxOwnerAppArmorUsernsDecision is what LinuxOwnerAppArmorUsernsDecision reports for the most
+// recent VerifyLinuxOwnerInstallation call; every call resets it before its first check.
 var linuxOwnerAppArmorUsernsDecision = LinuxAppArmorUsernsNotNeeded
 
 func LinuxOwnerAppArmorUsernsDecision() string {
@@ -391,16 +384,20 @@ func verifyLinuxOwnerAppArmorProfileFile(a, b ACLSubject) (bool, bool) {
 		return true, false
 	}
 	identity, err := FileIdentity(info)
-	if err != nil || !info.Mode().IsRegular() || identity.UID != 0 || identity.GID != 0 ||
-		info.Mode().Perm() != 0o644 || identity.Links != 1 {
+	if err != nil || !info.Mode().IsRegular() || identity.UID != linuxAppArmorInstallerUID ||
+		identity.GID != linuxAppArmorInstallerGID || info.Mode().Perm() != 0o644 || identity.Links != 1 {
 		return true, false
 	}
-	for _, path := range []string{"/etc", linuxAppArmorPolicyPath} {
-		if !verifyLockedRootDirectory(path, a, b) {
-			return true, false
-		}
+	if !verifyLockedDirectory("/etc", 0, 0, a, b) {
+		return true, false
 	}
-	if err := VerifyNoUntrustedACLWrite(linuxAppArmorInstallPath, []uint32{0}, nil, false); err != nil {
+	if !verifyLockedDirectory(linuxAppArmorPolicyPath, linuxAppArmorInstallerUID, linuxAppArmorInstallerGID, a, b) {
+		return true, false
+	}
+	if !verifyLinuxAppArmorIncludeClosure(a, b) {
+		return true, false
+	}
+	if err := VerifyNoUntrustedACLWrite(linuxAppArmorInstallPath, []uint32{linuxAppArmorInstallerUID}, nil, false); err != nil {
 		return true, false
 	}
 	if err := VerifyEffectiveAccess(linuxAppArmorInstallPath, a, 4, 2); err != nil {
@@ -416,18 +413,47 @@ func verifyLinuxOwnerAppArmorProfileFile(a, b ACLSubject) (bool, bool) {
 	return true, true
 }
 
-// verifyLockedRootDirectory is the root-owned, non-writable, no-untrusted-ACL-write and
-// no-unprivileged-effective-write requirement shared by the install and parser directories.
-func verifyLockedRootDirectory(path string, a, b ACLSubject) bool {
+// verifyLinuxAppArmorIncludeClosure pins the include files the compiled policy embeds: a writer
+// who can widen them can widen the loaded policy while the profile file stays byte-identical.
+func verifyLinuxAppArmorIncludeClosure(a, b ACLSubject) bool {
+	for _, path := range linuxAppArmorIncludePaths {
+		if !verifyLockedDirectory(filepath.Dir(path), linuxAppArmorInstallerUID, linuxAppArmorInstallerGID, a, b) {
+			return false
+		}
+		info, err := LstatCanonicalPath(path)
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+		identity, err := FileIdentity(info)
+		if err != nil || identity.UID != linuxAppArmorInstallerUID || identity.GID != linuxAppArmorInstallerGID ||
+			identity.Links != 1 || info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		if err := VerifyNoUntrustedACLWrite(path, []uint32{linuxAppArmorInstallerUID}, nil, false); err != nil {
+			return false
+		}
+		if err := VerifyEffectiveAccess(path, a, 4, 2); err != nil {
+			return false
+		}
+		if err := VerifyEffectiveAccess(path, b, 0, 2); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// verifyLockedDirectory is the no-untrusted-ACL-write and no-unprivileged-effective-write
+// requirement shared by the policy, include and parser directories.
+func verifyLockedDirectory(path string, ownerUID, ownerGID uint32, a, b ACLSubject) bool {
 	directory, err := LstatCanonicalPath(path)
 	if err != nil || !directory.IsDir() {
 		return false
 	}
 	identity, err := FileIdentity(directory)
-	if err != nil || identity.UID != 0 || identity.GID != 0 || directory.Mode().Perm()&0o022 != 0 {
+	if err != nil || identity.UID != ownerUID || identity.GID != ownerGID || directory.Mode().Perm()&0o022 != 0 {
 		return false
 	}
-	if err := VerifyNoUntrustedACLWrite(path, []uint32{0}, nil, true); err != nil {
+	if err := VerifyNoUntrustedACLWrite(path, []uint32{ownerUID}, nil, true); err != nil {
 		return false
 	}
 	if err := VerifyEffectiveAccess(path, a, 0, 2); err != nil {
@@ -486,20 +512,29 @@ func compileLinuxAppArmorProfile(a, b ACLSubject) ([]string, string) {
 	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
 		return nil, "missing"
 	}
-	if identity, err := FileIdentity(info); err != nil || identity.UID != 0 {
+	if identity, err := FileIdentity(info); err != nil || identity.UID != linuxAppArmorInstallerUID {
 		return nil, "missing"
 	}
-	if !verifyLockedRootDirectory(filepath.Dir(parser), a, b) {
+	if !verifyLockedDirectory(filepath.Dir(parser), linuxAppArmorInstallerUID, linuxAppArmorInstallerGID, a, b) {
 		return nil, "missing"
 	}
 	for _, prefix := range [][]string{{"-c0"}, {}} {
 		arguments := append(append([]string{}, prefix...), "-Q", "-S", "-K", "-T", "--skip-bad-cache", linuxAppArmorInstallPath)
-		command := exec.Command(parser, arguments...)
-		command.Stderr = io.Discard
-		output, err := command.Output()
-		if err != nil || len(output) == 0 || len(output) > linuxAppArmorCompileMaxBytes {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		command := exec.CommandContext(ctx, parser, arguments...)
+		command.Env = []string{"HOME=/", "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "LC_ALL=C"}
+		var stdout, stderr boundedLinuxOutput
+		stdout.limit = linuxAppArmorCompileMaxBytes
+		stderr.limit = linuxAppArmorCompileMaxBytes
+		command.Stdout = &stdout
+		command.Stderr = &stderr
+		runErr := command.Run()
+		timedOut := ctx.Err() != nil
+		cancel()
+		if runErr != nil || timedOut || stdout.Len() == 0 {
 			continue
 		}
+		output := stdout.Bytes()
 		whole := sha256.Sum256(output)
 		hashes := []string{hex.EncodeToString(whole[:])}
 		if len(output) > 8 {
@@ -928,6 +963,29 @@ func (output *boundedLinuxOutput) Write(value []byte) (int, error) {
 		return 0, errLinuxPreflightOutputTooLarge
 	}
 	return output.Buffer.Write(value)
+}
+
+// ReadFrom must be overridden: the embedded bytes.Buffer's own ReadFrom would let io.Copy
+// append unbounded output without ever calling the bounded Write above.
+func (output *boundedLinuxOutput) ReadFrom(source io.Reader) (int64, error) {
+	var total int64
+	chunk := make([]byte, 32*1024)
+	for {
+		count, readErr := source.Read(chunk)
+		if count > 0 {
+			written, writeErr := output.Write(chunk[:count])
+			total += int64(written)
+			if writeErr != nil {
+				return total, writeErr
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				return total, nil
+			}
+			return total, readErr
+		}
+	}
 }
 
 func verifyLinuxServicePath(value string, a, b ACLSubject) error {

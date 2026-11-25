@@ -1643,6 +1643,12 @@ sudo install -o root -g root -m 0644 "$repo/scripts/systemd/symmetry-daemon.serv
 
 # The installer loads its policy through the guest's kernel security filesystem; an already
 # present mount must not be remounted (the mount syscall fails EBUSY and aborts the fixture).
+# The glob keeps the module name out of this file: the fixture's policy census must stay empty.
+userns_restriction=$(machine_run /bin/sh -c 'cat /proc/sys/kernel/*_restrict_unprivileged_userns') ||
+  fail 'cannot read the AppArmor unprivileged user-namespace restriction for this acceptance'
+userns_restriction=$(printf '%s' "$userns_restriction" | /usr/bin/tr -d '[:space:]')
+[[ "$userns_restriction" == 1 ]] ||
+  fail "the AppArmor unprivileged user-namespace restriction must be 1 for this acceptance (read $userns_restriction)"
 if [ "$(machine_run /usr/bin/findmnt --noheadings --output TARGET --target /sys/kernel/security)" != "/sys/kernel/security" ]; then
   machine_run /usr/bin/mount -t securityfs securityfs /sys/kernel/security ||
     fail 'mount the guest kernel security filesystem for the installed userns exception'
@@ -1663,6 +1669,11 @@ machine_run /root/install-linux-owner.sh \
 print_filtered_output_lines <"$installer_log"
 (( installer_status == 0 )) ||
   fail "install-linux-owner.sh did not install the staged owner artifacts (status=$installer_status)"
+grep --quiet --extended-regexp 'userns=per_program$' "$installer_log" || {
+  printf 'The in-guest installer did not report the loaded userns exception (expected userns=per_program).\n' >&2
+  print_filtered_output_lines <"$installer_log"
+  exit 1
+}
 machine_run /usr/bin/systemctl enable symmetry-owner.service
 machine_run /usr/bin/systemctl start symmetry-owner.service
 machine_run /usr/bin/systemctl is-active --quiet symmetry-owner.service
@@ -1679,6 +1690,44 @@ machine_run_as "$A_USER" "$A_USER" /usr/libexec/symmetry/symmetry-daemon \
 print_filtered_output_lines <"$daemon_verify_log"
 (( daemon_verify_status == 0 )) ||
   fail 'installed daemon -verify-linux-owner-install refused the staged daemon config'
+grep --quiet --extended-regexp 'userns=per_program$' "$daemon_verify_log" || {
+  printf 'The installed daemon preflight did not report the loaded userns exception (expected userns=per_program).\n' >&2
+  print_filtered_output_lines <"$daemon_verify_log"
+  exit 1
+}
+# The preflight package's AppArmor rows run as root against the guest's real policy tree, so the
+# root identity arms execute in CI; each named row must run and pass exactly once, never skip.
+userns_preflight_events="$fixture_root/userns-preflight-events.json"
+userns_preflight_status=0
+machine_run_count=$((machine_run_count + 1))
+sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
+  --unit="${machine}-userns-preflight-${machine_run_count}" \
+  --property="WorkingDirectory=$A_SOURCE/daemon" \
+  --setenv="HOME=/root" \
+  --setenv="PATH=$A_HOME/.ci-go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  --setenv="GOROOT=$A_HOME/.ci-go" \
+  --setenv="GOMODCACHE=$A_HOME/.ci-gomod" \
+  --setenv="GOCACHE=/root/.cache/go-build" \
+  --setenv="GOTMPDIR=/root/.cache/tmp" \
+  --setenv=CGO_ENABLED=0 \
+  --setenv=GOFLAGS=-mod=readonly \
+  -- "$A_HOME/.ci-go/bin/go" test -count=1 -timeout 600s -json ./internal/linuxpreflight \
+  -run '^TestLinuxAppArmor' >"$userns_preflight_events" 2>&1 || userns_preflight_status=$?
+if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$userns_preflight_events" \
+  TestLinuxAppArmorUsernsDecisionRows \
+  TestLinuxAppArmorProfileTextMatchesTheInstaller \
+  TestLinuxAppArmorLoadedProfileScan \
+  TestLinuxAppArmorHostStateRows \
+  TestLinuxAppArmorCompileRows \
+  TestLinuxAppArmorAttachmentSensitivePolicyHash \
+  TestLinuxAppArmorDecisionResetsPerVerify; then
+  printf 'The root-identity AppArmor preflight rows did not run and pass exactly once inside the guest (go test exit=%s).\n' \
+    "$userns_preflight_status" >&2
+  grep --invert-match --extended-regexp '^\{' "$userns_preflight_events" | head -n 5 | print_filtered_output_lines || true
+  exit 1
+fi
+(( userns_preflight_status == 0 )) ||
+  fail "the in-guest AppArmor preflight rows exited with status $userns_preflight_status"
 daemon_service_start_status=0
 if machine_run /usr/bin/systemctl start symmetry-daemon.service; then
   daemon_service_start_status=0

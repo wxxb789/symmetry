@@ -271,16 +271,25 @@ path `/usr/libexec/symmetry/symmetry-linux-gate`). It never writes the sysctl,
 and it fails closed: a profile it cannot load and verify against the kernel's
 recorded policy hash is not published, and a host that already carries the
 profile or the loaded policy while the restriction is absent or `0` is refused.
-A re-run whose staged text differs from the published file stops and asks for
-removal first. `install-linux-owner.sh -print-userns-profile` prints the exact
-profile text (the installer is the single source; the daemon preflight embeds
-the same five lines), and `install-linux-owner.sh -remove-userns-profile`
-unloads it through its definition file, proves it is gone and removes the
-file. Removal is the rollback: while the restriction stays `1`, the daemon's
-`-verify-linux-owner-install` ExecStartPre then refuses to start, and that
-refusal is the intended fail-closed state rather than a defect. The procedure
-does not prove anything about hosts whose sysctl is `0` (nothing is installed
-there) and does not relax or set the sysctl on any host.
+It also refuses to load while any policy input is writable by a non-root
+identity: the profile file, its include closure (`abi/4.0`, `tunables/global`)
+and their directories must stay root-owned and non-writable, and the daemon
+preflight refuses a host whose closure a non-root writer could widen.
+A re-run whose staged text differs from the published file stops with a
+message naming `install-linux-owner.sh -remove-userns-profile` as the remedy.
+`install-linux-owner.sh -print-userns-profile` prints the exact profile text
+(the installer is the single source; the daemon preflight embeds the same five
+lines), and `install-linux-owner.sh -remove-userns-profile` unloads it, proves
+it is gone and removes the file. The unload only ever passes a definition file
+that byte-equals the fixed text — the staged file, the verified published file
+or a freshly printed copy — so a foreign declaration placed at the published
+path is never unloaded, and removal exits non-zero instead of claiming success
+when the kernel's policy interface cannot be read. Removal is the rollback:
+while the restriction stays `1`, the daemon's `-verify-linux-owner-install`
+ExecStartPre then refuses to start, and that refusal is the intended
+fail-closed state rather than a defect. The procedure does not prove anything
+about hosts whose sysctl is `0` (nothing is installed there) and does not relax
+or set the sysctl on any host.
 
 The daemon takes its configuration path from `-config`, with no default, and its
 first start needs `SYMMETRY_ENROLLMENT_TOKEN` in the daemon process's own

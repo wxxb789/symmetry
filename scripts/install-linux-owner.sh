@@ -49,11 +49,12 @@ loads and verifies the per-program AppArmor userns exception for the exact insta
 0644, the only rule userns, flags=(unconfined) — the global restriction is never written. It
 fails closed: a profile that cannot be loaded and verified is not published, a host that
 carries the profile while the restriction is absent or 0 is refused, and a re-run whose staged
-text differs from the published file stops for -remove-userns-profile. Verification compares the
-compilation of the exact staged bytes with compression disabled against the kernel's recorded
-policy hash, whole or from byte 9 (apparmor_parser < 5 writes the whole output uncompressed and
-is accepted there); the kernel hashes the decompressed policy, so a compressed compile never
-matches.
+text differs from the published file stops naming -remove-userns-profile as the remedy. The
+policy inputs must be root-owned and non-writable: the profile file, its include closure
+(abi/4.0, tunables/global) and their directories. Verification compares the compilation of the
+exact staged bytes with compression disabled against the kernel's recorded policy hash, whole or
+from byte 9 (apparmor_parser < 5 writes the whole output uncompressed and is accepted there);
+the kernel hashes the decompressed policy, so a compressed compile never matches.
 
 Bounded AppArmor modes outside a full install:
   install-linux-owner.sh -print-userns-profile    print the exact profile text to stdout
@@ -80,6 +81,8 @@ USERSNS_PROFILE_FILE=/etc/apparmor.d/symmetry-linux-owner-userns
 USERSNS_ATTACH=/usr/libexec/symmetry/symmetry-linux-gate
 USERSNS_SYSCTL=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
 USERSNS_PROFILES_ROOT=/sys/kernel/security/apparmor/policy/profiles
+USERSNS_ABI_FILE=/etc/apparmor.d/abi/4.0
+USERSNS_TUNABLES_FILE=/etc/apparmor.d/tunables/global
 
 print_userns_profile() {
   printf 'abi <abi/4.0>,\n'
@@ -502,6 +505,24 @@ read_userns_restriction() {
   printf 'absent\n'
 }
 
+# The compiled policy embeds the include closure, so a writable closure widens the loaded
+# policy while the profile file stays byte-identical.
+verify_userns_include_closure() {
+  for include_file in "$USERSNS_ABI_FILE" "$USERSNS_TUNABLES_FILE"; do
+    include_directory=${include_file%/*}
+    [ -d "$include_directory" ] && [ ! -L "$include_directory" ] ||
+      fail "the AppArmor include directory $include_directory is required while the AppArmor unprivileged user-namespace restriction is active"
+    check_root_directory "$include_directory"
+    [ -f "$include_file" ] && [ ! -L "$include_file" ] ||
+      fail "the AppArmor include file $include_file is required while the AppArmor unprivileged user-namespace restriction is active"
+    include_metadata=$(/usr/bin/stat -c '%u %g %a %h' "$include_file") || fail "cannot inspect $include_file"
+    set -- $include_metadata
+    [ "$#" -eq 4 ] && [ "$1" -eq 0 ] && [ "$2" -eq 0 ] && [ "$4" -eq 1 ] || fail "$include_file must be root:root and singly linked"
+    include_permissions=$(printf '%d' "0$3") || fail "cannot parse $include_file permissions"
+    [ $((include_permissions & 18)) -eq 0 ] || fail "$include_file is group/world writable"
+  done
+}
+
 check_root_executable() {
   file=$1
   label=$2
@@ -580,8 +601,10 @@ verify_userns_profile_load() {
 # and a name that is not a file is skipped, so the file that declares the profile is passed here.
 unload_userns_profile() {
   [ -n "${PARSER:-}" ] || return 0
+  fixed_hash=$(print_userns_profile | sha256_stream) || return 1
   for candidate in "${TMP_PROFILE:-}" "$USERSNS_PROFILE_FILE"; do
-    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+    if [ -n "$candidate" ] && [ -f "$candidate" ] && [ ! -L "$candidate" ] &&
+      [ "$(sha256_file "$candidate")" = "$fixed_hash" ]; then
       "$PARSER" -R "$candidate" >/dev/null 2>&1 && return 0
     fi
   done
@@ -626,6 +649,7 @@ install_userns_profile() {
   check_root_directory /etc
   [ -d /etc/apparmor.d ] && [ ! -L /etc/apparmor.d ] || fail 'the AppArmor policy directory /etc/apparmor.d is required while the AppArmor unprivileged user-namespace restriction is active'
   check_root_directory /etc/apparmor.d
+  verify_userns_include_closure
   PARSER=$(resolve_apparmor_parser)
   TMP_PROFILE=$(/usr/bin/mktemp /etc/apparmor.d/.linux-owner-userns.XXXXXX) || fail 'create temporary AppArmor userns profile'
   print_userns_profile > "$TMP_PROFILE"
@@ -637,6 +661,13 @@ install_userns_profile() {
   [ "$(sha256_file "$TMP_PROFILE")" = "$PROFILE_HASH" ] || fail 'the staged AppArmor userns profile differs from the fixed text'
   USERSNS_RESTORE_PUBLISHED=0
   if [ -e "$USERSNS_PROFILE_FILE" ] || [ -L "$USERSNS_PROFILE_FILE" ]; then
+    # The shared verify_published_file message names no remedy, so this re-run names its own.
+    published_metadata=$(/usr/bin/stat -c '%u %g %a %h' "$USERSNS_PROFILE_FILE" 2>/dev/null || true)
+    if [ ! -f "$USERSNS_PROFILE_FILE" ] || [ -L "$USERSNS_PROFILE_FILE" ] ||
+      [ "$published_metadata" != '0 0 644 1' ] ||
+      [ "$(sha256_file "$USERSNS_PROFILE_FILE")" != "$PROFILE_HASH" ]; then
+      fail 'the published AppArmor userns profile differs from the fixed text; re-run with -remove-userns-profile to unload and remove it, then install again'
+    fi
     verify_published_file "$USERSNS_PROFILE_FILE" "$PROFILE_HASH" 0 644 'AppArmor userns profile'
     USERSNS_RESTORE_PUBLISHED=1
   fi
@@ -649,10 +680,15 @@ install_userns_profile() {
     rollback_userns_profile
     fail 'the loaded AppArmor userns profile could not be verified against the staged userns profile text'
   fi
-  USERSNS_LOADED_BY_RUN=0
-  [ "$(sha256_file "$TMP_PROFILE")" = "$PROFILE_HASH" ] || fail 'the staged AppArmor userns profile changed while it was loaded'
+  if [ "$(sha256_file "$TMP_PROFILE")" != "$PROFILE_HASH" ]; then
+    rollback_userns_profile
+    fail 'the staged AppArmor userns profile changed while it was loaded'
+  fi
+  # The exit trap keeps the full rollback (unload plus a verified published reload) armed until
+  # the publication succeeded: the shared publish path can fail without naming a remedy.
   publish_or_verify "$TMP_PROFILE" "$USERSNS_PROFILE_FILE" "$PROFILE_HASH" 0 644 'AppArmor userns profile'
   TMP_PROFILE=
+  USERSNS_LOADED_BY_RUN=0
   printf 'apparmor_userns=per_program\n'
 }
 
@@ -660,12 +696,17 @@ install_userns_profile() {
 remove_userns_profile() {
   check_root_directory /etc
   PARSER=$(resolve_apparmor_parser optional)
+  unload_proved=0
   if [ -n "$PARSER" ]; then
-    unload_userns_profile || true
+    if unload_userns_profile; then unload_proved=1; fi
   fi
-  if [ -d "$USERSNS_PROFILES_ROOT" ]; then
+  if [ -e "$USERSNS_PROFILES_ROOT" ] || [ -L "$USERSNS_PROFILES_ROOT" ]; then
+    [ -d "$USERSNS_PROFILES_ROOT" ] && [ ! -L "$USERSNS_PROFILES_ROOT" ] ||
+      fail 'the AppArmor policy interface is not a readable directory; the removed state cannot be proven'
     loaded=$(scan_loaded_userns_profile_directory) || fail 'cannot enumerate the loaded AppArmor profiles while removing the AppArmor userns profile'
     [ -z "$loaded" ] || fail 'the installed AppArmor userns profile is still loaded'
+  elif [ "$unload_proved" -ne 1 ]; then
+    fail 'the AppArmor policy interface is invisible and the fixed declaration could not be unloaded; the removed state cannot be proven'
   fi
   if [ -e "$USERSNS_PROFILE_FILE" ] || [ -L "$USERSNS_PROFILE_FILE" ]; then
     [ -f "$USERSNS_PROFILE_FILE" ] && [ ! -L "$USERSNS_PROFILE_FILE" ] || fail 'the installed AppArmor userns profile is not a regular non-symlink file'
@@ -840,13 +881,13 @@ validate_unit_template "$OWNER_TEMPLATE" owner
 validate_unit_template "$DAEMON_TEMPLATE" daemon
 
 cleanup() {
+  if [ "${USERSNS_LOADED_BY_RUN:-0}" = 1 ] && [ -n "${PARSER:-}" ]; then
+    rollback_userns_profile
+  fi
   for temp_path in "$TMP_WRAPPER" "$TMP_CORE" "$TMP_GATE" "$TMP_BOOTSTRAP" "$TMP_DAEMON" \
     "$TMP_CONFIG" "$TMP_OWNER_UNIT" "$TMP_DAEMON_UNIT" "$TMP_INTENT" "$TMP_PROFILE" "$TMP_PROFILE_COMPILE"; do
     [ -z "$temp_path" ] || /usr/bin/rm -f "$temp_path"
   done
-  if [ "${USERSNS_LOADED_BY_RUN:-0}" = 1 ] && [ -n "${PARSER:-}" ]; then
-    unload_userns_profile || true
-  fi
   if [ "${CREATED_DRAIN_DIR:-0}" -eq 1 ]; then
     /usr/bin/rm -f "$TMP_DRAIN_DAEMON"
     /usr/bin/rmdir "$TMP_DRAIN_DIR" 2>/dev/null || true

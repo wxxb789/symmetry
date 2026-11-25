@@ -13,10 +13,10 @@ choices it leaves open and records the probe evidence that closed them.
 
 | Contract clause | Dispatch head | Content |
 | --- | --- | --- |
-| Change 1 installer | `scripts/install-linux-owner.sh` | 9-argument install, root-only, marker/resume, `verify_published_file`/`publish_or_verify`/`verify_existing_or_absent` (delivered :324, :379, :342), fixed publish list, no service start/stop |
-| Change 2 preflight | `daemon/internal/linuxpreflight/preflight_linux.go` | `LinuxOwnerPreflightRuntimeBoundary` (delivered :43), `verifyInstalledLinuxOwnerAssets` (delivered :138-181), `verifyLinuxOwnerAppArmorUserns` (delivered :441-470) |
+| Change 1 installer | `scripts/install-linux-owner.sh` | 9-argument install, root-only, marker/resume, `verify_published_file`/`publish_or_verify`/`verify_existing_or_absent` (delivered :327, :382, :345), fixed publish list, no service start/stop |
+| Change 2 preflight | `daemon/internal/linuxpreflight/preflight_linux.go` | `LinuxOwnerPreflightRuntimeBoundary` (delivered :45), `verifyInstalledLinuxOwnerAssets` (delivered :141), `verifyLinuxOwnerAppArmorUserns` (delivered :467) |
 | Change 2 decision line | `daemon/cmd/symmetry-daemon/main.go` | `-verify-linux-owner-install` prints the boundary line and `apparmor_userns=` (delivered :266) |
-| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :967), securityfs guard (delivered :1644-1649), in-guest installer run (delivered :1654-1665), in-guest `-verify-linux-owner-install` (delivered :1674-1681), installed-owner scratch group (delivered :2997-3001) |
+| Change 3 fixture | `scripts/ci/linux-v2-native-acceptance.sh` | nspawn boot with the narrowed capability (delivered :967), restriction read (delivered :1647-1651), securityfs guard (delivered :1652-1655), in-guest installer run (delivered :1660), installer-log decision grep (delivered :1672), in-guest `-verify-linux-owner-install` (delivered :1687) with its decision grep (delivered :1693), in-guest root preflight rows (delivered :1700-1730), `shared` group guard (delivered :1556) |
 | Change 3 base package | `scripts/ci/linux-v2-native-rootfs-base.sh` | pinned `--include=` set (delivered :47) and the guest policy-service mask (delivered :70-72) |
 | Change 4 design text | `docs/design/harness.md`, `docs/goals/0010-refactor-program.md` | not owned; the amendment text is proposed in §9 and applied by the D3 amendment |
 
@@ -109,19 +109,19 @@ for a profile loaded the production way (`--replace`, compressed).
 
 ## 3. Profile text, attachment set and load command (the installer's, byte-fixed)
 
-```
-abi <abi/4.0>,
-include <tunables/global>
-profile symmetry-linux-owner-userns /usr/libexec/symmetry/symmetry-linux-gate flags=(unconfined) {
-  userns,
-}
-```
+The text is not copied here (contract Change 5); it is emitted by
+`scripts/install-linux-owner.sh -print-userns-profile` and its bytes are pinned by
+`TestLinuxAppArmorProfileTextMatchesTheInstaller` and the evidence record's §1 digest.
 
 - One `profile` stanza per exact installed binary path; the measured set is the census C2 set
   (`/usr/libexec/symmetry/symmetry-linux-gate`); the launcher core, wrapper, daemon and clone
   bootstrap create no user namespace and are not attached. No glob, directory, regex or prefix.
 - The only rule is `userns,`; the only other bytes are the probe's two boilerplate lines; the
   attachment is unquoted, matching Ubuntu's shipped per-program `flags=(unconfined)` pattern.
+- Those two boilerplate lines are *inputs*: the fix stage verifies `abi <abi/4.0>` and
+  `tunables/global` (owner, mode, link count, and — in the preflight — the ACL and the
+  effective A/B access, plus each include directory) before anything is compiled or loaded, so a
+  writable closure cannot widen the loaded policy behind a byte-identical profile file.
 - File `/etc/apparmor.d/symmetry-linux-owner-userns`, root:root mode 0644, singly linked,
   published through the installer's existing machinery (hash-pinned temp file beside the final
   path + `publish_or_verify` + `verify_published_file`), so a re-run is idempotent and a
@@ -178,6 +178,18 @@ vocabulary's `not_needed` token and it is unreachable, because the unsupported v
 fails first. That file is outside the contract's owned list and is the one addition the plan
 justifies for the build.
 
+Fix-stage amendments to this section (review STD-A03/A06/A07/A08/A09): the include closure is
+verified with the same rules as the profile file through `verifyLinuxAppArmorIncludeClosure`
+and a parameterized `verifyLockedDirectory`; the parser runs through `exec.CommandContext` with
+a 10s deadline, a sanitized environment and bounded output (the bound needed an explicit
+`ReadFrom`, because the embedded `bytes.Buffer` promotes one that `io.Copy` prefers); the
+trusted-path identity (`linuxAppArmorInstallerUID`/`GID`, production `root:root`) is a test
+seam so every AppArmor row executes in the unprivileged `daemon` job, while the same rows run
+as root in the fixture's guest; the vocabulary moved to the build-tag-free
+`apparmor_userns.go`, with `preflight_unsupported.go` and its test returning and pinning the
+shared token; and `VerifyLinuxOwnerInstallation` resets the recorded decision before its first
+check, so a failing verify never reports an earlier call's value.
+
 ## 6. Fixture (Change 3)
 
 No policy text, load command or attachment of its own. Three bounded additions: the guest boots
@@ -209,7 +221,8 @@ identity.
   with the fixed name, another profile and a stray file; duplicate names reported.
 - Host-state rows (`TestLinuxAppArmorHostStateRows`): the sysctl reader against real files, the
   profile-file verifier against a foreign-owned temp path (absent, world-writable, symlink,
-  foreign text; the root-owned positive rows are gated on `Geteuid()==0`), and one real
+  foreign text; the delivered bytes run the positive rows through the identity seam,
+  unprivileged and as root), and one real
   `apparmor_parser` compilation of the profile text.
 - The installer step's own decision/failure/rollback rows are a bounded local probe (run as root
   in WSL Ubuntu-24.04 with the fixed paths substituted to a scratch layout and `apparmor_parser`
@@ -229,6 +242,18 @@ identity.
   recorded. M6/M7/M8 mutate a scratch copy of the whole daemon module under `/tmp`, restored;
   M10 reddens the C6 census on a scratch copy of the fixture; M9/M11 are not applicable because
   no `gate.c` byte changes.
+
+Fix-stage rows and mutants (evidence record §6/§7 carries the verbatim rows, the digests and
+the probe substitutions): the identity seam adds the unprivileged execution of every AppArmor
+row and the `t.TempDir()` parser copy; the closure rows pin the missing file, the writable file
+and the writable directory; the compiler rows pin the sanitized environment (with a direct
+canary control) and the output bound; the attachment-sensitivity row pins that the compiled
+policy hash changes with the attachment path and with the profile name; and
+`TestLinuxAppArmorDecisionResetsPerVerify` pins the reset. The mutants are the pre-fix
+before-states (foreign published bytes with and without a remedy, a missing include file, an
+invisible policy interface, a foreign unload argument, the compile row's `--- SKIP`) plus four
+in-place source mutants (closure call deleted, `Env` deleted, `ReadFrom` deleted, reset
+deleted) and the non-Linux vocabulary rename.
 
 ## 8. Runs, reviews and budget
 
@@ -279,6 +304,17 @@ sensitivity, in-guest load) are recorded as a probe residual — run 3 is the la
 action and the scratch branch is deleted (`git ls-remote origin
 scratch/rf-acc-apparmor-userns-profile` prints nothing).
 
+### Fix stage (2026-11-26, over the review's STD-A01..A10 / SPEC-A01..A04)
+
+The fix stage changed no accepted decision, no profile-text byte, no gate byte and no existing
+test; it strengthened checks, named remedies and moved the root-only rows into reachable
+identities. Evidence record §11 lists every finding's disposition; §8 carries the per-file
+delta and the delivered digests, §6/§7 the local rows, mutants and before-states, §10 the gate
+commands and counts. The only item this stage cannot close is the runner re-binding of the
+delivered bytes: SPEC-A01's attachment-sensitivity probe row and SPEC-A02's equality table for
+the delivered revisions belong to the conductor's Bind run on the PR head, which is why the
+TODO and CLOSED-TODO sentences bind the wall rows to run 3's head until then.
+
 ## 9. Records and the proposed D3 amendment text
 
 The evidence record `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md` carries the
@@ -306,3 +342,15 @@ unwritable policy interface are refused (`apparmor_state_unreadable`) rather tha
 guest whose systemd already mounted securityfs needs no fixture mount; the `--capability=all`
 draft was narrowed to `CAP_MAC_ADMIN` and the base rootfs masks the guest's policy service, so
 the fixture widens nothing beyond the load's own capability.
+
+## 11. Conductor ruling 2026-11-26 (recorded)
+
+`conductor ruling 2026-11-26` (the review run's DECISION_NEEDED axis): the read-only kernel
+check stands as the exact-attachment proof **only** with the attachment-sensitivity row
+(a same-text declaration whose attachment path, or separately whose profile name, compiles to a
+different policy hash). That row now exists as a local measurement and as
+`TestLinuxAppArmorAttachmentSensitivePolicyHash`; its runner form is part of the conductor's
+Bind run. The ruling also ratified SPEC-A03's three added files (`preflight_unsupported.go`,
+the rootfs-base mask lines, this runbook's section) and directed SPEC-A02's rewording: the
+TODO and CLOSED-TODO sentences bind the wall rows to run 3's head (`ce3c30b9`) until the Bind
+run re-binds the delivered bytes. SPEC-A04's two embedded profile-text copies are deleted.
