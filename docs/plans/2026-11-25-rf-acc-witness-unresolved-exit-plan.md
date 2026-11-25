@@ -118,7 +118,8 @@ completeness loop no pre-gate replay can satisfy.
    are both the unbound placeholder (`PID <= 1 && Identity == ""`). The equality condition
    and message, the completeness check for every other pair, and the duplicate PID/identity
    checks are unchanged. `expected == nil` with a present actual is not a placeholder pair,
-   so an incomplete actual there still fails.
+   so an incomplete actual there still fails. (The fix increment later added the journal-bound
+   condition — §8.)
 2. `daemon/e2e/production_linux_v2_owner_identity_test.go` (new, `//go:build linux && amd64`,
    `package e2e_test`): the mandatory pure-function table test
    `TestLinuxV2RequireSameOwnerIdentities` — equal `{}` pass; the pre-gate rehearsal shape
@@ -137,3 +138,22 @@ completeness loop no pre-gate replay can satisfy.
    and shim (`507340af…`) reused verbatim. The `:3737` helper-response-loss call site
    receives the same exemption through the shared function and stays unexercised until
    `shared` clears its earlier stops.
+
+## 8. Fix increment (2026-11-25, review MUST_FIX R1/R2)
+
+The review found that the ruling-E exemption could hide a slot the held journal proves bound (R2) and
+that §4 of the record contradicted §10 (R1).
+
+R2 is implemented at the exemption's single site: the skip additionally requires that the
+boundary-validated journal does not bind the slot, projected the way the witness's
+`fillSummaryFromJournal` does from the reservation, the handoff, the authority or the two release
+proofs. Both replays pass the journal each already validated against its held marker. The table test
+gains the journal column, the journal constructors and the journal-bound placeholder row; ruling
+rows (a)/(b) are that new row and the existing pre-gate rehearsal row. M-E1..M-E3 are re-observed on
+the new bytes and M-E4 covers the journal condition; because the function now carries the journal
+parameter, M-E1's revert is no longer byte-identical to any pushed file.
+
+Because the e2e bytes changed after run 4, run 4's binding is void for the delivered bytes (lesson
+86); the fix ruling authorizes a single re-bind run on the final bytes, and it is outstanding. R1's
+record amendments are §4/§6/§11 of the record; TODO's clause (1) entry carries the tightening and the
+outstanding re-bind.

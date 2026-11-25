@@ -1909,11 +1909,14 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       `ack_loss_launcher_bound`'s second wall — `linuxV2RequireSameOwnerIdentities` rejecting the
       unbound owner placeholder every pre-gate replay carries by construction — is fixed under
       conductor ruling E (2026-11-25) by iterating the same four pairs in the completeness pass and
-      skipping only pairs whose marker and response sides are both that placeholder, with the
-      mandatory table test `daemon/e2e/production_linux_v2_owner_identity_test.go`; its M-E1 guest
-      row is run `45536878631` (byte-exact, the dispatch-head function bytes) and the four-set run
-      `45540942939` is green (record §10). This bullet stays in `docs/TODO.md` while clause (2) and
-      the F4 item are open; no CLOSED-TODO move.
+      skipping only pairs whose marker and response sides are both that placeholder and that the
+      held journal has not bound (the 2026-11-25 R2 tightening; record §11), with the mandatory
+      table test `daemon/e2e/production_linux_v2_owner_identity_test.go`; its M-E1 guest row is run
+      `45536878631` (byte-exact: run 3's e2e file is the skip-reverted function bytes) and the
+      four-set run `45540942939` is green (record §10). The R2 tightening changed the e2e bytes
+      after run 4, so run 4 no longer binds the delivered bytes and the single re-bind run on the
+      final bytes is the outstanding binding action (record §11). This bullet stays in
+      `docs/TODO.md` while clause (2) and the F4 item are open; no CLOSED-TODO move.
 
       No clause (1) text above is deleted: the root-cause question it asks is answered by ruling Q1(a)
       and the fix is the behaviour it names.

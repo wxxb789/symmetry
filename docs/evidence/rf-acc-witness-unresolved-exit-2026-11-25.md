@@ -68,7 +68,7 @@ response shape and exited 0, and the e2e stopped at
 The `daemon` CI job on the PR head runs the full `-race ./...` pass; this stage ran the package-scoped
 race pass and the exact focused/suite commands the contract lists.
 
-## 4. Guest proof: scratch loop (`scratch/rf-acc-witness-unresolved-exit`, cap 3 runs)
+## 4. Guest proof: scratch loop (`scratch/rf-acc-witness-unresolved-exit`, runs 1-4)
 
 Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml` (push-only, copy of
 `linux-native-v2-acceptance.yml` without the Environment and with the ratified dummy pins; verbatim in
@@ -76,13 +76,13 @@ Throwaway workflow `.github/workflows/scratch-rf-acc-witness-unresolved-exit.yml
 burndown copy, answers only `gh auth login`). Run order: mutants first, final bytes last (lesson 86).
 
 Every scratch job ran with the §7 dummy pins: no `environment:`, no `secrets.*`, no `vars.*`, and no
-billed provider turn (all four legs hold before `native_release`). Run order: the two product-mutant
-classes first, the final-bytes run last (lesson 86), so the last code-affecting action on the scratch
-branch is the delivered product file.
+billed provider turn (all four legs hold before `native_release`). Run order within each increment:
+the mutant classes first, the final-bytes run last (lesson 86).
 
-Runs used: 3 of the 3-run cap (classes + 2, lesson 69) — M1, M2, final bytes, in that order, each
-settled before the next push; no run was voided and no class needed a repeat. The branch was deleted
-after run 3 (`git push origin --delete scratch/rf-acc-witness-unresolved-exit`) and
+Runs used: 4 in order — the product increment's three (M1, M2, final bytes; the lesson-69 classes + 2
+cap) and the ruling-E increment's run 4 on the post-run-3 e2e change (§10a) — each settled before the
+next push. No run was voided at the time and no class needed a repeat. The branch was deleted after
+run 4 (`git push origin --delete scratch/rf-acc-witness-unresolved-exit`) and
 `git ls-remote origin scratch/rf-acc-witness-unresolved-exit` prints nothing.
 
 | Run | Purpose | Scratch head | Workflow sha256 | Product sha256 | Case sets | Acceptance job | Result |
@@ -90,11 +90,15 @@ after run 3 (`git push origin --delete scratch/rf-acc-witness-unresolved-exit`) 
 | 1 | mutant M1 | `a47a05fc` | `eccc66db…` | `57adce7e…` | `stage_replay_create_started` | `138938170006` (run `45534474018`) | red at the verbatim exit line, §5 |
 | 2 | mutant M2 | `ec11c304` | `3ef92a26…` | `c6b37cc6…` | `stage_replay_leaf_bound`, `stage_replay_launcher_bound`, `ack_loss_launcher_bound` | `138941583215` (run `45535320177`), 11m33s | two sets green (they do not use the mutated sites), `ack_loss_launcher_bound` red at §4c's second wall — §5 M2 row |
 | 3 | final bytes | `a5dfb1b1` | `f3cb9e92…` | `7484da8b…` | all four sets above | `138945998150` (run `45536878631`), 9m10s | three sets green, `ack_loss_launcher_bound` red at the second wall — §4a/§4c |
+| 4 | ruling-E e2e change (final e2e bytes) — §10a | `e150c8e7` | `f3cb9e92…` (reused) | `7484da8b…` (unchanged) | all four sets above | `138959590401` (run `45540942939`), 8m51s | **all four sets exit 0** — §10b |
 
-Run 3 is the last code-affecting action on the scratch branch: every later change is this record and
-`docs/TODO.md`, and the goal worktree's product/test bytes equal the scratch head's byte for byte
-(§6). Its artifact `linux-v2-native-evidence-45536878631-1` binds all four exports to
-`source_commit=a5dfb1b1…` and carries, per set, `manifest.json` plus the allowlisted witness document.
+Run 3 closed the product increment: the goal worktree's product/test bytes equal the scratch head's
+byte for byte (§6), and its artifact `linux-v2-native-evidence-45536878631-1` binds all four exports
+to `source_commit=a5dfb1b1…` and carries, per set, `manifest.json` plus the allowlisted witness
+document. Run 4 closed the ruling-E increment on the e2e bytes §10a froze and was the scratch
+branch's last code-affecting action; the fix increment (§11) then changed the same function's e2e
+bytes, so the delivered e2e bytes no longer equal run 4's and the single re-bind run on the final
+bytes the ruling authorizes is pending (§11).
 
 ### 4a. Per-set rows (acceptance)
 
@@ -168,8 +172,13 @@ focused command of §3, and then byte-restored (sha256 re-checked against `7484d
 
 ## 6. sha256 equality table (the tested bytes)
 
-**Tested bytes = delivered bytes.** The goal worktree's file bytes and the scratch head `a5dfb1b1`'s
-file bytes are equal on the two files that carry the behaviour, and the artifacts bind that head:
+**Tested bytes.** Run 3 (`a5dfb1b1`) compiled the two product files below and its artifact binds that
+head; run 4 (`e150c8e7`) compiled the same product bytes plus
+`daemon/e2e/production_linux_v2_owner_cli_test.go` and
+`daemon/e2e/production_linux_v2_owner_identity_test.go`, whose tested bytes and digests are §10a.
+The delivered product bytes still equal both runs'; the delivered CLI test file no longer equals
+run 4's because the fix increment (§11) changed it — the pending re-bind of the delivered e2e bytes
+is §11.
 
 | Layer | sha256 |
 | --- | --- |
@@ -307,8 +316,8 @@ test file `7ef3983b173f1db2ddeaa5c3b3d32964fc496c9fc44d873ba7fd7d6a358f6115`.
    the branch is unreachable today; if a future producer may omit keys, red it explicitly.
 8. **The table's bound→different case changes PID and identity together**, so pass 1's identity term
    is not isolated (audit P3). A one-line case with equal PIDs and different identities is the
-   recommended addition if the file is touched again; it was not added because any edit after run 4
-   would invalidate the binding run.
+   recommended addition if the file is touched again; the fix increment (§11) touched it after run 4
+   for the R2 tightening only, and this note stays open.
 
 ## 10. Ruling-E increment (2026-11-25): the ACK-loss second wall fixed
 
@@ -342,8 +351,9 @@ call site receives the same exemption through the shared function and stays **un
 ### 10b. The four sets on the final bytes (run 4)
 
 Run `45540942939` (acceptance job `138959590401`, 8m51s, conclusion `success`), scratch head
-`e150c8e7`; the job's last line is `All 4 case sets exited 0.` This run is the last code-affecting
-action on the scratch branch; the branch was deleted afterwards and
+`e150c8e7`; the job's last line is `All 4 case sets exited 0.` This run was the branch's last
+code-affecting action and the branch was deleted afterwards; the fix increment (§11) later changed
+the same function's e2e bytes, so this run's binding is void for the delivered bytes (§4/§11).
 `git ls-remote origin scratch/rf-acc-witness-unresolved-exit` prints nothing. Before this run the
 leg's failure lines were: `unresolved production recovery exit = <nil>, want deliberate nonzero
 process exit` (runs `45481221551`/`45484692731`; fixed by §3) and `launcher_bound ACK-loss replay
@@ -392,7 +402,7 @@ the function's dispatch-head bytes, so a fresh dispatch would compile and execut
 (sha256s above); its local table red was re-observed and the mutation restored byte-identically
 (`99b00fbd…`, `git status` clean) before the push. M-E2/M-E3 are local-only (the four sets are all
 `unresolved`, so they cannot reach a proven outcome), applied in the scratch worktree and restored
-byte-identically.
+byte-identically. The fix increment re-observed M-E1..M-E3 on its bytes and added M-E4 (§11).
 
 ### 10d. Dual audit of the ruling-E delta
 
@@ -404,9 +414,9 @@ returned **no defect**.
 | `AuditE2EInvariants` (Sol-class reviewer) | recovery/authority invariants | no defect. Every pair shape walked: no bound owner can escape completeness or the duplicate checks; the skip is exactly the both-sides-unbound placeholder; equality pass and slot order verbatim. F1-F4 P3 notes: `expected == nil` + bound actual still accepted (pre-existing semantics; unreachable — the producer emits all five keys, no `omitempty`); case 5 does not isolate the identity-only comparator; the `PID <= 1` predicate mirrors the pre-existing completeness check; case 6 pins PID-before-identity ordering |
 | `AuditE2EIntegrity` (DeepSeek-class auditor) | acceptance integrity | no defect. Diff is a single hunk inside the function; `requireLinuxV2RecoveryExitStatus` and both call sites byte-identical; all four sha256 anchors match; CI reach verified (`daemon` job `-race ./...` covers `./e2e`; build tag and `TestMain` checked; acceptance `-run` patterns unaffected); every mandated case reds for the ruled reason, with the `expected == nil` case the sole M-E3 discriminator; hygiene clean |
 
-Reconciliation: no P1/P2. Nothing was changed after the audits: the P3 notes stay recorded as limits
-(§9 items 7-8) because the ruling's mandated cases are fully covered and any post-run edit would
-invalidate run 4.
+Reconciliation: no P1/P2. Nothing was changed after the audits within the ruling-E increment: the P3
+notes stay recorded as limits (§9 items 7-8) because the ruling's mandated cases are fully covered,
+and the later fix-increment change that does void run 4's binding for the delivered bytes is §11.
 
 ### 10e. Scratch appendix (lesson 76)
 
@@ -599,3 +609,112 @@ account. It is pinned by sha256 instead of embedded because its literal binary s
 config fallback are host locations the record-cleanliness gate refuses; the behavior above is its
 whole contract. Both scratch-only files were deleted with the branch and neither ever entered the
 goal tree, so this PR carries no workflow change.
+
+## 11. Fix increment (2026-11-25, review MUST_FIX R1/R2)
+
+R1 amended the record: §4 now carries the true four-run ledger (runs 1-3 on the product increment,
+the post-run-3 e2e change, run 4), the branch-deletion point after run 4, and each increment's last
+code-affecting action; §6 names the tested e2e bytes and points at §10a.
+
+R2 tightened the ruling-E placeholder exemption. The review's gap: the completeness pass excused any
+pair whose marker and response sides were both the unbound placeholder, so a product projection
+defect that under-reported an owner the held journal proved bound stayed invisible. The skip now also
+requires that the journal does not bind the slot: `linuxV2RequireSameOwnerIdentities` takes the
+boundary-validated journal, and `linuxV2JournalBindsOwnerSlot` projects the slot the way the
+witness's `fillSummaryFromJournal` does (reservation, then handoff, then authority, then the two
+release proofs), so a `{}`/`{}` pair for a journal-bound slot reds with `replayed owner set contains
+an incomplete process identity`. Both replays pass the journal each already validated against its
+held marker: the ACK-loss replay and the helper-response-loss replay.
+
+### 11a. The change (frozen bytes)
+
+| Layer | sha256 |
+| --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `7b27d40fe3588e80a2bd512368ec2e8a1b36858d6410b6493b4ff932e05b2bb3` |
+| `daemon/e2e/production_linux_v2_owner_identity_test.go` | `eb2aa7b9a5aca84142875ec5834e7aa6c77e56dd829c485d18e502955b9b7130` |
+| canonical diff anchor over the two e2e files, `git -c diff.mnemonicprefix=false diff -- daemon/e2e/production_linux_v2_owner_cli_test.go daemon/e2e/production_linux_v2_owner_identity_test.go`; the index equals the §10a bytes (`99b00fbd…`, `9755123b…`) | `97e26a2492f42574fece93fc70a18c540559563fbc9c06576ec990e900f83505` |
+
+Diff scope: 78 insertions / 6 deletions in the CLI file (the guard helper, the strengthened
+condition, the two call sites) and 40 insertions / 1 deletion in the table test (the journal column,
+the journal constructors, the new row, the call). The helper-response-loss call site receives the
+same restriction through the shared function and stays unexercised until `shared` clears its earlier
+stops (ruling).
+
+### 11b. The ruling rows and the before-state
+
+The table test gained row (a), `a journal-bound slot placeholder pair fails`: the pre-gate rehearsal
+shape (bound anchor/helper/launcher, placeholder gate) with a journal that binds gate, so the
+placeholder pair must red. Row (b) is the existing `pre-gate rehearsal passes with one unbound slot`:
+the same shape with gate absent from the journal, whose placeholder pair must pass. With the journal
+parameter and the new row in place but the old unconditional skip still in the function, row (a)
+failed exactly as the review described — `owner identity comparison error = <nil>, want "incomplete
+process identity"`, the sole red of the table run — and adding the journal condition turned it green
+with every other row green. The pre-fix signature could not express the row at all, so this two-step
+run is the characterization baseline in place of a pre-fix failing test.
+
+### 11c. Mutants on the fix bytes (local, restored byte-identically)
+
+| id | Mutation (exact edit) | Mutant sha256 | Observed |
+| --- | --- | --- | --- |
+| M-E1 | the placeholder skip block deleted (no exemption) | `dfdb2db9a34d21e22e6d9337c359b5f86f2a68a57f08a0dfb2837b6ae34c6f49` | red: `…/unbound_placeholder_pairs_pass` and `…/pre-gate_rehearsal_passes_with_one_unbound_slot` — `owner identity comparison error = replayed owner set contains an incomplete process identity, want none` |
+| M-E2 | the exemption moved into the equality pass, the completeness pass rejecting every incomplete actual | `2bd83eb93a6c46c368c1fc44c94c07c23520f5c5b77feb02a568e4cdc9873513` | same two rows, same message |
+| M-E3 | the completeness pass skips any incomplete actual regardless of the marker | `ea08cd309f83addf38fa08820ee0eaab04ab7541aa0dad39ab8e6b1ddb49b4b5` | red: `…/an_unbound_replay_slot_without_a_marker_slot_fails` — `owner identity comparison error = <nil>, want "incomplete process identity"` (the sole discriminator, as §10c records) |
+| M-E4 | the journal condition dropped from the skip (placeholder pairs exempt unconditionally) | `2ce1cec95b7114b8a95377bc0ea9b6460e42dec31eb73c134ecb1d1bed6ccd1f` | red: `…/a_journal-bound_slot_placeholder_pair_fails` — `owner identity comparison error = <nil>, want "incomplete process identity"` |
+
+Mutations verbatim, applied to the fix bytes (`7b27d40f…`) and restored from a byte backup:
+
+```
+M-E1 (delete the skip block):
+-		// The witness emits an unbound owner slot as the same zero object on both sides;
+-		// only a placeholder pair the journal has not bound may escape the completeness check.
+-		if pair.expected != nil && pair.expected.PID <= 1 && pair.expected.Identity == "" &&
+-			process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
+-			continue
+-		}
+
+M-E2 (the exemption moved into the equality pass; the skip block deleted as in M-E1):
+ 	for _, pair := range pairs {
+-		if pair.expected != nil && (pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
++		if pair.expected != nil && !(pair.expected.PID <= 1 && pair.expected.Identity == "" && pair.actual != nil && pair.actual.PID <= 1 && pair.actual.Identity == "") &&
++			(pair.actual == nil || pair.actual.PID != pair.expected.PID || pair.actual.Identity != pair.expected.Identity) {
+
+M-E3 (drop the marker-side placeholder conditions):
+-		if pair.expected != nil && pair.expected.PID <= 1 && pair.expected.Identity == "" &&
+-			process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
++		if process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
+
+M-E4 (drop the journal condition):
+-			process.PID <= 1 && process.Identity == "" && !linuxV2JournalBindsOwnerSlot(journal, pair.name) {
++			process.PID <= 1 && process.Identity == "" {
+```
+
+Each mutant was exercised with `go test -count=1 -run TestLinuxV2RequireSameOwnerIdentities ./e2e/`
+in the fix worktree and restored from a byte backup; the restored file re-hashes to `7b27d40f…` /
+`eb2aa7b9…` and the same command is green. M-E1's guest evidence stays run 3's red at `:3501` on the
+skip-less function; on the fix bytes its revert can no longer be byte-identical to any pushed file
+because the function carries the journal parameter, so a fresh guest dispatch of M-E1 would be a new
+run. M-E4 reds inside the PR-gated `daemon` job (the table test runs under `go test -race ./...` as
+the runner user), not only outside CI.
+
+### 11d. Binding state after the fix
+
+The fix increment changed the e2e bytes after run 4, so run 4's binding is void for the delivered
+bytes (lesson 86): run 4 still proves the ruling-E bytes §10a froze, and nothing in this increment
+re-proves the fix bytes end to end. The single re-bind run on the final bytes is authorized by the
+fix ruling (2026-11-25, R1) and is the next code-affecting action of record; this stage does not
+push, so it stays pending, and the gates below stand on the delivered bytes.
+
+### 11e. Local gates on the fix bytes (WSL Ubuntu-24.04, `GOTOOLCHAIN=go1.27.0`, working directory `daemon/`)
+
+| Gate | Command | Exit | Result |
+| --- | --- | --- | --- |
+| gofmt | `gofmt -l .` | 0 | no file listed |
+| vet | `GOOS=linux go vet ./...` | 0 | clean |
+| focused | `go test -count=1 -run TestLinuxV2NativeWitnessUnresolvedOutcomeFailsTheCommand ./internal/app/` | 0 | ok, 0.025s |
+| witness suite | `go test -count=1 -run TestLinuxV2Native ./internal/app/` | 0 | ok, 1.378s |
+| e2e table | `go test -count=1 -run TestLinuxV2RequireSameOwnerIdentities ./e2e/` | 0 | ok, 0.037s |
+| e2e package | `go test -count=1 ./e2e/` | 0 | ok, 0.155s (env-gated tests skip) |
+| build | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` | 0 | clean |
+
+The full `-race ./...` pass and the guest re-bind run stay with the PR head's `daemon` job and the
+conductor (this stage ran the package-scoped commands above in the foreground).
