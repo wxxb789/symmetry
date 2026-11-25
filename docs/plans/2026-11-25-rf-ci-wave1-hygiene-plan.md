@@ -123,12 +123,16 @@ five more mutation witnesses and three pin-strengthening changes — the evidenc
 finding and its disposition. The measurement windows are attempt-aware (a retried PR run counts both
 attempts' job minutes and is reported per attempt).
 
-Left to the publish/verify stage, because this stage may not push, commit or open a PR: the wave PR's
-own green run on the final bytes (16 jobs, `daemon-audit` green), the two-rapid-push cancel check, the
-single scratch dispatch run with the M6/M7/M8/M13 plants, the after-window of 5 PR runs, and the
-scratch-branch deletion proof. The evidence record states each of these as not-run-in-this-stage with
-the exact command the publishing stage must execute; the before-window (last 5 completed PR runs) is
-collected here from the GitHub API.
+Executed by the runtime acceptance of 2026-11-25 (UTC), because the implementing stage may not push,
+commit or open a PR: the wave PR's own green run on the final bytes (PR #292, run `45680179932`, 16
+jobs, `daemon-audit` green), the two-rapid-push cancel check (`45679924982` `cancelled` then
+`45680179932` `success`), the scratch dispatch carrying the M6/M7/M8/M13 plants (a no-plant warm-up
+used the first of the two allowed dispatches, `45680484186`; the plants run `45682191821` concluded
+`failure` with the four expected reds plus the M13 collateral in `pi-control-e2e-windows`), and the
+scratch-branch deletion proof. Still open: the after-window of 5 PR runs — conductor-owned post-merge,
+seeded by `45680179932` (45.63 runner-min vs the 47.79 before-window mean, −4.5 %). The evidence
+record §8 records each of these results in place; the before-window (last 5 completed PR runs) is
+collected in the evidence record from the GitHub API.
 
 ## Out of scope (with reason)
 

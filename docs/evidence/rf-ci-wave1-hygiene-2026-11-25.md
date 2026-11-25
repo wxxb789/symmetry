@@ -9,8 +9,10 @@ Revision under test: `refactor/rf-ci-wave1-hygiene` at `61399984` (drafted again
 `30ed5ada`; the three commits between them touch no owned file). Implementation date: 2026-11-25.
 
 Stage boundary: this record was produced by the implementing stage, which may not push, commit or open a
-pull request. Everything a GitHub-side gate needs is therefore handed over in §8 with its exact command;
-nothing in §8 is claimed as passed. §1-§7 are executed results from this host.
+pull request; every GitHub-side gate was handed over in §8 with its exact command. The runtime
+acceptance of 2026-11-25 (UTC) then executed §8 items 1-3 and 5-6 against PR #292, and §8 records their
+observed results; only item 4 (the after-window) remains open, conductor-owned post-merge. §1-§7 are
+executed results from this host; §8 items 1-3 and 5-6 are executed results from the runtime session.
 
 ## 1. File inventory and hashes
 
@@ -103,17 +105,17 @@ Corrections the measurements force on the contract's own assumptions:
 | clause | green command (repository root) | exit | evidence row | expected failure / baseline observed first |
 | --- | --- | --- | --- | --- |
 | §1 concurrency pinned, PR-only | `python3 scripts/ci/test-ci-structure-extraction.py` (`WorkflowHygieneTests::test_only_superseded_pull_request_runs_are_cancelled`) | 0 | §3; C4 = 1; block sits between `permissions:` and `jobs:` | mutation tests `test_mutation_cancelling_every_event_reddens_the_concurrency_pin` and `test_mutation_a_constant_concurrency_group_reddens_the_concurrency_pin` redden the same pin before the fix exists (M1, M2) |
-| §1 live cancel behaviour | *not run in this stage* (§8) | — | — | the pre-change tree has no `concurrency:` key (C4 = 0), so a second push to the same PR queues a full superseded run |
+| §1 live cancel behaviour | two rapid pushes to the wave PR; `gh run list --repo wxxb789/symmetry --branch refactor/rf-ci-wave1-hygiene --event pull_request --limit 5` (§8 item 2) | `cancelled` / `success` | run `45679924982` (head `70685e63`) concluded `cancelled` 25 s after the probe run was created — 11 of its 16 jobs cancelled, 5 already `success` (`changes`, `citation-existence`, `record-cleanliness`, `legacy-route-audit`, `coverage-frontend`); run `45680179932` (head `40effe5f`; tree `f8ac8e53…` identical to `70685e63`'s) concluded `success`; push-event audit (`createdAt > 2026-11-25T18:50:00Z`) empty — zero cancelled `push`-event runs of `ci.yml` | the pre-change tree has no `concurrency:` key (C4 = 0): before this change a second push queued a full superseded run (§6 before-window: 0 cancelled runs) |
 | §2 every job has its ceiling | `python3 scripts/ci/test-ci-structure-extraction.py::WorkflowHygieneTests::test_every_job_carries_its_pinned_ceiling_and_no_step_cap_meets_it` | 0 | §3; C2 = 16; YAML probe prints the table (`control` 25 and `legacy-route-audit` 10 are the R3/R4 amendments, §5) | mutations `test_mutation_deleting_the_daemon_ceiling_…` (M3), `test_mutation_raising_a_ceiling_…` (M4: 360), `test_mutation_a_ceiling_below_its_step_cap_…` (M4b: compose 15, now asserted on the cap message) and `test_mutation_a_step_cap_above_its_job_ceiling_…` (a 45-min step under a 40-min ceiling, the witness the first review's finding asked for) each redden the pin |
 | R0 (conductor) — the changed bytes sit exactly at the Credo strict baseline | the `control` step's ratchet (§3, fix-round r2 row) | 0 | §3: 564 issues / 225 files / 70 checks — 160 readability, 326 refactor, 73 design, 5 warning, every category equal to `scripts/ci/credo-strict-baseline.json`; no added line exceeds 98 columns | PR run `45672530392` failed `control` at 570 vs 564 (readability 166 vs 160; the six added lines at `goal_0006_migration_test.exs:697/698/701/704/710/713`); the r2 reflow returns the file to its two pre-existing issues |
 | §3 relocation, blocking step, no leftover | `python3 scripts/ci/test-ci-structure-extraction.py::…::test_the_daemon_audit_job_holds_the_moved_steps_and_the_blocking_model_routing_step` | 0 | §3; byte-identity check: the 72 removed lines of `daemon` (golangci 955-997 with its two comment lines, govulncheck 998-1018, model-routing 1061-1068 at `HEAD`) equal the 72 lines now in `daemon-audit` (`old == moved` → `True`; newline-joined span sha256 `589d57dcc0c92dae3646b8b50ea6d2cf94b723fe4e3ce178fc5c95ec95eb1eb1`); the reviewer's independent span digest is `5e8da0a309eac08db02690f068e0a558baff7fd4e25fc27749c25c595d655ac0`; C9/C10. The pin also now fixes the job's `uses:` prerequisites (`actions/checkout@v7`, `actions/setup-go@v7` with `go-version: 1.27.4` and `cache-dependency-path: daemon/go.sum`), its `defaults.run.working-directory: daemon`, and every defining command line of the two advisory bodies (version/digest/archive literals and the `GOOS=linux … run --config .golangci.yml` invocation for golangci-lint; `govulncheck_version='v1.10.0'` and the `./...` invocation for govulncheck) | mutations `test_mutation_marking_the_model_routing_step_advisory_…` (M5), `test_mutation_replacing_a_model_routing_invocation_with_exit_zero_…`, `test_mutation_emptying_a_moved_advisory_body_…` (golangci invocation → `exit 0`; the false-negative the second audit found), `test_mutation_pointing_the_moved_jobs_defaults_at_the_root_…` and `test_mutation_dropping_the_moved_jobs_setup_go_…` redden the pin; `daemon` no longer names any of the three steps |
-| §3 daemon-audit green / M6 / M7 | *not run in this stage* (§8) | — | — | the moved commands' pre-change green runs are the before-window rows (§6); `daemon` carried the same steps and passed (12-run evidence in the contract) |
+| §3 daemon-audit green / M6 / M7 | plants run `45682191821` and the final-byte run `45680179932` (§8 items 1 and 3) | reds as planted; new home green | final bytes: `daemon-audit` `success`, 196 s ≤ `daemon` 421 s — the moved blocking model-routing step gates and passes in the new home (`python3 ../scripts/ci/test-model-routing-evaluation.py` green). Plants: `daemon-audit` red on M6 — `AssertionError: planted M6: forced model-routing suite failure`, `FAILED (failures=1, skipped=1)`; `daemon` red on M7 in the race step (the plant sits outside the two package-scoped ordinary packages, so only the race pass sees it) — `WARNING: DATA RACE` at `daemon/internal/execution/containment_receipt_test.go:24`, `TestPlantedM7RaceOnly`; every other job `success` in both runs; first failing lines verbatim in §8 item 3 | the moved commands' pre-change green runs are the before-window rows (§6); `daemon` carried the same steps and passed (12-run evidence in the contract) |
 | §4 one vitest step | `python3 scripts/ci/test-ci-structure-extraction.py::…::test_one_step_owns_the_frontend_suite` | 0 | §3; C6: the action lost its plain test step (`ACTION_STEPS` pin), exactly one step in both files mentions `vitest` (ci.yml's coverage step) | mutations `test_mutation_restoring_the_plain_frontend_suite_reddens_the_owner_pin` (M9) reddens both the owner pin and `check_action`, and `test_mutation_re_adding_the_plain_frontend_suite_to_a_job_reddens_the_owner_pin` re-adds the suite inside a `ci.yml` job in the `run test` spelling (the second audit's counterexample to the first pattern); thresholds untouched (the classifier suite's `VITEST_COVERAGE_FLOORS` pin still passes, 37 tests OK) |
-| §4 M8 / thresholds | *not run in this stage* (§8) | — | — | before-window: the plain run executes inside `Run ./.github/actions/contracts-build` (1.67-2.10 min) and `coverage-frontend`'s suite step passes (0.60-0.82 min) |
+| §4 M8 / thresholds | plants run `45682191821`, job `coverage-frontend` (§8 item 3) | red as planted; thresholds untouched | M8 red — `FAIL  src/services/refusals.test.ts > planted M8 forced failure > fails deterministically`, `AssertionError: expected true to be false`, `Tests  1 failed \| 633 passed (634)`; the thresholds are untouched and the single frontend suite run is green on the final bytes (`coverage-frontend` `success`, 66 s = 3.7 % of its ceiling; the classifier suite's `VITEST_COVERAGE_FLOORS` pin still passes, 37 tests OK, §3) | before-window: the plain run executes inside `Run ./.github/actions/contracts-build` (1.67-2.10 min) and `coverage-frontend`'s suite step passes (0.60-0.82 min) |
 | §5 five cache sites | `python3 scripts/ci/test-ci-structure-extraction.py::…::test_every_mix_deps_get_site_is_preceded_by_its_elixir_cache_step` | 0 | §3; C5 = 5 sites, C7 = 5 cache steps; each key carries `${{ runner.os }}`, `otp-29.0.6-elixir-1.20.4` and `${{ hashFiles('control/mix.lock') }}`, no `restore-keys`; env split test/dev/prod; the action's step keeps `if: inputs.build-control-release == 'true'` | mutations `test_mutation_deleting_a_cache_step_…` (M11), `test_mutation_stripping_the_lock_hash_from_a_cache_key_…` (M12) and `test_mutation_a_sixth_mix_deps_get_without_a_cache_step_…` each redden the pin; `actions/cache@v6` resolves (`git ls-remote` → `refs/tags/v6` = `55cc8345863c7cc4c66a329aec7e433d2d1c52a9`) |
-| §5 restore lines / M13 | *not run in this stage* (§8) | — | — | before-window per-site baselines are in §6 |
+| §5 restore lines / M13 | plants run `45682191821`, five `actions/cache@v6` sites (§8 item 3) | all five sites warm; red as planted | all five sites restored warm — verbatim `Cache restored from key:` values in §8 item 3 for `control`, `coverage-control` (plus the post-step `Cache hit occurred on the primary key …, not saving cache.`), `pi-control-e2e-windows`, `browser-fixture-linux` and the `contracts` action; no `Cache not found` line at any site. M13 red under the warm `control` restore at `Run MIX_ENV=test mix compile --warnings-as-errors` — `warning: variable "unused_m13" is unused`, `Compilation failed due to warnings while using the --warnings-as-errors option` (the Credo strict ratchet passed first: 564 issues) | before-window per-site baselines are in §6 |
 | §6 before-window | `gh api` collection (§6 command) | 0 | §6 tables | — |
-| §6 after-window | *not run in this stage* (§8) | — | — | — |
+| §6 after-window | *deferred — conductor-owned post-merge* (§8 item 4) | — | seed row `45680179932` (final-byte green run): wall 573 s (9m33s), queue 0 s, 2738 job-seconds = 45.63 runner-min against the §6 mean 47.79 (−4.5 %); `daemon` 421 s (−161 s vs its 9.70-min mean) offset by the new `daemon-audit` job (196 s); the saving comes from the vitest de-duplication and the cache; no job above 40 % of its ceiling (max `integration` 30.8 %); the 5-run window is collected by the conductor after merge | — |
 | flake item | ExUnit: `mix test test/symmetry_control/migrations/goal_0006_migration_test.exs:686` | 0 | §7: fixed row `1 test, 0 failures`; the same harness with the pre-fix row under the forced trigger order: `1 test, 1 failure` with `tasks_context_snapshot_ownership_fkey` | pre-fix red reproduced first (§7). **The contract's literal fix sentence is superseded by proof** (deviation ratified by conductor ruling 2026-11-26 (contract); see §7): "make the row violate only the asserted FK" is unsatisfiable at the schema this test builds — `AddPlanningTaskIdentityGuards` (`20260910000000`, which drops the 4-column ownership FK) is not in `MigrationModules.base_migrations()` (ends at `20260907000000`, `VersionRequestHashes`, `control/test/support/migration_modules.ex:65-87`), `migrate_goal_up!/0` runs only `AddGoal0006ControlPlane`, `tasks_goal_fields_all_or_none` requires `context_snapshot_id IS NOT NULL` (`20260909000000_add_goal_0006_control_plane.exs:1237-1245`) and `context_snapshots_work_item_ownership_fkey` (same file, `:425-430`) forces the referenced pair into `work_items`, which is exactly what the asserted work-item FK needs absent |
 | branch protection | `gh api repos/wxxb789/symmetry/branches/main/protection` and `.../rulesets` | 404 "Branch not protected"; `[]` | no required-check contexts exist, so no job name is a protected context and nothing is renamed | re-read before the wave PR (§8) |
 | citation gate for the amended document | see §3 | 0 | 19 path citations pass | — |
@@ -308,7 +310,9 @@ Per-site before-window baselines (minutes per run, oldest last):
 
 ### After window — first 5 completed `pull_request` runs whose head contains the wave merge
 
-Not collected in this stage (§8). The comparison to apply when it is: the same attempt-aware
+Not collected yet — conductor-owned post-merge (§8 item 4); the final-byte green run `45680179932` is
+its seed row (wall 573 s / 9m33s, 0 s queue, 45.63 runner-min vs the 47.79 mean, −4.5 %; `daemon`
+−161 s offset by `daemon-audit` 196 s). The comparison to apply when it is: the same attempt-aware
 definitions above; wall (mean against 12.12 min), measured runner-minutes (mean against 47.79), per-job
 durations as fractions of the amended ceilings (`control` 25, `legacy-route-audit` 10; report anything
 above 40 %), cancelled-run count, queue delay; item 3 attribution `daemon` ≥150 s below its 9.70 min
@@ -423,39 +427,94 @@ exactly these bytes into its scratch tree; the fix-round r1 bytes were `fde9c590
   otherwise succeeds and the deferred ownership check fires at commit). This is the review's
   counterexample, now red; the mutant is an oracle gap for CI — a schema mutation, not a suite pin.
 
-## 8. Not run in this stage (handover)
+## 8. Handover gates — observed runtime results
 
 The implementing stage may not push, commit, open a pull request or dispatch workflows on the
-repository. These goal-contract gates therefore remain open; each is handed over with its command.
+repository, so these goal-contract gates were handed over with their commands. The runtime acceptance
+(2026-11-25, UTC; the conductor's authority note allowed the empty probe commit, one scratch branch
+and at most two dispatches) then executed items 1-3 and 5-6 against PR #292, and the observed results
+are recorded in place below — every cited run attempt 1, no re-runs anywhere. Item 4 remains open,
+conductor-owned post-merge.
 
-1. **Wave PR and its own green run.** Push `refactor/rf-ci-wave1-hygiene`, open a normal PR, and require
-   the run on the final bytes to be green with 16 jobs and `daemon-audit` green (proves the moved
-   commands run in the new home). Read the advisory actionlint log for new findings on the changed files
-   (the diff must add none). The first PR run (`45672530392`, head `0283c9a8`) is red at `control`'s
-   Credo step (ruling R0, §5); the green run on the fix-round r2 bytes is the acceptance evidence.
-2. **Live concurrency check.** Two rapid pushes to the wave PR: the first run must conclude `cancelled`,
-   the second green; then verify zero cancelled `push`-event runs of `ci.yml` in the after-window.
-3. **Plant dispatch (budget: 1).** Push `scratch/rf-ci-wave1-hygiene` = wave branch + one plant commit
-   carrying M6, M7, M8, M13, then `gh workflow run ci.yml --repo wxxb789/symmetry --ref
-   scratch/rf-ci-wave1-hygiene`. Expected: `daemon-audit` red (M6), `daemon` red (M7, race step),
-   `coverage-frontend` red (M8), `control` red under the warm cache (M13). Delete the branch afterwards
-   and prove it with an empty `git ls-remote origin scratch/rf-ci-wave1-hygiene`.
-   Pre-plant sha256s for restoration (the plant must be removed or the branch deleted; these are the
-   bytes a restore has to reproduce):
+1. **Wave PR and its own green run — done, green.** PR #292 head `40effe5f` (the empty probe commit;
+   tree `f8ac8e53…` identical to `70685e63`'s, so the run validates the same bytes). Run
+   `45680179932`: `success`, all 16 jobs green including `daemon-audit` (196 s) — the moved blocking
+   model-routing step gates and passes in its new home. Numbers: wall 573 s (9m33s), queue delay 0 s,
+   2738 job-seconds = 45.63 runner-minutes; `daemon` 421 s; `daemon-audit` 196 s ≤ `daemon`; no job
+   above 40 % of its ceiling (max `integration` 30.8 %); per-job seconds: changes 8, record-cleanliness
+   5, citation-existence 7, contracts 105, control 430, coverage-control 157, coverage-daemon 77,
+   coverage-frontend 66, pi-control-e2e-windows 160, daemon 421, daemon-audit 196, legacy-route-audit
+   31, daemon-windows 335, integration 185, compose 361, browser-fixture-linux 194 — the seed row set
+   for §6's after-window. The earlier red is history: run `45672530392` (head `0283c9a8`) failed at
+   `control`'s Credo step (ruling R0, §5); the green run on the final bytes is the acceptance evidence.
+2. **Live concurrency check — done, cancel confirmed.** The empty probe commit `40effe5f` was pushed
+   88 s after the prior push's run (`45679924982`, head `70685e63`) was created, while it was still in
+   flight. `gh run list --repo wxxb789/symmetry --branch refactor/rf-ci-wave1-hygiene --event pull_request --limit 5` (the rows, verbatim): `45680179932` `success` 9m33s head `40effe5f`; `45679924982`
+   `cancelled` 1m58s head `70685e63`. `45679924982` concluded `cancelled` 25 s after the probe run was
+   created — 11 of its 16 jobs concluded `cancelled`, 5 had already finished `success` (`changes`,
+   `citation-existence`, `record-cleanliness`, `legacy-route-audit`, `coverage-frontend`). Push-event
+   audit (`createdAt > 2026-11-25T18:50:00Z`): empty — zero cancelled `push`-event runs of `ci.yml`
+   (nothing was pushed to `main` or tags in the window).
+3. **Plant dispatch — done; the four plants red, the one collateral explained.** Scratch branch
+   `scratch/rf-ci-wave1-hygiene` = `40effe5f` + one plant commit `bcd041d9` ("scratch: plant M6 M7 M8
+   M13 for the wave-1 hygiene acceptance dispatch"; 4 files, +34 lines). Both allowed dispatches were
+   used: the warm-up `45680484186` (no plants, `success`) and the plants run `45682191821` (`failure`).
+   The four expected reds, first failing line verbatim:
+   * `daemon-audit` red on M6, step `Check auditable model-routing workflow`:
+     `AssertionError: planted M6: forced model-routing suite failure` (`Ran 85 tests in 126.743s`,
+     `FAILED (failures=1, skipped=1)`).
+   * `daemon` red on M7 in the race step (the planted test is outside the two package-scoped ordinary
+     packages, so only the race pass sees it): `WARNING: DATA RACE`, `TestPlantedM7RaceOnly` at
+     `daemon/internal/execution/containment_receipt_test.go:24`,
+     `FAIL github.com/wxxb789/symmetry/daemon/internal/execution`.
+   * `coverage-frontend` red on M8: `FAIL  src/services/refusals.test.ts > planted M8 forced failure
+     > fails deterministically`, `AssertionError: expected true to be false`, `Tests  1 failed | 633
+     passed (634)`.
+   * `control` red on M13 at `Run MIX_ENV=test mix compile --warnings-as-errors` under a warm cache
+     restore (Credo strict ratchet green first): `warning: variable "unused_m13" is unused`,
+     `Compilation failed due to warnings while using the --warnings-as-errors option`.
+   Collateral: `pi-control-e2e-windows` red on the same M13 plant — its `Compile Control for Windows
+   Pi E2E` step also runs `mix compile --warnings-as-errors`, so the same unused-variable warning
+   reddens that job too; this is the same plant surfacing in a second compile gate, not a fifth
+   planted target. Every other job concluded `success`. All five cache sites restored warm, no
+   `Cache not found` line at any site — verbatim `Cache restored from key:` values:
+   * `control` — `Cache restored from key: elixir-test-Linux-otp-29.0.6-elixir-1.20.4-895406ef5e6e2bb12533c3865b0a0a6f4c6696d7a5bb9d721715d30c3d088459`
+   * `coverage-control` — `Cache restored from key: elixir-test-Linux-otp-29.0.6-elixir-1.20.4-895406ef5e6e2bb12533c3865b0a0a6f4c6696d7a5bb9d721715d30c3d088459`, plus `Cache hit occurred on the primary key elixir-test-Linux-otp-29.0.6-elixir-1.20.4-895406ef5e6e2bb12533c3865b0a0a6f4c6696d7a5bb9d721715d30c3d088459, not saving cache.`
+   * `pi-control-e2e-windows` — `Cache restored from key: elixir-test-Windows-otp-29.0.6-elixir-1.20.4-9e9aa5a078eaee8ca3b64bde41da51bf7d3e778e3d5f17a9da8481e8c95c8d38`
+   * `browser-fixture-linux` — `Cache restored from key: elixir-dev-Linux-otp-29.0.6-elixir-1.20.4-895406ef5e6e2bb12533c3865b0a0a6f4c6696d7a5bb9d721715d30c3d088459`
+   * `contracts` (inside `Run ./.github/actions/contracts-build`) — `Cache restored from key: elixir-prod-Linux-otp-29.0.6-elixir-1.20.4-895406ef5e6e2bb12533c3865b0a0a6f4c6696d7a5bb9d721715d30c3d088459`
+   Each site restored its own runner's exact warm key (the Windows `hashFiles` value `9e9aa5a0…`
+   differs from the Linux `895406ef…`); on `control`, `mix deps.get` came off the download path
+   (<1 s after the cache step).
+   Deletion proof: `git push origin --delete scratch/rf-ci-wave1-hygiene` → `- [deleted] scratch/rf-ci-wave1-hygiene`; `git ls-remote origin scratch/rf-ci-wave1-hygiene` → exit 0, 0 lines / 0 bytes;
+   `gh api repos/wxxb789/symmetry/git/refs/heads/scratch/rf-ci-wave1-hygiene` → 404
+   `{"message":"Not Found"}`. The four pre-plant sha256s were verified on `40effe5f` before the plant
+   and re-verified on the PR branch after (nothing leaked to it):
    * `scripts/ci/test-model-routing-evaluation.py` (M6 target) — `589837525d7bbca860770e48cff7ce438374a0b62fb1c0db40fd60566a1c1a7c`
    * `daemon/internal/execution/containment_receipt_test.go` (M7 target) — `caa8b530a175557f0a83d43148eab83e4f3709b78d62b32469f6a6139a9eb765`
    * `frontend/src/services/refusals.test.ts` (M8 target) — `201b88f81c74a1d351e56f971d7d1992b803fe5cd7d5fc43f2da7c0cd025e520`
    * `control/lib/symmetry_control/goals.ex` (M13 target) — `109eecd9dc91b78bc1423c1c0eef176bfdbcd4cd4c613386b659da9f0f4e4e92`
-4. **After-window** (§6): collect the first 5 completed `pull_request` runs whose head contains the wave
-   merge with the commands in §6 and compare as specified there.
-5. **Branch-protection re-read before the PR.** Authenticated
-   `gh api repos/wxxb789/symmetry/branches/main/protection` and `.../rulesets`. Read on 2026-11-25
-   during implementation: `{"message":"Branch not protected", … "status":404}` and `[]`, so no
-   required-check context exists and no job name is protected; re-reading before the PR is still
-   required, and if a context appears, no job may be renamed (the changed diff adds one job,
-   `daemon-audit`, without removing any).
-6. **Advisory actionlint and the full CI matrix** on the wave PR (the local gates cover the two suites
-   the contract names; the matrix's other suites are CI-side).
+4. **After-window — still open, conductor-owned post-merge** (§6). The runtime acceptance did not
+   collect the 5-run window (the wave PR had not merged). Seed row, the final-byte green run
+   `45680179932`: wall 573 s (9m33s), queue 0 s, 2738 job-seconds = 45.63 runner-minutes against the
+   §6 before-window mean of 47.79 (−4.5 %), with `daemon` 421 s (−161 s against its 9.70-min mean)
+   offset by the new `daemon-audit` job (196 s). The saving against the before-window comes from the
+   vitest de-duplication and the Elixir cache — the run adds `daemon-audit` and still lands below the
+   mean. The conductor collects the first 5 completed `pull_request` runs whose head contains the wave
+   merge after the merge and compares as specified in §6; this item stays open until then.
+5. **Branch-protection re-read before the PR — done.** Re-read by the runtime acceptance on
+   2026-11-25 before the wave PR: `gh api repos/wxxb789/symmetry/branches/main/protection` → HTTP 404,
+   `{"message":"Branch not protected","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"404"}`;
+   `gh api repos/wxxb789/symmetry/rulesets` → `[]`. No required-check context exists, so no job name
+   is a protected context; the changed diff adds `daemon-audit` and renames or removes no job.
+6. **Advisory actionlint and the full CI matrix — done.** Run `45680179932`, job `legacy-route-audit`,
+   step `Measure actionlint findings for the workflows (advisory)` (pinned actionlint 1.7.12):
+   `actionlint_exit_status=0`, **`actionlint_findings=0`** — no findings at all, hence none on the
+   changed `.github/workflows/ci.yml`; the plants run's same step reports the identical pair. The full
+   CI matrix is green on the wave PR (run `45680179932`, 16/16 jobs, item 1), and the plant dispatch
+   exercised the red paths (item 3). The two `X Process completed with exit code 1` annotations under
+   `legacy-route-audit` belong to the advisory `ruff` and `shellcheck` steps (both
+   `continue-on-error`), not to actionlint.
 7. **`ce-work` delegation:** not used. The stage template's eligibility gate requires a `ce-work` skill
    invocation offering `mode:return-to-caller` as an explicit callable command; this runtime's skill
    discovery was not exercised for that route, so the loop ran here. No delegation record exists.
