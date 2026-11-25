@@ -25,6 +25,17 @@ linux_v2_pi_tree_digest() {
   ' _ "$tree"
 }
 
+linux_v2_pin_pi_tree() {
+  local tree=$1 runner=${2:-}
+  # The pin binds the normalized release tree (root:root; dirs 0755; files 0644 / u+x 0755), and a
+  # raw extraction's modes and ownership follow the caller's umask and uid, so normalize in place.
+  $runner chown -R root:root "$tree"
+  $runner find "$tree" -type d -exec chmod 0755 {} +
+  $runner find "$tree" -type f ! -perm -u+x -exec chmod 0644 {} +
+  $runner find "$tree" -type f -perm -u+x -exec chmod 0755 {} +
+  test "$(linux_v2_pi_tree_digest "$tree" "$runner")" = "${pi_tree_sha:-}"
+}
+
 linux_v2_fetch_pi() {
   local destination=$1
   local pi_url='https://github.com/earendil-works/pi/releases/download/v1.5.2/pi-linux-x64.tar.gz'
@@ -42,8 +53,8 @@ linux_v2_fetch_pi() {
   mkdir "$pi_unpack"
   tar --extract --file "$pi_archive" --directory "$pi_unpack"
   test -x "$pi_executable"
-  # The whole-tree pin is checked at the staging site (linux-v2-native-acceptance.sh:459-460),
-  # where ownership and modes are canonicalized for the guest; raw extraction is caller-dependent.
+  # Every caller exposes or copies this tree, so the pin is checked on the canonicalized bytes.
+  linux_v2_pin_pi_tree "$pi_unpack/pi" sudo
   test "$(sha256sum "$pi_executable" | cut -d' ' -f1)" = "$pi_executable_sha"
   test "$(timeout 30s "$pi_executable" --version)" = "$pi_version_line"
 }

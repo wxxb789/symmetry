@@ -988,7 +988,8 @@ machine_run_as() {
   home=$(cut -d: -f6 <"$passwd_log")
   [[ -n "$home" && "$home" == /* ]] || fail "the guest passwd entry for $user must name an absolute home"
   machine_run_count=$((machine_run_count + 1))
-  local unit="${machine}-step-${machine_run_count}"
+  # A pipeline runs this in a subshell and loses the increment there, so the suffix keeps the name unique.
+  local unit="${machine}-step-${machine_run_count}-${BASHPID}"
   sudo systemd-run --machine="$machine" --quiet --wait --pipe --collect \
     --unit="$unit" --uid="$user" --gid="$group" \
     --setenv="HOME=$home" --setenv='PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \

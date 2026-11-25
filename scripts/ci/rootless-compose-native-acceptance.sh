@@ -111,10 +111,8 @@ trap cleanup_native_services EXIT INT TERM
 source "$repo/scripts/ci/linux-v2-native-tools.sh"
 # OpenCode is production-unavailable; no executable or private transport is needed.
 linux_v2_fetch_pi "$native_root"
-# Pi resolves version metadata and runtime assets relative to its public release.
-# Only the digest-verified public tree is exposed; private fixture paths stay private.
-chmod -R a+rX "$pi_unpack/pi"
-chmod 0555 "$pi_executable"
+# Pi resolves version metadata and runtime assets relative to its public release; the fetch pins
+# the canonical root-owned tree and only it is exposed (private fixture paths stay private).
 
 source_tree_digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["tree_digest"])' <<< "$source_subject_json")
 
