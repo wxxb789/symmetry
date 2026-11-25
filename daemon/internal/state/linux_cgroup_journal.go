@@ -391,9 +391,12 @@ func (store *Store) scanLinuxV2NativeAdmissionLocked(
 				return errors.New("Linux clone seed or target path is already reserved")
 			}
 		}
-		if reservation != nil && foreign.ContainmentCgroup != nil {
-			other := foreign.ContainmentCgroup
-			if other.Parent.Path == reservation.Parent.Path && other.LeafName == reservation.LeafName {
+		if reservation != nil {
+			if other := foreign.ContainmentCgroup; other != nil {
+				if other.Parent.Path == reservation.Parent.Path && other.LeafName == reservation.LeafName {
+					return errors.New("Linux cgroup leaf path is already reserved")
+				}
+			} else if linuxV2RetainedReleaseNamesLeaf(foreign, *reservation) {
 				return errors.New("Linux cgroup leaf path is already reserved")
 			}
 		}
@@ -415,6 +418,15 @@ func validLinuxV2AdmissionFence(key RunKey, fence protocol.Fence) bool {
 	return validateKey(key) == nil && fence.Generation == key.Generation &&
 		validRequiredString(fence.RuntimeID, 4096) && fence.RuntimeEpoch > 0 &&
 		validRequiredString(fence.ClaimID, 4096) && validRequiredString(fence.LeaseToken, 65536)
+}
+
+// linuxV2RetainedReleaseNamesLeaf keeps a retained pre-checkout clone's leaf name reserved:
+// its release proof still names the parent path and leaf a new reservation must not reuse.
+func linuxV2RetainedReleaseNamesLeaf(journal RunJournal, reservation LinuxCgroupReservation) bool {
+	proof := journal.ContainmentCgroupReleaseProof
+	return proof != nil && proof.CgroupIdentity != nil && LinuxV2ReleasedCloneRetainedAfterRelease(journal) &&
+		proof.CgroupIdentity.Parent.Path == reservation.Parent.Path &&
+		proof.CgroupIdentity.LeafName == reservation.LeafName
 }
 
 func linuxV2ForeignJournalIsSafelyRetired(journal RunJournal) bool {
