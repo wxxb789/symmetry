@@ -898,11 +898,8 @@ func TestOpenCodeForeignBlobGoalAssignmentFailsBeforeWorkspaceProcessSessionAndE
 	value.AgentProfiles[value.Runtime.AgentProfile] = profile
 	registry := newHarnessRegistry(profile)
 	if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner(profile.Command, nativeProbeDigestFixtures{
-		responses: map[string][]byte{
-			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
-			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
-		},
-		digest: "sha256:" + strings.Repeat("0", 64),
+		responses: openCodeExactBlobProbeResponses(),
+		digest:    "sha256:" + strings.Repeat("0", 64),
 	})); err != nil {
 		t.Fatal(err)
 	}
@@ -995,6 +992,125 @@ func TestComposedOpenCodeProbeStaysFailClosedThroughTheRegistry(t *testing.T) {
 	if registration.Capabilities.Adapter == nil || registration.Capabilities.Adapter.Operations.Start || registration.Capabilities.Adapter.Operations.Events || registration.Capabilities.Adapter.Operations.Cancel ||
 		registration.Capabilities.Adapter.NativeVersion != unavailableNativeMetadataVersion || registration.Capabilities.Adapter.ImplementationVersion != unavailableNativeMetadataVersion {
 		t.Fatalf("registration adapter = %+v, want the unavailable no-operation projection", registration.Capabilities.Adapter)
+	}
+}
+
+// openCodePromotedAdapterVersion is the implementation identity a promoted OpenCode runtime
+// selects through adapter_version. It is the cross-package contract string the harness
+// projection reports, so the daemon test pins it literally.
+const openCodePromotedAdapterVersion = "opencode-http-v2"
+
+// TestComposedOpenCodeProbePromotesOnlyTheTestedBlobOnWindows pins the daemon-level
+// projection: the composed OpenCode adapter reaches the promotion gate, the probed version
+// and implementation identity become the registration metadata, and only start/events/cancel
+// are advertised. Windows is the platform the 2.4.1 exact-blob evidence covers, so the
+// promotion branch is asserted there and the fail-closed branch on every other platform.
+func TestComposedOpenCodeProbePromotesOnlyTheTestedBlobOnWindows(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		digest string
+	}{
+		{name: "tested blob", digest: opencode.TestedExecutableHash},
+		{name: "foreign blob", digest: "sha256:" + strings.Repeat("0", 64)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantPromoted := runtime.GOOS == "windows" && test.digest == opencode.TestedExecutableHash
+			value := testConfig(t)
+			value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+			value.Runtime.HarnessVersion = opencode.TestedVersion
+			value.Runtime.AdapterProtocolVersion = 1
+			value.Runtime.AdapterVersion = "legacy"
+			if wantPromoted {
+				value.Runtime.AdapterVersion = openCodePromotedAdapterVersion
+			}
+			registry := harness.NewRegistry()
+			if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
+				responses: openCodeExactBlobProbeResponses(),
+				digest:    test.digest,
+			})); err != nil {
+				t.Fatal(err)
+			}
+			daemon := &daemon{config: value, harnessRegistry: registry}
+			if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+				t.Fatalf("ensureHarnessProbe() error = %v", err)
+			}
+			capabilities := daemon.harnessCapabilities
+			if !capabilities.VersionKnown || capabilities.NativeVersion != opencode.TestedVersion || !capabilities.TransportVerified {
+				t.Fatalf("capabilities = %+v, want the probed version and transport", capabilities)
+			}
+			if capabilities.Verified != wantPromoted || capabilities.Start != wantPromoted || capabilities.Events != wantPromoted ||
+				capabilities.Cancel != wantPromoted || capabilities.Resume {
+				t.Fatalf("capabilities promoted = %t, want %t: %+v", capabilities.Verified, wantPromoted, capabilities)
+			}
+			if capabilities.Handoff || capabilities.ApprovalResponse || capabilities.HardCostLimit || capabilities.ProviderAccess ||
+				capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
+				t.Fatalf("capabilities advertised unproved operations: %+v", capabilities)
+			}
+			registration, metadata, err := buildRuntimeRegistration(value.Runtime, value.AgentProfiles[value.Runtime.AgentProfile], capabilities)
+			if err != nil {
+				t.Fatalf("buildRuntimeRegistration() error = %v", err)
+			}
+			if registration.HarnessVersion != opencode.TestedVersion || metadata.HarnessVersion != opencode.TestedVersion ||
+				registration.Capabilities.Adapter.NativeVersion != opencode.TestedVersion {
+				t.Fatalf("registration native metadata = %+v metadata=%+v, want the probed version", registration, metadata)
+			}
+			wantAdapterVersion := unavailableNativeMetadataVersion
+			if wantPromoted {
+				wantAdapterVersion = openCodePromotedAdapterVersion
+				if capabilities.ImplementationVersion != openCodePromotedAdapterVersion {
+					t.Fatalf("implementation version = %q, want %q", capabilities.ImplementationVersion, openCodePromotedAdapterVersion)
+				}
+			} else if capabilities.ImplementationVersion != "" {
+				t.Fatalf("unpromoted projection claimed implementation identity %q", capabilities.ImplementationVersion)
+			}
+			if registration.AdapterVersion != wantAdapterVersion || metadata.AdapterVersion != wantAdapterVersion ||
+				registration.Capabilities.Adapter.ImplementationVersion != wantAdapterVersion {
+				t.Fatalf("registration adapter metadata = %+v metadata=%+v, want %q", registration, metadata, wantAdapterVersion)
+			}
+			operations := registration.Capabilities.Adapter.Operations
+			if operations.Start != wantPromoted || operations.Events != wantPromoted || operations.Cancel != wantPromoted || operations.Resume {
+				t.Fatalf("registration operations = %+v, want promoted=%t", operations, wantPromoted)
+			}
+		})
+	}
+}
+
+// The composed registry seam and the unavailable constructor must report one refusal
+// sentence; this pins the record's byte-identical claim instead of a substring match.
+func TestComposedOpenCodeRefusalSentenceMatchesTheUnavailableSeam(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the platform refusal sentence is produced only where the platform gate refuses")
+	}
+	seamCapabilities, seamErr := harness.NewOpenCodeAdapter().Probe(context.Background())
+	if seamErr == nil {
+		t.Fatal("NewOpenCodeAdapter().Probe() returned no refusal")
+	}
+	seamReason := seamCapabilities.Unsupported[string(harness.CapabilityStart)]
+	if seamReason == "" {
+		t.Fatalf("seam projection carries no start reason: %+v", seamCapabilities.Unsupported)
+	}
+	value := testConfig(t)
+	value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+	value.Runtime.HarnessVersion = opencode.TestedVersion
+	value.Runtime.AdapterVersion = "configured-adapter"
+	value.Runtime.AdapterProtocolVersion = 1
+	profile := value.AgentProfiles[value.Runtime.AgentProfile]
+	profile.Command = "opencode-fixture"
+	value.AgentProfiles[value.Runtime.AgentProfile] = profile
+	registry := newHarnessRegistry(profile)
+	if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner(profile.Command, nativeProbeDigestFixtures{
+		responses: openCodeExactBlobProbeResponses(),
+		digest:    opencode.TestedExecutableHash,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &daemon{config: value, harnessRegistry: registry}
+	if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
+		t.Fatalf("ensureHarnessProbe() error = %v, want the tolerated fail-closed projection", err)
+	}
+	composedReason := daemon.harnessCapabilities.Unsupported[string(harness.CapabilityStart)]
+	if composedReason != seamReason {
+		t.Fatalf("composed start refusal = %q, seam = %q, want one byte-identical sentence", composedReason, seamReason)
 	}
 }
 
@@ -5888,6 +6004,15 @@ func (runner nativeProbeDigestFixtures) Run(ctx context.Context, executable stri
 
 func (runner nativeProbeDigestFixtures) ExecutableDigest(context.Context, string) (string, error) {
 	return runner.digest, nil
+}
+
+// openCodeExactBlobProbeResponses is the version/help fixture pair the composed OpenCode
+// exact-blob rows share.
+func openCodeExactBlobProbeResponses() map[string][]byte {
+	return map[string][]byte{
+		"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
+		"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+	}
 }
 
 func TestNativeAdapterStartPublicationLinearizesCancellation(t *testing.T) {

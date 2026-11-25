@@ -52,9 +52,9 @@ var (
 	errTurnUnverified     = fmt.Errorf("%w: OpenCode terminal event semantics are unverified", harness.ErrNativeUnverified)
 	errNilNativeProcess   = errors.New("opencode native process starter returned a nil process")
 	versionPattern        = regexp.MustCompile(`^(?:opencode v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
-	unsupportedOperations = "OpenCode V2 2.4.1 native terminal and recovery behavior lacks the exact-binary promotion evidence; version and serve help do not establish native support"
-	// 1.18.x printed a prefixed readiness line; 2.4.1 prints the bare form recorded in every
-	// testdata/opencode/2.4.1 receipt, so both spellings are accepted.
+	unsupportedOperations = "OpenCode V2 2.4.1 operation is not covered by the exact-blob promotion evidence"
+	// The frozen fixtures spell the readiness line with the `opencode ` prefix; 2.4.1 prints
+	// the bare form recorded in every testdata/opencode/2.4.1 receipt, so both are accepted.
 	listeningLinePattern = regexp.MustCompile(`^(?:opencode )?server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
 )
 
@@ -298,11 +298,11 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 	}
 	capabilities.TransportVerified = true
 	if err := ctx.Err(); err != nil {
-		return harness.Capabilities{}, err
+		return capabilities, err
 	}
 	digest, hashKnown := openCodeExecutableDigest(ctx, adapter.executable, runner)
 	if err := ctx.Err(); err != nil {
-		return harness.Capabilities{}, err
+		return capabilities, err
 	}
 	return openCodeCapabilitiesForPlatform(runtime.GOOS, capabilities, hashKnown && digest == TestedExecutableHash)
 }

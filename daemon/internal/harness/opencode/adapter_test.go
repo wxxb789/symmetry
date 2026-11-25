@@ -53,11 +53,8 @@ func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 
 func TestProbePromotesOnlyTheExactTestedBlobOnWindows(t *testing.T) {
 	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
-		fixtureCommandRunner: fixtureCommandRunner{responses: map[string][]byte{
-			"--version":    []byte("opencode v" + TestedVersion + "\n"),
-			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
-		}},
-		digest: TestedExecutableHash,
+		fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+		digest:               TestedExecutableHash,
 	})
 	capabilities, err := adapter.Probe(context.Background())
 	if runtime.GOOS == "linux" {
@@ -96,11 +93,8 @@ func TestProbeRejectsWrongBlobDigest(t *testing.T) {
 		t.Skip("the blob gate is only reachable where the platform gate admits")
 	}
 	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
-		fixtureCommandRunner: fixtureCommandRunner{responses: map[string][]byte{
-			"--version":    []byte("opencode v" + TestedVersion + "\n"),
-			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
-		}},
-		digest: testedLinuxExecutableHash,
+		fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+		digest:               testedLinuxExecutableHash,
 	})
 	capabilities, err := adapter.Probe(context.Background())
 	if !errors.Is(err, harness.ErrNativeUnverified) {
@@ -212,6 +206,67 @@ func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
 			}
 			if capabilities.Start {
 				t.Fatalf("capabilities.Start = true after bounded probe failure: %+v", capabilities)
+			}
+		})
+	}
+}
+
+// A cancelled or expired probe must keep the seeded projection so a caller sees the
+// real cause instead of an empty capability map (record section 8).
+func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T) {
+	for _, test := range []struct {
+		name                  string
+		newAdapter            func(cancel context.CancelFunc) *Adapter
+		want                  error
+		wantVersionKnown      bool
+		wantTransportVerified bool
+	}{
+		{
+			name: "version probe deadline",
+			newAdapter: func(context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", errorCommandRunner{errors: map[string]error{
+					"--version": fmt.Errorf("fixture probe: %w", context.DeadlineExceeded),
+				}})
+			},
+			want: context.DeadlineExceeded,
+		},
+		{
+			name: "help probe cancellation",
+			newAdapter: func(context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", errorCommandRunner{
+					responses: map[string][]byte{"--version": []byte("opencode v" + TestedVersion + "\n")},
+					errors:    map[string]error{"serve --help": fmt.Errorf("fixture probe: %w", context.Canceled)},
+				})
+			},
+			want:             context.Canceled,
+			wantVersionKnown: true,
+		},
+		{
+			name: "digest observes cancellation",
+			newAdapter: func(cancel context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", cancellingDigestCommandRunner{
+					fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+					cancel:               cancel,
+				})
+			},
+			want:                  context.Canceled,
+			wantVersionKnown:      true,
+			wantTransportVerified: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			capabilities, err := test.newAdapter(cancel).Probe(ctx)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			}
+			if err := capabilities.Validate(); err != nil {
+				t.Fatalf("cancelled probe returned an invalid projection: %v", err)
+			}
+			if capabilities.Kind != harness.KindOpenCode || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel ||
+				capabilities.VersionKnown != test.wantVersionKnown || capabilities.TransportVerified != test.wantTransportVerified {
+				t.Fatalf("capabilities = %+v, want the seeded projection (version_known=%t transport_verified=%t)", capabilities, test.wantVersionKnown, test.wantTransportVerified)
 			}
 		})
 	}
@@ -921,6 +976,14 @@ func (runner fixtureCommandRunner) Run(_ context.Context, _ string, args ...stri
 	return runner.responses[strings.Join(args, " ")], nil
 }
 
+// exactBlobProbeResponses is the version/help fixture pair every exact-blob probe row shares.
+func exactBlobProbeResponses() map[string][]byte {
+	return map[string][]byte{
+		"--version":    []byte("opencode v" + TestedVersion + "\n"),
+		"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+	}
+}
+
 // digestCommandRunner adds the harness.ExecutableHasher seam so a promotion gate
 // stays deterministic without hashing whatever this host resolves.
 type digestCommandRunner struct {
@@ -930,6 +993,18 @@ type digestCommandRunner struct {
 
 func (runner digestCommandRunner) ExecutableDigest(context.Context, string) (string, error) {
 	return runner.digest, nil
+}
+
+// cancellingDigestCommandRunner cancels the probe context when the digest gate is
+// reached, so a cancelled probe pins the seeded projection at that boundary.
+type cancellingDigestCommandRunner struct {
+	fixtureCommandRunner
+	cancel context.CancelFunc
+}
+
+func (runner cancellingDigestCommandRunner) ExecutableDigest(context.Context, string) (string, error) {
+	runner.cancel()
+	return TestedExecutableHash, nil
 }
 
 type errorCommandRunner struct {

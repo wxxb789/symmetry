@@ -438,11 +438,8 @@ func TestAdapterPolicyTruthTablePromotedOmO(t *testing.T) {
 // promoted projections and the platform refusal the Linux rows carry.
 func TestAdapterPolicyTruthTablePromotedOpenCode(t *testing.T) {
 	adapter := opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
-		responses: map[string][]byte{
-			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
-			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
-		},
-		digest: opencode.TestedExecutableHash,
+		responses: openCodeExactBlobProbeResponses(),
+		digest:    opencode.TestedExecutableHash,
 	})
 	capabilities, err := adapter.Probe(context.Background())
 	wantPromoted := runtime.GOOS == "windows"
@@ -476,11 +473,8 @@ func TestAdapterPolicyTruthTableOpenCodeRejectsForeignBlob(t *testing.T) {
 		t.Skip("the blob gate is only reachable where the platform gate admits")
 	}
 	adapter := opencode.NewAdapterWithRunner("opencode-fixture", nativeProbeDigestFixtures{
-		responses: map[string][]byte{
-			"--version":    []byte("opencode v" + opencode.TestedVersion + "\n"),
-			"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
-		},
-		digest: "sha256:" + strings.Repeat("0", 64),
+		responses: openCodeExactBlobProbeResponses(),
+		digest:    "sha256:" + strings.Repeat("0", 64),
 	})
 	capabilities, err := adapter.Probe(context.Background())
 	if !errors.Is(err, harness.ErrNativeUnverified) {

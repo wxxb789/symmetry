@@ -103,15 +103,15 @@ Row 6 (revision binding): §1 base revision + §5 digest table; a later `main` r
 
 | Mutant | Mutation (scratch) | Check that reddened | Restored |
 | --- | --- | --- | --- |
-| M1 wrong blob digest | `TestedExecutableHash` ← the Linux hash | `TestProbeRejectsWrongBlobDigest` — `Probe() error = <nil>, want ErrNativeUnverified` | `adapter.go` sha256 `bac1ffd3…ab92` |
-| M2 wrong `--version` | the `version != TestedVersion` branch deleted | `TestProbeRejectsWrongVersionAndIncompleteHelp` — `V1_version`, `historical_V1_pin`, `superseded_V2_pin` rows failed with the help/`ErrNativeUnverified` path instead of `ErrUnsupportedVersion` | `adapter.go` sha256 `bac1ffd3…ab92` |
-| M3 Linux admission forced to promote | platform gate condition forced false | `TestProbeRecordsExactTransportButRemainsUnverified` (Linux branch), `TestProbePromotesOnlyTheExactTestedBlobOnWindows` (Linux branch), `TestAdapterPolicyTruthTablePromotedOpenCode` (Linux branch) all failed with `Probe() error = <nil>` / blob reason, want the Linux platform refusal | `adapter.go` sha256 `bac1ffd3…ab92` |
+| M1 wrong blob digest | `TestedExecutableHash` ← the Linux hash | `TestProbeRejectsWrongBlobDigest` — `Probe() error = <nil>, want ErrNativeUnverified` | `adapter.go` sha256 `8b38c2f1…f8ca` |
+| M2 wrong `--version` | the `version != TestedVersion` branch deleted | `TestProbeRejectsWrongVersionAndIncompleteHelp` — `V1_version`, `historical_V1_pin`, `superseded_V2_pin` rows failed with the help/`ErrNativeUnverified` path instead of `ErrUnsupportedVersion` | `adapter.go` sha256 `8b38c2f1…f8ca` |
+| M3 Linux admission forced to promote | platform gate condition forced false | `TestProbeRecordsExactTransportButRemainsUnverified` (Linux branch), `TestProbePromotesOnlyTheExactTestedBlobOnWindows` (Linux branch), `TestAdapterPolicyTruthTablePromotedOpenCode` (Linux branch) all failed with `Probe() error = <nil>` / blob reason, want the Linux platform refusal | `adapter.go` sha256 `8b38c2f1…f8ca` |
 
 The compose refusal rows are constructor-seam assertions (`NewOpenCodeAdapter()`), so a gate
 mutation cannot redden them; they are not locally runnable without a compose host. Recorded, not
 silently skipped.
-The restored digest is the file's digest at mutation time; two later comment-only trims moved
-`adapter.go` to its delivered digest (§5), and the post-trim Windows/Linux suites were re-run.
+The restored digest is the file's digest at mutation time; the mutants were re-run on the
+apply-sweep bytes (§9), so the restored digest is `adapter.go`'s delivered digest in §5.
 
 ## 4. Gates (exact commands; cwd; exit)
 
@@ -153,19 +153,21 @@ CI runner end to end, because the witness suites it contains demand provisioned 
 ## 5. Delivered-file sha256 equality table
 
 Computed at the delivered bytes after the final gate sweep (the record itself is omitted by
-construction; the PR merge revision re-binds them, row 6).
+construction; the PR merge revision re-binds them, row 6). The branch's merge of `origin/main`
+re-bound `.github/workflows/ci.yml`, and the apply sweep (§9) re-bound the four Go files it
+edited; every row below matches the delivered bytes.
 
 | File | sha256 |
 | --- | --- |
-| `.github/workflows/ci.yml` | `96c25e4c9eb27c66f9142b305385459d00a536b1e4fc63afe353515c0e86ccb5` |
-| `daemon/internal/app/adapter_policy_truth_table_test.go` | `c77a352e29f1edd9b07bbcfcaf58bf8280761fc134d5d8b2d763811fb9eb06d7` |
-| `daemon/internal/app/harness_test.go` | `1b975be94686cd656d172fc1588d6a773b379ab9e1d826ee608bd8c4e0fd4f22` |
+| `.github/workflows/ci.yml` | `9355ba6d21ab0fcf11607bb4a7e54f9e13dc5b45c394bc07cff95b9b137f607a` |
+| `daemon/internal/app/adapter_policy_truth_table_test.go` | `788b6425dde10e9536b259d54d348d309fd3cfa489985c6ac228ae2e512d06c8` |
+| `daemon/internal/app/harness_test.go` | `1e35b541959fa25248c97391ba9cf5d3870ac45d1ffd87b9169c5be56fdc7b92` |
 | `daemon/internal/app/probe.go` | `e8681b18a49070617765d804b9c9ad6e4aac1798716208215137c081f4daba65` |
 | `daemon/internal/harness/harness_test.go` | `3cb64f1c20af0d5063272e63e1a4ae2f9751687826b67c25ff060ce55cc76759` |
-| `daemon/internal/harness/opencode/adapter.go` | `873b8655510d6e711a13f4614a851870bb707982eca223c7f128557ad6aef59b` |
+| `daemon/internal/harness/opencode/adapter.go` | `8b38c2f18bc04b55e724de02cca7e49ca5fd272ce50e3e200d31806e3682f8ca` |
 | `daemon/internal/harness/opencode/adapter_native_work_linux_test.go` | `89541009b365a6163a52898ce704a5dc65814a50bed63b9cfd65c60174d08c40` |
 | `daemon/internal/harness/opencode/adapter_native_work_test.go` | `5ba83f16505e0f2bae2a85adf2f8e55a62f7360bf624fee5d9a24b025314eda9` |
-| `daemon/internal/harness/opencode/adapter_test.go` | `fd066dd9841071ee84d838bc24a4279352bd23df980bc745ac5a7fd02e264162` |
+| `daemon/internal/harness/opencode/adapter_test.go` | `e4bc67ada8f1bc8deb932b83020bc5c9c2692b5dfc79f15c394b3878b2297ab2` |
 | `daemon/internal/harness/opencode/inprocess_containment_test.go` (new) | `9f3bdff150af99fc3775468105ed4270261ced19ef0c20b6ba19382275ace7d7` |
 | `daemon/internal/harness/registry.go` | `c8049e6eced97a11d325b78aff7ec9c6aa77102f1397f799164a8646d6e2ddcc` |
 | `docs/TODO.md` | `89d147c7df18f33f15bdb63daca12dab207dc44b8f626a955299fe2a2f7e17cb` |
@@ -269,3 +271,29 @@ findings changed these bytes:
 - Comment-only trims after those reviews: three new comments exceeded the contract's two-line
   bound and were shortened; the post-trim Windows and Linux suites and the six assertion rows were
   re-run on the delivered digests, and the §5 table lists those digests.
+
+## 9. Apply sweep (2026-11-26)
+
+The accepted simplification findings were applied on the delivered bytes, each with read-only
+evidence in the review report:
+
+- The blanket refusal sentence (`unsupportedOperations`) is now operation-scoped instead of
+  claiming missing promotion evidence, and the readiness-line comment cites the frozen fixtures'
+  prefix spelling instead of an unrecorded 1.18.x line. Both late probe-cancellation guards
+  return the seeded projection, so a mid-probe cancel no longer surfaces as a malformed
+  (empty-kind) capability map.
+- Three pins were added: a composed OpenCode promotion row pinning the literal
+  `opencode-http-v2` identity with `Resume` staying unpromoted, a non-Windows row asserting the
+  composed refusal sentence is byte-equal to `harness.NewOpenCodeAdapter()`'s, and a
+  cancelled/expired probe row whose digest-gate arm failed with the empty-map symptom before the
+  guard fix and passes after it.
+- The five duplicated version/help probe fixtures were hoisted into one helper per package.
+- The Windows `gofmt`/`vet`/package-suite run, the WSL `GOOS=linux` vet/build, the WSL
+  `opencode`+`harness` suite and the six `--assert` rows (7 rows `run=1 pass=1 skip=0`) were
+  re-run green on these bytes.
+- Mutants M1/M2/M3 were re-run with the same reddening checks as §3 (M1/M2 on Windows, M3 on
+  Linux) and restored byte-identical; the restored digest is `adapter.go`'s §5 digest.
+- The race row was re-run in its exact CI form: the named assertion row is green and the touched
+  packages pass under `-race`; the row still exits non-zero on this host because the
+  `internal/platform` anchor-shape-table family is environment-gated (it requires an
+  unprivileged A process), unchanged by this sweep.
