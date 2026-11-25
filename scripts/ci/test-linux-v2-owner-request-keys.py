@@ -1,22 +1,8 @@
 #!/usr/bin/env python3
 """Pin the writer/fixture agreement on which owner-witness cases route to a Goal admission.
 
-``write-linux-v2-owner-request.py`` keys its admission branch on ``GOAL_ADMISSION_CASES``
-(the caller's case name) while ``provision-linux-v2-control-claims.exs`` decides the same
-fact per ``@cases`` row from that row's repository role and maps the row to the case name
-its run metadata carries (``schedule/5``'s ``request_case`` cond, which the writer re-checks
-as ``run.get("case") == case``). Both sides are read here from the committed bytes,
-statically, and must name the same writer cases.
-
-The writer side is parsed with ``ast``: ``literal_eval`` over the two module-level
-assignments reads exactly the literal, so a computed or renamed shape is refused with the
-symbol named, and no neighbouring line can be matched. The fixture side is a line census
-over the region from its ``@cases`` opener to the next top-level ``def``: every non-blank
-line must be the opener, a structural line of the table's concatenation, or a case row
-(interpolated names expanded from the referenced attribute's own string list). Anything
-else is refused with the offending line, because a shape the parser cannot read must never
-be skipped into a smaller set. Every mutation witness below mutates one side of the
-committed bytes and expects that refusal.
+Both sides are read from the committed bytes, statically; a shape the parser cannot read is
+refused, never guessed around. See docs/plans/2026-11-26-rf-ci-owner-request-key-check-plan.md §2.
 """
 
 from __future__ import annotations
@@ -81,7 +67,7 @@ def fixture_rows(text: str) -> list[tuple[str, str]]:
     rows: list[tuple[str, str]] = []
     seen: set[str] = set()
     interpolations: dict[str, str] = {}
-    index = start
+    index = start + 1
     while index < end:
         line = lines[index]
         mapping = ENUM_MAP.match(line)
@@ -91,7 +77,7 @@ def fixture_rows(text: str) -> list[tuple[str, str]]:
             interpolations[mapping.group(2)] = mapping.group(1)
             index += 1
             continue
-        if not line.strip() or line == "  @cases [" or ROW_STRUCTURE.match(line):
+        if not line.strip() or ROW_STRUCTURE.match(line):
             index += 1
             continue
         opener = ROW_START.match(line)
@@ -217,17 +203,13 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
         self.assertIn(anchor, text)
         return text.replace(anchor, replacement, 1)
 
-    def agree(self, writer_text: str, fixture_text: str) -> tuple[set[str], set[str]]:
-        return check_agreement(writer_text, fixture_text)
-
     def test_the_committed_pair_agrees(self) -> None:
-        writer_goals, fixture_goals = self.agree(self.writer_text, self.fixture_text)
-        self.assertEqual(writer_goals, fixture_goals)
+        check_agreement(self.writer_text, self.fixture_text)
 
     def test_dropping_a_writer_goal_case_is_refused(self) -> None:
         mutated = self.mutate(self.writer_text, '    "codex_containment",\n', "")
         with self.assertRaises(Refused) as refused:
-            self.agree(mutated, self.fixture_text)
+            check_agreement(mutated, self.fixture_text)
         self.assertIn("codex_containment", str(refused.exception))
 
     def test_a_fixture_only_goal_case_is_refused(self) -> None:
@@ -237,7 +219,7 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
         )
         mutated = self.mutate(self.fixture_text, "  ] ++\n", probe + "  ] ++\n")
         with self.assertRaises(Refused) as refused:
-            self.agree(self.writer_text, mutated)
+            check_agreement(self.writer_text, mutated)
         self.assertIn("goal_case_drift_probe", str(refused.exception))
 
     def test_a_legacy_row_routed_into_a_goal_case_is_refused(self) -> None:
@@ -246,7 +228,7 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
         # `stage_replay` case.
         mutated = self.mutate(self.fixture_text, '          "stage_replay_unprovisioned_refusal"\n', "")
         with self.assertRaises(Refused) as refused:
-            self.agree(self.writer_text, mutated)
+            check_agreement(self.writer_text, mutated)
         self.assertIn("legacy rows route to a writer case keyed as a goal admission", str(refused.exception))
 
     def test_unparseable_shapes_are_refused_with_their_location(self) -> None:
@@ -267,6 +249,7 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
                 '"claude_containment", "claude-native", :claude_code, goal_role,',
             ),
             ("writer", "GOAL_ADMISSION_CASES = {", "GOAL_ADMISSION_CASES = {*CASES,"),
+            ("fixture", "  ] ++\n", "  ] ++\n  @cases [\n"),
         )
         for side, anchor, replacement in mutations:
             with self.subTest(anchor=anchor):
@@ -277,7 +260,7 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
                 else:
                     fixture_text = self.mutate(self.fixture_text, anchor, replacement)
                 with self.assertRaises(Refused) as refused:
-                    self.agree(writer_text, fixture_text)
+                    check_agreement(writer_text, fixture_text)
                 self.assertIn(WRITER.name if side == "writer" else FIXTURE.name, str(refused.exception))
 
 

@@ -5353,7 +5353,7 @@ section, whose pointer sentence names this one.
       any unparseable line — maps each goal-routed row to the writer case its run metadata carries,
       and asserts the two sets equal (48 rows total, 43 goal-routed, mapping to the five writer
       cases) while refusing a legacy row that maps into the goal set. Three mutation witnesses (a
-      dropped writer case, a fixture-only goal row, and an unparseable shape in four spellings)
+      dropped writer case, a fixture-only goal row, and an unparseable shape in five spellings)
       turn it red and print both sets on a disagreement; the check already reddens on the pre-#294
       writer (`550f96a3^`), which carried no `GOAL_ADMISSION_CASES` at all. One `.github/workflows/ci.yml`
       line joins the daemon job's existing `Check Linux v2 fixture contracts` step, with no
