@@ -1490,36 +1490,7 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       so the fix is a strictness restore, not an incident: add `uniqueItems` where it can express the
       rule, or a semantic clause on the Elixir side. Owner: contracts strictness (A6).
 
-## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)
-
-- [ ] `TestAutonomousReturnReleasesItsInputReader` (`daemon/cmd/symmetry-fake-agent/autonomous_test.go`;
-      package `daemon/cmd/symmetry-fake-agent`): failed once in the hosted `daemon` job's race step
-      (`go test -race -count=1 -timeout 600s -json ./...` through `scripts/ci/stdio-only-caller-boundary.py`),
-      run `44976804508`, on PR #225 head `d45dc45f` — a Control-only code change
-      (`control/lib/symmetry_control_web/protocol.ex` plus its reason-coverage test and two docs records;
-      `git diff --name-only origin/main...d45dc45f`), so the daemon tree is untouched by that PR. Observed
-      failure text: the test's own `t.Fatalf("reader goroutine is still alive when runAutonomous returned")`
-      with the goroutine dump it printed — `goroutine 22 [runnable]` in `runAutonomous.func1` (the reader
-      closure in `autonomous.go`, reported at the function's tail, with no `readLine` or select frame),
-      `created by ... runAutonomous in goroutine 50`. Reproduction
-      attempts and outcomes: the same test passed on the PR's previous and next heads (CI reruns), and no
-      other occurrence is recorded in the repository; added 2026-11-22 — Linux (WSL, go1.27.0) `go test
-      -race -count=20 -timeout 600s -v -run '^TestAutonomousReturnReleasesItsInputReader$'
-      ./cmd/symmetry-fake-agent/` → 20/20 `--- PASS`, exit 0. Cause unknown. Most probable mechanism
-      (inference, re-derived from this run's own `-json` record): the input is a closable `io.Pipe` whose
-      `Close` does unblock the parked `readLine`, so the reader's exit is reachable; the record's
-      `"Elapsed":0.01` (`--- FAIL: ... (0.01s)`) is below `runAutonomous`'s `readerJoinTimeout = 50 ms` at
-      that head, so the join's `time.After(readerJoinTimeout)` arm cannot have fired — the run returned
-      through `<-readerDone`, so the reader had already run its deferred `close(readerDone)` and was in its
-      exit epilogue when the scan ran, and `bytes.Contains(stacks, "runAutonomous.func1")` reads that
-      exiting goroutine as a live leak. Next diagnostic step: repeat the `-race -count=N` run under CPU
-      contention, and on a reproduction capture whether the reader's `close(readerDone)` had already run
-      when the scan executed (the goleak oracle in the same file is the existing alternative oracle) rather
-      than touching the assertion or the bound, which the sibling
-      `TestAutonomousReturnBoundsTheJoinOnAnUnblockableCarrier` pins (`--- PASS: ... (0.05s)` in the same
-      run). Proximity, not duplication: the comment-policy-sweep entry above for
-      `daemon/cmd/symmetry-fake-agent/autonomous.go` records the *unblockable* carrier, whose reader is
-      never joined — a different property, not this test's failure.
+## Observed flakes, cause unknown: two observations (2026-11-22 CI runs and PR #220 review)
 
 - [ ] `TestLinuxOwnerAnchorWire*` — the five tests
       `TestLinuxOwnerAnchorWireShapeRejectsWrongDescriptorCounts`, `TestLinuxOwnerAnchorWireCloneCleanupDescriptorGate`,
