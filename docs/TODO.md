@@ -1024,10 +1024,14 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       pure move and kept them byte-identical). Single-point mutants of
       `daemon/native/linux-gate/protocol/wire.go` survive the whole package suite at base and HEAD
       for: `DecodeLaunchResult`'s `OwnerPID <= 1` and `UserNSInode == 0` checks, `readWireString`'s
-      NUL check and `maxCommandString` bound, the receipt generation upper bound and minimum length,
-      and `encodeGuardedRelease`'s body and grant bounds. The generation and minimum-length checks may
-      be shadowed by later reads or `receipt.Validate`; the rest are real gaps. Add one rejection test
-      per check in a separate maintenance slice.
+      NUL check, the receipt generation upper bound and minimum length, and
+      `encodeGuardedRelease`'s body and grant bounds. `readWireString`'s `maxCommandString` bound
+      left this list on 2026-11-26: `rf-claude-schema-argv` added
+      `TestWireLinuxCommandStringBoundary`, whose decode row refuses a `maxCommandString`+1 element
+      (`length-prefixed command string is oversized or truncated`, evidence record §7); the NUL
+      check stays open. The generation and minimum-length checks may be shadowed by later reads or
+      `receipt.Validate`; the rest are real gaps. Add one rejection test per check in a separate
+      maintenance slice.
 
 ## Deferred review findings (PR #205)
 
@@ -1612,25 +1616,36 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 ## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
 
-- [ ] Production Linux v2 owner hosts with `kernel.apparmor_restrict_unprivileged_userns=1` need a
-      per-program `userns` AppArmor profile for the launcher/gate (`scripts/install-linux-owner.sh`), or
-      the sysctl relaxed, to be specified by the D3 `harness.md` amendment / W5-02a. The Ubuntu default
-      transitions an unconfined `unshare(CLONE_NEWUSER)` caller into the capability-denying
-      `unprivileged_userns` profile, so the launcher/gate's later `drop_to_b`
-      (`daemon/native/linux-gate/c-gate/gate.c`) cannot proceed; the host prerequisite probe carries a
-      per-program exception for its own ephemeral binary, which does not cover production installs. The
-      native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
-      before its case sets can pass.
-      **Confirmed on the guest (2026-11-25, goal `rf-acc-guest-native-exec`, runs `45593856716`,
-      `45601287283` and the final `45602546196`, evidence §7/§9):** the gate's pre-clone credential
-      drop is refused a capability *use*, not a missing capability — `PR_CAPBSET_DROP` returns
-      `EPERM` while the gate is its user namespace's root and the bounding set is still non-zero,
-      reported verbatim as `guest_stage=gate_drop_bounding_set errno=1`. No gate-side change can
-      substitute (the `CapBnd == 0` invariant is read back by `drop_to_b` and skipping it would
-      weaken it), so the fix here is the named one above: the per-program `userns` profile in the
-      installer plus the fixture exception. Follow-up goal: `rf-acc-apparmor-userns-profile`, which
-      owns `scripts/install-linux-owner.sh` and the acceptance fixture (both outside that goal's
-      owned set).
+- [ ] The owner-gated D3 `harness.md` amendment and the D3/W5-02 item still need the delivered host
+      requirement applied; `docs/design/harness.md` and `docs/goals/0010-refactor-program.md` are
+      owner-gated, so goal `rf-acc-apparmor-userns-profile` only proposes the amendment text in its
+      plan §9. **Delivered (2026-11-26, goal `rf-acc-apparmor-userns-profile`, branch
+      `refactor/rf-acc-apparmor-userns-profile`, base `61399984`; plan
+      `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
+      `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`):** on a host with
+      `kernel.apparmor_restrict_unprivileged_userns=1`, `scripts/install-linux-owner.sh` installs,
+      loads and verifies the per-program AppArmor `userns` exception
+      `/etc/apparmor.d/symmetry-linux-owner-userns` for the exact installed gate path
+      `/usr/libexec/symmetry/symmetry-linux-gate`, fails closed when it cannot prove the loaded
+      fact, and removes it through `-remove-userns-profile`; the installed
+      `-verify-linux-owner-install` check refuses such a host unless the exact installed text is
+      the loaded policy proven against that exact text, and records `apparmor_userns=not_needed|per_program` beside
+      `LinuxOwnerPreflightRuntimeBoundary`; `scripts/ci/linux-v2-native-acceptance.sh` boots its
+      guest with the default capability set plus `CAP_MAC_ADMIN`, provides the security filesystem before the in-guest
+      installer run and authors no policy text of its own, while
+      `scripts/ci/linux-v2-native-rootfs-base.sh` pins the `apparmor` package the in-guest load
+      and readback need. The sysctl is never written, the two existing CI exceptions and the gate
+      are unchanged, and the delivered run rows stand in the goal's evidence record. Run 3's head
+      (`ce3c30b9`) clears the wall's rows (the installer and the preflight print
+      `apparmor_userns=per_program`, the migration transport start resolves its one-use
+      RELEASE, and `shared`'s `clone_integration_linux_test.go:240` /
+      `launcher_integration_linux_test.go:439` checks pass); the runs stop beyond the wall at
+      rows named verbatim in the record §8 (the migration turn wait and `shared`'s
+      `/proc/<pid>/environ` identity rows) — next-goal territory, out of this goal's scope. The
+      apply, fix and round-1 stages changed bytes after that head, so this entry binds the wall
+      rows to `ce3c30b9` alone; the conductor's Bind run `45688173130` bound `2d423748`, the
+      round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds the delivered
+      revisions (record §1 digests, §8 delta tables).
 
 ## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
 
@@ -1861,23 +1876,17 @@ section below.
       `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §3, run `45671784251`):
       both sets now pass the clone reserve and the fresh-leg umask wall (the authorized one-line
       `production` UMask arm is in; runs `45665341553`/`45668197894` red at the wall, run 4 zero
-      `… are 05` lines) and stop at, verbatim, `codex_containment` — `start native owner witness
-      transport: resume process "/usr/local/bin/codex": one-use Linux v2 RELEASE result is
-      unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown;
-      stage=clone_bootstrap arm=bootstrap_attempt wait_class=other
-      guest_stage=gate_drop_bounding_set errno=1)` (the same pre-clone credential fact the
-      `## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction` entry above records;
-      the AppArmor userns wall, owned by the in-flight goal `rf-acc-apparmor-userns-profile` per
-      the conductor ruling 2026-11-26 — not `rf-acc-guest-native-exec`, which merged as #289);
-      `claude_containment` — `start native owner witness transport: start
-      "/usr/local/bin/claude": validate native command and three Runner pipes before cgroup
-      reservation: Linux owner native argv contains an empty, oversized, or NUL value` (root
-      cause measured: the Claude adapter's fixed `--json-schema` element is 23 881 bytes,
-      `daemon/internal/harness/claude/adapter.go:160-180`, over the 16 KiB `maxCommandString`
-      bound, `daemon/native/linux-gate/protocol/wire.go:53`, refused at `wire_linux.go:450-452`
-      via `daemon/internal/execution/linux_owner_v2_linux.go:182`; owner `rf-claude-schema-argv`,
-      a new conductor goal whose design is pending: raise the argv bound, shrink the schema
-      argument, or move the schema off argv). Both sets'
+      `… are 05` lines), and both walls the run then stopped at are closed, moved to
+      `docs/archive/CLOSED-TODO.md`: `codex_containment`'s AppArmor userns wall by
+      `rf-acc-apparmor-userns-profile` (#293; its record §8 names the rows that clear the wall
+      and the runs' next stops — the migration turn wait and the `shared` `/proc/<pid>/environ`
+      identity rows — and its §12 frames them as next-goal territory), and
+      `claude_containment`'s fixed
+      `--json-schema` argv wall by `rf-claude-schema-argv` (closure under
+      `## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg
+      (2026-11-26)`; its Bind run `45710455914` on `72f8d01e` shows zero `oversized` refusals
+      and the claude transport reaching its first native stage, and the set's next stop is
+      recorded in the `## rf-claude-schema-argv: residuals` section below). Both sets'
       `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
       failing leg).
 
@@ -1911,6 +1920,24 @@ section below.
       file sha256 `c5da521d…`, identical at both heads); run 4 had 0 such lines. Post-wall
       cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
       conductor.
+
+## rf-claude-schema-argv: residuals (2026-11-26)
+
+- [ ] The `claude_containment` set's next stop beyond the argv wall (2026-11-26, Bind run
+      `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): verbatim `positive owner witness
+      lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` [INFERENCE:
+      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Owner:
+      TBD, a new conductor goal; the stop is the owner witness's durable-stage summary check
+      (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
+      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`).
+
+- [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
+      `daemon/internal/platform/linux_supervisor_protocol_linux.go:19`) carries the command's
+      Args/Env as JSON and would refuse a 23 881-byte element (`errLinuxSupervisorFrameTooLarge`,
+      `supervisor_linux_client.go:79,219-224`). It is not on the linux-v2 path that
+      `claude_containment` takes (`linuxV2Requested()` dispatches first). Owner: platform, if a
+      claude-like leg ever takes that route. No code change.
 
 ## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)
 

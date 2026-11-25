@@ -26,4 +26,10 @@ func TestUnsupportedKindRefusalsAreStable(t *testing.T) {
 		err.Error() != "Linux owner installation verification is supported only on Linux amd64" {
 		t.Fatalf("VerifyLinuxOwnerInstallation() error = %v", err)
 	}
+	if got := LinuxOwnerAppArmorUsernsDecision(); got != "not_needed" {
+		t.Fatalf("LinuxOwnerAppArmorUsernsDecision() = %q, want the recorded not_needed token", got)
+	}
+	if LinuxAppArmorUsernsNotNeeded != "not_needed" {
+		t.Fatalf("the shared vocabulary token = %q, want not_needed", LinuxAppArmorUsernsNotNeeded)
+	}
 }

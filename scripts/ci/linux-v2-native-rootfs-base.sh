@@ -44,7 +44,7 @@ while true; do
   status=0
   sudo timeout --signal=TERM --kill-after=30s "$attempt_timeout_seconds" \
     debootstrap --variant=minbase \
-      --include=acl,binutils,bash,ca-certificates,coreutils,curl,dbus,git,libacl1,libcap2-bin,libgcc-s1,libstdc++6,passwd,procps,python3,sudo,systemd,systemd-sysv,tar,util-linux \
+      --include=acl,apparmor,binutils,bash,ca-certificates,coreutils,curl,dbus,git,libacl1,libcap2-bin,libgcc-s1,libstdc++6,passwd,procps,python3,sudo,systemd,systemd-sysv,tar,util-linux \
       "$codename" "$base" "$ubuntu_mirror" 2>&1 | tee "$attempt_log" || status=${PIPESTATUS[0]}
   if (( status == 0 )); then
     break
@@ -67,4 +67,7 @@ while true; do
   attempt=$((attempt + 1))
 done
 sudo chroot "$base" /usr/bin/test -x /usr/bin/readelf
+# apparmor.service would reload the guest's distro profile set into the shared kernel policy
+# namespace at boot; the installer loads only its own per-program exception, so it is masked.
+sudo ln -sfn /dev/null "$base/etc/systemd/system/apparmor.service"
 printf 'Shared disposable guest rootfs base ready: %s\n' "$base"

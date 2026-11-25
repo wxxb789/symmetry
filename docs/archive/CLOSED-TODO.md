@@ -5309,6 +5309,57 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       `rf-acc-apparmor-userns-profile`; the Claude fixed-argv bound wall, owned by
       `rf-claude-schema-argv`) are recorded in the goal's residual entry in `docs/TODO.md`.
 
+## rf-acc-apparmor-userns-profile: the production host requirement is specified and installed (2026-11-26)
+
+- [x] The host requirement's "to be specified by the D3 `harness.md` amendment / W5-02a" statement is
+      closed (goal `rf-acc-apparmor-userns-profile`, branch `refactor/rf-acc-apparmor-userns-profile`,
+      base `61399984`; plan `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
+      `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`): the per-program AppArmor
+      `userns` exception is installed, loaded and verified by `scripts/install-linux-owner.sh` for
+      the exact installed gate path `/usr/libexec/symmetry/symmetry-linux-gate` whenever
+      `kernel.apparmor_restrict_unprivileged_userns=1`, the installed preflight refuses such a host
+      unless the exact installed text is the loaded policy (proven by the kernel's recorded hash), and the acceptance fixture
+      loads the installer's own profile inside its guest with no policy text of its own
+      (`grep -c apparmor scripts/ci/linux-v2-native-acceptance.sh` stays 0). Relaxing the sysctl and
+      a fixture-only exception were rejected; the gate, the two existing CI exceptions and the
+      marker/resume semantics of the installer are unchanged. What stays open is only the
+      owner-gated amendment application itself, recorded in `docs/TODO.md`. On run 3's head
+      (`ce3c30b9`) the rows clear the wall (installer/preflight `apparmor_userns=per_program`,
+      the migration transport start, the two `shared` checks) and the runs' next stops are named
+      verbatim in the evidence record §8; the conductor's Bind run `45688173130` bound
+      `2d423748`, the round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds
+      the delivered revisions (the record's §1 digest table is the delivered set).
+
+## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg (2026-11-26)
+
+- [x] The `claude_containment` stop of the rf-acc-containment-goal-admission residual — verbatim
+      `start native owner witness transport: start "/usr/local/bin/claude": validate native
+      command and three Runner pipes before cgroup reservation: Linux owner native argv
+      contains an empty, oversized, or NUL value` (run `45671784251`) at
+      `daemon/internal/execution/linux_owner_v2_linux.go:182` for the Claude adapter's fixed
+      23 881-byte `--json-schema` element — is closed (goal `rf-claude-schema-argv`, branch
+      `refactor/rf-claude-schema-argv`, base `8453da12`; plan
+      `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md`, record
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md`): the one per-element cap is raised
+      from 16 KiB to 64 KiB in both languages in one change
+      (`daemon/native/linux-gate/protocol/wire.go:53` `maxCommandString = 64 << 10`;
+      `daemon/native/linux-gate/c-gate/gate.c:91` `MAX_COMMAND_STRING = 64 * 1024`), the Linux
+      twin of `adapter_cmdline_windows_test.go` proves the real fixed argv passes
+      `linuxgate.NativeCommand.Validate()` and `EncodeRelease` (schema 23 881 bytes, guarded
+      RELEASE packet ≈24 392 bytes — the fixture's temporary workspace path moves it by a byte
+      or two), the boundary pair (exactly-cap accepted, cap+1 refused)
+      holds on Go validate, Go decode and the gate's real `read_release`, and the census probe
+      carries the literal 64 KiB assert plus a compile-time tie to Go's `maxCommandString`; both
+      single-sided mutants were observed red and then restored byte-identically (record §6). No
+      `maxReleaseSize`/`maxCommandVector`/frame/version change, no schema or adapter change, and
+      the 16 KiB-vintage gate refuses the new frame fail-closed with `EPROTO` at `read_span`.
+      The conductor's Bind scratch run of the `claude_containment` case set ran as `45710455914`
+      on `72f8d01e` plus the two scratch-only files: zero `oversized` refusals, the transport's
+      first native stage reached (`native_open_reached`, live B process verified), exit 1 at the
+      owner witness's durable-stage summary check — whose verbatim stop and `initial_lease_acked`
+      inference are recorded in the goal's residual entry in `docs/TODO.md`; the base red it
+      removes is run `45671784251`.
+
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
 - [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
