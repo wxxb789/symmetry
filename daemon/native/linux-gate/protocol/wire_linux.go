@@ -510,33 +510,54 @@ func validateRunnerPipes(stdin, stdout, stderr *os.File) error {
 
 func receiveCloneStatusPacket(ctx context.Context, fd int, deadline time.Time) ([]byte, bool, error) {
 	if err := waitForStatus(ctx, fd, deadline); err != nil {
-		return nil, false, err
+		return nil, false, cloneStatusReadFailure(CloneReadClassWait, err)
 	}
 	data := make([]byte, maxCloneStatusFrameSize)
 	oob := make([]byte, unix.CmsgSpace(4*4))
 	n, oobn, flags, _, err := unix.Recvmsg(fd, data, oob, unix.MSG_CMSG_CLOEXEC)
 	if err != nil {
-		return nil, false, err
+		return nil, false, cloneStatusReadFailure(CloneReadClassRecv, err)
 	}
 	if oobn != 0 {
 		fds, parseErr := parseRights(oob[:oobn])
 		closeFDs(fds)
 		if parseErr != nil {
-			return nil, false, parseErr
+			return nil, false, cloneStatusReadFailure(CloneReadClassAncillary, parseErr)
 		}
-		return nil, false, errors.New("clone status channel carried unexpected descriptors")
+		return nil, false, cloneStatusReadFailure(CloneReadClassAncillary,
+			errors.New("clone status channel carried unexpected descriptors"))
 	}
 	if flags&(unix.MSG_TRUNC|unix.MSG_CTRUNC) != 0 || n > maxCloneStatusFrameSize {
-		return nil, false, errors.New("clone status frame is truncated or oversized")
+		return nil, false, cloneStatusReadFailure(CloneReadClassTruncated,
+			errors.New("clone status frame is truncated or oversized"))
 	}
 	if n == 0 {
 		if flags&unix.MSG_EOR != 0 {
-			return nil, false, errors.New("clone status channel carried a zero-length packet")
+			return nil, false, cloneStatusReadFailure(CloneReadClassEmptyPacket,
+				errors.New("clone status channel carried a zero-length packet"))
 		}
 		return nil, true, nil
 	}
-	if n < 12 || string(data[:8]) != launchMagic || binary.LittleEndian.Uint16(data[8:10]) != cloneStatusWireVersion {
-		return nil, false, errors.New("clone status frame magic or version is invalid")
+	if n < 12 || string(data[:8]) != launchMagic {
+		return nil, false, cloneStatusReadFailure(CloneReadClassMagicOrVersion,
+			errors.New("clone status frame magic or version is invalid"))
+	}
+	if version := binary.LittleEndian.Uint16(data[8:10]); version != cloneStatusWireVersion {
+		frameErr := errors.New("clone status frame magic or version is invalid")
+		if version == wireVersion {
+			if kind := binary.LittleEndian.Uint16(data[10:12]); kind == frameExecAttempt || kind == frameExecFailure {
+				// A v1 gate frame on the clone channel: the pre-clone guard's
+				// FRAME_EXEC_FAILURE (16 B, errno) or the non-clone attempt frame.
+				errno := 0
+				if kind == frameExecFailure && n >= execFailureSize {
+					if raw := binary.LittleEndian.Uint32(data[12:16]); raw <= ^uint32(0)>>1 {
+						errno = int(raw)
+					}
+				}
+				return nil, false, &CloneStatusReadError{Class: CloneReadClassGateV1Frame, Errno: errno, Err: frameErr}
+			}
+		}
+		return nil, false, cloneStatusReadFailure(CloneReadClassMagicOrVersion, frameErr)
 	}
 	return data[:n], false, nil
 }
@@ -562,7 +583,7 @@ func readCloneBootstrapExecAttempt(ctx context.Context, fd int, deadline time.Ti
 		return 0, 0, err
 	}
 	if eof {
-		return 0, 0, io.EOF
+		return 0, 0, cloneStatusReadFailure(CloneReadClassPeerClosed, io.EOF)
 	}
 	if len(packet) >= 12 && binary.LittleEndian.Uint16(packet[10:12]) == frameCloneBootstrapFailure {
 		failure, decodeErr := DecodeCloneBootstrapFailure(packet)
@@ -580,7 +601,7 @@ func readCloneCheckoutReady(ctx context.Context, fd int, deadline time.Time) (au
 		return authority.LinuxCloneCheckoutReceipt{}, err
 	}
 	if eof {
-		return authority.LinuxCloneCheckoutReceipt{}, io.EOF
+		return authority.LinuxCloneCheckoutReceipt{}, cloneStatusReadFailure(CloneReadClassPeerClosed, io.EOF)
 	}
 	if len(packet) >= 12 && binary.LittleEndian.Uint16(packet[10:12]) == frameCloneBootstrapFailure {
 		failure, decodeErr := DecodeCloneBootstrapFailure(packet)
@@ -598,7 +619,7 @@ func readCloneNativeExecResult(ctx context.Context, fd int, deadline time.Time) 
 		return execStatus{}, err
 	}
 	if eof {
-		return execStatus{}, io.EOF
+		return execStatus{}, cloneStatusReadFailure(CloneReadClassPeerClosed, io.EOF)
 	}
 	if len(packet) >= 12 && binary.LittleEndian.Uint16(packet[10:12]) == frameCloneBootstrapFailure {
 		failure, decodeErr := DecodeCloneBootstrapFailure(packet)

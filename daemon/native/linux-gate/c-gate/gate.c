@@ -63,6 +63,17 @@ enum {
   FRAME_CLONE_BOOTSTRAP_FAILURE = 24,
   CLONE_FAILURE_REQUEST_STAGE = 1,
   CLONE_FAILURE_EXEC_STAGE = 7,
+  CLONE_FAILURE_GATE_CLOSE_STAGE = 8,
+  CLONE_FAILURE_GATE_DROP_STAGE = 9,
+  CLONE_FAILURE_GATE_PARENT_DEATH_STAGE = 10,
+  CLONE_FAILURE_GATE_FENCE_STAGE = 11,
+  CLONE_FAILURE_GATE_DROP_GROUPS_STAGE = 12,
+  CLONE_FAILURE_GATE_DROP_BOUNDING_SET_STAGE = 13,
+  CLONE_FAILURE_GATE_DROP_CREDENTIALS_STAGE = 14,
+  CLONE_FAILURE_GATE_DROP_CAPABILITIES_STAGE = 15,
+  CLONE_FAILURE_GATE_DROP_AMBIENT_STAGE = 16,
+  CLONE_FAILURE_GATE_DROP_NO_NEW_PRIVS_STAGE = 17,
+  CLONE_FAILURE_GATE_DROP_STATUS_STAGE = 18,
   RELEASE_WIRE_VERSION = 2,
   RELEASE_CLONE_WIRE_VERSION = 3,
   CLONE_STATUS_WIRE_VERSION = 3,
@@ -1033,6 +1044,57 @@ static void send_clone_bootstrap_failure(uint32_t stage, int error_number) {
   (void)send_packet(EXEC_STATUS_FD, packet, sizeof(packet));
 }
 
+/* A clone release's read accepts the v3 clone family only, so the pre-clone
+ * guards report in that family; the stage names the guard, never the caller. */
+static void send_preclone_failure(const struct release_command *command, uint32_t stage, int error_number) {
+  if (command->clone_mode) {
+    send_clone_bootstrap_failure(stage, error_number);
+  } else {
+    send_exec_failure(error_number);
+  }
+}
+
+/* Re-derives the first unsatisfied credential fact in drop_to_b's own order;
+ * read-only, it only selects the stage label. */
+static uint32_t classify_drop_failure(struct owner_config *config) {
+  int groups = getgroups(0, NULL);
+  if (groups < 0) return 0;
+  if (groups != 0) return CLONE_FAILURE_GATE_DROP_GROUPS_STAGE;
+  for (long capability = 0; capability <= 63; ++capability) {
+    int bounded = prctl(PR_CAPBSET_READ, capability, 0, 0, 0);
+    if (bounded == 1) return CLONE_FAILURE_GATE_DROP_BOUNDING_SET_STAGE;
+    if (bounded < 0 && errno != EINVAL) return 0;
+  }
+  uid_t ruid, euid, suid;
+  gid_t rgid, egid, sgid;
+  if (getresuid(&ruid, &euid, &suid) != 0 || getresgid(&rgid, &egid, &sgid) != 0) return 0;
+  if (ruid != 1 || euid != 1 || suid != 1 || rgid != 1 || egid != 1 || sgid != 1) {
+    return CLONE_FAILURE_GATE_DROP_CREDENTIALS_STAGE;
+  }
+  struct __user_cap_header_struct header = {
+    .version = _LINUX_CAPABILITY_VERSION_3,
+    .pid = 0,
+  };
+  struct __user_cap_data_struct data[2];
+  memset(data, 0, sizeof(data));
+  if (syscall(SYS_capget, &header, data) != 0) return 0;
+  for (int index = 0; index < 2; ++index) {
+    if (data[index].effective != 0 || data[index].permitted != 0 || data[index].inheritable != 0) {
+      return CLONE_FAILURE_GATE_DROP_CAPABILITIES_STAGE;
+    }
+  }
+#ifdef PR_CAP_AMBIENT
+  for (long capability = 0; capability <= 63; ++capability) {
+    int ambient = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0, 0);
+    if (ambient == 1) return CLONE_FAILURE_GATE_DROP_AMBIENT_STAGE;
+    if (ambient < 0 && errno != EINVAL) return 0;
+  }
+#endif
+  if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 1) return CLONE_FAILURE_GATE_DROP_NO_NEW_PRIVS_STAGE;
+  if (read_self_status(config) != 0) return CLONE_FAILURE_GATE_DROP_STATUS_STAGE;
+  return 0;
+}
+
 static int unset_cloexec(int fd) {
   int flags = fcntl(fd, F_GETFD);
   if (flags < 0) return -1;
@@ -1208,11 +1270,29 @@ static void exec_clone_bootstrap(const struct owner_config *config,
 static void exec_as_b(struct owner_config *config, unsigned char *packet,
     size_t packet_size, const struct release_command *command, pid_t owner_pid) {
   memset(packet + 12, 0, 32);
-  if (close(RELEASE_FD) != 0 || drop_to_b(config) != 0 ||
-      prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 ||
-      check_exec_guard(owner_pid, OWNER_PIDFD, command->owner_pipe_fd, EXEC_STATUS_FD, command->lease_deadline_ns) != 0) {
+  if (close(RELEASE_FD) != 0) {
     int error_number = errno;
-    send_exec_failure(error_number);
+    send_preclone_failure(command, CLONE_FAILURE_GATE_CLOSE_STAGE, error_number);
+    _exit(1);
+  }
+  if (drop_to_b(config) != 0) {
+    int error_number = errno;
+    uint32_t stage = CLONE_FAILURE_GATE_DROP_STAGE;
+    if (command->clone_mode) {
+      uint32_t classified = classify_drop_failure(config);
+      if (classified != 0) stage = classified;
+    }
+    send_preclone_failure(command, stage, error_number);
+    _exit(1);
+  }
+  if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0) {
+    int error_number = errno;
+    send_preclone_failure(command, CLONE_FAILURE_GATE_PARENT_DEATH_STAGE, error_number);
+    _exit(1);
+  }
+  if (check_exec_guard(owner_pid, OWNER_PIDFD, command->owner_pipe_fd, EXEC_STATUS_FD, command->lease_deadline_ns) != 0) {
+    int error_number = errno;
+    send_preclone_failure(command, CLONE_FAILURE_GATE_FENCE_STAGE, error_number);
     _exit(1);
   }
   if (command->clone_mode) exec_clone_bootstrap(config, packet, packet_size, command, owner_pid);

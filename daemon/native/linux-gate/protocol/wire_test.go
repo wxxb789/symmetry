@@ -189,7 +189,7 @@ func wireTestRoundTripCases(t *testing.T) []wireRoundTripCase {
 	result := wireTestLaunchResult()
 	ready := wireTestLauncherReady()
 	receipt := wireTestCheckoutReceipt()
-	return []wireRoundTripCase{
+	cases := []wireRoundTripCase{
 		{
 			name: "launch request", kind: frameLaunchRequest, version: wireVersion,
 			encode: func() ([]byte, error) { return encodeLaunchRequest(token, auth) },
@@ -367,6 +367,29 @@ func wireTestRoundTripCases(t *testing.T) []wireRoundTripCase {
 			goldenHex: wireTestCloneBootstrapFailureGoldenHex,
 		},
 	}
+	for _, stage := range []CloneBootstrapFailureStage{
+		CloneFailureGateClose, CloneFailureGateDrop, CloneFailureGateParentDeath, CloneFailureGateFence,
+		CloneFailureGateDropGroups, CloneFailureGateDropBoundingSet, CloneFailureGateDropCredentials,
+		CloneFailureGateDropCapabilities, CloneFailureGateDropAmbient, CloneFailureGateDropNoNewPrivs,
+		CloneFailureGateDropStatus,
+	} {
+		stage := stage
+		cases = append(cases, wireRoundTripCase{
+			name: "clone bootstrap failure gate guard " + fmt.Sprintf("%d", stage),
+			kind: frameCloneBootstrapFailure, version: cloneStatusWireVersion,
+			encode: func() ([]byte, error) { return EncodeCloneBootstrapFailure(stage, 1) },
+			decode: func(t *testing.T, packet []byte) string {
+				t.Helper()
+				failure, err := DecodeCloneBootstrapFailure(packet)
+				if err != nil {
+					t.Fatalf("decode clone bootstrap failure: %v", err)
+				}
+				return fmt.Sprintf("%+v", *failure)
+			},
+			want: fmt.Sprintf("%+v", CloneBootstrapFailureError{Stage: stage, Errno: 1}),
+		})
+	}
+	return cases
 }
 
 type wireRefusalCase struct {
@@ -751,7 +774,7 @@ func TestWireCloneStatusRefusals(t *testing.T) {
 			want: "Linux clone bootstrap failure frame code is invalid",
 		},
 		wireRefusalCase{
-			name: "stage beyond the exec stage", mutate: wireTestSetUint32(12, uint32(CloneFailureExec)+1),
+			name: "stage beyond the last gate stage", mutate: wireTestSetUint32(12, uint32(CloneFailureGateDropStatus)+1),
 			want: "Linux clone bootstrap failure frame code is invalid",
 		},
 		wireRefusalCase{
@@ -953,4 +976,35 @@ func FuzzDecodeCloneBootstrapFailure(f *testing.F) {
 	f.Fuzz(func(t *testing.T, candidate []byte) {
 		wireTestFuzzDecode(t, candidate, DecodeCloneBootstrapFailure)
 	})
+}
+
+func TestCloneBootstrapFailureStageNumbersArePinned(t *testing.T) {
+	for _, testCase := range []struct {
+		stage CloneBootstrapFailureStage
+		want  uint32
+	}{
+		{CloneFailureRequest, 1},
+		{CloneFailureSeed, 2},
+		{CloneFailureTarget, 3},
+		{CloneFailureGit, 4},
+		{CloneFailureCheckout, 5},
+		{CloneFailureNativeImage, 6},
+		{CloneFailureExec, 7},
+		{CloneFailureGateClose, 8},
+		{CloneFailureGateDrop, 9},
+		{CloneFailureGateParentDeath, 10},
+		{CloneFailureGateFence, 11},
+		{CloneFailureGateDropGroups, 12},
+		{CloneFailureGateDropBoundingSet, 13},
+		{CloneFailureGateDropCredentials, 14},
+		{CloneFailureGateDropCapabilities, 15},
+		{CloneFailureGateDropAmbient, 16},
+		{CloneFailureGateDropNoNewPrivs, 17},
+		{CloneFailureGateDropStatus, 18},
+	} {
+		if uint32(testCase.stage) != testCase.want {
+			t.Fatalf("clone bootstrap failure stage %d carries %d; the C gate and the Go decoder must agree",
+				testCase.want, uint32(testCase.stage))
+		}
+	}
 }

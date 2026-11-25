@@ -686,6 +686,19 @@ const (
 	ReleaseGuestStageCheckout    = "checkout"
 	ReleaseGuestStageNativeImage = "native_image"
 	ReleaseGuestStageExec        = "exec"
+	// Gate-side pre-clone guard stages (the gate names the exact guard in the
+	// same closed numeric vocabulary a clone release binds).
+	ReleaseGuestStageGateClose            = "gate_close"
+	ReleaseGuestStageGateDrop             = "gate_drop"
+	ReleaseGuestStageGateParentDeath      = "gate_parent_death"
+	ReleaseGuestStageGateFence            = "gate_fence"
+	ReleaseGuestStageGateDropGroups       = "gate_drop_groups"
+	ReleaseGuestStageGateDropBoundingSet  = "gate_drop_bounding_set"
+	ReleaseGuestStageGateDropCredentials  = "gate_drop_credentials"
+	ReleaseGuestStageGateDropCapabilities = "gate_drop_capabilities"
+	ReleaseGuestStageGateDropAmbient      = "gate_drop_ambient"
+	ReleaseGuestStageGateDropNoNewPrivs   = "gate_drop_no_new_privs"
+	ReleaseGuestStageGateDropStatus       = "gate_drop_status"
 )
 
 // ReleaseArmShape is the bounded detail shape an arm can carry.
@@ -693,6 +706,7 @@ type ReleaseArmShape struct {
 	SubStep        string
 	WaitClass      bool
 	GuestBootstrap bool
+	CloneRead      bool
 }
 
 // ReleaseSubStepError labels the release sub-step and arm that failed so the
@@ -701,6 +715,7 @@ type ReleaseSubStepError struct {
 	SubStep    string
 	Arm        string
 	WaitClass  string
+	ReadClass  string
 	GuestStage string
 	Errno      int
 	Err        error
@@ -715,16 +730,16 @@ func LookupReleaseArmShape(arm string) (ReleaseArmShape, bool) {
 	case ReleaseArmBootstrapInstalled, ReleaseArmBootstrapImage, ReleaseArmBootstrapProcess, ReleaseArmLeafMembership:
 		return ReleaseArmShape{SubStep: ReleaseSubStepCloneBootstrap}, true
 	case ReleaseArmBootstrapAttempt:
-		return ReleaseArmShape{SubStep: ReleaseSubStepCloneBootstrap, WaitClass: true, GuestBootstrap: true}, true
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneBootstrap, WaitClass: true, GuestBootstrap: true, CloneRead: true}, true
 	case ReleaseArmCheckoutReceipt:
-		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout, WaitClass: true, GuestBootstrap: true}, true
+		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout, WaitClass: true, GuestBootstrap: true, CloneRead: true}, true
 	case ReleaseArmCheckoutReceiptMismatch, ReleaseArmCheckoutCallback,
 		ReleaseArmCheckoutAckEncode, ReleaseArmCheckoutAckSend:
 		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout}, true
 	case ReleaseArmNativeAwaitResult:
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true}, true
 	case ReleaseArmNativeCloneProof:
-		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true, GuestBootstrap: true}, true
+		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true, GuestBootstrap: true, CloneRead: true}, true
 	case ReleaseArmNativeErrno, ReleaseArmNativeNoAttempt, ReleaseArmNativeProcess, ReleaseArmNativeReadback:
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec}, true
 	case ReleaseArmRegisterProcess, ReleaseArmRegisterWaiter:
@@ -768,6 +783,28 @@ func ReleaseGuestStageName(stage CloneBootstrapFailureStage) (string, bool) {
 		return ReleaseGuestStageNativeImage, true
 	case CloneFailureExec:
 		return ReleaseGuestStageExec, true
+	case CloneFailureGateClose:
+		return ReleaseGuestStageGateClose, true
+	case CloneFailureGateDrop:
+		return ReleaseGuestStageGateDrop, true
+	case CloneFailureGateParentDeath:
+		return ReleaseGuestStageGateParentDeath, true
+	case CloneFailureGateFence:
+		return ReleaseGuestStageGateFence, true
+	case CloneFailureGateDropGroups:
+		return ReleaseGuestStageGateDropGroups, true
+	case CloneFailureGateDropBoundingSet:
+		return ReleaseGuestStageGateDropBoundingSet, true
+	case CloneFailureGateDropCredentials:
+		return ReleaseGuestStageGateDropCredentials, true
+	case CloneFailureGateDropCapabilities:
+		return ReleaseGuestStageGateDropCapabilities, true
+	case CloneFailureGateDropAmbient:
+		return ReleaseGuestStageGateDropAmbient, true
+	case CloneFailureGateDropNoNewPrivs:
+		return ReleaseGuestStageGateDropNoNewPrivs, true
+	case CloneFailureGateDropStatus:
+		return ReleaseGuestStageGateDropStatus, true
 	default:
 		return "", false
 	}
@@ -807,6 +844,15 @@ func NewReleaseSubStepError(subStep, arm string, errno int, err error) *ReleaseS
 	}
 	if shape.WaitClass {
 		failure.WaitClass = ReleaseWaitErrorClass(err)
+	}
+	if shape.CloneRead {
+		var readFailure *CloneStatusReadError
+		if errors.As(err, &readFailure) {
+			failure.ReadClass = readFailure.Class
+			if failure.Errno == 0 && readFailure.Errno > 0 {
+				failure.Errno = readFailure.Errno
+			}
+		}
 	}
 	if shape.GuestBootstrap {
 		var guest *CloneBootstrapFailureError
