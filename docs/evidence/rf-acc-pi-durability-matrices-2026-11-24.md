@@ -391,9 +391,11 @@ all-12 replay; each "before" column points at the same set's row in `45461719002
 
 Re-run 2026-11-25 by the fix stage on the delivered worktree bytes (the sha256 table of §1).
 Toolchains: WSL Ubuntu-24.04 (go1.27.0, shellcheck 0.9.0, python 3.12.3), WSL Alpine
-`symmetry-race` (elixir 1.19.6 / OTP 28) and, for the CI-parity formatter, Windows mise
-`elixir@1.20.4-otp-29` / `erlang@29.1.2`; rows whose result depends on the toolchain state both
-values.
+`symmetry-race` (elixir 1.19.6 / OTP 28 — Alpine `elixir-1.19.6-r0` on `erlang28-28.5.0.7-r0`;
+`elixir --version` reports `Erlang/OTP 28 [erts-16.4.0.6]`, and the `compiled with Erlang/OTP 27`
+build annotation there is the upstream build, not the run OTP) and, for the CI-parity formatter,
+Windows mise `elixir@1.20.4-otp-29` / `erlang@29.1.2`; rows whose result depends on the toolchain
+state both values.
 
 | Gate (working directory) | Command | Exit | Result |
 | --- | --- | --- | --- |
@@ -406,7 +408,7 @@ values.
 | gofmt | `gofmt -l .` in `daemon/` (WSL, go1.27.0) | 0 | no files listed |
 | go vet | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...` in `daemon/` (WSL) | 0 | clean |
 | go build | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...` in `daemon/` (WSL) | 0 | clean |
-| elixir formatter | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` | 1 (1.20.4) / 1 (1.19.6) | **Amendment (F10(i), §10.9/§10.10)**: the CI-parity 1.20.4/OTP 29 run is red at base and delivered alike — pre-existing Styler drift on bytes this goal did not touch (base `33ad88a9` 110 removed/138 added lines, delivered 106/137; 240 at the `9d113eb6` copy). At every goal-touched rejected line the base counterpart is rejected too, and the one new-layout rejection the hunk-scoped check found was rewritten to the formatter's own layout. `symmetry-race` elixir 1.19.6/OTP 27: rc 1, 359 rejected lines at the delivered bytes (round-2 correction, §12.3: the earlier "rc 0, clean" reading was wrong; the rejection diff holds no goal-hunk line). Ubuntu's elixir 1.14.0 cannot run the project (`mix.exs` declares `~> 1.17`). |
+| elixir formatter | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` | 1 (1.20.4) / 1 (1.19.6) | **Amendment (F10(i), §10.9/§10.10)**: the CI-parity 1.20.4/OTP 29 run is red at base and delivered alike — pre-existing Styler drift on bytes this goal did not touch (base `33ad88a9` 110 removed/138 added lines, delivered 106/137; 240 at the `9d113eb6` copy). At every goal-touched rejected line the base counterpart is rejected too, and the one new-layout rejection the hunk-scoped check found was rewritten to the formatter's own layout. `symmetry-race` elixir 1.19.6/OTP 28: rc 1, 359 rejected lines at the delivered bytes (round-2 correction, §12.3: the earlier "rc 0, clean" reading was wrong; the rejection diff holds no goal-hunk line). Ubuntu's elixir 1.14.0 cannot run the project (`mix.exs` declares `~> 1.17`). |
 | actionlint | not run | — | exempt: no workflow file changes in the goal tree (the throwaway workflow is scratch-only and deleted with the branch; the `git ls-remote` proof is in §3) |
 | frozen paths | `git diff 9d113eb6 -- daemon/internal/harness/opencode daemon/internal/harness/testdata/opencode .github/workflows/ci.yml docs/design/harness.md docs/goals/README.md docs/goals/0010-refactor-program.md` | 0 | empty (0 bytes) at the delivered bytes |
 | frozen regions | a region checker over the `9d113eb6` copy (regions `:21`, `:665`, `:894-895`, `:1002-1003`, `:1081-1097`, `:1116-1125`) that matches each verbatim in the delivered file, plus the 20 frozen OpenCode-pattern lines extracted from the `cc725d50` copy | 0 | `MISSING_TOTAL= 0` |
@@ -483,7 +485,7 @@ values.
   as an amendment with a `docs/TODO.md` entry; the hunk-scoped check (§10.10) shows every
   goal-touched rejected line has a rejected base counterpart and the one new-layout rejection it
   found was rewritten to the formatter's own layout. The closest available toolchain (elixir
-  1.19.6/OTP 27) reports the same red — round-2 correction, §12.3: rc 1 with 359 rejected lines
+  1.19.6/OTP 28) reports the same red — round-2 correction, §12.3: rc 1 with 359 rejected lines
   at the delivered bytes, none on a goal-hunk line (the earlier "passes clean" reading misread
   the run's exit code).
 - **`owner-witness-stderr.log` is still never published**: the exporter reads only allowlisted
@@ -1320,7 +1322,7 @@ Compose prepare suite — all OK (49-test exporter suite unchanged); `jscpd-chan
 and `--base 33ad88a9` — exit 0, "none new"; record-cleanliness and citation-existence — exit 0;
 Elixir parse OK; the formatter check is red at base and delivered alike under the available
 toolchains and its rejection diff touches no goal-hunk line (round-2 correction, §12.3: 359
-rejected lines at the delivered bytes under elixir 1.19.6, rc 1); `git diff --check` — 0. Item
+rejected lines at the delivered bytes under elixir 1.19.6/OTP 28, rc 1); `git diff --check` — 0. Item
 probes: the writer probe (`probe-writer.py`, sha256
 `7400af11b4ce65b6b257a11d0e787a679ccbe4f17a963f3641283468d6263bd5`) positive rc 0 / old argv rc 1
 `per-harness daemon profile is absent`; the `Map.merge` equality probe (`probe-goal-policy.exs`,
@@ -1541,7 +1543,7 @@ to end on the delivered bytes and published `rootless-compose-native-evidence-45
   `## rf-acc-pi-durability-matrices: pi-evidence residual (2026-11-24)`, which keeps its other
   entries. `docs/TODO.md` now holds only undone items in that section.
 - **DS P3-4 (the elixir wording).** Corrected in §4e, §6, §11.7 and the F10(i) TODO entry: the
-  elixir 1.19.6/OTP 27 run is rc 1, not clean — 359 rejected lines at the delivered bytes (370 at
+  elixir 1.19.6/OTP 28 run is rc 1, not clean — 359 rejected lines at the delivered bytes (370 at
   `01c0d4cf`), re-measured with a direct exit-code capture (the earlier reading misread the exit
   code); the rejection diff greps clean for every goal-hunk marker (`Map.merge`,
   `execution_policy`, `provider_access`, the policy keys). The CI-parity 1.20.4/OTP 29 numbers are
@@ -1564,7 +1566,7 @@ to end on the delivered bytes and published `rootless-compose-native-evidence-45
 | whitespace | `git diff --check` | 0 | clean |
 | record cleanliness | `python3 scripts/ci/check-record-cleanliness.py --base 01c0d4cf --head 5ba0dd0b`, and again on the delivered record head | 0 / 0 | `1 changed record(s) pass the root-only check` |
 | citations | `python3 scripts/ci/check-citation-existence.py --base 01c0d4cf --head 5ba0dd0b`, and again on the delivered record head | 0 / 0 | `1 changed document(s) pass the path and symbol check` (604 then 606 path citation(s)); the three pre-existing CLOSED-TODO ignore notes unchanged |
-| elixir formatter (fact) | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` (`symmetry-race`, elixir 1.19.6/OTP 27) | 1 | red at base and delivered alike; 359 rejected lines at the delivered bytes, none on a goal-hunk line |
+| elixir formatter (fact) | `(cd control && mix format --check-formatted ../scripts/ci/provision-linux-v2-control-claims.exs)` (`symmetry-race`, elixir 1.19.6/OTP 28) | 1 | red at base and delivered alike; 359 rejected lines at the delivered bytes, none on a goal-hunk line |
 | unit-name probe / census | §12.1 artifacts | 0 / 0 | delivered `PROBE-PASS` (`duplicates=0`); the BASHPID-removed mutant exits 3 (`duplicates=2`); the census lists 40 call sites, one pipeline |
 | pi pin probe | §12.2 artifact | 0 | fetch rc 0 and pin MATCH; five canonical-form tamper mutants refused, two normalization-erased mutants accepted |
 

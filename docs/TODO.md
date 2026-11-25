@@ -1972,7 +1972,7 @@ witness's invisible App refusal (2026-11-24)`. What the capture named stays open
       amendment F10(i); evidence record §6/§10.10): the CI-parity run (elixir 1.20.4 / OTP 29) is
       red at the PR base `33ad88a9` (110 removed/138 added lines) and at the delivered bytes
       (106/137); the drift is upstream Styler style over bytes this goal did not touch (alias
-      splitting, `unless` → `if !(...)`, `@cases` list re-indentation); the elixir 1.19.6/OTP 27
+      splitting, `unless` → `if !(...)`, `@cases` list re-indentation); the elixir 1.19.6/OTP 28
       run is red at base and delivered alike (359 rejected lines at the delivered bytes, none on a
       goal-hunk line — round-2 correction, record §12.3). Resolve in a separate maintenance change
       (reformat the file under the CI-parity toolchain, or pin the formatter version); the gate
