@@ -525,6 +525,18 @@ func TestLinuxV2NativeWitnessReportsOnlyExactAuthenticatedHelperDrop(t *testing.
 	}
 }
 
+func linuxV2NativeWitnessExactPhysicalStop() linuxV2NativeWitnessStop {
+	return linuxV2NativeWitnessStop{
+		ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
+		Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
+		Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
+		KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
+		ProducerFenced: true, DescendantsReaped: true,
+		LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
+		GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
+	}
+}
+
 func TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck(t *testing.T) {
 	witness := &linuxV2NativeWitnessRun{
 		request: linuxV2NativeWitnessRequest{
@@ -538,15 +550,7 @@ func TestLinuxV2NativeWitnessAllowsReceiptBackedLostClearAck(t *testing.T) {
 			Stages: linuxV2NativeWitnessStages{
 				NativeReleased: true, StopReceiptDurable: true, LeafRemoved: true, JournalCleared: true,
 			},
-			Stop: linuxV2NativeWitnessStop{
-				ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-				Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-				Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-				KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
-				LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-				GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-			},
+			Stop: linuxV2NativeWitnessExactPhysicalStop(),
 			Release: linuxV2NativeWitnessRelease{
 				Version: authority.SupervisorHandoffVersionV2, LeafDisposition: authority.LinuxCgroupLeafRemoved,
 				OpaquePlatformRelease: true, LeafRemoved: true, ClearPersisted: true,
@@ -584,15 +588,7 @@ func TestLinuxV2NativeWitnessAllowsExactStopReceiptForLostReceiptAck(t *testing.
 			ResponseLostAfter: linuxV2NativeWitnessStopReceiptStage, JournalUnproven: true,
 			NativeReleaseState: linuxV2NativeWitnessNativeReleaseReleased,
 			Stages:             linuxV2NativeWitnessStages{NativeReleased: true, StopReceiptDurable: true},
-			Stop: linuxV2NativeWitnessStop{
-				ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
-				Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
-				Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
-				KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
-				ProducerFenced: true, DescendantsReaped: true,
-				LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
-				GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
-			},
+			Stop:               linuxV2NativeWitnessExactPhysicalStop(),
 		},
 	}
 	if err := witness.validateFinalSummary(); err != nil {
@@ -601,6 +597,341 @@ func TestLinuxV2NativeWitnessAllowsExactStopReceiptForLostReceiptAck(t *testing.
 	witness.summary.Stop.ReceiptVersion = 0
 	if err := witness.validateFinalSummary(); err == nil {
 		t.Fatal("lost receipt ACK without exact v2 receipt was accepted")
+	}
+}
+
+func TestLinuxV2NativeWitnessRecoveryRefusalNamesTheGuard(t *testing.T) {
+	tests := []struct {
+		name       string
+		caseName   string
+		journal    state.RunJournal
+		wantRefuse bool
+		wantGuard  string
+		wantReason string
+	}{
+		{
+			name: "journal with unresolved authority", caseName: "stage_replay",
+			journal: state.RunJournal{ContainmentHandoff: &authority.SupervisorHandoff{}},
+		},
+		{
+			name: "clone intent alone keeps the authority", caseName: "stage_replay",
+			journal: state.RunJournal{LinuxCloneIntent: &authority.LinuxCloneIntent{}},
+		},
+		{
+			name: "released proof refuses", caseName: "stage_replay",
+			journal:    state.RunJournal{ContainmentCgroupReleaseProof: &authority.SupervisorHandoffReleaseProof{}},
+			wantRefuse: true, wantGuard: "journal_without_unresolved_authority", wantReason: "release_proof_present",
+		},
+		{
+			name: "pre-gate release proof refuses", caseName: "stage_replay",
+			journal:    state.RunJournal{ContainmentCgroupPreGateReleaseProof: &authority.LinuxCgroupPreGateReleaseProof{}},
+			wantRefuse: true, wantGuard: "journal_without_unresolved_authority", wantReason: "release_proof_present",
+		},
+		{
+			name: "clone abort proof refuses", caseName: "stage_replay",
+			journal: state.RunJournal{
+				LinuxCloneIntent: &authority.LinuxCloneIntent{}, LinuxCloneAbortProof: &authority.LinuxCloneAbortProof{},
+			},
+			wantRefuse: true, wantGuard: "journal_without_unresolved_authority", wantReason: "clone_abort_proof_present",
+		},
+		{
+			name: "clone promotion receipt refuses", caseName: "stage_replay",
+			journal: state.RunJournal{
+				LinuxCloneIntent: &authority.LinuxCloneIntent{}, LinuxClonePromotionReceipt: &authority.LinuxClonePromotionReceipt{},
+			},
+			wantRefuse: true, wantGuard: "journal_without_unresolved_authority", wantReason: "clone_promotion_receipt_present",
+		},
+		{
+			name: "empty journal refuses", caseName: "stage_replay", journal: state.RunJournal{},
+			wantRefuse: true, wantGuard: "journal_without_unresolved_authority", wantReason: "no_unresolved_term",
+		},
+		{
+			name: "another case refuses its own way", caseName: "codex_containment",
+			journal:    state.RunJournal{ContainmentHandoff: &authority.SupervisorHandoff{}},
+			wantRefuse: true, wantGuard: "case_not_stage_replay",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			refusal, refused := linuxV2NativeWitnessRecoveryRefusal(test.caseName, test.journal, errors.New("recover v2 owner run/1: pinned leaf mismatch"))
+			if refused != test.wantRefuse {
+				t.Fatalf("refused = %t, want %t (%+v)", refused, test.wantRefuse, refusal)
+			}
+			if !test.wantRefuse {
+				return
+			}
+			if refusal.Guard != test.wantGuard || refusal.Reason != test.wantReason {
+				t.Fatalf("refusal = %+v, want guard=%q reason=%q", refusal, test.wantGuard, test.wantReason)
+			}
+			if refusal.RecoveryErrorClass != "recovery_failed" {
+				t.Fatalf("refusal recovery error class = %q, want the bounded default", refusal.RecoveryErrorClass)
+			}
+			if err := refusal.Validate(); err != nil {
+				t.Fatalf("refusal code is not closed-vocabulary: %v", err)
+			}
+		})
+	}
+	refusal, refused := linuxV2NativeWitnessRecoveryRefusal("stage_replay",
+		state.RunJournal{ContainmentCgroupReleaseProof: &authority.SupervisorHandoffReleaseProof{}},
+		fmt.Errorf("recover v2 owner run/1: %w", context.DeadlineExceeded))
+	if !refused || refusal.String() != "refusal=journal_without_unresolved_authority reason=release_proof_present recovery_error_class=timeout" {
+		t.Fatalf("refusal rendering = %q, want the named guard, reason and class", refusal.String())
+	}
+}
+
+func TestLinuxV2NativeWitnessRecoveryErrorClassClosesTheVocabulary(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "no recovery error", err: nil, want: ""},
+		{name: "cancelled", err: fmt.Errorf("recover v2 owner run/1: %w", context.Canceled), want: "cancelled"},
+		{name: "timeout", err: context.DeadlineExceeded, want: "timeout"},
+		{name: "owner lost", err: platform.ErrLinuxOwnerHelperV2OwnerLost, want: "owner_lost"},
+		{name: "helper recovery only", err: platform.ErrLinuxOwnerHelperV2RecoveryOnly, want: "helper_recovery_only"},
+		{name: "outcome unknown", err: linuxgate.ErrOutcomeUnknown, want: "outcome_unknown"},
+		{name: "gate never produced", err: linuxgate.ErrGateNeverProduced, want: "gate_never_produced"},
+		{name: "cgroup unresolved", err: platform.ErrLinuxCgroupV2Unresolved, want: "cgroup_unresolved"},
+		{name: "free-form recovery failure", err: errors.New("recover v2 owner run/1: pinned leaf mismatch"), want: "recovery_failed"},
+		{
+			name: "cancellation beats owner loss",
+			err:  errors.Join(platform.ErrLinuxOwnerHelperV2OwnerLost, context.Canceled), want: "cancelled",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxV2NativeWitnessRecoveryErrorClass(test.err); got != test.want {
+				t.Fatalf("recovery error class = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessRefusalDocumentIsIdentityOnly(t *testing.T) {
+	identityFields := []string{
+		"version", "case", "harness", "native_version", "installed_owner_verified", "run_key", "fence", "subject",
+		"recovery_refusal",
+	}
+	document := linuxV2NativeWitnessRefusalDocument{
+		Version: 1, Case: "stage_replay", Harness: "pi", NativeVersion: "1.5.2", InstalledOwnerVerified: true,
+		RunKey: linuxV2NativeWitnessRunKey{RunID: "run-1", Generation: 2},
+		Fence:  linuxV2NativeWitnessFenceSummary{RuntimeID: "runtime-1", RuntimeEpoch: 3, Generation: 2, ClaimID: "claim-1"},
+		Subject: protocol.Subject{
+			ResourceID: "resource-1", Commit: "1111111111111111111111111111111111111111", TreeDigest: "sha256:tree-1",
+		},
+		RecoveryRefusal: linuxV2NativeWitnessRefusal{
+			Guard: "journal_without_unresolved_authority", Reason: "release_proof_present", RecoveryErrorClass: "recovery_failed",
+		},
+	}
+	var encoded bytes.Buffer
+	if err := writeLinuxV2NativeWitnessRefusal(&encoded, document); err != nil {
+		t.Fatalf("write owner witness refusal document: %v", err)
+	}
+	raw := encoded.Bytes()
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("decode owner witness refusal document: %v", err)
+	}
+	if len(decoded) != len(identityFields) {
+		t.Fatalf("refusal document fields = %d, want the %d identity fields", len(decoded), len(identityFields))
+	}
+	for _, field := range identityFields {
+		if _, present := decoded[field]; !present {
+			t.Fatalf("refusal document omitted %q", field)
+		}
+	}
+	if err := validateLinuxV2NativeWitnessRefusalDocument(raw); err != nil {
+		t.Fatalf("identity-only refusal document was refused: %v", err)
+	}
+	genericDocument := func(decoded map[string]json.RawMessage) map[string]any {
+		document := make(map[string]any, len(decoded))
+		for key, rawValue := range decoded {
+			var generic any
+			if err := json.Unmarshal(rawValue, &generic); err != nil {
+				t.Fatalf("re-decode refusal field %s: %v", key, err)
+			}
+			document[key] = generic
+		}
+		return document
+	}
+	authorityFields := map[string]any{
+		"outcome":             "unresolved",
+		"failure_category":    "containment_unproven",
+		"recovery_state":      "unresolved",
+		"journal_unproven":    true,
+		"no_target_abort":     false,
+		"response_lost_after": "stop",
+		"stages":              map[string]any{"journal_cleared": true},
+		"release":             map[string]any{"clear_persisted": true},
+		"stop":                map[string]any{"receipt_version": authority.SupervisorVersionV2},
+	}
+	for field, value := range authorityFields {
+		mutated := genericDocument(decoded)
+		mutated[field] = value
+		mutatedJSON, err := json.Marshal(mutated)
+		if err != nil {
+			t.Fatalf("encode mutated refusal document: %v", err)
+		}
+		if err := validateLinuxV2NativeWitnessRefusalDocument(mutatedJSON); err == nil {
+			t.Fatalf("refusal document with %q authority was accepted", field)
+		}
+	}
+	missing := genericDocument(decoded)
+	delete(missing, "recovery_refusal")
+	missingJSON, err := json.Marshal(missing)
+	if err != nil {
+		t.Fatalf("encode refusal document without its refusal code: %v", err)
+	}
+	if err := validateLinuxV2NativeWitnessRefusalDocument(missingJSON); err == nil {
+		t.Fatal("refusal document without its refusal code was accepted")
+	}
+	freeForm := genericDocument(decoded)
+	freeForm["recovery_refusal"] = map[string]any{"guard": "journal_without_unresolved_authority", "reason": "/opt/symmetry-owner-test/leaf"}
+	freeFormJSON, err := json.Marshal(freeForm)
+	if err != nil {
+		t.Fatalf("encode free-form refusal: %v", err)
+	}
+	if err := validateLinuxV2NativeWitnessRefusalDocument(freeFormJSON); err == nil {
+		t.Fatal("free-form refusal reason was accepted")
+	}
+}
+
+func TestLinuxV2NativeWitnessUnresolvedSummaryTrippedNamesPredicates(t *testing.T) {
+	retained := func() linuxV2NativeWitnessSummary {
+		return linuxV2NativeWitnessSummary{
+			Outcome: "unresolved", RecoveryState: "unresolved", FailureCategory: "containment_unproven", JournalUnproven: true,
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*linuxV2NativeWitnessSummary)
+		want   []string
+	}{
+		{name: "retained journal", mutate: func(*linuxV2NativeWitnessSummary) {}},
+		{name: "outcome", mutate: func(s *linuxV2NativeWitnessSummary) { s.Outcome = "recovered" }, want: []string{"outcome"}},
+		{
+			name: "failure category", mutate: func(s *linuxV2NativeWitnessSummary) { s.FailureCategory = "" },
+			want: []string{"failure_category"},
+		},
+		{
+			name: "journal unproven", mutate: func(s *linuxV2NativeWitnessSummary) { s.JournalUnproven = false },
+			want: []string{"journal_unproven"},
+		},
+		{
+			name: "no-target abort", mutate: func(s *linuxV2NativeWitnessSummary) { s.NoTargetAbort = true },
+			want: []string{"no_target_abort"},
+		},
+		{
+			name: "anchor retired", mutate: func(s *linuxV2NativeWitnessSummary) { s.Release.AnchorRetired = true },
+			want: []string{"release.anchor_retired"},
+		},
+		{
+			name: "opaque release", mutate: func(s *linuxV2NativeWitnessSummary) { s.Release.OpaquePlatformRelease = true },
+			want: []string{"release.opaque_platform_release"},
+		},
+		{
+			name: "clear persisted", mutate: func(s *linuxV2NativeWitnessSummary) { s.Release.ClearPersisted = true },
+			want: []string{"release.clear_persisted"},
+		},
+		{
+			name: "leaf removed", mutate: func(s *linuxV2NativeWitnessSummary) { s.Release.LeafRemoved = true },
+			want: []string{"release.leaf_removed"},
+		},
+		{
+			name: "exact versioned stop receipt",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop = linuxV2NativeWitnessExactPhysicalStop()
+			},
+		},
+		{
+			name: "versioned receipt without physical proof",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop.ReceiptVersion = authority.SupervisorVersionV2
+			},
+			want: []string{"stop.receipt_version"},
+		},
+		{
+			name: "unknown stop receipt version",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop.ReceiptVersion = authority.SupervisorVersionV2 + 1
+			},
+			want: []string{"stop.receipt_version"},
+		},
+		{
+			name: "absent stop receipt version stays untripped",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop = linuxV2NativeWitnessStop{ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill"}
+			},
+		},
+		{
+			name: "versioned receipt without its physical flags",
+			mutate: func(s *linuxV2NativeWitnessSummary) {
+				s.Stop = linuxV2NativeWitnessStop{
+					ReceiptVersion: authority.SupervisorVersionV2, ReceiptStatus: "stopped", ProofKind: "helper-cgroup-kill",
+					Issuer:           linuxV2NativeWitnessProcess{PID: 60, Identity: "helper:60:start"},
+					Reaper:           linuxV2NativeWitnessProcess{PID: 10, Identity: "anchor:10:start"},
+					KillAcknowledged: true, PopulatedZero: true, NoMigrationObserved: true,
+					ProducerFenced: true, DescendantsReaped: false,
+					LauncherExit: linuxV2NativeWitnessExit{PID: 61, Identity: "launcher:61:start", Waited: true, Reaped: true},
+					GateExit:     linuxV2NativeWitnessExit{PID: 62, Identity: "gate:62:start", Waited: true, Reaped: true},
+				}
+			},
+			want: []string{"stop.receipt_version"},
+		},
+		{
+			name: "journal cleared", mutate: func(s *linuxV2NativeWitnessSummary) { s.Stages.JournalCleared = true },
+			want: []string{"stages.journal_cleared"},
+		},
+		{
+			name:   "ordered multi-trip",
+			mutate: func(s *linuxV2NativeWitnessSummary) { s.Outcome = "completed"; s.NoTargetAbort = true },
+			want:   []string{"outcome", "no_target_abort"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			summary := retained()
+			test.mutate(&summary)
+			tripped := linuxV2NativeWitnessUnresolvedSummaryTripped(summary)
+			if strings.Join(tripped, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("tripped predicates = %v, want %v", tripped, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessUnresolvedSummaryErrorNamesTheTrippedPredicate(t *testing.T) {
+	witness := &linuxV2NativeWitnessRun{
+		request: linuxV2NativeWitnessRequest{Case: "stage_replay"},
+		summary: linuxV2NativeWitnessSummary{
+			Outcome: "unresolved", RecoveryState: "unresolved", FailureCategory: "containment_unproven", JournalUnproven: true,
+			NativeReleaseState: linuxV2NativeWitnessNativeReleaseUnknown,
+			Stop:               linuxV2NativeWitnessStop{ReceiptVersion: authority.SupervisorVersionV2},
+		},
+	}
+	err := witness.validateFinalSummary()
+	if err == nil || !strings.Contains(err.Error(), "stage replay unresolved outcome lacks retained journal/owner uncertainty: tripped stop.receipt_version") {
+		t.Fatalf("unresolved summary refusal = %v, want the named tripped predicate", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessAllowsExactVersionedStopForUnresolvedRecovery(t *testing.T) {
+	witness := &linuxV2NativeWitnessRun{
+		request: linuxV2NativeWitnessRequest{Case: "stage_replay"},
+		summary: linuxV2NativeWitnessSummary{
+			Outcome: "unresolved", RecoveryState: "unresolved", FailureCategory: "containment_unproven", JournalUnproven: true,
+			NativeReleaseState: linuxV2NativeWitnessNativeReleaseReleased,
+			Stages:             linuxV2NativeWitnessStages{NativeReleased: true, StopReceiptDurable: true},
+			Stop:               linuxV2NativeWitnessExactPhysicalStop(),
+		},
+	}
+	if err := witness.validateFinalSummary(); err != nil {
+		t.Fatalf("exact versioned physical-stop proof was refused by the unresolved branch: %v", err)
+	}
+	witness.summary.Stop.DescendantsReaped = false
+	if err := witness.validateFinalSummary(); err == nil || !strings.Contains(err.Error(), "tripped stop.receipt_version") {
+		t.Fatalf("inexact versioned stop receipt was accepted: %v", err)
 	}
 }
 

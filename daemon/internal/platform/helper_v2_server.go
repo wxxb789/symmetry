@@ -1118,16 +1118,24 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 	if cloneGrant != nil {
 		onCheckoutReady = func(callbackContext context.Context, receipt authority.LinuxCloneCheckoutReceipt) error {
 			if !linuxOwnerHelperV2CheckoutReceiptMatches(receipt, *cloneGrant) {
-				return errors.New("Linux gate checkout receipt differs from the exact clone grant")
+				return linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneCheckout,
+					linuxgate.ReleaseArmCheckoutReceiptMismatch, 0,
+					errors.New("Linux gate checkout receipt differs from the exact clone grant"))
 			}
 			return helper.relayCheckoutReady(callbackContext, connection, request, *cloneGrant, receipt)
 		}
 	}
 	var err error
 	if gateIdentity == nil || gateUserNamespace == nil {
-		err = errors.New("Linux owner helper lacks the exact registered gate/user namespace for release authorization")
+		err = linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepGateAuthorize,
+			linuxgate.ReleaseArmGateMissingIdentity, 0,
+			errors.New("Linux owner helper lacks the exact registered gate/user namespace for release authorization"))
 	} else {
 		err = helper.anchorClient.AuthorizeGateRelease(releaseContext, helper.grant, helper.helper, *gateIdentity, *gateUserNamespace)
+		if err != nil {
+			err = linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepGateAuthorize,
+				linuxgate.ReleaseArmGateAuthorize, 0, err)
+		}
 	}
 	if err == nil {
 		sequence, leaseDeadline, leaseLive = helper.lease.releaseGuard()
@@ -1169,9 +1177,13 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 		registerErr := helper.anchorClient.RegisterProcess(registerContext, helper.grant, helper.helper, helper.helper, gateProcess, "native", int(prepared.PIDFD().Fd()))
 		cancel()
 		if registerErr != nil {
-			err = fmt.Errorf("register same-PID B exec with owner anchor: %w", registerErr)
+			err = linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepRegister,
+				linuxgate.ReleaseArmRegisterProcess, 0,
+				fmt.Errorf("register same-PID B exec with owner anchor: %w", registerErr))
 		} else if _, waitErr := helper.ensureGateWait(); waitErr != nil {
-			err = fmt.Errorf("start exact helper-owned gate waiter: %w", waitErr)
+			err = linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepRegister,
+				linuxgate.ReleaseArmRegisterWaiter, 0,
+				fmt.Errorf("start exact helper-owned gate waiter: %w", waitErr))
 		}
 	}
 	helper.stateMu.Lock()
@@ -1196,7 +1208,8 @@ func (helper *linuxOwnerHelperV2) handleRelease(connection *net.UnixConn, reques
 			copy := stopEvidence
 			evidence = &copy
 		}
-		responseErr := helper.writeResponse(connection, "release", "unresolved", nil, nil, nil, nil, nil, sequence, evidence, code)
+		detail := linuxOwnerHelperV2ReleaseErrorDetailFor(err, ownerLost, leaseLive, stopRequested)
+		responseErr := helper.writeResponseWithDetail(connection, detail, "release", "unresolved", nil, nil, nil, nil, nil, sequence, evidence, code)
 		if stopErr != nil {
 			helper.requestAnchorTakeover()
 		}

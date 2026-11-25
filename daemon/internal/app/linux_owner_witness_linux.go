@@ -529,8 +529,13 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 			}
 		}
 		if recoveryErr != nil {
-			if request.Case != "stage_replay" || !linuxV2NativeWitnessJournalHasUnresolvedAuthority(journal) {
-				return errors.New("recover existing owner witness RunJournal without launch")
+			if refusal, refused := linuxV2NativeWitnessRecoveryRefusal(request.Case, journal, recoveryErr); refused {
+				if request.Case == "stage_replay" {
+					if err := witness.writeRecoveryRefusal(output, refusal); err != nil {
+						return err
+					}
+				}
+				return fmt.Errorf("recover existing owner witness RunJournal without launch: %s: %w", refusal, recoveryErr)
 			}
 			if err := witness.summarizeJournal(journal, false); err != nil {
 				return err
@@ -705,6 +710,28 @@ func (witness *linuxV2NativeWitnessRun) updateHealth(update func(*linuxV2NativeW
 	witness.mu.Unlock()
 }
 
+// linuxV2NativeWitnessUnresolvedSummaryTripped names each tripped unresolved
+// predicate by property only; the e2e accepts an exact versioned physical-stop proof here.
+func linuxV2NativeWitnessUnresolvedSummaryTripped(summary linuxV2NativeWitnessSummary) []string {
+	tripped := make([]string, 0, 4)
+	add := func(condition bool, name string) {
+		if condition {
+			tripped = append(tripped, name)
+		}
+	}
+	add(summary.Outcome != "unresolved", "outcome")
+	add(summary.FailureCategory != "containment_unproven", "failure_category")
+	add(!summary.JournalUnproven, "journal_unproven")
+	add(summary.NoTargetAbort, "no_target_abort")
+	add(summary.Release.AnchorRetired, "release.anchor_retired")
+	add(summary.Release.OpaquePlatformRelease, "release.opaque_platform_release")
+	add(summary.Release.ClearPersisted, "release.clear_persisted")
+	add(summary.Release.LeafRemoved, "release.leaf_removed")
+	add(summary.Stop.ReceiptVersion != 0 && !linuxV2NativeWitnessStopSummaryHasPhysicalProof(summary.Stop), "stop.receipt_version")
+	add(summary.Stages.JournalCleared, "stages.journal_cleared")
+	return tripped
+}
+
 func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
 	if witness.request.Case == "codex_containment" || witness.request.Case == "claude_containment" {
 		if witness.summary.Containment == nil || !witness.summary.Containment.NativeOpenReached {
@@ -735,11 +762,8 @@ func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
 		}
 		switch witness.summary.RecoveryState {
 		case "unresolved":
-			if witness.summary.Outcome != "unresolved" || witness.summary.FailureCategory != "containment_unproven" ||
-				!witness.summary.JournalUnproven || witness.summary.NoTargetAbort || witness.summary.Release.AnchorRetired ||
-				witness.summary.Release.OpaquePlatformRelease || witness.summary.Release.ClearPersisted || witness.summary.Release.LeafRemoved ||
-				witness.summary.Stop.ReceiptVersion != 0 || witness.summary.Stages.JournalCleared {
-				return errors.New("stage replay unresolved outcome lacks retained journal/owner uncertainty")
+			if tripped := linuxV2NativeWitnessUnresolvedSummaryTripped(witness.summary); len(tripped) > 0 {
+				return fmt.Errorf("stage replay unresolved outcome lacks retained journal/owner uncertainty: tripped %s", strings.Join(tripped, ","))
 			}
 			return nil
 		case "aborted_no_target":
@@ -2040,6 +2064,83 @@ func writeLinuxV2NativeWitnessSummary(output io.Writer, summary linuxV2NativeWit
 	return nil
 }
 
+// A refusal document carries identity fields and the refusal code only: it may
+// record why it refused, never an outcome, receipt or release it did not observe.
+type linuxV2NativeWitnessRefusalDocument struct {
+	Version                int                              `json:"version"`
+	Case                   string                           `json:"case"`
+	Harness                string                           `json:"harness"`
+	NativeVersion          string                           `json:"native_version"`
+	InstalledOwnerVerified bool                             `json:"installed_owner_verified"`
+	RunKey                 linuxV2NativeWitnessRunKey       `json:"run_key"`
+	Fence                  linuxV2NativeWitnessFenceSummary `json:"fence"`
+	Subject                protocol.Subject                 `json:"subject"`
+	RecoveryRefusal        linuxV2NativeWitnessRefusal      `json:"recovery_refusal"`
+}
+
+func (witness *linuxV2NativeWitnessRun) writeRecoveryRefusal(output io.Writer, refusal linuxV2NativeWitnessRefusal) error {
+	witness.mu.Lock()
+	document := linuxV2NativeWitnessRefusalDocument{
+		Version: witness.summary.Version, Case: witness.summary.Case, Harness: witness.summary.Harness,
+		NativeVersion: witness.summary.NativeVersion, InstalledOwnerVerified: witness.summary.InstalledOwnerVerified,
+		RunKey: witness.summary.RunKey, Fence: witness.summary.Fence, Subject: witness.summary.Subject,
+		RecoveryRefusal: refusal,
+	}
+	witness.mu.Unlock()
+	return writeLinuxV2NativeWitnessRefusal(output, document)
+}
+
+func writeLinuxV2NativeWitnessRefusal(output io.Writer, document linuxV2NativeWitnessRefusalDocument) error {
+	if output == nil {
+		return errors.New("owner witness refusal output writer is nil")
+	}
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(document); err != nil {
+		return fmt.Errorf("encode redacted owner witness refusal: %w", err)
+	}
+	if err := validateLinuxV2NativeWitnessRefusalDocument(encoded.Bytes()); err != nil {
+		return err
+	}
+	if _, err := output.Write(encoded.Bytes()); err != nil {
+		return fmt.Errorf("write redacted owner witness refusal: %w", err)
+	}
+	return nil
+}
+
+func validateLinuxV2NativeWitnessRefusalDocument(raw []byte) error {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("decode owner witness refusal document: %w", err)
+	}
+	identityFields := []string{
+		"version", "case", "harness", "native_version", "installed_owner_verified", "run_key", "fence", "subject",
+		"recovery_refusal",
+	}
+	allowed := make(map[string]bool, len(identityFields))
+	for _, field := range identityFields {
+		allowed[field] = true
+		if _, present := document[field]; !present {
+			return fmt.Errorf("owner witness refusal document omitted %q", field)
+		}
+	}
+	for field := range document {
+		if !allowed[field] {
+			return fmt.Errorf("owner witness refusal document exposed a non-identity field %q", field)
+		}
+	}
+	var version int
+	if err := json.Unmarshal(document["version"], &version); err != nil || version != 1 {
+		return errors.New("owner witness refusal document does not carry the supported identity version")
+	}
+	var refusal linuxV2NativeWitnessRefusal
+	if err := json.Unmarshal(document["recovery_refusal"], &refusal); err != nil {
+		return fmt.Errorf("decode owner witness refusal code: %w", err)
+	}
+	return refusal.Validate()
+}
+
 var errLinuxV2NativeWitnessContainmentUnproven = errors.New("owner witness containment is unresolved")
 
 // The acceptance job decides an unresolved stage-replay recovery by the process
@@ -2822,6 +2923,122 @@ func linuxV2NativeWitnessJournalHasUnresolvedAuthority(journal state.RunJournal)
 		return true
 	}
 	return journal.LinuxCloneIntent != nil && journal.LinuxCloneAbortProof == nil && journal.LinuxClonePromotionReceipt == nil
+}
+
+// Bounded refusal vocabulary: a refusal document carries codes only, never a
+// path, PID, command line or raw error text.
+const (
+	linuxV2NativeWitnessRefusalCaseNotStageReplay                = "case_not_stage_replay"
+	linuxV2NativeWitnessRefusalJournalWithoutUnresolvedAuthority = "journal_without_unresolved_authority"
+	linuxV2NativeWitnessRefusalReasonReleaseProof                = "release_proof_present"
+	linuxV2NativeWitnessRefusalReasonCloneAbortProof             = "clone_abort_proof_present"
+	linuxV2NativeWitnessRefusalReasonClonePromotionReceipt       = "clone_promotion_receipt_present"
+	linuxV2NativeWitnessRefusalReasonNoUnresolvedTerm            = "no_unresolved_term"
+	linuxV2NativeWitnessRecoveryClassCancelled                   = "cancelled"
+	linuxV2NativeWitnessRecoveryClassTimeout                     = "timeout"
+	linuxV2NativeWitnessRecoveryClassOwnerLost                   = "owner_lost"
+	linuxV2NativeWitnessRecoveryClassHelperRecoveryOnly          = "helper_recovery_only"
+	linuxV2NativeWitnessRecoveryClassOutcomeUnknown              = "outcome_unknown"
+	linuxV2NativeWitnessRecoveryClassGateNeverProduced           = "gate_never_produced"
+	linuxV2NativeWitnessRecoveryClassCgroupUnresolved            = "cgroup_unresolved"
+	linuxV2NativeWitnessRecoveryClassRecoveryFailed              = "recovery_failed"
+)
+
+type linuxV2NativeWitnessRefusal struct {
+	Guard              string `json:"guard"`
+	Reason             string `json:"reason,omitempty"`
+	RecoveryErrorClass string `json:"recovery_error_class,omitempty"`
+}
+
+func (refusal linuxV2NativeWitnessRefusal) String() string {
+	message := "refusal=" + refusal.Guard
+	if refusal.Reason != "" {
+		message += " reason=" + refusal.Reason
+	}
+	if refusal.RecoveryErrorClass != "" {
+		message += " recovery_error_class=" + refusal.RecoveryErrorClass
+	}
+	return message
+}
+
+func (refusal linuxV2NativeWitnessRefusal) Validate() error {
+	switch refusal.Guard {
+	case linuxV2NativeWitnessRefusalCaseNotStageReplay, linuxV2NativeWitnessRefusalJournalWithoutUnresolvedAuthority:
+	default:
+		return fmt.Errorf("owner witness refusal names an unknown guard %q", refusal.Guard)
+	}
+	switch refusal.Reason {
+	case "", linuxV2NativeWitnessRefusalReasonReleaseProof, linuxV2NativeWitnessRefusalReasonCloneAbortProof,
+		linuxV2NativeWitnessRefusalReasonClonePromotionReceipt, linuxV2NativeWitnessRefusalReasonNoUnresolvedTerm:
+	default:
+		return fmt.Errorf("owner witness refusal names an unknown journal reason %q", refusal.Reason)
+	}
+	switch refusal.RecoveryErrorClass {
+	case "", linuxV2NativeWitnessRecoveryClassCancelled, linuxV2NativeWitnessRecoveryClassTimeout,
+		linuxV2NativeWitnessRecoveryClassOwnerLost, linuxV2NativeWitnessRecoveryClassHelperRecoveryOnly,
+		linuxV2NativeWitnessRecoveryClassOutcomeUnknown, linuxV2NativeWitnessRecoveryClassGateNeverProduced,
+		linuxV2NativeWitnessRecoveryClassCgroupUnresolved, linuxV2NativeWitnessRecoveryClassRecoveryFailed:
+	default:
+		return fmt.Errorf("owner witness refusal names an unknown recovery error class %q", refusal.RecoveryErrorClass)
+	}
+	return nil
+}
+
+// linuxV2NativeWitnessUnresolvedAuthorityRefusalReason names a present term when
+// one decided the authority guard, else reports no_unresolved_term.
+func linuxV2NativeWitnessUnresolvedAuthorityRefusalReason(journal state.RunJournal) string {
+	if journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+		return linuxV2NativeWitnessRefusalReasonReleaseProof
+	}
+	if journal.LinuxCloneIntent != nil {
+		if journal.LinuxCloneAbortProof != nil {
+			return linuxV2NativeWitnessRefusalReasonCloneAbortProof
+		}
+		if journal.LinuxClonePromotionReceipt != nil {
+			return linuxV2NativeWitnessRefusalReasonClonePromotionReceipt
+		}
+	}
+	return linuxV2NativeWitnessRefusalReasonNoUnresolvedTerm
+}
+
+func linuxV2NativeWitnessRecoveryErrorClass(err error) string {
+	if err == nil {
+		return ""
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return linuxV2NativeWitnessRecoveryClassCancelled
+	case errors.Is(err, context.DeadlineExceeded):
+		return linuxV2NativeWitnessRecoveryClassTimeout
+	case errors.Is(err, platform.ErrLinuxOwnerHelperV2OwnerLost):
+		return linuxV2NativeWitnessRecoveryClassOwnerLost
+	case errors.Is(err, platform.ErrLinuxOwnerHelperV2RecoveryOnly):
+		return linuxV2NativeWitnessRecoveryClassHelperRecoveryOnly
+	case errors.Is(err, linuxgate.ErrOutcomeUnknown):
+		return linuxV2NativeWitnessRecoveryClassOutcomeUnknown
+	case errors.Is(err, linuxgate.ErrGateNeverProduced):
+		return linuxV2NativeWitnessRecoveryClassGateNeverProduced
+	case errors.Is(err, platform.ErrLinuxCgroupV2Unresolved):
+		return linuxV2NativeWitnessRecoveryClassCgroupUnresolved
+	default:
+		return linuxV2NativeWitnessRecoveryClassRecoveryFailed
+	}
+}
+
+// linuxV2NativeWitnessRecoveryRefusal returns refused=true when a failed
+// recovery may not launch; the journal terms that kept the authority are the only reason.
+func linuxV2NativeWitnessRecoveryRefusal(caseName string, journal state.RunJournal, recoveryErr error) (linuxV2NativeWitnessRefusal, bool) {
+	refusal := linuxV2NativeWitnessRefusal{RecoveryErrorClass: linuxV2NativeWitnessRecoveryErrorClass(recoveryErr)}
+	if caseName != "stage_replay" {
+		refusal.Guard = linuxV2NativeWitnessRefusalCaseNotStageReplay
+		return refusal, true
+	}
+	if !linuxV2NativeWitnessJournalHasUnresolvedAuthority(journal) {
+		refusal.Guard = linuxV2NativeWitnessRefusalJournalWithoutUnresolvedAuthority
+		refusal.Reason = linuxV2NativeWitnessUnresolvedAuthorityRefusalReason(journal)
+		return refusal, true
+	}
+	return linuxV2NativeWitnessRefusal{}, false
 }
 
 func linuxV2WitnessWorkEqual(left, right protocol.Work) bool {

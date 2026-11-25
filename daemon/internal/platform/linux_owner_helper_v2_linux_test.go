@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
 )
@@ -639,12 +641,13 @@ func TestLinuxOwnerHelperV2UnarmedLeaseObservationDoesNotLatchOrWake(t *testing.
 	}
 }
 
-func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
+func dialLinuxOwnerHelperV2TestExchange(t *testing.T) (*net.UnixConn, *net.UnixConn) {
+	t.Helper()
 	listener, err := net.ListenUnix("unixpacket", &net.UnixAddr{Name: filepath.Join(t.TempDir(), "helper.sock"), Net: "unixpacket"})
 	if err != nil {
 		t.Fatalf("listen for helper response test: %v", err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() { listener.Close() })
 	listener.SetUnlinkOnClose(true)
 	accepted := make(chan *net.UnixConn, 1)
 	acceptErr := make(chan error, 1)
@@ -660,7 +663,7 @@ func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect to helper response test: %v", err)
 	}
-	defer client.Close()
+	t.Cleanup(func() { client.Close() })
 	var server *net.UnixConn
 	select {
 	case server = <-accepted:
@@ -669,13 +672,17 @@ func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
 	case <-time.After(testHangGuard):
 		t.Fatal("helper response test connection was not accepted")
 	}
-	defer server.Close()
-	if err := server.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatalf("bound helper response write: %v", err)
+	t.Cleanup(func() { server.Close() })
+	for _, connection := range []*net.UnixConn{server, client} {
+		if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			t.Fatalf("bound helper response exchange: %v", err)
+		}
 	}
-	if err := client.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		t.Fatalf("bound helper response read: %v", err)
-	}
+	return client, server
+}
+
+func TestLinuxOwnerHelperV2ResponseRejectsActionOutsideStatus(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
 	response := linuxOwnerHelperV2Response{
 		Operation: "release", WitnessActionObserved: true,
 		WitnessAction: linuxOwnerHelperV2WitnessCrashAfterRelease,
@@ -701,6 +708,750 @@ func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesStopEvidence(t *testing.
 	if !errors.As(err, &unresolved) || !errors.Is(err, ErrLinuxOwnerHelperV2ReleaseUnresolved) ||
 		unresolved.Code != "release_outcome_unknown" || unresolved.Evidence == nil {
 		t.Fatalf("unresolved release error lost stop evidence: %v", err)
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseErrorDetailClassifiesSubSteps(t *testing.T) {
+	tests := []struct {
+		name                                    string
+		err                                     error
+		ownerLost, leaseLive, stopReq           bool
+		wantStage, wantArm, wantWait, wantGuest string
+		wantErrno                               int
+		wantReason                              string
+	}{
+		{
+			name: "gate authorization refuses without the exact gate identity",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepGateAuthorize,
+				linuxgate.ReleaseArmGateMissingIdentity, 0, errors.New("anchor refused the grant")),
+			leaseLive: true, wantStage: "gate_authorize", wantArm: "missing_gate_identity",
+		},
+		{
+			name: "clone bootstrap attempt carries its wait class",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, 0,
+				fmt.Errorf("receive same-PID B bootstrap attempt: %w", context.DeadlineExceeded)),
+			leaseLive: true, wantStage: "clone_bootstrap", wantArm: "bootstrap_attempt", wantWait: "deadline",
+		},
+		{
+			name: "clone checkout receipt names the guest bootstrap failure",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutReceipt, 0,
+				fmt.Errorf("receive B checkout-ready receipt: %w",
+					&linuxgate.CloneBootstrapFailureError{Stage: linuxgate.CloneFailureExec, Errno: 1})),
+			leaseLive: true, wantStage: "clone_checkout", wantArm: "checkout_receipt", wantWait: "other",
+			wantGuest: "exec", wantErrno: 1,
+		},
+		{
+			name: "native exec errno",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, 1,
+				errors.New("native exec failed after RELEASE: errno=1")),
+			leaseLive: true, wantStage: "native_exec", wantArm: "exec_errno", wantErrno: 1,
+		},
+		{
+			name: "native exec without an attempt",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeNoAttempt, 0,
+				errors.New("gate closed exec-status FD without an exec attempt")),
+			leaseLive: true, wantStage: "native_exec", wantArm: "no_exec_attempt",
+		},
+		{
+			name: "native exec process-side verify",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeProcess, 0,
+				errors.New("native PID/start identity changed")),
+			leaseLive: true, wantStage: "native_exec", wantArm: "native_process",
+		},
+		{
+			name: "native exec image readback",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeReadback, 0,
+				errors.New("same-PID executable readback differs")),
+			leaseLive: true, wantStage: "native_exec", wantArm: "exec_readback",
+		},
+		{
+			name: "clone exec proof reads an EOF as a closed peer",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeCloneProof, 0,
+				fmt.Errorf("receive same-PID native exec proof: %w", io.EOF)),
+			leaseLive: true, wantStage: "native_exec", wantArm: "clone_exec_proof", wantWait: "peer_closed",
+		},
+		{
+			name: "register",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepRegister, linuxgate.ReleaseArmRegisterProcess, 0,
+				errors.New("register same-PID B exec with owner anchor")),
+			leaseLive: true, wantStage: "register", wantArm: "native_register",
+		},
+		{
+			name: "joined abort keeps the sub-step",
+			err: errors.Join(linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, 1,
+				errors.New("native exec failed after RELEASE: errno=1")), errors.New("abort the pinned leaf")),
+			leaseLive: true, wantStage: "native_exec", wantArm: "exec_errno", wantErrno: 1,
+		},
+		{
+			// The wait class comes from the arm's own read; an abort sibling's
+			// ENOTCONN must not reclassify a deadline.
+			name: "abort errno does not reclassify the arm wait error",
+			err: errors.Join(linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec,
+				linuxgate.ReleaseArmNativeAwaitResult, 0, context.DeadlineExceeded), unix.ENOTCONN),
+			leaseLive: true, wantStage: "native_exec", wantArm: "await_result", wantWait: "deadline",
+		},
+		{
+			name: "wrapped sub-step survives the release guard chain",
+			err: fmt.Errorf("%w: await guarded native exec result: %w", linuxgate.ErrOutcomeUnknown,
+				linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, 1,
+					errors.New("native exec failed after RELEASE: errno=1"))),
+			leaseLive: true, wantStage: "native_exec", wantArm: "exec_errno", wantErrno: 1,
+		},
+		{
+			name: "a labelled wait error keeps the inner clone arm",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeAwaitResult, 0,
+				fmt.Errorf("%w: await guarded native exec result: %w", linuxgate.ErrOutcomeUnknown,
+					linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, 0,
+						fmt.Errorf("receive same-PID B bootstrap attempt: %w",
+							&linuxgate.CloneBootstrapFailureError{Stage: linuxgate.CloneFailureExec, Errno: 1})))),
+			leaseLive: true, wantStage: "clone_bootstrap", wantArm: "bootstrap_attempt", wantWait: "other",
+			wantGuest: "exec", wantErrno: 1,
+		},
+		{
+			name: "a labelled checkout callback keeps the helper receipt mismatch",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutCallback, 0,
+				fmt.Errorf("durably record clone checkout-ready receipt: %w",
+					linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutReceiptMismatch, 0,
+						errors.New("Linux gate checkout receipt differs from the exact clone grant")))),
+			leaseLive: true, wantStage: "clone_checkout", wantArm: "checkout_receipt_mismatch",
+		},
+		{
+			name: "an unlabelled wait error still renders await_result",
+			err: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeAwaitResult, 0,
+				fmt.Errorf("%w: await guarded native exec result: %w", linuxgate.ErrOutcomeUnknown,
+					errors.New("exec-status channel closed or carried ancillary data before a frame"))),
+			leaseLive: true, wantStage: "native_exec", wantArm: "await_result", wantWait: "other",
+		},
+		{
+			name: "untyped release failure", err: errors.New("Linux owner helper lease expired before gate RELEASE"),
+			wantStage: "none",
+		},
+		{
+			name: "owner loss without an error", leaseLive: false, ownerLost: true, wantStage: "none", wantReason: "owner_lost",
+		},
+		{
+			name: "lease expiry without an error", leaseLive: false, wantStage: "none", wantReason: "lease_expired",
+		},
+		{
+			name: "stop request without an error", leaseLive: true, stopReq: true, wantStage: "none", wantReason: "stop_requested",
+		},
+		{
+			name: "live lease and no error carries no reason", leaseLive: true, wantStage: "none",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := linuxOwnerHelperV2ReleaseErrorDetailFor(test.err, test.ownerLost, test.leaseLive, test.stopReq)
+			if detail.Stage != test.wantStage || detail.Arm != test.wantArm ||
+				detail.WaitClass != test.wantWait || detail.GuestStage != test.wantGuest ||
+				detail.Errno != test.wantErrno || detail.Reason != test.wantReason {
+				t.Fatalf("release detail = %+v, want stage=%q arm=%q wait_class=%q guest_stage=%q errno=%d reason=%q",
+					*detail, test.wantStage, test.wantArm, test.wantWait, test.wantGuest, test.wantErrno, test.wantReason)
+			}
+			if err := detail.Validate(); err != nil {
+				t.Fatalf("classified release detail is not closed-vocabulary: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm(t *testing.T) {
+	// Expected renderings are literals, never derived from the constants: a
+	// swapped arm or sub-step constant value reddens here (mutant M7).
+	arms := []struct {
+		subStep string
+		arm     string
+		want    string
+	}{
+		{linuxgate.ReleaseSubStepGateAuthorize, linuxgate.ReleaseArmGateMissingIdentity, "stage=gate_authorize arm=missing_gate_identity"},
+		{linuxgate.ReleaseSubStepGateAuthorize, linuxgate.ReleaseArmGateAuthorize, "stage=gate_authorize arm=anchor_authorize"},
+		{linuxgate.ReleaseSubStepGateAuthorize, linuxgate.ReleaseArmGateIdentity, "stage=gate_authorize arm=gate_identity"},
+		{linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapInstalled, "stage=clone_bootstrap arm=installed_bootstrap"},
+		{linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapAttempt, "stage=clone_bootstrap arm=bootstrap_attempt wait_class=other"},
+		{linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapImage, "stage=clone_bootstrap arm=bootstrap_image"},
+		{linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmBootstrapProcess, "stage=clone_bootstrap arm=bootstrap_process"},
+		{linuxgate.ReleaseSubStepCloneBootstrap, linuxgate.ReleaseArmLeafMembership, "stage=clone_bootstrap arm=leaf_membership"},
+		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutReceipt, "stage=clone_checkout arm=checkout_receipt wait_class=other"},
+		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutReceiptMismatch, "stage=clone_checkout arm=checkout_receipt_mismatch"},
+		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutCallback, "stage=clone_checkout arm=checkout_callback"},
+		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutAckEncode, "stage=clone_checkout arm=checkout_ack_encode"},
+		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutAckSend, "stage=clone_checkout arm=checkout_ack_send"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeAwaitResult, "stage=native_exec arm=await_result wait_class=other"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, "stage=native_exec arm=exec_errno"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeNoAttempt, "stage=native_exec arm=no_exec_attempt"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeProcess, "stage=native_exec arm=native_process"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeReadback, "stage=native_exec arm=exec_readback"},
+		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeCloneProof, "stage=native_exec arm=clone_exec_proof wait_class=other"},
+		{linuxgate.ReleaseSubStepRegister, linuxgate.ReleaseArmRegisterProcess, "stage=register arm=native_register"},
+		{linuxgate.ReleaseSubStepRegister, linuxgate.ReleaseArmRegisterWaiter, "stage=register arm=gate_waiter"},
+	}
+	rendered := make(map[string]string, len(arms))
+	for _, arm := range arms {
+		shape, found := linuxgate.LookupReleaseArmShape(arm.arm)
+		if !found || shape.SubStep != arm.subStep {
+			t.Fatalf("arm %q is not bound to sub-step %q in the closed vocabulary", arm.arm, arm.subStep)
+		}
+		failure := linuxgate.NewReleaseSubStepError(arm.subStep, arm.arm, 0, errors.New("bounded probe failure"))
+		detail := linuxOwnerHelperV2ReleaseErrorDetailFor(failure, false, true, false)
+		if detail.Stage != arm.subStep || detail.Arm != arm.arm {
+			t.Fatalf("arm %q classified as stage=%q arm=%q", arm.arm, detail.Stage, detail.Arm)
+		}
+		if err := detail.Validate(); err != nil {
+			t.Fatalf("arm %q is not closed-vocabulary: %v", arm.arm, err)
+		}
+		if got := detail.String(); got != arm.want {
+			t.Fatalf("arm %q rendered %q, want the literal %q", arm.arm, got, arm.want)
+		}
+		if shape.WaitClass != strings.Contains(arm.want, " wait_class=") {
+			t.Fatalf("arm %q literal %q disagrees with the closed wait-class shape", arm.arm, arm.want)
+		}
+		if other, duplicate := rendered[arm.want]; duplicate {
+			t.Fatalf("arms %q and %q render the same bounded detail %q", other, arm.arm, arm.want)
+		}
+		rendered[arm.want] = arm.arm
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseWaitErrorClassClosesTheVocabulary(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "no failure", err: nil, want: ""},
+		{name: "context deadline", err: context.DeadlineExceeded, want: "deadline"},
+		{name: "os deadline", err: os.ErrDeadlineExceeded, want: "deadline"},
+		{name: "wrapped deadline", err: fmt.Errorf("wait for close-on-exec result: %w", context.DeadlineExceeded), want: "deadline"},
+		{name: "eof", err: io.EOF, want: "peer_closed"},
+		{name: "wrapped eof", err: fmt.Errorf("receive same-PID native exec proof: %w", io.EOF), want: "peer_closed"},
+		{name: "unexpected eof", err: io.ErrUnexpectedEOF, want: "peer_closed"},
+		{name: "reset peer", err: unix.ECONNRESET, want: "peer_closed"},
+		{name: "unconnected peer", err: unix.ENOTCONN, want: "peer_closed"},
+		{name: "broken peer pipe", err: unix.EPIPE, want: "peer_closed"},
+		{name: "canceled context", err: context.Canceled, want: "other"},
+		{name: "filtered channel text", err: errors.New("exec-status channel closed or carried ancillary data before a frame"), want: "other"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxgate.ReleaseWaitErrorClass(test.err); got != test.want {
+				t.Fatalf("wait class = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2NativeExecVerifyArmSplitsProcessFromReadback(t *testing.T) {
+	cause := errors.New("native process exited before exec readback: boom")
+	processSide := linuxgate.NativeExecProcessSide(cause)
+	if got := processSide.Error(); got != cause.Error() {
+		t.Fatalf("process-side verify error = %q, want the cause verbatim %q", got, cause.Error())
+	}
+	if got := linuxgate.NativeExecVerifyArm(processSide); got != "native_process" {
+		t.Fatalf("process-side verify arm = %q, want native_process", got)
+	}
+	wrapped := fmt.Errorf("%w: verify same-PID native exec: %w", linuxgate.ErrOutcomeUnknown, processSide)
+	if got := linuxgate.NativeExecVerifyArm(wrapped); got != "native_process" {
+		t.Fatalf("wrapped process-side verify arm = %q, want native_process", got)
+	}
+	if got := linuxgate.NativeExecVerifyArm(errors.New("same-PID /proc executable readback differs")); got != "exec_readback" {
+		t.Fatalf("readback verify arm = %q, want exec_readback", got)
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseGuestFailureDetailClosesTheVocabulary(t *testing.T) {
+	stages := []struct {
+		stage linuxgate.CloneBootstrapFailureStage
+		want  string
+	}{
+		{linuxgate.CloneFailureRequest, "request"},
+		{linuxgate.CloneFailureSeed, "seed"},
+		{linuxgate.CloneFailureTarget, "target"},
+		{linuxgate.CloneFailureGit, "git"},
+		{linuxgate.CloneFailureCheckout, "checkout"},
+		{linuxgate.CloneFailureNativeImage, "native_image"},
+		{linuxgate.CloneFailureExec, "exec"},
+	}
+	for _, stage := range stages {
+		failure := linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeCloneProof, 0,
+			fmt.Errorf("receive same-PID native exec proof: %w",
+				&linuxgate.CloneBootstrapFailureError{Stage: stage.stage, Errno: 13}))
+		detail := linuxOwnerHelperV2ReleaseErrorDetailFor(failure, false, true, false)
+		if detail.GuestStage != stage.want || detail.Errno != 13 || detail.WaitClass != "other" {
+			t.Fatalf("guest stage %v = %+v, want guest_stage=%q errno=13 wait_class=other", stage.stage, *detail, stage.want)
+		}
+		if err := detail.Validate(); err != nil {
+			t.Fatalf("guest stage %q is not closed-vocabulary: %v", stage.want, err)
+		}
+		for _, fragment := range []string{"guest_stage=" + stage.want, "errno=13"} {
+			if !strings.Contains(detail.String(), fragment) {
+				t.Fatalf("guest stage %q rendered %q without %q", stage.want, detail.String(), fragment)
+			}
+		}
+	}
+	guest := &linuxgate.CloneBootstrapFailureError{Stage: linuxgate.CloneFailureExec, Errno: 13}
+	tests := []struct {
+		name    string
+		failure *linuxgate.ReleaseSubStepError
+	}{
+		{
+			name: "unknown guest stage stays unclassified",
+			failure: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeCloneProof, 0,
+				&linuxgate.CloneBootstrapFailureError{Stage: linuxgate.CloneBootstrapFailureStage(99), Errno: 13}),
+		},
+		{
+			name: "guest failure on an arm that cannot read it stays unclassified",
+			failure: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepCloneBootstrap,
+				linuxgate.ReleaseArmBootstrapImage, 0, guest),
+		},
+		{
+			name: "the errno arm keeps its own errno",
+			failure: linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec,
+				linuxgate.ReleaseArmNativeErrno, 2, guest),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			detail := linuxOwnerHelperV2ReleaseErrorDetailFor(test.failure, false, true, false)
+			if detail.GuestStage != "" {
+				t.Fatalf("unclassified guest failure carried guest_stage=%q", detail.GuestStage)
+			}
+			if err := detail.Validate(); err != nil {
+				t.Fatalf("unclassified guest failure is not closed-vocabulary: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseErrorDetailRedactsFreeFormText(t *testing.T) {
+	raw := "/home/some-profile-user/secret\npid=4242 exec --lease-token=abcd1234"
+	detail := linuxOwnerHelperV2ReleaseErrorDetailFor(
+		linuxgate.NewReleaseSubStepError(linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, 1,
+			errors.New(raw)),
+		false, true, false)
+	if rendered := detail.String(); rendered != "stage=native_exec arm=exec_errno errno=1" {
+		t.Fatalf("release detail rendered %q, want the closed sub-step, arm and errno only", rendered)
+	}
+	rendered := detail.String()
+	for _, fragment := range []string{"some-profile-user", "/home", "4242", "lease-token", "secret"} {
+		if strings.Contains(rendered, fragment) {
+			t.Fatalf("release detail leaked %q: %s", fragment, rendered)
+		}
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary(t *testing.T) {
+	tests := []struct {
+		name    string
+		detail  *LinuxOwnerHelperV2ReleaseErrorDetail
+		wantErr bool
+	}{
+		{name: "nil detail", detail: nil},
+		{
+			name:   "sub-step and errno",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "exec_errno", Errno: 1},
+		},
+		{
+			name:   "wait arm with its class",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await_result", WaitClass: "deadline"},
+		},
+		{
+			name: "clone proof with its guest stage",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "native_exec", Arm: "clone_exec_proof", WaitClass: "other", GuestStage: "exec", Errno: 1,
+			},
+		},
+		{name: "reason only", detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Reason: "stop_requested"}},
+		{name: "free-form stage", detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "/tmp/native exec"}, wantErr: true},
+		{
+			name:    "negative errno",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "exec_errno", Errno: -1},
+			wantErr: true,
+		},
+		{name: "free-form reason", detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Reason: "owner lost"}, wantErr: true},
+		{
+			name:   "reason contradicts a sub-step",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Errno: 1, Reason: "owner_lost"}, wantErr: true,
+		},
+		{
+			name:    "free-form arm",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await /home/user/secret"},
+			wantErr: true,
+		},
+		{
+			name:    "arm bound to another sub-step",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "checkout_receipt", WaitClass: "other"},
+			wantErr: true,
+		},
+		{
+			name:    "arm without a sub-step",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Arm: "exec_errno"},
+			wantErr: true,
+		},
+		{
+			name:    "wait arm without its class",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "clone_exec_proof"},
+			wantErr: true,
+		},
+		{
+			name:    "wait class on an arm that never waits",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "exec_readback", WaitClass: "other"},
+			wantErr: true,
+		},
+		{
+			name: "free-form wait class",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "native_exec", Arm: "await_result", WaitClass: "soon",
+			},
+			wantErr: true,
+		},
+		{
+			name: "guest stage on an arm that cannot read one",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "native_exec", Arm: "exec_errno", GuestStage: "exec",
+			},
+			wantErr: true,
+		},
+		{
+			name: "free-form guest stage",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+				Stage: "native_exec", Arm: "clone_exec_proof", WaitClass: "other", GuestStage: "exec /home/user/secret",
+			},
+			wantErr: true,
+		},
+		{
+			name:    "errno without a sub-step",
+			detail:  &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Errno: 1},
+			wantErr: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.detail.Validate()
+			if test.wantErr && err == nil {
+				t.Fatalf("detail %+v was accepted", *test.detail)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("detail %+v was rejected: %v", *test.detail, err)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseUnresolvedErrorCarriesTheBoundedDetail(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure *LinuxOwnerHelperV2ReleaseUnresolvedError
+		want    string
+	}{
+		{
+			name: "code and detail",
+			failure: &LinuxOwnerHelperV2ReleaseUnresolvedError{
+				Code:   "release_outcome_unknown",
+				Detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "clone_exec_proof", WaitClass: "other", GuestStage: "exec", Errno: 1},
+			},
+			want: "Linux owner helper release outcome is unresolved (release_outcome_unknown; stage=native_exec arm=clone_exec_proof wait_class=other guest_stage=exec errno=1)",
+		},
+		{
+			name:    "code only stays byte-identical",
+			failure: &LinuxOwnerHelperV2ReleaseUnresolvedError{Code: "release_outcome_unknown"},
+			want:    "Linux owner helper release outcome is unresolved (release_outcome_unknown)",
+		},
+		{
+			name: "detail only",
+			failure: &LinuxOwnerHelperV2ReleaseUnresolvedError{
+				Detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Reason: "stop_requested"},
+			},
+			want: "Linux owner helper release outcome is unresolved (stage=none reason=stop_requested)",
+		},
+		{
+			name:    "empty failure",
+			failure: &LinuxOwnerHelperV2ReleaseUnresolvedError{},
+			want:    "Linux owner helper release outcome is unresolved",
+		},
+		{
+			name:    "nil failure",
+			failure: nil,
+			want:    "Linux owner helper release outcome is unresolved",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.failure.Error(); got != test.want {
+				t.Fatalf("release unresolved error = %q, want %q", got, test.want)
+			}
+			if !errors.Is(test.failure, ErrLinuxOwnerHelperV2ReleaseUnresolved) {
+				t.Fatal("bounded release detail broke the sentinel chain")
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ResponseErrorCarriesTheReleaseDetail(t *testing.T) {
+	detail := &LinuxOwnerHelperV2ReleaseErrorDetail{
+		Stage: "clone_checkout", Arm: "checkout_receipt", WaitClass: "deadline",
+	}
+	err := linuxOwnerHelperV2ResponseError(linuxOwnerHelperV2Response{
+		Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+		ReleaseErrorDetail: detail,
+	})
+	var unresolved *LinuxOwnerHelperV2ReleaseUnresolvedError
+	if !errors.As(err, &unresolved) || unresolved.Evidence != nil || unresolved.Detail != detail {
+		t.Fatalf("unresolved release without stop evidence lost its bounded detail: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stage=clone_checkout arm=checkout_receipt wait_class=deadline") {
+		t.Fatalf("release detail is absent from the error chain: %v", err)
+	}
+}
+
+func TestLinuxOwnerHelperV2ResponseRejectsAFreeFormReleaseDetail(t *testing.T) {
+	tests := []struct {
+		name   string
+		detail *LinuxOwnerHelperV2ReleaseErrorDetail
+		want   string
+	}{
+		{
+			name:   "free-form sub-step",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "exec /home/user/secret failed"},
+			want:   "unknown sub-step",
+		},
+		{
+			name:   "free-form arm",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await /home/user/secret"},
+			want:   "unknown arm",
+		},
+		{
+			name:   "arm bound to another sub-step",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "checkout_receipt", WaitClass: "other"},
+			want:   "does not belong to sub-step",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, server := dialLinuxOwnerHelperV2TestExchange(t)
+			response := linuxOwnerHelperV2Response{
+				Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+				ReleaseErrorDetail: test.detail,
+			}
+			if err := writeLinuxOwnerHelperV2Response(server, response); err != nil {
+				t.Fatalf("write helper response with an invalid detail: %v", err)
+			}
+			if _, rights, err := readLinuxOwnerHelperV2Response(client); err == nil {
+				closeLinuxOwnerAnchorFDs(rights)
+				t.Fatal("invalid release detail was accepted from the wire")
+			} else if !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("release detail rejection = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseDetailSurvivesTheWire(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
+	response := linuxOwnerHelperV2Response{
+		Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+		ReleaseErrorDetail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+			Stage: "native_exec", Arm: "clone_exec_proof", WaitClass: "other", GuestStage: "exec", Errno: 1,
+		},
+	}
+	if err := writeLinuxOwnerHelperV2Response(server, response); err != nil {
+		t.Fatalf("write helper response with a bounded detail: %v", err)
+	}
+	decoded, rights, err := readLinuxOwnerHelperV2Response(client)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		t.Fatalf("read helper response with a bounded detail: %v", err)
+	}
+	if got := decoded.ReleaseErrorDetail.String(); got != "stage=native_exec arm=clone_exec_proof wait_class=other guest_stage=exec errno=1" {
+		t.Fatalf("wire release detail = %q, want the bounded detail unchanged", got)
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseDetailIsWrittenThroughTheResponseWriter(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
+	helper := &linuxOwnerHelperV2{}
+	detail := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await_result", WaitClass: "other"}
+	if err := helper.writeResponseWithDetail(server, detail, "release", "unresolved", nil, nil, nil, nil, nil, 0, nil, "release_outcome_unknown"); err != nil {
+		t.Fatalf("write unresolved release response with a bounded detail: %v", err)
+	}
+	decoded, rights, err := readLinuxOwnerHelperV2Response(client)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		t.Fatalf("read helper response written through writeResponseWithDetail: %v", err)
+	}
+	if got := decoded.ReleaseErrorDetail.String(); got != "stage=native_exec arm=await_result wait_class=other" {
+		t.Fatalf("writeResponseWithDetail release detail = %q, want the bounded detail on the wire", got)
+	}
+}
+
+func TestLinuxOwnerHelperV2ResponseWriterRefusesAnInvalidReleaseDetail(t *testing.T) {
+	client, server := dialLinuxOwnerHelperV2TestExchange(t)
+	helper := &linuxOwnerHelperV2{}
+	invalid := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await /home/user/secret"}
+	err := helper.writeResponseWithDetail(server, invalid, "release", "unresolved", nil, nil, nil, nil, nil, 0, nil, "release_outcome_unknown")
+	if err == nil || !strings.Contains(err.Error(), "unknown arm") {
+		t.Fatalf("writeResponseWithDetail accepted an invalid release detail: %v", err)
+	}
+	valid := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_exec", Arm: "await_result", WaitClass: "other"}
+	if err := helper.writeResponseWithDetail(server, valid, "release", "unresolved", nil, nil, nil, nil, nil, 0, nil, "release_outcome_unknown"); err != nil {
+		t.Fatalf("writeResponseWithDetail refused a bounded detail after an invalid one: %v", err)
+	}
+	decoded, rights, err := readLinuxOwnerHelperV2Response(client)
+	closeLinuxOwnerAnchorFDs(rights)
+	if err != nil {
+		t.Fatalf("read the bounded release detail after an invalid write attempt: %v", err)
+	}
+	if got := decoded.ReleaseErrorDetail.String(); got != "stage=native_exec arm=await_result wait_class=other" {
+		t.Fatalf("release detail after an invalid write attempt = %q, want the valid bounded detail", got)
+	}
+}
+
+func TestLinuxOwnerHelperV2ResponseErrorKeepsTheReleaseCodeSentinel(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		wantIs  error
+		wantMsg string
+	}{
+		{name: "owner loss keeps its sentinel", code: "owner_lost_during_release", wantIs: ErrLinuxOwnerHelperV2OwnerLost},
+		{
+			name: "lease expiry keeps the generic rejection", code: "lease_expired_during_release",
+			wantMsg: "Linux owner helper rejected operation (lease_expired_during_release)",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := linuxOwnerHelperV2ResponseError(linuxOwnerHelperV2Response{
+				Operation: "release", Status: "unresolved", ErrorCode: test.code,
+				ReleaseErrorDetail: &LinuxOwnerHelperV2ReleaseErrorDetail{
+					Stage: "native_exec", Arm: "await_result", WaitClass: "other",
+				},
+			})
+			var unresolved *LinuxOwnerHelperV2ReleaseUnresolvedError
+			if !errors.As(err, &unresolved) {
+				t.Fatalf("evidence-less unresolved release is not typed: %v", err)
+			}
+			if test.wantIs != nil && !errors.Is(err, test.wantIs) {
+				t.Fatalf("unresolved release lost its code sentinel: %v", err)
+			}
+			if test.wantMsg != "" && !strings.Contains(err.Error(), test.wantMsg) {
+				t.Fatalf("unresolved release lost the generic rejection text: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxOwnerHelperV2ReleaseCheckoutRejectionCarriesTheTerminalDetail(t *testing.T) {
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: "run-1", Generation: 3, BindingKey: "primary",
+		ResourceID: "00000000-0000-4000-8000-000000000001",
+		BaseCommit: strings.Repeat("a", 40), BaseTreeDigest: "sha256:" + strings.Repeat("b", 64),
+		Nonce:    strings.Repeat("c", authority.LinuxCloneNonceBytes*2),
+		SeedPath: "/var/lib/symmetry/seeds/run-1.bundle",
+		Target:   "/var/lib/symmetry/checkouts/binding-primary/run-run-1/generation-3",
+	}
+	seed := authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: intent.BaseCommit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 128, Device: 7, Inode: 11,
+	}
+	cloneGrant := authority.LinuxCloneGrant{Intent: intent, Seed: seed}
+	receipt := authority.LinuxCloneCheckoutReceipt{
+		Version: authority.LinuxCloneVersion, RunID: intent.RunID, Generation: intent.Generation,
+		BindingKey: intent.BindingKey, ResourceID: intent.ResourceID, Target: intent.Target,
+		Nonce: intent.Nonce, SeedDigest: seed.Digest, BaseCommit: intent.BaseCommit,
+		TargetDevice: 19, TargetInode: 23,
+	}
+	if err := cloneGrant.Validate(); err != nil {
+		t.Fatalf("test clone grant is invalid: %v", err)
+	}
+	tests := []struct {
+		name       string
+		terminal   linuxOwnerHelperV2Response
+		want       []string
+		wantTyped  bool
+		wantAbsent string
+	}{
+		{
+			name: "unresolved terminal response carries its detail",
+			terminal: linuxOwnerHelperV2Response{
+				Operation: "release", Status: "unresolved", ErrorCode: "release_outcome_unknown",
+				ReleaseErrorDetail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "clone_checkout", Arm: "checkout_callback"},
+			},
+			want: []string{"gate refused the checkout callback", "stage=clone_checkout arm=checkout_callback"}, wantTyped: true,
+		},
+		{
+			name: "released terminal response keeps the rejection guard",
+			terminal: linuxOwnerHelperV2Response{
+				Operation: "release", Status: "released", Released: true,
+			},
+			want:       []string{"gate refused the checkout callback", "released the Clone after checkout callback rejection"},
+			wantAbsent: "stage=",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			clientConn, server := dialLinuxOwnerHelperV2TestExchange(t)
+			helper := authority.LinuxCgroupProcessIdentity{PID: 4242, Identity: "linux:v2:checkout-helper"}
+			grant := LinuxOwnerAnchorGrant{
+				RunKey: LinuxOwnerAnchorRunKey{RunID: intent.RunID, Generation: intent.Generation},
+				Fence:  protocol.Fence{}, LaunchToken: "token-1",
+			}
+			client := &LinuxOwnerHelperV2Client{connection: clientConn, grant: grant, helper: helper}
+			request := client.newRequest("release")
+			done := make(chan error, 1)
+			go func() {
+				done <- client.releaseWithCheckoutReady(context.Background(), request, nil, &cloneGrant,
+					func(context.Context, authority.LinuxCloneCheckoutReceipt) error {
+						return errors.New("gate refused the checkout callback")
+					})
+			}()
+			if _, _, err := readLinuxOwnerHelperV2Request(server); err != nil {
+				t.Fatalf("read the release request: %v", err)
+			}
+			if err := writeLinuxOwnerHelperV2Response(server, linuxOwnerHelperV2Response{
+				Version: linuxOwnerHelperV2Version, RunKey: grant.RunKey, Fence: grant.Fence,
+				LaunchToken: grant.LaunchToken, Helper: helper,
+				Operation: "checkout-ready", Status: "ready",
+				CommitAcknowledged: true, ReleaseAttempted: true, CheckoutReceipt: &receipt,
+			}); err != nil {
+				t.Fatalf("write the checkout-ready event: %v", err)
+			}
+			ack, _, err := readLinuxOwnerHelperV2Request(server)
+			if err != nil {
+				t.Fatalf("read the checkout-ready acknowledgement: %v", err)
+			}
+			if ack.Accepted {
+				t.Fatal("client acknowledged a rejected checkout callback")
+			}
+			terminal := test.terminal
+			terminal.Version = linuxOwnerHelperV2Version
+			terminal.RunKey = grant.RunKey
+			terminal.Fence = grant.Fence
+			terminal.LaunchToken = grant.LaunchToken
+			terminal.Helper = helper
+			if err := writeLinuxOwnerHelperV2Response(server, terminal); err != nil {
+				t.Fatalf("write the terminal release response: %v", err)
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("checkout rejection returned no error")
+				}
+				for _, want := range test.want {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("checkout rejection error = %v, want %q", err, want)
+					}
+				}
+				if test.wantAbsent != "" && strings.Contains(err.Error(), test.wantAbsent) {
+					t.Fatalf("checkout rejection error = %v, want no %q", err, test.wantAbsent)
+				}
+				var unresolved *LinuxOwnerHelperV2ReleaseUnresolvedError
+				if typed := errors.As(err, &unresolved); typed != test.wantTyped {
+					t.Fatalf("checkout rejection typed unresolved = %v, want %v: %v", typed, test.wantTyped, err)
+				}
+			case <-time.After(testHangGuard):
+				t.Fatal("checkout rejection did not settle")
+			}
+		})
 	}
 }
 

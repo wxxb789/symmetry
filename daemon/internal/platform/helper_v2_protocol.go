@@ -123,6 +123,7 @@ type linuxOwnerHelperV2Response struct {
 	CheckoutReceipt       *authority.LinuxCloneCheckoutReceipt       `json:"checkout_receipt,omitempty"`
 	StatusSnapshot        *linuxOwnerHelperV2StatusSnapshot          `json:"status_snapshot,omitempty"`
 	ErrorCode             string                                     `json:"error_code,omitempty"`
+	ReleaseErrorDetail    *LinuxOwnerHelperV2ReleaseErrorDetail      `json:"release_error_detail,omitempty"`
 }
 
 func (response linuxOwnerHelperV2Response) matches(grant LinuxOwnerAnchorGrant, helper authority.LinuxCgroupProcessIdentity) bool {
@@ -463,6 +464,132 @@ func readLinuxOwnerHelperV2Request(connection *net.UnixConn) (linuxOwnerHelperV2
 	return request, fds, nil
 }
 
+// LinuxOwnerHelperV2ReleaseErrorDetail is the bounded, redacted release failure
+// detail: closed sub-step/arm/wait/guest vocabularies, an optional errno and branch reason.
+type LinuxOwnerHelperV2ReleaseErrorDetail struct {
+	Stage      string `json:"stage"`
+	Arm        string `json:"arm,omitempty"`
+	WaitClass  string `json:"wait_class,omitempty"`
+	GuestStage string `json:"guest_stage,omitempty"`
+	Errno      int    `json:"errno,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+const (
+	linuxOwnerHelperV2ReleaseStageNone          = "none"
+	linuxOwnerHelperV2ReleaseReasonOwnerLost    = "owner_lost"
+	linuxOwnerHelperV2ReleaseReasonLeaseExpired = "lease_expired"
+	linuxOwnerHelperV2ReleaseReasonStop         = "stop_requested"
+)
+
+func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) String() string {
+	if detail == nil {
+		return ""
+	}
+	message := "stage=" + detail.Stage
+	if detail.Arm != "" {
+		message += " arm=" + detail.Arm
+	}
+	if detail.WaitClass != "" {
+		message += " wait_class=" + detail.WaitClass
+	}
+	if detail.GuestStage != "" {
+		message += " guest_stage=" + detail.GuestStage
+	}
+	if detail.Errno != 0 {
+		message += fmt.Sprintf(" errno=%d", detail.Errno)
+	}
+	if detail.Reason != "" {
+		message += " reason=" + detail.Reason
+	}
+	return message
+}
+
+func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
+	if detail == nil {
+		return nil
+	}
+	switch detail.Stage {
+	case linuxOwnerHelperV2ReleaseStageNone, linuxgate.ReleaseSubStepGateAuthorize, linuxgate.ReleaseSubStepCloneBootstrap,
+		linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseSubStepRegister:
+	default:
+		return fmt.Errorf("Linux owner helper release error detail has an unknown sub-step %q", detail.Stage)
+	}
+	if detail.Errno < 0 {
+		return errors.New("Linux owner helper release error detail has a negative errno")
+	}
+	switch detail.Reason {
+	case "", linuxOwnerHelperV2ReleaseReasonOwnerLost, linuxOwnerHelperV2ReleaseReasonLeaseExpired, linuxOwnerHelperV2ReleaseReasonStop:
+	default:
+		return fmt.Errorf("Linux owner helper release error detail has an unknown reason %q", detail.Reason)
+	}
+	if detail.Reason != "" && (detail.Stage != linuxOwnerHelperV2ReleaseStageNone || detail.Errno != 0) {
+		return errors.New("Linux owner helper release error detail mixes a branch reason with a sub-step")
+	}
+	if detail.Stage == linuxOwnerHelperV2ReleaseStageNone {
+		if detail.Arm != "" || detail.WaitClass != "" || detail.GuestStage != "" {
+			return errors.New("Linux owner helper release error detail carries arm detail without a sub-step")
+		}
+		if detail.Errno != 0 {
+			return errors.New("Linux owner helper release error detail carries an errno without a sub-step")
+		}
+		return nil
+	}
+	shape, found := linuxgate.LookupReleaseArmShape(detail.Arm)
+	if !found {
+		return fmt.Errorf("Linux owner helper release error detail has an unknown arm %q", detail.Arm)
+	}
+	if shape.SubStep != detail.Stage {
+		return fmt.Errorf("Linux owner helper release error detail arm %q does not belong to sub-step %q", detail.Arm, detail.Stage)
+	}
+	if shape.WaitClass != (detail.WaitClass != "") {
+		return errors.New("Linux owner helper release error detail carries a wait class exactly when its arm reads the exec-status channel")
+	}
+	switch detail.WaitClass {
+	case "", linuxgate.ReleaseWaitClassDeadline, linuxgate.ReleaseWaitClassPeerClosed, linuxgate.ReleaseWaitClassOther:
+	default:
+		return fmt.Errorf("Linux owner helper release error detail has an unknown wait class %q", detail.WaitClass)
+	}
+	if detail.GuestStage != "" {
+		if !shape.GuestBootstrap {
+			return errors.New("Linux owner helper release error detail carries a guest bootstrap stage on an arm that cannot read one")
+		}
+		switch detail.GuestStage {
+		case linuxgate.ReleaseGuestStageRequest, linuxgate.ReleaseGuestStageSeed, linuxgate.ReleaseGuestStageTarget,
+			linuxgate.ReleaseGuestStageGit, linuxgate.ReleaseGuestStageCheckout,
+			linuxgate.ReleaseGuestStageNativeImage, linuxgate.ReleaseGuestStageExec:
+		default:
+			return fmt.Errorf("Linux owner helper release error detail has an unknown guest bootstrap stage %q", detail.GuestStage)
+		}
+	}
+	return nil
+}
+
+// linuxOwnerHelperV2ReleaseErrorDetailFor reduces a failed release attempt to
+// the bounded detail the unresolved response carries; the raw chain is never serialized.
+func linuxOwnerHelperV2ReleaseErrorDetailFor(err error, ownerLost, leaseLive, stopRequested bool) *LinuxOwnerHelperV2ReleaseErrorDetail {
+	detail := &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: linuxOwnerHelperV2ReleaseStageNone}
+	var subStep *linuxgate.ReleaseSubStepError
+	if errors.As(err, &subStep) {
+		detail.Stage = subStep.SubStep
+		detail.Arm = subStep.Arm
+		detail.WaitClass = subStep.WaitClass
+		detail.GuestStage = subStep.GuestStage
+		detail.Errno = subStep.Errno
+	}
+	if err == nil {
+		switch {
+		case ownerLost:
+			detail.Reason = linuxOwnerHelperV2ReleaseReasonOwnerLost
+		case !leaseLive:
+			detail.Reason = linuxOwnerHelperV2ReleaseReasonLeaseExpired
+		case stopRequested:
+			detail.Reason = linuxOwnerHelperV2ReleaseReasonStop
+		}
+	}
+	return detail
+}
+
 func writeLinuxOwnerHelperV2Response(connection *net.UnixConn, response linuxOwnerHelperV2Response, fds ...int) error {
 	encoded, err := json.Marshal(response)
 	if err != nil || len(encoded) == 0 || len(encoded) > linuxOwnerHelperV2MaxFrame {
@@ -510,6 +637,10 @@ func readLinuxOwnerHelperV2Response(connection *net.UnixConn) (linuxOwnerHelperV
 		closeLinuxOwnerAnchorFDs(fds)
 		return linuxOwnerHelperV2Response{}, nil, errors.New("Linux owner helper exposed a selected action outside authenticated Status")
 	}
+	if err := response.ReleaseErrorDetail.Validate(); err != nil {
+		closeLinuxOwnerAnchorFDs(fds)
+		return linuxOwnerHelperV2Response{}, nil, err
+	}
 	return response, fds, nil
 }
 
@@ -517,9 +648,21 @@ func linuxOwnerHelperV2ResponseError(response linuxOwnerHelperV2Response) error 
 	if response.Status == "recovery_only" || response.ErrorCode == "owner_lost" {
 		return ErrLinuxOwnerHelperV2RecoveryOnly
 	}
-	if response.Operation == "release" && response.Status == "unresolved" && response.StopEvidence != nil {
-		copy := *response.StopEvidence
-		return &LinuxOwnerHelperV2ReleaseUnresolvedError{Code: response.ErrorCode, Evidence: &copy}
+	if response.Operation == "release" && response.Status == "unresolved" &&
+		(response.StopEvidence != nil || response.ReleaseErrorDetail != nil) {
+		failure := &LinuxOwnerHelperV2ReleaseUnresolvedError{Code: response.ErrorCode, Detail: response.ReleaseErrorDetail}
+		if response.StopEvidence != nil {
+			copy := *response.StopEvidence
+			failure.Evidence = &copy
+		}
+		// The detail is never nil now, so the code-driven sentinel must stay in the chain.
+		switch response.ErrorCode {
+		case "owner_lost_during_release":
+			return errors.Join(failure, ErrLinuxOwnerHelperV2OwnerLost)
+		case "lease_expired_during_release":
+			return errors.Join(failure, fmt.Errorf("Linux owner helper rejected operation (%s)", response.ErrorCode))
+		}
+		return failure
 	}
 	switch response.ErrorCode {
 	case "owner_lost_during_release":
