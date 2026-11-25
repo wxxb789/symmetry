@@ -263,6 +263,7 @@ func runConfiguredOwnerCommand(command string, args []string) error {
 			return err
 		}
 		fmt.Fprintln(os.Stdout, linuxpreflight.LinuxOwnerPreflightRuntimeBoundary)
+		fmt.Fprintf(os.Stdout, "apparmor_userns=%s\n", linuxpreflight.LinuxOwnerAppArmorUsernsDecision())
 		return nil
 	case "-recover-containment-only":
 		if err := platform.EnsureLinuxChildSubreaper(); err != nil {

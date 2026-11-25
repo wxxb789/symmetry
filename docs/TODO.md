@@ -1638,25 +1638,36 @@ is fixed here; each bullet names what a follow-up has to re-derive.
 
 ## Linux v2 owner hosts under the Ubuntu AppArmor userns restriction (2026-11-22)
 
-- [ ] Production Linux v2 owner hosts with `kernel.apparmor_restrict_unprivileged_userns=1` need a
-      per-program `userns` AppArmor profile for the launcher/gate (`scripts/install-linux-owner.sh`), or
-      the sysctl relaxed, to be specified by the D3 `harness.md` amendment / W5-02a. The Ubuntu default
-      transitions an unconfined `unshare(CLONE_NEWUSER)` caller into the capability-denying
-      `unprivileged_userns` profile, so the launcher/gate's later `drop_to_b`
-      (`daemon/native/linux-gate/c-gate/gate.c`) cannot proceed; the host prerequisite probe carries a
-      per-program exception for its own ephemeral binary, which does not cover production installs. The
-      native acceptance fixture (`scripts/ci/linux-v2-native-acceptance.sh`) needs the same exception
-      before its case sets can pass.
-      **Confirmed on the guest (2026-11-25, goal `rf-acc-guest-native-exec`, runs `45593856716`,
-      `45601287283` and the final `45602546196`, evidence §7/§9):** the gate's pre-clone credential
-      drop is refused a capability *use*, not a missing capability — `PR_CAPBSET_DROP` returns
-      `EPERM` while the gate is its user namespace's root and the bounding set is still non-zero,
-      reported verbatim as `guest_stage=gate_drop_bounding_set errno=1`. No gate-side change can
-      substitute (the `CapBnd == 0` invariant is read back by `drop_to_b` and skipping it would
-      weaken it), so the fix here is the named one above: the per-program `userns` profile in the
-      installer plus the fixture exception. Follow-up goal: `rf-acc-apparmor-userns-profile`, which
-      owns `scripts/install-linux-owner.sh` and the acceptance fixture (both outside that goal's
-      owned set).
+- [ ] The owner-gated D3 `harness.md` amendment and the D3/W5-02 item still need the delivered host
+      requirement applied; `docs/design/harness.md` and `docs/goals/0010-refactor-program.md` are
+      owner-gated, so goal `rf-acc-apparmor-userns-profile` only proposes the amendment text in its
+      plan §9. **Delivered (2026-11-26, goal `rf-acc-apparmor-userns-profile`, branch
+      `refactor/rf-acc-apparmor-userns-profile`, base `61399984`; plan
+      `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
+      `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`):** on a host with
+      `kernel.apparmor_restrict_unprivileged_userns=1`, `scripts/install-linux-owner.sh` installs,
+      loads and verifies the per-program AppArmor `userns` exception
+      `/etc/apparmor.d/symmetry-linux-owner-userns` for the exact installed gate path
+      `/usr/libexec/symmetry/symmetry-linux-gate`, fails closed when it cannot prove the loaded
+      fact, and removes it through `-remove-userns-profile`; the installed
+      `-verify-linux-owner-install` check refuses such a host unless the exact installed text is
+      the loaded policy proven against that exact text, and records `apparmor_userns=not_needed|per_program` beside
+      `LinuxOwnerPreflightRuntimeBoundary`; `scripts/ci/linux-v2-native-acceptance.sh` boots its
+      guest with the default capability set plus `CAP_MAC_ADMIN`, provides the security filesystem before the in-guest
+      installer run and authors no policy text of its own, while
+      `scripts/ci/linux-v2-native-rootfs-base.sh` pins the `apparmor` package the in-guest load
+      and readback need. The sysctl is never written, the two existing CI exceptions and the gate
+      are unchanged, and the delivered run rows stand in the goal's evidence record. Run 3's head
+      (`ce3c30b9`) clears the wall's rows (the installer and the preflight print
+      `apparmor_userns=per_program`, the migration transport start resolves its one-use
+      RELEASE, and `shared`'s `clone_integration_linux_test.go:240` /
+      `launcher_integration_linux_test.go:439` checks pass); the runs stop beyond the wall at
+      rows named verbatim in the record §8 (the migration turn wait and `shared`'s
+      `/proc/<pid>/environ` identity rows) — next-goal territory, out of this goal's scope. The
+      apply, fix and round-1 stages changed bytes after that head, so this entry binds the wall
+      rows to `ce3c30b9` alone; the conductor's Bind run `45688173130` bound `2d423748`, the
+      round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds the delivered
+      revisions (record §1 digests, §8 delta tables).
 
 ## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
 

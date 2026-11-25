@@ -5308,3 +5308,24 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       earlier round's walls (the codex release class — the AppArmor userns wall, owned by
       `rf-acc-apparmor-userns-profile`; the Claude fixed-argv bound wall, owned by
       `rf-claude-schema-argv`) are recorded in the goal's residual entry in `docs/TODO.md`.
+
+## rf-acc-apparmor-userns-profile: the production host requirement is specified and installed (2026-11-26)
+
+- [x] The host requirement's "to be specified by the D3 `harness.md` amendment / W5-02a" statement is
+      closed (goal `rf-acc-apparmor-userns-profile`, branch `refactor/rf-acc-apparmor-userns-profile`,
+      base `61399984`; plan `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
+      `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`): the per-program AppArmor
+      `userns` exception is installed, loaded and verified by `scripts/install-linux-owner.sh` for
+      the exact installed gate path `/usr/libexec/symmetry/symmetry-linux-gate` whenever
+      `kernel.apparmor_restrict_unprivileged_userns=1`, the installed preflight refuses such a host
+      unless the exact installed text is the loaded policy (proven by the kernel's recorded hash), and the acceptance fixture
+      loads the installer's own profile inside its guest with no policy text of its own
+      (`grep -c apparmor scripts/ci/linux-v2-native-acceptance.sh` stays 0). Relaxing the sysctl and
+      a fixture-only exception were rejected; the gate, the two existing CI exceptions and the
+      marker/resume semantics of the installer are unchanged. What stays open is only the
+      owner-gated amendment application itself, recorded in `docs/TODO.md`. On run 3's head
+      (`ce3c30b9`) the rows clear the wall (installer/preflight `apparmor_userns=per_program`,
+      the migration transport start, the two `shared` checks) and the runs' next stops are named
+      verbatim in the evidence record §8; the conductor's Bind run `45688173130` bound
+      `2d423748`, the round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds
+      the delivered revisions (the record's §1 digest table is the delivered set).
