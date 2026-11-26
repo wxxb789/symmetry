@@ -898,3 +898,20 @@ and `scripts/ci/register-linux-v2-claim-machine.py`
 (`25b04fbcbe37cc9d678b7c07aa98690bd5cd276f4e08e1c89553eace166e3087` →
 `f6029087c0acf8c42478018f0f9672fdf7a914a715d4e49d0eb3c3ee128ad773`; invoked by the acceptance
 script at `:1534`).
+
+## 15. Bind 3 — BINDING on `2627473c`
+
+[Run `45820200923`](https://github.com/wxxb789/symmetry/actions/runs/45820200923) (`shared`, scratch
+commit `7242480f`) supersedes §14. Clone-intent refusal count: 0. Pi reached the same RPC stop as
+§14; the run failed, and the partial export has no manifest.
+
+Zip SHA-256: native evidence `28ceccf27839c9eb4ad0fb4488bcd856848d8e04efbad1a2206828c667bc3d29`;
+host prerequisite `7e487d575cb2b89acc77ef0de7c099f88b34282cd5e3ef57765cbb42ef631031`.
+
+SHA-256 delta from Bind 2: all 13 previously recorded inputs are unchanged. #302 changed these
+additional inputs compiled into the same e2e test binary:
+
+| File | Bind 2 (`5ae35230`) | Bind 3 (`2627473c`) |
+| --- | --- | --- |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` |
+| `daemon/e2e/production_linux_v2_cleanup_worker_shell_test.go` | Absent | `e9e95d049df3dab8e6f5a78a7d28fd2fbed04cef1291994fb67bc6d4f5d194d9` |
