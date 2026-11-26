@@ -35,7 +35,8 @@ available before-state (§4.1).
    opener, a structural line of the concatenation (`] ++`, `Enum.map(@attr, fn v ->`, `end) ++`,
    `[`, `]`), or a row: a start line `{"<name>"|"<prefix>#{var}", "<profile>", :<harness>,
    :<role>,` completed by `"<description>"}` lines, with interpolated names expanded from the
-   referenced attribute's own string list. An unparseable line refuses with its text, so a shape
+   referenced attribute's own string list; an element line there that is neither blank, a comment,
+   nor a bare quoted string refuses too. An unparseable line refuses with its text, so a shape
    the parser cannot read can never be silently skipped into a smaller set. The two routing facts
    are parsed the same way: the goal-role list from
    `Enum.split_with(@cases, fn … repository_role not in [:pi_durability, :opencode_goal] end)` and
@@ -63,15 +64,19 @@ available before-state (§4.1).
    (a) drop `"codex_containment"` from the writer's set → red; (b) add a goal-routed
    `pi_durability` row named for the probe to the fixture's table → red; (c) unparseable shapes →
    red with a bounded reason: the split predicate's role list replaced by a variable, the
-   `request_case` cond's prefix arm rewritten, one row's role atom replaced, and the writer's set
-   assignment starred (`{*CASES,`). Each mutation asserts its anchor matched, so a mutated-away
+   `request_case` cond's prefix arm rewritten, one row's role atom replaced, one
+   `@stage_replay_holds` element line replaced by an atom, a second `  @cases [` opener appended,
+   and the writer's set assignment starred (`{*CASES,`); (d) remove the
+   `stage_replay_unprovisioned_refusal` exemption from the cond's fixed list → red (the
+   legacy-side disjointness witness). Each mutation asserts its anchor matched, so a mutated-away
    anchor fails the witness instead of passing vacuously.
 6. **`ci.yml`: exactly one line, in the daemon job's existing step.** The new suite joins
    `Check Linux v2 fixture contracts` after `test-linux-v2-host-prerequisite-probe.py`
    (`.github/workflows/ci.yml:998`). No structure pin needs an update: `check_job_timeouts` pins
    the daemon ceiling (30) and step caps against it, and no pin names this step or hashes its
-   body (`grep -rn "fixture contracts" scripts/ci/` → only `ci.yml:993`); the job's timeout
-   derivation is therefore untouched. No new job.
+   body (`grep -rn "fixture contracts" scripts/ci/ .github/` → only
+   `.github/workflows/ci.yml:993`; the `scripts/ci/`-only invocation prints nothing); the job's
+   timeout derivation is therefore untouched. No new job.
 7. **Comment glue: point at the test, keep ≤2 lines.** Writer `:30-31` keeps its first line
    (the fact) and its second becomes the pointer to the new suite; the fixture's `:184-185`
    comment above `goal_case_specs` gets the same pointer. Nothing else in either file changes.

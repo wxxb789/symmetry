@@ -50,7 +50,15 @@ def parse_string_attribute(text: str, name: str) -> list[str]:
     end = STRING_ATTRIBUTE_END.search(body)
     if end is None:
         raise Refused(f"{FIXTURE.name}: `@{name} [` has no `  ]` terminator")
-    values = STRING_ATTRIBUTE_VALUES.findall(body[: end.start()])
+    values: list[str] = []
+    for line in body[: end.start()].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        element = STRING_ATTRIBUTE_VALUES.match(line)
+        if element is None:
+            raise Refused(f"{FIXTURE.name}: unparseable `@{name} [` element line {line!r}")
+        values.append(element.group(1))
     if not values:
         raise Refused(f"{FIXTURE.name}: `@{name} [` holds no string values")
     return values
@@ -163,7 +171,7 @@ def writer_goal_cases(text: str) -> set[str]:
     return goals
 
 
-def check_agreement(writer_text: str, fixture_text: str) -> tuple[set[str], set[str]]:
+def check_agreement(writer_text: str, fixture_text: str) -> None:
     writer_goals = writer_goal_cases(writer_text)
     rows = fixture_rows(fixture_text)
     goal_roles = fixture_goal_roles(fixture_text)
@@ -186,7 +194,6 @@ def check_agreement(writer_text: str, fixture_text: str) -> tuple[set[str], set[
         raise Refused(
             f"{FIXTURE.name}: legacy rows route to a writer case keyed as a goal admission: {legacy_collisions}"
         )
-    return writer_goals, fixture_goals
 
 
 class OwnerRequestKeyAgreement(unittest.TestCase):
@@ -223,9 +230,8 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
         self.assertIn("goal_case_drift_probe", str(refused.exception))
 
     def test_a_legacy_row_routed_into_a_goal_case_is_refused(self) -> None:
-        # The unprovisioned refusal is the legacy row that survives the prefix rule only through
-        # the fixed-name list; losing that exemption dispatches it under the goal-keyed
-        # `stage_replay` case.
+        # The unprovisioned refusal survives the prefix rule only through the fixed-name list;
+        # losing that exemption dispatches it under the goal-keyed `stage_replay` case.
         mutated = self.mutate(self.fixture_text, '          "stage_replay_unprovisioned_refusal"\n', "")
         with self.assertRaises(Refused) as refused:
             check_agreement(self.writer_text, mutated)
@@ -250,6 +256,7 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
             ),
             ("writer", "GOAL_ADMISSION_CASES = {", "GOAL_ADMISSION_CASES = {*CASES,"),
             ("fixture", "  ] ++\n", "  ] ++\n  @cases [\n"),
+            ("fixture", '"handoff_committed",\n', ":handoff_committed,\n"),
         )
         for side, anchor, replacement in mutations:
             with self.subTest(anchor=anchor):
