@@ -32,7 +32,7 @@ Why the preceding `alternate_mount` leg leaves it:
    measured parent identity differs from the live anchor's manager subgroup by `MountID`
    (`daemon/internal/platform/linux_cgroup_v2_linux.go:239-247`;
    `authority.LinuxCgroupParentIdentity{MountID}` at `daemon/internal/authority/cgroup.go:25-31`).
-   Verbatim guest text (probe output, `gdd/native/run-45384436642.log:1231`):
+   Verbatim guest text (probe output, `gdd/native/run-45384436642.log:1227`):
    `-verify-linux-owner-install: configured delegated parent identity differs from the live owner
    anchor's exact manager subgroup`.
 3. The refusal path has no release or clear step: the process exits 1 with the claim row, which
@@ -62,17 +62,17 @@ Discrimination against the contract's three candidates:
 The refusal leg's roster row is retained by design, so the shared set must not let it precede a
 leg that requires a fresh or physically released Store. The delivered order runs
 `run_alternate_mount_refusal_witness "$v2_alternate_mount_events"` at
-`scripts/ci/linux-v2-native-acceptance.sh:3190`, after every leg that starts a fresh native-owner
-witness (pi `:3170`, crash `:3174`, daemon-crash `:3175`, stage-replay `:3176`, ack-loss `:3179`,
-helper-exit `:3182`, response-loss `:3183`, receipt-persist `:3185`, pid-reuse `:3186`, v1-replay
-`:3187`) and immediately before the frozen `opencode_native_health` leg (`:3191`). No journal is
+`scripts/ci/linux-v2-native-acceptance.sh:3186`, after every leg that starts a fresh native-owner
+witness (pi `:3166`, crash `:3170`, daemon-crash `:3171`, stage-replay `:3172`, ack-loss `:3175`,
+helper-exit `:3178`, response-loss `:3179`, receipt-persist `:3181`, pid-reuse `:3182`, v1-replay
+`:3183`) and immediately before the frozen `opencode_native_health` leg (`:3190`). No journal is
 deleted, no Store is reset, and no leg's assertions are weakened.
 
 The old placement carried the fixture-inventory rule "intentionally first so another row cannot
 mask the proof" (`docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82`). That rule is
 preserved by an explicit, stronger pin: the leg reads the App stderr it already captures and
-requires the mount-identity preflight refusal verbatim, and forbids the foreign-ownership
-refusal. Position no longer has to carry the anti-masking proof.
+requires the mount-identity preflight refusal on a line that also carries the witness marker, and
+forbids the foreign-ownership refusal. Position no longer has to carry the anti-masking proof.
 
 The pinned text is grounded in the App's own print path, not in prose: `main.go:35` prints
 `-linux-v2-native-owner-witness: <err>`; `linux_owner_witness_linux.go:3258` wraps the preflight
@@ -95,9 +95,12 @@ already non-empty.
      containment (authority, handoff, scan ledger or abort-less reservation), no unproven stop, no
      cgroup reservation even when aborted, and no release tombstone.
    - New pure predicates `linuxV2RequireMountRefusalCause(lines)` and
-     `linuxV2RequireClaimOnlyRetainedRow(journal)`, each with a unit table row per branch: 3 for
-     the cause predicate (witness marker present; foreign-ownership phrase absent; mount phrase
-     present) and 12 for the row predicate (missing row plus 11 field predicates).
+     `linuxV2RequireClaimOnlyRetainedRow(journal, found)`, each with a unit table row per branch:
+     7 rows for the cause predicate (an unmarked capture is refused, the foreign-ownership phrase
+     is refused anywhere, and the mount phrase is required on a line that also carries the witness
+     marker: accepted chain, empty, bare probe, foreign, unrelated, masked, both causes) and 15 for
+     the row predicate (zero-value row plus 14 field mutations, with the `found=false` refusal
+     pinned by a direct call).
    - One row pinning the capture read refusal
      (`TestLinuxV2AlternateMountRefusalCauseRefusesAnUnreadableCapture`).
    - One unit row pinning the unchanged precondition's treatment of a claim-only prior record
@@ -140,14 +143,14 @@ already non-empty.
 ## 6. Local gates
 
 From `daemon/`: `gofmt -l e2e/`; `go vet ./...` (Windows, pinned go1.27.4) and
-`GOOS=linux go vet ./e2e/`; the three new rows plus the `./e2e/` package; then the full
+`GOOS=linux go vet ./e2e/`; the four new rows plus the `./e2e/` package; then the full
 `go test ./...` on Windows and in WSL (`wsl -d Ubuntu-24.04` as root from
-`/mnt/q/repos/wt-acc-journal-release/symmetry/daemon`, go1.27.0), never beside a measurement
-harness. From the repo root: `bash -n scripts/ci/linux-v2-native-acceptance.sh`. Scratch
+`<HOST-PATH>/mnt/q/repos/wt-acc-journal-release/symmetry/daemon`, go1.27.0), never beside a
+measurement harness. From the repo root: `bash -n scripts/ci/linux-v2-native-acceptance.sh`. Scratch
 harnesses, not committed: `check-order.sh` on the pre-change bytes (RED) and on the delivered
 bytes (GREEN); `guard-harness.sh` with all ten event files (green), one empty, and one missing
 (red); `mutants.sh` in a scratch clone for one red row per new branch. Comment cap:
-`python C:/Users/lhan/.local/state/gdd/scratch/comment-cap.py <worktree>` before the final
+`python <HOST-PATH>/.local/state/gdd/scratch/comment-cap.py <worktree>` before the final
 re-measure of digests and anchors.
 
 ## 7. Out of scope

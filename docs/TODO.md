@@ -2167,9 +2167,9 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
 
 ## rf-acc-shared-journal-release: residuals (2026-11-26)
 
-The `shared` pi leg's `:91` pre-existing-RunJournal stop closed on 2026-11-26 (goal
-`rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`, base
-`7111828b`); its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
+The `shared` pi leg's `:91` pre-existing-RunJournal stop is delivered, pending the conductor's Bind
+on the head (goal `rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`,
+base `7111828b`); its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
 `## rf-acc-shared-journal-release: the shared pi leg refuses the prior refusal leg's RunJournal (2026-11-26)`.
 
 - [ ] The mount-refusal leg must stay the last Store-reading leg of the `shared` arm (2026-11-26,

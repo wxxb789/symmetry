@@ -1611,6 +1611,14 @@ func linuxV2OwnerCommandExitCode(command *linuxV2OwnerWitnessCommand) int {
 	return exitErr.ExitCode()
 }
 
+// linuxV2LogOwnerWitnessStderr emits the bounded, redacted App stderr tail under one prefix.
+func linuxV2LogOwnerWitnessStderr(t *testing.T, prefix string, lines []string) {
+	t.Helper()
+	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
+		t.Logf("%s: %s", prefix, line)
+	}
+}
+
 // linuxV2ReportOwnerWitnessFailure reaps an already-refused command for its exit status and
 // prints the bounded, redacted tail of the App stderr the harness captured as its sink.
 func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture, command *linuxV2OwnerWitnessCommand) {
@@ -1629,9 +1637,7 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 		t.Logf("owner-witness stderr capture refused: %v", err)
 		return
 	}
-	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
-		t.Logf("owner-witness stderr: %s", line)
-	}
+	linuxV2LogOwnerWitnessStderr(t, "owner-witness stderr", lines)
 }
 
 // linuxV2JournalBindsOwnerSlot projects one owner slot, PID and creation identity, the
@@ -2279,11 +2285,15 @@ func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linu
 	return nil
 }
 
-func TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease(t *testing.T) {
-	claimOnly := state.RunJournal{
+func linuxV2ClaimOnlyRefusalJournal() state.RunJournal {
+	return state.RunJournal{
 		RunID: "c869cf0f-884e-4160-b99a-aedd1dd6d659", Generation: 1, LocalState: "claimed",
 		ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Unix(1, 0),
 	}
+}
+
+func TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease(t *testing.T) {
+	claimOnly := linuxV2ClaimOnlyRefusalJournal()
 	snapshot := linuxV2StoreJournalSnapshot{
 		owner: linuxV2StoreJournalOwnerStateFromJournal(claimOnly), journal: claimOnly,
 	}
@@ -2309,7 +2319,10 @@ func linuxV2RequireMountRefusalCause(lines []string) error {
 	if strings.Contains(window, linuxV2ForeignOwnershipRefusalPhrase) {
 		return errors.New("alternate-mount refusal names a prior RunJournal instead of the mount identity")
 	}
-	if !strings.Contains(window, linuxV2MountRefusalCausePhrase) {
+	if !slices.ContainsFunc(lines, func(line string) bool {
+		return strings.Contains(line, "-linux-v2-native-owner-witness:") &&
+			strings.Contains(line, linuxV2MountRefusalCausePhrase)
+	}) {
 		return errors.New("alternate-mount refusal does not name the configured-vs-anchor parent identity")
 	}
 	return nil
@@ -2340,6 +2353,14 @@ func TestLinuxV2AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal(t 
 			name:  "an unrelated witness refusal is refused",
 			lines: []string{"-linux-v2-native-owner-witness: owner witness config native harness version differs from the tested release"},
 			want:  "configured-vs-anchor parent identity",
+		},
+		{
+			name: "the mount phrase without the witness marker on its line is refused",
+			lines: []string{
+				"-linux-v2-native-owner-witness: owner witness config native harness version differs from the tested release",
+				"-verify-linux-owner-install: " + linuxV2MountRefusalCausePhrase,
+			},
+			want: "configured-vs-anchor parent identity",
 		},
 		{
 			name: "a capture naming both causes is refused",
@@ -2386,10 +2407,7 @@ func linuxV2RequireClaimOnlyRetainedRow(journal state.RunJournal, found bool) er
 }
 
 func TestLinuxV2AlternateMountRefusalRetainsTheClaimOnlyRow(t *testing.T) {
-	claimOnly := state.RunJournal{
-		RunID: "c869cf0f-884e-4160-b99a-aedd1dd6d659", Generation: 1, LocalState: "claimed",
-		ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Unix(1, 0),
-	}
+	claimOnly := linuxV2ClaimOnlyRefusalJournal()
 	if err := linuxV2RequireClaimOnlyRetainedRow(claimOnly, true); err != nil {
 		t.Fatalf("the exact claim-only refusal row was refused: %v", err)
 	}
@@ -2400,7 +2418,7 @@ func TestLinuxV2AlternateMountRefusalRetainsTheClaimOnlyRow(t *testing.T) {
 		name   string
 		mutate func(*state.RunJournal)
 	}{
-		{name: "the row is gone", mutate: func(journal *state.RunJournal) { *journal = state.RunJournal{} }},
+		{name: "a zero-value row is refused", mutate: func(journal *state.RunJournal) { *journal = state.RunJournal{} }},
 		{name: "local state is not claimed", mutate: func(journal *state.RunJournal) { journal.LocalState = "stale" }},
 		{name: "the claim id is missing", mutate: func(journal *state.RunJournal) { journal.ClaimID = "" }},
 		{name: "claim grant is incomplete", mutate: func(journal *state.RunJournal) { journal.LeaseToken = "" }},
@@ -4841,9 +4859,7 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 		t.Fatalf("read captured alternate-mount App stderr: %v", err)
 	}
 	if err := linuxV2RequireMountRefusalCause(stderrLines); err != nil {
-		for _, line := range linuxV2OwnerWitnessStderrBoundedLines(stderrLines) {
-			t.Logf("alternate-mount App stderr: %s", line)
-		}
+		linuxV2LogOwnerWitnessStderr(t, "alternate-mount App stderr", stderrLines)
 		t.Fatalf("alternate-mount refusal is not attributable to the mount identity: %v", err)
 	}
 	journalSetAfter, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
