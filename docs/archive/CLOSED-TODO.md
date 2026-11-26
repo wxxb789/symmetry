@@ -5582,6 +5582,8 @@ section, whose pointer sentence names this one.
       owner-loss-latch probes (record §5).
       The `checkout_ready` census residual is tracked in the
       `## rf-acc-claude-stage-replay: residuals (2026-11-26)` section of `docs/TODO.md`.
-      Delivered, pending the conductor's Bind: the Bind runs `claude_containment` and
-      `codex_containment` once each, and the `shared` `stop_receipt_durable` leg if it is
-      reachable (otherwise recorded unreached), and records the next stop verbatim, or green.
+      Delivered and bound by the conductor's Bind 4: run `45802625407` on `1f893969` is the
+      BINDING acceptance for `claude_containment` and `codex_containment` — both green, no next
+      stop, `owner_loss` captured (`owner_lost=true`, `error` absent, helper-issued `stop_proof`;
+      both manifests passed). The optional `shared` `stop_receipt_durable` leg was not in the
+      run's two case sets. Evidence record `## Bind 4`.

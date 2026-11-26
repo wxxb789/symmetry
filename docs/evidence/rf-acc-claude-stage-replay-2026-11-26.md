@@ -508,7 +508,7 @@ rows, mutants, suites and anchor sweep above were all run at the delivered r2 by
 `accept`/022 row is the CI-parity surface (the CI daemon job runs as the non-root runner user); the
 root row re-ran on the r2 bytes with the identical refusal set, and the as-is-umask row is this
 host's implement-stage environment record, kept with its base attribution. The r2 full-suite rows
-ran on `15e000f4`, four seconds before the `c52468cd` merge (ruling Y2, restored by round-4 Q6):
+ran on `15e000f4`, four seconds before the `94e36995` merge (ruling Y2, restored by round-4 Q6):
 the two §1-hashed r2 run-input files are byte-identical at `15e000f4` and `94e36995`
 (`3c8759c4…`, `9dc0667b…`), so the r2 suite rows do not cover the `origin/main` content merged in
 afterwards; the r3/r4 rows below carry that coverage.
@@ -751,8 +751,9 @@ sentence; §10 carries the round.
 
 ## 9. Close-out
 
-Delivered, pending the conductor's Bind (both containment sets, `claude_containment` and
-`codex_containment`): the implement round plus fix rounds r1, r2 (superseded), r3 and r4 — the
+Delivered, bound by the conductor's Bind 4 (run `45802625407` on `1f893969`; both containment
+sets, `claude_containment` and `codex_containment`, green — `## Bind 4`): the implement round plus
+fix rounds r1, r2 (superseded), r3 and r4 — the
 contract's round-3 ruling Z1-Z5 (§8) and round-4 ruling Q1-Q6 (§10), on top of the r1 review
 findings STD-A01/STD-A02, the DS r1 P1 (the valid unresolved thread `PRRT_kwDOUMNTZc68QecV`,
 contract ruling R1-R6), the DS r2 P1-1/P1-2 plus the three round-3 consults, and the round-3
@@ -763,8 +764,8 @@ delivered assertions; `docs/TODO.md` carries the `checkout_ready` census residua
 guest-only product-mutant residual, the router call-site pin and the Q4 comment disposition.
 Round 4 re-ran every gate on the final run inputs named in §1's r4 table (§6); the last step ran
 the comment cap *before* the final re-measure, and §1's r4 digests were re-read at the delivered
-bytes and are unchanged across every gate row above. Bind 3 below is diagnostic for `91df192f`;
-the conductor's re-Bind runs both containment sets on this head.
+bytes and are unchanged across every gate row above. The earlier Binds below stay diagnostic;
+Bind 4 (`## Bind 4`) is this head's BINDING acceptance for both containment sets.
 
 ## 10. Fix round r4 — Q1-Q6 (the capture's own deadline; round-3 residue)
 
@@ -1077,5 +1078,81 @@ the scratch branch deleted and the temporary worktree removed. Full report:
 | `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
 
 The Go-file digest equals §1's delivered r3 digest; the shim carries the recovered blob unchanged,
+and the workflow carries the single `case_sets` delta (`claude_containment` first,
+`codex_containment` second). The four record-only docs are not run inputs.
+
+## Bind 4 — BINDING: the acceptance run on the r4 PR head 1f893969 (claude_containment + codex_containment)
+
+Run `45802625407` on `1f893969` is the **BINDING** acceptance for `claude_containment` and
+`codex_containment`: both green, with `owner_loss` captured, `owner_lost=true`, `error` absent and
+a helper-issued `stop_proof`; the earlier Binds stay diagnostic.
+
+The conductor's Bind on the exact PR-head bytes plus the two scratch-only files, watched once, then
+the scratch branch deleted and the temporary worktree removed. Full report:
+`findings/301-binding-run-4.md`; the run log is retained at
+`scratch/bind301r4/run-45802625407.log` under the GDD state root (sha256
+`789970b80476179607b7ed79dc6d97d5c38ce00db43c2e8f8b009a0dc0dd835e`, 5172 lines).
+
+- Run `45802625407` (event `push`, `run_attempt=1`, head
+  `4a7f5921f8bda75db1096b36d3957cf51ccf44c6` = `1f893969` + the two scratch-only files, created
+  10:34:41Z, conclusion **success**); `total_count=1` at every read (right after creation, after
+  settlement, immediately before the branch deletion, after it, and at a final post-cleanup read).
+- `claude_containment`: the recorded stop `A helper did not exit with owner loss after the
+  stage-replay kill` is **gone** (0 occurrences; 0 of `exact process pidfd remained live beyond the
+  bounded wait`, `did not exit with owner loss`, `Go native acceptance event gate failed`,
+  `--- FAIL` and `pass=0`); `TestProductionLinuxV2ClaudeNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` verify green
+  (`run=1 pass=1 skip=0`, log 3076, 3650-3651) beside the seven AppArmor rows (2489-2495);
+  `Case set claude_containment exited 0`; the export manifest is `status: "passed"` with
+  `missing_allowlisted_files: []`.
+- `codex_containment`: the same stop is **gone**; `TestProductionLinuxV2CodexNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_codex` verify green
+  (`run=1 pass=1 skip=0`, log 4431, 5005-5006) beside the seven AppArmor rows (3844-3850);
+  `Case set codex_containment exited 0` and `All 2 case sets exited 0.`; the export manifest is
+  `status: "passed"` with `missing_allowlisted_files: []`. No first failing line (0 `pass=0`
+  rows); both jobs `success`.
+- The r4 `owner_loss` snapshot is exported in both stage-replay members
+  (`owner_witness_response.owner_loss`): `captured` true, `owner_lost` true,
+  `release_authorized` true, `error` empty and omitted, `stop_proof.kind` `helper` with
+  issuer = reaper = the held helper (`native_release`; `claude_containment` pid 7170,
+  `codex_containment` pid 7215) and `stop_proof.helper_exit` nil; the exported
+  `helper.pidfd_verified` false is the fixture mirror's zero value (the daemon wire helper carries
+  only pid/identity; the fixture assertion checks pid/identity, kind/issuer/reaper, nil
+  `helper_exit`, empty `error` and `release_authorized`).
+- Artifacts (sha256 = zip bytes = API `digest`): `linux-v2-native-evidence-45802625407-1` id
+  `15108742965` sha256
+  `43484c74f33a009b57700cae17fe77040682364aa46a10a2fdb4afc8ddb559f3` (members
+  `claude_containment/manifest.json`
+  `7c88db7d40d7a3bd5100f14fa2f695f117d26a6a8551892d578714b05a1e0711`;
+  `claude_containment/claude-native-containment.json`
+  `5b4bd877a5bbb03af4597a37384924baecdaa8a77bce5ca5bf4dd02895e3b46c`;
+  `claude_containment/claude-stage-crash-replay-native-release.json`
+  `fba6266cd801bd19a42f0cc86f54ec48693d2e6fa29cc343f83f26ff31fc8972`;
+  `codex_containment/manifest.json`
+  `d55ebb11a3b54768e1b0b53f2a56d70586cb90f72d8b479a69680e8132966676`;
+  `codex_containment/codex-native-containment.json`
+  `ae927ddd19f0701d1b1045fb77bd11da9f3334ea90ca8d35ce808c245e882058`;
+  `codex_containment/codex-stage-crash-replay-native-release.json`
+  `0f798b3c620d0359917ae725fea64eb12565ae6b3833f9f8b9c1a45e5853d17d`);
+  `linux-v2-host-prerequisite-45802625407-1` id `15108246601` sha256
+  `50dcebe017656ba571a2c03c5d3612aa6b316bde690bca595b6ed07066ba1211` (`status: passed`,
+  `source_commit` = the run head).
+- Run-input sha256 equality (run head `4a7f5921` vs PR head `1f893969`): the pushed commit's
+  parent is exactly `1f893969`, and `git diff --name-status 1f893969 4a7f5921` is exactly the two
+  scratch-only rows; every other tree file is byte-identical by construction. Executed run inputs:
+
+| file | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | yes |
+| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | yes |
+| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | yes |
+| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `3eaada89cf74e116282fe74cfd1fbda8c418197c09f6c29785cd6533060d7f04` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The Go-file digest equals §1's delivered r4 digest; the shim carries the recovered blob unchanged,
 and the workflow carries the single `case_sets` delta (`claude_containment` first,
 `codex_containment` second). The four record-only docs are not run inputs.

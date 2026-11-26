@@ -2001,13 +2001,22 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
 
 - [ ] Stage-replay router stage→arm mapping unpinned locally (2026-11-26, goal
       `rf-acc-claude-stage-replay`; contract round-2 ruling Y3 P3-3, restored by round-4 Q3): the
-      stage predicate's arms are each pinned locally (its 13 rows, the 16 snapshot rows, the ten
+      stage predicate's arms are each pinned locally (its 13 rows, the 16 snapshot rows, the eleven
       overlay mutants), but no local row observes the matrix's call-site wiring — which stage's
       leg takes the recovery-client snapshot arm and which keeps the unconditional 90 s unproven
       wait. The guest is fail-closed there (a swapped arm fatals on the mismatched durable
       boundary), so this is a local discrimination gap, not a silent-pass hole. Owner: conductor
       (add the call-site pin before the next Bind, or accept the guest's fail-closed behaviour as
       the oracle). No code change in this round.
+
+- [ ] Owner-loss capture re-dials a terminal `helper_exited` helper for the full 40 s (2026-11-26,
+      goal `rf-acc-claude-stage-replay`; contract round-4 ruling R2, Sol r4 F1, P3 speculative):
+      when `LookupHelper` reports a terminal `helper_exited` (`Control == nil`),
+      `captureLinuxV2NativeWitnessOwnerLoss`
+      (`daemon/internal/app/linux_owner_witness_linux.go:2938-2975`) keeps re-dialing for the full
+      40 s bound even though a gone helper can never yield the latch plus proof, so the capture
+      should return early instead. Not fixed in round 4 by ruling: a fix would re-open production
+      bytes and the Bind. Owner: conductor (fold into the next production-byte round).
 
 - [ ] Round-2 ruling Y3's second residual (P3-5, six 2-line "what" doc comments on unexported
       helpers) is superseded by round-4 Q4 and closed: the round-3-added comment lines were cut to
