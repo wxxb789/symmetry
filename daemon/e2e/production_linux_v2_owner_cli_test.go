@@ -1611,7 +1611,7 @@ func linuxV2OwnerCommandExitCode(command *linuxV2OwnerWitnessCommand) int {
 	return exitErr.ExitCode()
 }
 
-// linuxV2LogOwnerWitnessStderr emits the bounded, redacted App stderr tail under one prefix.
+// linuxV2LogOwnerWitnessStderr keeps a refusal's own cause in the log without echoing raw guest stderr.
 func linuxV2LogOwnerWitnessStderr(t *testing.T, prefix string, lines []string) {
 	t.Helper()
 	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
@@ -4852,8 +4852,8 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 	if entries, err := os.ReadDir(fixture.markerDir); err != nil || len(entries) != 0 {
 		t.Fatal("alternate mount refusal reached the B native hook marker boundary")
 	}
-	// Position no longer proves the cause: this leg follows the Store-reading legs, so the
-	// captured App stderr must name the mount identity itself.
+	// The captured App stderr must name the mount identity itself: any other refusal (for
+	// example a foreign-journal admission) has to red the leg instead of masking the proof.
 	stderrLines, err := linuxV2OwnerWitnessStderrTail(linuxV2OwnerWitnessStderrPath(fixture), fixture.request)
 	if err != nil {
 		t.Fatalf("read captured alternate-mount App stderr: %v", err)

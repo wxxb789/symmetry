@@ -5485,11 +5485,12 @@ section, whose pointer sentence names this one.
       `7111828b`; plan `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md`, record
       `docs/evidence/rf-acc-shared-journal-release-2026-11-26.md`):** the row is a claim-only
       RunJournal by design (the witness seeds the claim before the native-owner preflight; the
-      alternate cgroup bind mount is refused at the configured-vs-anchor parent identity), and the
-      product's own admission scan classifies it as unresolved, so the `shared` arm now runs the
-      refusal leg after the ten fresh/released-Store legs and pins its cause from the captured App
-      stderr; the refusal leg also requires its own retained row to stay claim-only, and a runtime
-      guard in the leg reddens if any prior leg's event file is missing. The pi leg's
-      `physically released and safe` precondition and every refusal assertion are unchanged; the
-      residual couplings stay in `docs/TODO.md` under this goal's section. The conductor's Bind on
-      the head is what removes the `:91` stop.
+      alternate cgroup bind mount is refused at the configured-vs-anchor parent identity) and no
+      product path retires it, so the refusal leg runs in its own case set
+      (`alternate_mount_refusal`, a fresh guest and Store per set) and its retained row is
+      invisible to the `shared` arm, which keeps base leg order. The leg pins its refusal cause
+      from the captured App stderr and requires its own retained row to stay claim-only; the pi
+      leg's `physically released and safe` precondition and every refusal assertion are
+      unchanged, and the option-(a) product-side retirement stays a residual in `docs/TODO.md`
+      under this goal's section. The conductor's Bind runs `shared` and `alternate_mount_refusal`
+      once each; it removes the `:91` stop.

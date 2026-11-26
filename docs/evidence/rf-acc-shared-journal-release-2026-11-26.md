@@ -90,11 +90,12 @@ check at `:1973`, fatal at `:1974` (identical to `2f7a38c6`/`origin/main` per Bi
 helper it calls, `linuxV2RequireSafelyReleasedPriorJournal`, is in
 `production_linux_v2_owner_cli_test.go:2259` and is unchanged (§9).
 
-## 3. The fix and the order pin
+## 3. Round-0 fix and order pin (superseded by §15)
 
-The `shared` arm now runs the mount-refusal leg after every leg that starts a fresh native-owner
-witness, and immediately before the frozen `opencode_native_health` leg
-(`scripts/ci/linux-v2-native-acceptance.sh`):
+**This section describes the round-0 (`84dc22c3`) bytes; round 1 replaced the ordering with the
+leg's own case set (§15).** The `shared` arm ran the mount-refusal leg after every leg that
+starts a fresh native-owner witness, and immediately before the frozen `opencode_native_health`
+leg (`scripts/ci/linux-v2-native-acceptance.sh`):
 
 | leg | line |
 | --- | --- |
@@ -114,16 +115,14 @@ witness, and immediately before the frozen `opencode_native_health` leg
 No journal is deleted, no Store is reset, no `rm`/`truncate`/state reset enters the script diff,
 and the moved leg keeps every one of its refusal assertions. The old placement carried the
 fixture-inventory rule "intentionally first so another row cannot mask the proof"
-(`docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82`); that rule is now carried by an
+(`docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82`); that rule is carried by an
 explicit pin: the leg reads its own captured App stderr
 (`production_linux_v2_owner_cli_test.go:4857`) and requires the mount-identity phrase on a line
 that also carries the witness marker, while forbidding the foreign-ownership phrase
 (`linuxV2RequireMountRefusalCause`, `:2314`), and it requires its own retained row to stay
-claim-only (`linuxV2RequireClaimOnlyRetainedRow`, `:2396`; call site `:4875`). The leg also guards
-its order at runtime: it refuses an empty argument list and fails unless all ten prior event files
-are already non-empty, and the call site (`:3187-3190`) passes those ten files to the guard as its
-arguments (`for prior in "$@"`, `:3034-3039`), so a future reorder cannot silently reintroduce the
-wall.
+claim-only (`linuxV2RequireClaimOnlyRetainedRow`, `:2396`; call site `:4875`). Round 0 also
+guarded the order at runtime (`:3034-3039`, ten prior event files as arguments); round 1 deletes
+that guard because the leg no longer shares the Store (§15).
 
 Local order and guard proof (scratch harnesses, not committed; base bytes snapshotted with
 `git show 7111828b:scripts/ci/linux-v2-native-acceptance.sh` to
@@ -142,12 +141,12 @@ bytes, and the guard rows re-run at the fix-round bytes):
 The guard block the harness executes is extracted verbatim from the delivered script
 (`sed -n '3034,3039p'`).
 
-**Coupling recorded as a residual** (`docs/TODO.md`): the mount leg stays before the opencode leg
-only because that leg aborts at its pinned-version config gate
-(`production_linux_v2_native_witness_test.go:1901`) before the prior-journal precondition
-(`:1968-1975`). If that version gate is fixed, the opencode leg would read the mount leg's
-claim-only row; the mount leg must then move after the opencode leg in the same change (or the
-opencode precondition needs its own released-store guarantee).
+**Corrected in round 1 (Sol P1):** the round-0 claim that the opencode leg was harmless was
+false. The opencode leg's fixture reads the shared Store at
+`production_linux_v2_native_witness_test.go:1968-1976` before the App's opencode version gate, so
+with the mount leg in `shared` the opencode leg would have failed at `:1974` for the mount leg's
+retained row — the same wall, re-labelled. Round 1 removes the coupling entirely by running the
+mount leg in its own case set (§15); the opencode leg's pinned-version behavior is unrelated.
 
 ## 4. Compile and vet
 
@@ -199,6 +198,9 @@ nil` was kept beside `HasPendingContainment()` because an aborted reservation
 (`AbortProof != nil`) escapes the latter; `an_aborted_cgroup_reservation_was_written` is the row
 that reds only for that disjunct.
 
+The last two rows (the deleted guard line and the zero-argument refusal) describe the round-0
+`84dc22c3` bytes; round 1 deletes the order guard (§15), so those rows are historical.
+
 ## 6. Full suites
 
 | gate | command | exit | result |
@@ -241,9 +243,9 @@ clear step. The row is retired only by the product's terminal/cleanup path
 (`cleanupPending` `daemon/internal/app/cleanup.go:893` → `DeleteJournal`
 `daemon/internal/state/run_journal.go:423`, single production caller at `cleanup.go:940`);
 containment-only recovery no-ops on it (§2(b)). The guest's shared StateDir therefore keeps such a
-row until teardown. This goal orders around it instead of touching durable state; a product-side
-retirement for a claim that provably never started native work is a separate, unowned decision
-(contract class DECISION_NEEDED).
+row until teardown. Round 1 gives the leg its own case set and Store instead of touching durable
+state (§15); a product-side retirement for a claim that provably never started native work is
+recorded as the option-(a) residual in `docs/TODO.md`.
 
 ## 9. Nothing weakened
 
@@ -269,10 +271,11 @@ retirement for a claim that provably never started native work is a separate, un
 
 ## 10. Anchor and digest re-measurement at the delivered bytes
 
-Delivered files and their sha256 at the fix-round delivered bytes (measured over the delivered
-bytes, the same bytes the §7 clone gates ran on; `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`
-and this record are deliberately not hashed, and
-`daemon/e2e/production_linux_v2_native_witness_test.go` is unchanged by design):
+Delivered files and their sha256 at the round-0 fix-round delivered bytes (`84dc22c3`; measured
+over the delivered bytes, the same bytes the §7 clone gates ran on; `docs/TODO.md`,
+`docs/archive/CLOSED-TODO.md` and this record are deliberately not hashed, and
+`daemon/e2e/production_linux_v2_native_witness_test.go` is unchanged by design). Round 1
+re-measures the new bytes in §15; the script anchors below move in round 1:
 
 | file | sha256 |
 | --- | --- |
@@ -310,14 +313,81 @@ is `native/run-45384436642.log:1227`):
 
 ## 11. Acceptance carried to the conductor's Bind
 
-Delivered, pending the conductor's Bind. The Bind must run `shared` once on the PR head and
-observe that the `:91` pre-existing-RunJournal stop is gone; the next stop (or green) is recorded
-verbatim, and if the run reaches `stop_readback_reader` its Result row is recorded. Two limbs
-cannot execute outside the guest and are proven locally by the rows above instead: (i) the
-moved leg's new stderr/cause assertions, whose text is grounded in the App's print chain (§1) and
-whose predicates are unit-pinned (§5); (ii) the ten legs' own compliance with the fresh/released
-precondition, which is the Bind's subject. `docs/archive/CLOSED-TODO.md` carries the closure
-statement in the "delivered, pending the conductor's Bind" form.
+Delivered, pending the conductor's Bind. Under the round-1 acceptance amendment the Bind runs
+`shared` **and** `alternate_mount_refusal` once each on the PR head: `shared` must still show the
+`:91` pre-existing-RunJournal stop gone (next stop or green recorded verbatim, and if the run
+reaches `stop_readback_reader` its Result row is recorded), and the new set must pass its
+mount-refusal leg and export `alternate-mount-refusal.json`. Two limbs cannot execute outside the
+guest and are proven locally by the rows above and in §15 instead: (i) the leg's stderr/cause
+assertions, whose text is grounded in the App's print chain (§1) and whose predicates are
+unit-pinned (§5); (ii) the leg's own compliance with the fresh/released precondition, which is
+the Bind's subject. `docs/archive/CLOSED-TODO.md` carries the closure statement in the
+"delivered, pending the conductor's Bind" form.
+
+## Bind — binding run on the fixed head 84dc22c3 (shared)
+
+*Superseded by round 1 (§15): the mount-refusal leg now runs in its own case set
+(`alternate_mount_refusal`), and the conductor re-Binds `shared` and the new set on the new head.*
+
+One `shared` run on the exact PR-head bytes plus the two scratch-only files, watched once, then
+the scratch branch deleted and the temporary worktree removed. Full report:
+`findings/300-binding-run.md`; the run log is retained at `scratch/bind300/run-45771518805.log`
+under the GDD state root (sha256
+`ca02616835c34affb7ee80f19cc309eec0d34bb261b12acc7d368e08cac2eef6`, 488559 B, 3096 lines).
+
+- Run `45771518805` (event `push`, `run_attempt=1`, head
+  `2dfde5e4d03d204c7499eac2a08006ff43e2295e` = `84dc22c3` + the two scratch-only files, created
+  06:54:59Z, conclusion `failure`); `total_count=1` on every read once the run row was indexed
+  (06:55:32Z, 07:00:49Z, 07:04:04Z, and after the branch deletion 07:04:16Z).
+- The `:91 pre-existing RunJournal … is not physically released` stop is **gone**: 0 occurrences
+  of `pre-existing RunJournal`, `is not physically released` and `may still own or require
+  recovery` in the whole log, and 0 of every earlier stop class
+  (`clone_integration_linux_test.go:252`, the `launcher_integration_linux_test.go` rows,
+  `open /proc/`, `/proc/`, `permission denied`, `stage leaf`, `not a member of the named leaf`).
+- The set's first failing line is the pi leg's clone-reserve refusal — the pre-existing
+  `pi_provider_action` provider-scoped-admission residual (`docs/TODO.md`, 2026-11-26, "still
+  need a provider-scoped admission … needs its own ruling"), not this change; the moved
+  alternate-mount leg never executed before the abort:
+
+  ```
+  Go native acceptance event gate failed: bad=TestProductionLinuxV2PiNativeProviderAction=run:1,pass:0,skip:0, skipped=[], fail_events=2, invalid_json_lines=0
+  witness output:     production_linux_v2_native_witness_test.go:91: owner-witness command exit status: 1
+  witness output:     production_linux_v2_native_witness_test.go:91: owner-witness stderr: -linux-v2-native-owner-witness: reserve owner witness clone before source Git effects: Linux clone intent does not match the current admitted Subject
+  ```
+
+  The retained row is the pi leg's own claim-only journal
+  (`journal-ab37035b11d22622d0a2675198c4a187862b2d6ae4936c446a14b16c92aa019b.json
+  {"local_state":"claimed","has_claim_grant":true,"has_clone_intent":false,
+  "has_seed_receipt":false,"recovery_required":false}`).
+- Every leg that ran verified green: all 21 case-set `verified … run=1 pass=1 skip=0` rows up to
+  the stop (unprovisioned refusal; the seven AppArmor rows; the legacy Pi/OpenCode refusals; the
+  B-caller and cross-mount cleanup denials; the unexpected-cgroup-procs-FD witness; the four
+  installed-owner scratch legs including `TestInstalledLinuxOwnerBoundaryScratch`; the four
+  marker-reader rows), then the pi leg is the first red. The readback reader start passed
+  (`root readback reader ready: unit=symmetry-ci-readback-reader.service MainPID=7213`); the pi
+  leg fails at its clone reserve, so `stop_readback_reader` (single call site `:3236`) did not
+  run and no Result row exists — unmeasured, not failed.
+- Artifacts (sha256 = zip bytes = API `digest`): `linux-v2-native-evidence-45771518805-1`
+  id `15094073615` sha256
+  `2f927ea232783189d8d560fec753509854d0be386e63c99890f5bbe5bbe9bf89` (members
+  `shared/pi-native-provider-action.json`
+  `c6338eacac6178c37f29dd376f2ff8dc8b74b2461a32b7e5c5d7a94db02cf550` and
+  `shared/unprovisioned-owner-refusal.json`
+  `676c81e374c86eb94fbd9d7a79a085ab18de51b06389b8e371a7565e8ab41a5f`);
+  `linux-v2-host-prerequisite-45771518805-1` id `15093937858` sha256
+  `2b4746da712d846aa299825f0b917491a23ddd178a6c5a554ab6fe372fa72bec` (`status: passed`,
+  `source_commit` = the run head).
+- Run-input sha256 equality (run head `2dfde5e4` vs PR head `84dc22c3`):
+
+| file | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `abdb383be31d70cd5b591cc8f927c2c2ec0e4fab196041b0a31ab91bd5e37012` | `abdb383be31d70cd5b591cc8f927c2c2ec0e4fab196041b0a31ab91bd5e37012` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `3254deef0bfdc16c741542623c293012aa1e1c265e6f881d74792121280f7bcb` | `3254deef0bfdc16c741542623c293012aa1e1c265e6f881d74792121280f7bcb` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The four record-only docs (`docs/TODO.md`, `docs/archive/CLOSED-TODO.md`, the plan, this record)
+are not run inputs; the full verified-row list and raw line numbers are in the findings file.
 
 ## 12. Limits and residual risk
 
@@ -328,13 +398,13 @@ statement in the "delivered, pending the conductor's Bind" form.
   single print (`cmd/symmetry-daemon/main.go:35` prints one `%v` line through the single-line
   wrappers at `linux_owner_witness_linux.go:3258` and `native_run.go:199`); a guest that wrapped
   them onto separate lines would red the leg rather than silently pass it.
-- The opencode ordering coupling of §3 is a residual in `docs/TODO.md`; if that leg's
-  pinned-version gate is fixed without moving the mount leg, the next `shared` run stops at the
-  opencode leg for this same wall.
-- The unmeasured `stop_readback_reader` row stays unmeasured until a `shared` run passes the
-  opencode leg (`docs/TODO.md`, readback residual).
-- This stage pushes nothing and commits nothing: the delivered bytes are the worktree files, and
-  no PR body exists to rewrite yet.
+- The round-0 opencode coupling of §3 no longer exists: round 1 runs the mount leg in its own
+  case set (§15), so no `shared` leg can observe the retained row.
+- The unmeasured `stop_readback_reader` row (`shared` aborts inside the `esac` before its single
+  call site) is measured by any case set whose dispatch completes; the new set's Bind measures it
+  if the mount-refusal leg passes (`docs/TODO.md`, readback residual).
+- This stage pushes nothing and commits nothing: the delivered bytes are the worktree files; the
+  PR body for the round-1 delivered state is `findings/300-body.md` (§15).
 
 ## 13. Apply round (2026-11-26, accepted simplify findings)
 
@@ -397,6 +467,9 @@ text the brief forbids rewriting. The same check over each changed doc's added l
 all four docs, and no added line of the six changed files carries a host absolute path: the only
 added lines naming a host-shaped prefix are the four `<HOST-PATH>`-tokenized ones.
 
+Round 1 (§15) deletes finding 3's order guard and its mutant row: with the mount leg in its own
+case set there is no order left to guard. Every other finding of this section stands.
+
 Appendix — scratch pins and mutants verbatim with their full sha256; the harness commands were
 `bash <scratch>/guard-harness.sh <script> 3034 3039 <label> [event-file…]` for the delivered block
 and `3034 3038` for the pre-fix and mutant blocks:
@@ -413,3 +486,92 @@ and `3034 3038` for the pre-fix and mutant blocks:
   `return nil, fmt.Errorf("read captured owner-witness stderr: %w", err)` arm of
   `linuxV2OwnerWitnessStderrTail` replaced by `return nil, nil`; file sha256
   `5ed0042071d294b429af0a9f718088ca63d351e95d7dd3749c115ac73dd1f4cf`.
+
+## 15. Round 1 (2026-11-26, conductor ruling option (b)): the refusal leg's own case set
+
+The round-1 ruling replaced the round-0 ordering with isolation. The mount-refusal leg runs in
+its own case set `alternate_mount_refusal` (a fresh guest, install and StateDir per set); its
+call and the runtime order guard are deleted from `shared`, which keeps base leg order. No
+journal is deleted, no Store is reset, `linuxV2RequireSafelyReleasedPriorJournal` is unchanged,
+and the leg's assertions are byte-equivalent (only its two comment blocks were rewritten; W4).
+The PR body for these bytes is `findings/300-body.md`.
+
+### 15.1 What changed
+
+| file | change |
+| --- | --- |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `alternate_mount_refusal` joins the allowlist (`:33`) and dispatch (`:3213-3215`); the mount call and its order comment are deleted from `shared`; the guard is deleted from `run_alternate_mount_refusal_witness`, which keeps a 2-line why comment |
+| `.github/workflows/linux-native-v2-acceptance.yml` | `alternate_mount_refusal` joins `case_sets` (`:130`) |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | the mount witness moves from `shared` to `alternate_mount_refusal` (`:318`); the set joins `PI_DURABILITY_CASE_SETS` (`:341`) |
+| `scripts/ci/test-linux-v2-evidence.py` | the case-set pin additionally checks the exporter catalog, allowlist disjointness, the dispatch arms and the mount-call/arm isolation, with two committed red mutations (`:435-490`, `:2014-2037`) |
+| `scripts/ci/test-ci-structure-extraction.py` | new pin: the workflow `case_sets` array equals the script allowlist (`:796-822`, `:1093-1097`), with a committed red mutation (`:1148-1154`) |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | the `:1614` comment is why-only and the capture-read comment drops the ordering rationale; no assertion changed |
+| `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`, the plan, this record | corrected to the option-(b) design, including the round-0 "opencode leg is harmless" claim (§3, §12, plan §4, TODO, PR body) |
+
+### 15.2 Why the guest cannot isolate one leg's Store (the ruling's evidence)
+
+Every leg's config `state_dir` must equal the root-installed `OwnerConfig.StateDir`: the e2e
+fixture fatals otherwise (`production_linux_v2_native_witness_test.go:1953-1956`) and so does the
+production witness (`linux_owner_witness_linux.go:1217`, object-identity bound by
+`linuxpreflight.VerifyOwnerStateDirBinding`, pinned by
+`TestLinuxV2NativeWitnessStateDirExceptionIsExactAndInstalled`). The guest installs exactly one
+such StateDir (`linux-v2-native-acceptance.sh:505,567-586`; the configs are generated with it at
+`:1339-1356`), and each case set is a fresh guest (`:79`, `:963`; workflow `:119-140`), so a
+separate case set is the only in-scope isolation. The new set runs one leg; its prerequisites
+(negative-root bundle, barrier, alternate bind mount, owner install, in-leg Control claim
+`stage_replay_alternate_mount` at `:3033-3037`, Control fixture case
+`scripts/ci/provision-linux-v2-control-claims.exs:80`) are provisioned unconditionally, exactly
+as for `migration`/`stale_leaf`. The workflow job ceiling stays `timeout-minutes: 180`; no
+in-repo derivation of a timeout from the case-set list exists (grep), and the new set adds one
+single-leg guest run of the same footprint as those sets.
+
+### 15.3 Pins and mutants (one red proof per pin)
+
+| pin | red proof |
+| --- | --- |
+| committed: workflow `case_sets` vs script allowlist (`test-ci-structure-extraction.py`) | `-k mutation_dropping_a_case_set` passes; the mutation drops the set from the workflow and the pin raises |
+| committed: allowlist vs exporter catalog + pi set + disjointness + dispatch arms + mount arm (`test-linux-v2-evidence.py`) | `-k mutations_dropping_the_mount_case_set` passes (drop from the allowlist; rejoin the shared arm) |
+| scratch: re-add `alternate-mount-refusal.json` to `shared`'s exporter allowlist | pin reds with `case-set witness allowlists are not disjoint` |
+| scratch: delete the `alternate_mount_refusal)` dispatch arm | pin reds with `the dispatch arms and the case-set allowlist diverged` and `the mount-refusal leg must run only in its own case set` |
+| scratch: `replica-export.py` export replica (WSL) | green export of `alternate-mount-refusal.json`; missing witness → `pi durability witness is unavailable: alternate-mount-refusal.json`; witness without the pi binding → `does not bind the staged pi executable`; `shared` with only the mount witness still demands its own first missing file |
+
+### 15.4 Gates at the round-1 delivered bytes
+
+| gate | command | exit | result |
+| --- | --- | --- | --- |
+| Windows full module | `go test ./... -count=1` from `daemon/` (go1.27.4 windows/amd64) | 0 | 27 ok / 0 FAIL / 3 no test files; 207.9s wall |
+| WSL full module, root | `go test ./... -count=1` (go1.27.0 linux/amd64, uid 0) | 1 | 30 ok incl. `daemon/e2e`; only `internal/platform` fails, 13 `wire harness requires an unprivileged A process: uid=0` rows — the same pre-existing class §6 recorded, in a package the range does not touch |
+| WSL full module, unprivileged | `wsl -d Ubuntu-24.04 -u accept` with the §6 env pins | 0 | 31 ok / 0 FAIL / 3 no test files |
+| vet | `go vet ./...` (Windows) | 0 | — |
+| vet | `GOOS=linux go vet ./...` (WSL root) | 0 | — |
+| formatting | `gofmt -l e2e/` | 0 | no output |
+| script syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | — |
+| actionlint | `actionlint .github/workflows/linux-native-v2-acceptance.yml` | 0 | — |
+| python CI suite | `python scripts/ci/test-linux-v2-evidence.py` (WSL) | 0 | 56 tests OK |
+| python CI suite | `python scripts/ci/test-ci-structure-extraction.py` (Windows and WSL) | 0 | 72 tests OK (WSL: 3 pwsh skips) |
+| python CI suite | `python scripts/ci/test-ci-changed-path-classifier.py` (Windows and WSL) | 0 | 37 tests OK |
+| new Go rows | the four-row e2e set (WSL root) | 0 | 26 RUN / 26 PASS / 0 FAIL (4 top-level, 22 subtests) |
+| duplication | `python scripts/ci/jscpd-changed.py --base 7111828b --head HEAD` (scratch clone with the existing jscpd install junctioned) | 0 | 10 changed files, 1775 scanned sources, 1254 corpus clones, none new |
+| comment cap | `python <scratch>/comment-cap.py <clone> 7111828b` | 0 | no added comment block over 2 lines |
+| record cleanliness | `python scripts/ci/check-record-cleanliness.py --repo <clone> --base 7111828b --head HEAD` | 0 | 1 changed record passes |
+| record sanitize | `model-routing-record-sanitize.py --check --root-only` | 0 / 1 / 0 | TODO, plan and record whole-file 0; CLOSED-TODO whole-file 1 (pre-existing, identical at `7111828b`) and its branch-added lines 0 |
+
+### 15.5 Delivered-byte digests (the guest/CI run inputs)
+
+| file | sha256 |
+| --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `920a0a3ea715d4951d8f96de9336d4152528d9a3a0e044a7c2125bc164c6d0c9` |
+| `.github/workflows/linux-native-v2-acceptance.yml` | `2d5500ce4b411e979cf974c19028514dceb5a729b3c73e8971add50f55bc27d8` |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` |
+
+The two CI test files are harness-side and the four records are not run inputs; the delivered
+set is 10 files, +415/−143. `git diff --check` is clean and no added line carries a host
+absolute path.
+
+### 15.6 Acceptance carried to the conductor's Bind (amended)
+
+The Bind runs `shared` and `alternate_mount_refusal` once each on the PR head: `shared` must keep
+the `:91` stop gone (next stop or green recorded verbatim), and the new set must pass
+`TestProductionLinuxV2AlternateCgroupMountRefusal` and export `alternate-mount-refusal.json`; if
+its dispatch completes, record the `stop_readback_reader` Result row.

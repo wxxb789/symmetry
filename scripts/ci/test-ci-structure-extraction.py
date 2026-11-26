@@ -14,6 +14,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 ACCEPTANCE = ROOT / ".github" / "workflows" / "linux-native-v2-acceptance.yml"
+ACCEPTANCE_SCRIPT = ROOT / "scripts" / "ci" / "linux-v2-native-acceptance.sh"
 ACTION = ROOT / ".github" / "actions" / "contracts-build" / "action.yml"
 
 JOB_HEADER = re.compile(r"^  ([a-z][a-z0-9-]*):$")
@@ -792,6 +793,35 @@ def check_caller_advisory_step(workflow_text: str) -> None:
     require(scalars == CONTRACTS_ADVISORY_STEP, f"the contracts advisory step changed: {scalars!r}")
 
 
+def acceptance_workflow_case_sets(workflow_text: str) -> tuple[str, ...]:
+    lines = workflow_text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line.strip() == "case_sets=("]
+    require(len(starts) == 1, "the acceptance workflow must carry exactly one case_sets array")
+    entries = []
+    for line in lines[starts[0] + 1 :]:
+        stripped = line.strip()
+        if stripped == ")":
+            break
+        if stripped:
+            entries.append(stripped)
+    require(bool(entries), "the acceptance workflow case_sets array is empty")
+    return tuple(entries)
+
+
+def check_acceptance_case_set_wiring(workflow_text: str, script_text: str) -> None:
+    entries = acceptance_workflow_case_sets(workflow_text)
+    listed = [
+        line.strip() for line in script_text.splitlines() if line.strip().startswith("shared|codex_containment|")
+    ]
+    require(len(listed) == 1, "the acceptance script must carry exactly one case-set allowlist line")
+    allowlist = listed[0].removesuffix(") ;;").split("|")
+    require(len(entries) == len(set(entries)), "the acceptance workflow case_sets array repeats a set")
+    require(
+        set(entries) == set(allowlist),
+        f"the workflow case_sets array and the script allowlist diverged: {entries!r} != {tuple(allowlist)!r}",
+    )
+
+
 def check_blocking_gate_step(
     workflow_text: str, job: str, step_name: str, invocation: str, *, condition: str | None = None
 ) -> list[str]:
@@ -1060,6 +1090,13 @@ class ContractsActionTests(unittest.TestCase):
         check_caller_advisory_step(WORKFLOW.read_text(encoding="utf-8"))
 
 
+class AcceptanceCaseSetTests(unittest.TestCase):
+    def test_the_acceptance_workflow_case_sets_match_the_script_allowlist(self) -> None:
+        check_acceptance_case_set_wiring(
+            ACCEPTANCE.read_text(encoding="utf-8"), ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        )
+
+
 class FoldedGateCompletenessTests(unittest.TestCase):
     def test_every_advisory_step_is_asserted_by_its_job_or_allowlisted(self) -> None:
         check_folded_gate_completeness(WORKFLOW.read_text(encoding="utf-8"), ACTION.read_text(encoding="utf-8"))
@@ -1107,6 +1144,14 @@ class MutationTests(unittest.TestCase):
             "ci.yml": cls.workflow_text,
             "linux-native-v2-acceptance.yml": ACCEPTANCE.read_text(encoding="utf-8"),
         }
+
+    def test_mutation_dropping_a_case_set_from_the_acceptance_workflow_reddens_the_wiring_pin(self) -> None:
+        acceptance = ACCEPTANCE.read_text(encoding="utf-8")
+        script = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        mutated = acceptance.replace("            alternate_mount_refusal\n", "", 1)
+        self.assertNotEqual(mutated, acceptance, "the mutation must edit the acceptance workflow")
+        with self.assertRaises(AssertionError):
+            check_acceptance_case_set_wiring(mutated, script)
 
     def test_mutation_inlining_a_sixty_line_block_into_an_extracted_step_reddens_the_step_pin(self) -> None:
         inline = "        run: |\n" + "".join(f"          echo {index}\n" for index in range(60))

@@ -57,37 +57,52 @@ Discrimination against the contract's three candidates:
 - (c) rejected: relaxing the pi leg's precondition would need to match a product gate that also
   refuses, and the contract forbids weakening it.
 
-## 2. The fix (Stage 2, wrong side)
+## 2. The fix (Stage 2, wrong side): the refusal leg's own case set
 
-The refusal leg's roster row is retained by design, so the shared set must not let it precede a
-leg that requires a fresh or physically released Store. The delivered order runs
-`run_alternate_mount_refusal_witness "$v2_alternate_mount_events"` at
-`scripts/ci/linux-v2-native-acceptance.sh:3187`, after every leg that starts a fresh native-owner
-witness (pi `:3167`, crash `:3171`, daemon-crash `:3172`, stage-replay `:3173`, ack-loss `:3176`,
-helper-exit `:3179`, response-loss `:3180`, receipt-persist `:3182`, pid-reuse `:3183`, v1-replay
-`:3184`) and immediately before the frozen `opencode_native_health` leg (`:3191`). No journal is
-deleted, no Store is reset, and no leg's assertions are weakened.
+Round 0 ordered the leg after the ten fresh/released-Store legs in `shared` (head `84dc22c3`:
+call at `scripts/ci/linux-v2-native-acceptance.sh:3187-3190`, runtime order guard at `:3034-3039`)
+and pinned its cause from the captured App stderr. The round-1 conductor ruling replaced the
+ordering with isolation (option (b)): the leg runs in its own case set `alternate_mount_refusal`,
+so its by-design claim-only row lives in that guest's own installed StateDir and is invisible to
+every other set. The mount call and the order guard are deleted from `shared`, whose remaining
+legs keep base order; the leg's assertions are byte-equivalent. No journal is deleted, no Store is
+reset, and no leg's assertions are weakened.
 
-The old placement carried the fixture-inventory rule "intentionally first so another row cannot
-mask the proof" (`docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82`). That rule is
-preserved by an explicit, stronger pin: the leg reads the App stderr it already captures and
-requires the mount-identity preflight refusal on a line that also carries the witness marker, and
-forbids the foreign-ownership refusal. Position no longer has to carry the anti-masking proof.
+Why the same guest cannot hold an isolated Store: the e2e fixture requires every leg's config
+`state_dir` to equal the root-installed `OwnerConfig.StateDir`
+(`production_linux_v2_native_witness_test.go:1953-1956`), the production witness refuses any other
+StateDir (`linux_owner_witness_linux.go:1217`, pinned by
+`TestLinuxV2NativeWitnessStateDirExceptionIsExactAndInstalled`), and the acceptance guest installs
+exactly one such StateDir (`linux-v2-native-acceptance.sh:505,567-586`). Each case set is a fresh
+guest (`:79`, `:963`; workflow `:119-140`), so a separate set is the only in-scope isolation.
 
-The pinned text is grounded in the App's own print path, not in prose: `main.go:35` prints
+The cause pin stays: the leg reads the App stderr it already captures
+(`production_linux_v2_owner_cli_test.go:4857`) and requires the mount-identity preflight refusal
+on a line that also carries the witness marker, and forbids the foreign-ownership refusal
+(`linuxV2RequireMountRefusalCause`, `:2314`) — a wrong-cause refusal must red the leg, not satisfy
+it. The pinned text is grounded in the App's own print path, not in prose: `main.go:35` prints
 `-linux-v2-native-owner-witness: <err>`; `linux_owner_witness_linux.go:3258` wraps the preflight
 as `preflight installed Linux v2 owner before clone/native work: %w`; `native_run.go:199` wraps it
-as `Linux v2 native owner preflight: %w`; `cgroup_linux.go:93` is the bare cause phrase. The leg
-also guards its order at runtime: it refuses a call that names no prior legs and fails unless all
-ten prior legs' event files are already non-empty.
+as `Linux v2 native owner preflight: %w`; `cgroup_linux.go:93` is the bare cause phrase.
 
 ## 3. Public/API shape
 
-1. `scripts/ci/linux-v2-native-acceptance.sh` — the leg move plus a 2-line comment naming the
-   retained-claim-only row as the reason for the order, and a runtime guard inside
-   `run_alternate_mount_refusal_witness` that refuses an empty argument list and fails unless the
-   ten prior legs' event files are non-empty; no other helper changes.
-2. `daemon/e2e/production_linux_v2_owner_cli_test.go`
+1. `scripts/ci/linux-v2-native-acceptance.sh` — `alternate_mount_refusal` joins the case-set
+   allowlist (`:33`) and the dispatch (`:3213-3215`); the mount-leg call and its two-line order
+   comment are deleted from `shared`; the runtime order guard is deleted from
+   `run_alternate_mount_refusal_witness`, which keeps a two-line why comment naming the retained
+   claim-only row and the isolation.
+2. `.github/workflows/linux-native-v2-acceptance.yml` — `alternate_mount_refusal` joins the
+   `case_sets` array (`:130`).
+3. `scripts/ci/export-linux-v2-redacted-evidence.py` — the mount witness moves from `shared`'s
+   allowlist to `alternate_mount_refusal`'s, and the new set joins `PI_DURABILITY_CASE_SETS`
+   (the script exports every non-containment set with `--native-kind pi`).
+4. `scripts/ci/test-linux-v2-evidence.py` — the case-set pin also checks the dispatch arms, the
+   mount-call/arm isolation, the exporter case-set catalog and allowlist disjointness, with two
+   committed red mutations.
+5. `scripts/ci/test-ci-structure-extraction.py` — a new pin: the workflow `case_sets` array
+   equals the script allowlist, with a committed red mutation.
+6. `daemon/e2e/production_linux_v2_owner_cli_test.go`
    - `runProductionLinuxV2AlternateMountRefusal`: require the exact refusal cause from
      `linuxV2OwnerWitnessStderrTail` (`daemon/e2e/production_linux_v2_native_witness_test.go:2216`)
      and require the leg's own retained row to be the claim-only shape: found, `claimed`, claim
@@ -104,22 +119,32 @@ ten prior legs' event files are already non-empty.
    - One row pinning the capture read refusal
      (`TestLinuxV2AlternateMountRefusalCaptureReadRefused`).
    - One unit row pinning the unchanged precondition's treatment of a claim-only prior record
-     (`linuxV2RequireSafelyReleasedPriorJournal` refuses it) as the ordering rationale.
-3. `daemon/e2e/production_linux_v2_native_witness_test.go` — no change.
-4. Records: this plan, an evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`.
+     (`linuxV2RequireSafelyReleasedPriorJournal` refuses it) as the isolation rationale.
+   - The `:1614` comment is why-only; the capture-read comment no longer claims an ordering
+     rationale. No assertion changes.
+7. `daemon/e2e/production_linux_v2_native_witness_test.go` — no change.
+8. Records: this plan, an evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`.
 
 ## 4. Choices the accepted plan left open
 
-- **Position**: immediately before `opencode_native_health`, not at the very end: the opencode
-  leg aborts on its own pinned-version gate before any Store read (its config gate runs at
-  `production_linux_v2_native_witness_test.go:1901`, the prior-journal precondition only at
-  `:1968-1975`), so the mount leg still produces its E3 negative evidence while nothing that needs
-  a released Store follows it.
-- **Cause pin by text, not by position**: the mount phrase is guest-verified; the assertion also
-  forbids `unresolved native ownership` (the foreign-row refusal) so a masked cause is a red leg.
+- **(b) not (a)**: product-side retirement of claim-only refusal journals stays out of this PR
+  (production byte; recorded as a `docs/TODO.md` residual with owner conductor) — the separate
+  case set gives the same order-independence without touching durable state or production code.
+  Round 0's claim that the opencode leg was harmless was false (its fixture reads the Store at
+  `native_witness_test.go:1968-1976` before the App's version gate), which is why ordering alone
+  could not deliver the ruling.
+- **No ordering left to guard**: with the leg alone in its set there is no prior leg to order
+  against, so the runtime guard is deleted rather than kept as dead weight. The stderr cause pin
+  stays: a wrong-cause refusal (for example a foreign-journal admission) must red the leg.
+- **The set id follows the existing naming**: `alternate_mount_refusal` (lowercase underscores).
 - **No new precondition on the moved leg**: requiring the fixture's stricter released-row
-  predicate for all prior rows would red the leg on rows the product accepts (pre-gate/abort
-  retirements). The moved leg asserts only its own cause and its own retained row.
+  predicate for prior rows is moot in its own Store; the leg asserts only its own cause and its
+  own retained row.
+- **Pi-durability**: the mount witness binds the staged provider-free pi executable (the writer
+  binds it for any provider-free pi witness), so the new set joins `PI_DURABILITY_CASE_SETS` and
+  the existing export validation covers it unchanged.
+- **Witness allowlists stay disjoint**: the mount witness is expected only by its own set, so a
+  `shared` export can no longer require a file `shared` never produces.
 - **Subsumed disjuncts dropped**: `ContainmentAuthority != nil` and `ContainmentHandoff != nil`
   were removed from the row predicate after the mutant run showed `HasPendingContainment()` alone
   reds their rows; keeping them would have shipped branches no mutant can distinguish.
@@ -135,29 +160,32 @@ ten prior legs' event files are already non-empty.
 | Contract clause | Baseline (before) | Proof |
 | --- | --- | --- |
 | 1 root cause named verbatim | `:91` stop, run `45737002125`; row shape from the log projection | record §1-§2 with the measured log lines (`:3146`, `:3226`, `:3229`) and the file:line anchors of record §10 |
-| 2 fix on the wrong side, no ad-hoc deletion | leg first, blocking row before the pi leg | record §3: the script diff (order only), the ordering checker RED on the pre-change bytes (`ORDERING-RED status=1`) and GREEN on the delivered bytes, the guard harness red/green, no `rm`/Store reset in the diff |
-| 2 no weakened precondition or refusal assertion | — | record §9: `git diff` shows no change to `linuxV2RequireSafelyReleasedPriorJournal`; the new row `TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease` pins its claim-only refusal |
-| Invariants: ≤2-line comments, `go vet`, records rule | — | record §4-§6: comment-cap before the re-measure, `go vet` rows, one red mutant per new branch (record §5) |
-| Acceptance: `:91` stop gone in the Bind | — | carried to the conductor's Bind; local rows recorded (record §11) |
+| 2 fix on the wrong side, no ad-hoc deletion | leg in `shared` (round 0: after the ten legs, with a runtime order guard) | record §15: the mount call and guard are gone from `shared`, no `rm`/Store reset in the diff, the case-set/arm pins red under mutation; the export replica proves the new set's own path |
+| 2 no weakened precondition or refusal assertion | — | record §9 + §15: `git diff` shows no change to `linuxV2RequireSafelyReleasedPriorJournal`, and the mount leg keeps every assertion byte-equivalent |
+| Invariants: ≤2-line comments, `go vet`, records rule | — | record §15: comment-cap before the re-measure, `go vet` rows, mutants for every new pin |
+| Acceptance: `:91` stop stays gone in `shared`; the new set passes its leg | — | carried to the conductor's Bind (§15): `shared` and `alternate_mount_refusal` once each |
 
 ## 6. Local gates
 
 From `daemon/`: `gofmt -l e2e/`; `go vet ./...` (Windows, pinned go1.27.4) and
-`GOOS=linux go vet ./e2e/`; the four new rows plus the `./e2e/` package; then the full
-`go test ./...` on Windows and in WSL (`wsl -d Ubuntu-24.04` as root from
-`<HOST-PATH>/mnt/q/repos/wt-acc-journal-release/symmetry/daemon`, go1.27.0), never beside a
-measurement harness. From the repo root: `bash -n scripts/ci/linux-v2-native-acceptance.sh`. Scratch
-harnesses, not committed: `check-order.sh` on the pre-change bytes (RED) and on the delivered
-bytes (GREEN); `guard-harness.sh` with all ten event files (green), one empty, and one missing
-(red); `mutants.sh` in a scratch clone for one red row per new branch. Comment cap:
-`python <HOST-PATH>/.local/state/gdd/scratch/comment-cap.py <worktree>` before the final
-re-measure of digests and anchors.
+`GOOS=linux go vet ./...`; the new rows plus the `./e2e/` package; then the full
+`go test ./...` on Windows and in WSL (`wsl -d Ubuntu-24.04`, root and unprivileged, go1.27.0),
+never beside a measurement harness. From the repo root: `bash -n
+scripts/ci/linux-v2-native-acceptance.sh`; `actionlint` over the workflows; `python
+scripts/ci/test-linux-v2-evidence.py` (WSL), `python
+scripts/ci/test-ci-structure-extraction.py`, `python
+scripts/ci/test-ci-changed-path-classifier.py`. Scratch harnesses, not committed:
+`replica-export.py` (green/missing/unbound export rows) and the pin mutants in a scratch clone.
+Comment cap: `python <HOST-PATH>/.local/state/gdd/scratch/comment-cap.py <clone> 7111828b`
+before the final re-measure of digests and anchors. jscpd via the existing install (symlinked
+into the scratch clone; never `pnpm install`), plus `check-record-cleanliness.py` and
+`model-routing-record-sanitize.py`.
 
 ## 7. Out of scope
 
-- Any production change (claim seeding before the preflight, foreign-claim retirement): contract
-  requires DECISION_NEEDED instead; recorded as a residual.
+- Any production change (claim seeding before the preflight, retirement of a claim that
+  provably never started native work): recorded as the option-(a) residual in `docs/TODO.md`.
 - The opencode leg's pinned-version gate and the unmeasured `stop_readback_reader` row: their own
   tracked entries.
-- Weakening, deleting or renaming any refusal assertion; deleting journals; splitting the shared
-  case set into another guest (needs the workflow file, not owned).
+- Weakening, deleting or renaming any refusal assertion; deleting journals; changing the
+  `shared` arm's remaining leg order.

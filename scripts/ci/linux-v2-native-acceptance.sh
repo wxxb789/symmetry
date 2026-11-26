@@ -30,7 +30,7 @@ source_tree_digest=$(jq --raw-output .tree_digest <<<"$source_subject_json")
 
 fixture_case_set=${SYMMETRY_LINUX_V2_NATIVE_CASE_SET:-}
 case "$fixture_case_set" in
-  shared|codex_containment|claude_containment|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
+  shared|codex_containment|claude_containment|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|alternate_mount_refusal|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
   *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET to one exact shared or unresolved witness case set' ;;
 esac
 fixture_identity_suffix=${fixture_case_set//_/-}
@@ -3023,20 +3023,13 @@ run_helper_response_loss_witnesses() {
 
 run_alternate_mount_refusal_witness() {
   local event_file=$1
-  shift
   local test_name=TestProductionLinuxV2AlternateCgroupMountRefusal
   local case_name=alternate_mount
   local bundle="$OWNER_NEGATIVE_ROOT/$case_name"
   local output_directory="$A_HOME/ci-fixture/witness-output/alternate-mount"
   local status=0
-  # This refusal leaves a claim-only RunJournal the product never retires here; running it
-  # before a fresh or released Store reader would fail that leg for the wrong cause.
-  local prior
-  (( $# > 0 )) || fail "alternate-mount refusal order guard received no prior legs"
-  for prior in "$@"; do
-    [[ -s "$prior" ]] ||
-      fail "alternate-mount refusal must follow every fresh or released Store-reading leg: $prior"
-  done
+  # This refusal retains a claim-only RunJournal no product path retires; its own case set (own
+  # guest and Store) is the only isolation, so no other set can observe the row.
   prepare_owner_request \
     stage_replay_alternate_mount stage_replay \
     "$fixture_root/negative-root/$case_name/config.json" \
@@ -3182,12 +3175,6 @@ case "$fixture_case_set" in
     run_receipt_persist_failure_witness "$v2_receipt_persist_events"
     run_literal_pid_reuse_witness "$v2_pid_reuse_events"
     run_legacy_v1_replay_witness "$v2_v1_replay_events"
-    # Follows every fresh or released Store reader (claim-only row kept) and stays above the frozen
-    # opencode leg, whose pinned-version gate stops the set; the cause is pinned by the App stderr.
-    run_alternate_mount_refusal_witness "$v2_alternate_mount_events" \
-      "$v2_pi_events" "$v2_crash_events" "$v2_daemon_crash_events" "$v2_stage_replay_events" \
-      "$v2_ack_loss_events" "$v2_helper_exit_before_register_events" "$v2_helper_stop_loss_events" \
-      "$v2_receipt_persist_events" "$v2_pid_reuse_events" "$v2_v1_replay_events"
     run_native_owner_witness opencode_native_health "$v2_opencode_events"
     run_go_test "$v2_peer_negative_opencode_events" ./internal/harness/opencode \
       '^(TestOpenCodeQualifiedStartNamespacePeerDenials|TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP)$' \
@@ -3222,6 +3209,9 @@ case "$fixture_case_set" in
     ;;
   migration)
     run_migration_denial_witness "$v2_migration_events"
+    ;;
+  alternate_mount_refusal)
+    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     ;;
   stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject)
     run_stale_owner_request_denial "$v2_negative_events" "$fixture_case_set"
