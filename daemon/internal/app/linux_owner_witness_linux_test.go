@@ -193,7 +193,7 @@ func TestLinuxV2NativeWitnessSharedStoreAllowsOnlyProofSafeForeignRows(t *testin
 		t.Fatalf("exact-key replay with an unresolved foreign owner = key:%#v found:%t error:%v", selected.Key(), found, err)
 	}
 	beforeReplay := snapshotLinuxV2NativeWitnessJournals(t, stateDir)
-	if err := recoverLinuxV2NativeWitnessRunKey(context.Background(), value, store, selected); err != nil {
+	if _, err := recoverLinuxV2NativeWitnessRunKey(context.Background(), value, store, selected, replayRequest); err != nil {
 		t.Fatalf("recover only the selected exact RunKey: %v", err)
 	}
 	assertLinuxV2NativeWitnessJournalsUnchanged(t, beforeReplay, snapshotLinuxV2NativeWitnessJournals(t, stateDir))
@@ -2311,5 +2311,201 @@ func TestLinuxV2NativeWitnessUserNamespaceShapeArmRefusesNonNsfsInodes(t *testin
 	value, err := linuxV2NativeWitnessUserNamespaceFromStat(unix.Stat_t{Mode: unix.S_IFREG, Dev: 4, Ino: 5})
 	if err != nil || value.Device != 4 || value.Inode != 5 {
 		t.Fatalf("exact nsfs stat = %#v/%v, want device 4 inode 5", value, err)
+	}
+}
+
+func TestLinuxV2NativeWitnessOwnerLossStage(t *testing.T) {
+	request := func(caseName, hold string) linuxV2NativeWitnessRequest {
+		return linuxV2NativeWitnessRequest{Case: caseName, Barrier: linuxV2NativeWitnessBarrier{HoldAfter: hold}}
+	}
+	for _, test := range []struct {
+		name    string
+		request linuxV2NativeWitnessRequest
+		want    string
+	}{
+		{name: "native_release hold", request: request("stage_replay", "native_release"), want: "native_release"},
+		{name: "stop_receipt_durable hold", request: request("stage_replay", "stop_receipt_durable"), want: "stop_receipt_durable"},
+		{name: "pre-release hold", request: request("stage_replay", "lease_armed")},
+		{name: "checkout_ready hold", request: request("stage_replay", "checkout_ready")},
+		{name: "unreleased hold", request: request("stage_replay", "handoff_prepared")},
+		{name: "leaf_removed hold", request: request("stage_replay", "leaf_removed")},
+		{name: "containment case", request: request("claude_containment", "native_release")},
+		{name: "empty request", request: request("", "")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxV2NativeWitnessOwnerLossStage(test.request); got != test.want {
+				t.Fatalf("owner-loss snapshot stage = %q, want %q", got, test.want)
+			}
+		})
+	}
+	if linuxV2NativeWitnessOwnerLossExpected(state.RunJournal{}) {
+		t.Fatal("an empty journal was accepted as the committed-live owner-loss boundary")
+	}
+	helper := authority.LinuxCgroupProcessIdentity{PID: 71, Identity: "linux:v2:held-helper"}
+	live := state.RunJournal{RunContainmentState: state.RunContainmentState{
+		ContainmentCgroup:    &state.LinuxCgroupReservation{Helper: &helper},
+		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+	}}
+	if !linuxV2NativeWitnessOwnerLossExpected(live) {
+		t.Fatal("the committed-live boundary was refused")
+	}
+	exited := live
+	exited.ContainmentCgroup = &state.LinuxCgroupReservation{Helper: &helper, HelperExit: &authority.LinuxCgroupExitProof{}}
+	if linuxV2NativeWitnessOwnerLossExpected(exited) {
+		t.Fatal("an exited helper was accepted as the committed-live owner-loss boundary")
+	}
+}
+
+func TestLinuxV2NativeWitnessOwnerLossSummaryShape(t *testing.T) {
+	request := linuxV2NativeWitnessRequest{Case: "stage_replay", Barrier: linuxV2NativeWitnessBarrier{HoldAfter: "native_release"}}
+	helper := linuxV2NativeWitnessProcess{PID: 71, Identity: "linux:v2:held-helper"}
+	captured := linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Captured: true, Helper: helper, OwnerLost: true}
+	failed := linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Helper: helper, Error: "held helper did not latch"}
+	for _, test := range []struct {
+		name     string
+		snapshot *linuxV2NativeWitnessOwnerLoss
+		wantOK   bool
+	}{
+		{name: "absent snapshot", wantOK: true},
+		{name: "captured latch without a proof yet", snapshot: &captured, wantOK: true},
+		{name: "bounded failure", snapshot: &failed, wantOK: true},
+		{name: "silent failure", snapshot: &linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Helper: helper}},
+		{name: "unheld stage", snapshot: func() *linuxV2NativeWitnessOwnerLoss {
+			value := captured
+			value.Stage = "lease_armed"
+			return &value
+		}()},
+		{name: "stage mismatch", snapshot: func() *linuxV2NativeWitnessOwnerLoss {
+			value := captured
+			value.Stage = "stop_receipt_durable"
+			return &value
+		}()},
+		{name: "missing helper identity", snapshot: func() *linuxV2NativeWitnessOwnerLoss {
+			value := captured
+			value.Helper.Identity = ""
+			return &value
+		}()},
+		{name: "unsupported version", snapshot: func() *linuxV2NativeWitnessOwnerLoss {
+			value := captured
+			value.Version = 2
+			return &value
+		}()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateLinuxV2NativeWitnessOwnerLoss(test.snapshot, request); (err == nil) != test.wantOK {
+				t.Fatalf("owner-loss snapshot validation error = %v, want ok=%t", err, test.wantOK)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery(t *testing.T) {
+	helper := authority.LinuxCgroupProcessIdentity{PID: 71, Identity: "linux:v2:held-helper"}
+	journal := state.RunJournal{
+		RunID: "owner-loss-seam-run", Generation: 1,
+		RunContainmentState: state.RunContainmentState{
+			ContainmentCgroup:    &state.LinuxCgroupReservation{Helper: &helper},
+			ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+		},
+	}
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open ordering-row Store: %v", err)
+	}
+	defer store.Close()
+	stageRequest := func(hold string) linuxV2NativeWitnessRequest {
+		return linuxV2NativeWitnessRequest{Case: "stage_replay", Barrier: linuxV2NativeWitnessBarrier{HoldAfter: hold}}
+	}
+	captured := &linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Captured: true, Helper: linuxV2NativeWitnessProcess{PID: helper.PID, Identity: helper.Identity}, OwnerLost: true}
+	originalCapture, originalRecover := linuxV2NativeWitnessCaptureOwnerLoss, linuxV2NativeWitnessInvokeRecovery
+	defer func() {
+		linuxV2NativeWitnessCaptureOwnerLoss = originalCapture
+		linuxV2NativeWitnessInvokeRecovery = originalRecover
+	}()
+	var order []string
+	linuxV2NativeWitnessCaptureOwnerLoss = func(context.Context, *daemon, state.RunJournal, string) *linuxV2NativeWitnessOwnerLoss {
+		order = append(order, "snapshot")
+		return captured
+	}
+	linuxV2NativeWitnessInvokeRecovery = func(context.Context, *daemon, []state.RunJournal) error {
+		order = append(order, "recovery")
+		return nil
+	}
+	snapshot, err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, store, journal, stageRequest("native_release"))
+	if err != nil || snapshot != captured {
+		t.Fatalf("owner-loss seam = snapshot %#v error %v, want the captured snapshot", snapshot, err)
+	}
+	if len(order) != 2 || order[0] != "snapshot" || order[1] != "recovery" {
+		t.Fatalf("owner-loss seam order = %v, want the snapshot before the recovery's first stop", order)
+	}
+	for _, test := range []struct {
+		name    string
+		request linuxV2NativeWitnessRequest
+		journal state.RunJournal
+	}{
+		{name: "unproven hold carries no snapshot", request: stageRequest("lease_armed"), journal: journal},
+		{name: "legacy journal carries no snapshot", request: stageRequest("native_release"), journal: state.RunJournal{RunID: "owner-loss-seam-run", Generation: 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			order = nil
+			snapshot, err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, store, test.journal, test.request)
+			if err != nil || snapshot != nil || len(order) != 1 || order[0] != "recovery" {
+				t.Fatalf("owner-loss seam = snapshot %#v order %v error %v, want recovery without a snapshot", snapshot, order, err)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout(t *testing.T) {
+	helper := authority.LinuxCgroupProcessIdentity{PID: 71, Identity: "linux:v2:held-helper"}
+	journal := state.RunJournal{
+		RunID: "owner-loss-budget-run", Generation: 1,
+		RunContainmentState: state.RunContainmentState{
+			ContainmentCgroup:    &state.LinuxCgroupReservation{Helper: &helper},
+			ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+		},
+	}
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open budget-row Store: %v", err)
+	}
+	defer store.Close()
+	originalCapture, originalRecover := linuxV2NativeWitnessCaptureOwnerLoss, linuxV2NativeWitnessInvokeRecovery
+	defer func() {
+		linuxV2NativeWitnessCaptureOwnerLoss = originalCapture
+		linuxV2NativeWitnessInvokeRecovery = originalRecover
+	}()
+	const cleanup = 100 * time.Millisecond
+	start := time.Now()
+	var captureDeadline time.Time
+	linuxV2NativeWitnessCaptureOwnerLoss = func(ctx context.Context, _ *daemon, _ state.RunJournal, _ string) *linuxV2NativeWitnessOwnerLoss {
+		captureDeadline, _ = ctx.Deadline()
+		select {
+		case <-ctx.Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+		return &linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Captured: true}
+	}
+	var recoveryLive bool
+	var recoveryRemaining time.Duration
+	linuxV2NativeWitnessInvokeRecovery = func(ctx context.Context, _ *daemon, _ []state.RunJournal) error {
+		recoveryLive = ctx.Err() == nil
+		if deadline, ok := ctx.Deadline(); ok {
+			recoveryRemaining = time.Until(deadline)
+		}
+		return nil
+	}
+	request := linuxV2NativeWitnessRequest{Case: "stage_replay", Barrier: linuxV2NativeWitnessBarrier{HoldAfter: "native_release"}}
+	if _, err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{CleanupTimeoutMS: int64(cleanup / time.Millisecond)}, store, journal, request); err != nil {
+		t.Fatalf("owner-loss budget row recovery error = %v", err)
+	}
+	if own := captureDeadline.Sub(start); own < 30*time.Second {
+		t.Fatalf("owner-loss capture deadline offset = %s, want the capture's own 40 s bound", own)
+	}
+	if !recoveryLive {
+		t.Fatal("recovery was admitted with the capture's exhausted context; its CleanupTimeout must start with the recovery")
+	}
+	if recoveryRemaining <= 0 || recoveryRemaining > 2*cleanup {
+		t.Fatalf("recovery context remaining = %s, want its full configured %s cleanup timeout", recoveryRemaining, cleanup)
 	}
 }

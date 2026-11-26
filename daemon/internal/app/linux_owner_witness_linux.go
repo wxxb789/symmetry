@@ -313,6 +313,7 @@ type linuxV2NativeWitnessSummary struct {
 	NativeBinary              string                                 `json:"native_binary,omitempty"`
 	NativeBinarySHA256        string                                 `json:"native_binary_sha256,omitempty"`
 	Containment               *linuxV2NativeWitnessContainment       `json:"containment,omitempty"`
+	OwnerLoss                 *linuxV2NativeWitnessOwnerLoss         `json:"owner_loss,omitempty"`
 }
 
 type linuxV2NativeWitnessStageMarker struct {
@@ -469,7 +470,7 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 			}
 			witness.summary.NativeReleaseState = linuxV2NativeWitnessNativeReleaseNotReleased
 			legacyStop := linuxV2NativeWitnessLegacyStop(journal)
-			recoveryErr := recoverLinuxV2NativeWitnessRunKey(ctx, value, store, journal)
+			_, recoveryErr := recoverLinuxV2NativeWitnessRunKey(ctx, value, store, journal, request)
 			journal, err = store.LoadJournal(key)
 			if err != nil {
 				return fmt.Errorf("read exact legacy owner witness RunJournal after recovery: %w", err)
@@ -504,7 +505,8 @@ func RunLinuxV2NativeOwnerWitness(ctx context.Context, configPath, requestPath s
 		if err := validateLinuxV2NativeWitnessExistingJournal(journal, request); err != nil {
 			return err
 		}
-		recoveryErr := recoverLinuxV2NativeWitnessRunKey(ctx, value, store, journal)
+		ownerLoss, recoveryErr := recoverLinuxV2NativeWitnessRunKey(ctx, value, store, journal, request)
+		witness.summary.OwnerLoss = ownerLoss
 		journal, err = store.LoadJournal(key)
 		if err != nil {
 			return fmt.Errorf("read selected owner witness RunJournal after exact-key recovery: %w", err)
@@ -742,6 +744,9 @@ func linuxV2NativeWitnessUnresolvedSummaryTripped(summary linuxV2NativeWitnessSu
 }
 
 func (witness *linuxV2NativeWitnessRun) validateFinalSummary() error {
+	if err := validateLinuxV2NativeWitnessOwnerLoss(witness.summary.OwnerLoss, witness.request); err != nil {
+		return err
+	}
 	if err := linuxV2NativeWitnessCloneRetentionError(witness.request.Case, witness.summary); err != nil {
 		return err
 	}
@@ -2849,17 +2854,145 @@ func validateLinuxV2NativeWitnessExistingJournal(journal state.RunJournal, reque
 	return nil
 }
 
+// The snapshot outlasts the product's 30 s owner-loss stop bound
+// (platform.linuxOwnerHelperV2StopTimeout); the interval bounds only the re-lookup cadence.
+const (
+	linuxV2NativeWitnessOwnerLossStopWait     = 40 * time.Second
+	linuxV2NativeWitnessOwnerLossPollInterval = 250 * time.Millisecond
+)
+
+type linuxV2NativeWitnessOwnerLoss struct {
+	Version           int                             `json:"version"`
+	Stage             string                          `json:"stage"`
+	Captured          bool                            `json:"captured"`
+	Helper            linuxV2NativeWitnessProcess     `json:"helper"`
+	OwnerLost         bool                            `json:"owner_lost"`
+	ReleaseAuthorized bool                            `json:"release_authorized,omitempty"`
+	StopProof         *authority.LinuxCgroupStopProof `json:"stop_proof,omitempty"`
+	Error             string                          `json:"error,omitempty"`
+}
+
+func linuxV2NativeWitnessOwnerLossStage(request linuxV2NativeWitnessRequest) string {
+	if request.Case != "stage_replay" {
+		return ""
+	}
+	switch request.Barrier.HoldAfter {
+	case "native_release", "stop_receipt_durable":
+		return request.Barrier.HoldAfter
+	}
+	return ""
+}
+
+func linuxV2NativeWitnessOwnerLossExpected(journal state.RunJournal) bool {
+	reservation := journal.ContainmentCgroup
+	return reservation != nil && reservation.Helper != nil && reservation.Helper.Validate() == nil &&
+		reservation.HelperExit == nil && journal.ContainmentAuthority != nil
+}
+
+func validateLinuxV2NativeWitnessOwnerLoss(snapshot *linuxV2NativeWitnessOwnerLoss, request linuxV2NativeWitnessRequest) error {
+	if snapshot == nil {
+		return nil
+	}
+	if snapshot.Version != 1 || snapshot.Stage != linuxV2NativeWitnessOwnerLossStage(request) ||
+		snapshot.Helper.PID <= 0 || snapshot.Helper.Identity == "" {
+		return errors.New("owner-loss snapshot does not belong to the exact stage-replay hold and its held helper")
+	}
+	if !snapshot.Captured && snapshot.Error == "" {
+		return errors.New("owner-loss snapshot neither captured the held helper nor reported why")
+	}
+	return nil
+}
+
+func captureLinuxV2NativeWitnessOwnerLoss(
+	ctx context.Context,
+	recovery *daemon,
+	journal state.RunJournal,
+	stage string,
+) *linuxV2NativeWitnessOwnerLoss {
+	snapshot := &linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: stage}
+	reservation := journal.ContainmentCgroup
+	if recovery == nil || reservation == nil || reservation.Helper == nil || reservation.Helper.Validate() != nil {
+		snapshot.Error = "selected journal has no exact held helper identity"
+		return snapshot
+	}
+	snapshot.Helper = linuxV2NativeWitnessProcess{PID: reservation.Helper.PID, Identity: reservation.Helper.Identity}
+	grant := linuxV2GrantFromJournal(journal.Key(), linuxV2FenceFromJournal(journal), reservation.Clone())
+	if grant.Validate() != nil {
+		snapshot.Error = "selected journal has no exact held helper control grant"
+		return snapshot
+	}
+	owner, err := recovery.linuxV2OwnerForRecovery()
+	if err != nil {
+		snapshot.Error = "owner-loss snapshot needs the exact recovery anchor"
+		return snapshot
+	}
+	anchor, err := owner.anchor.Discover(ctx)
+	if err != nil || !anchor.Process.Equal(reservation.Anchor) || !anchor.Parent.Equal(reservation.Parent) ||
+		anchor.OwnerUID != reservation.OwnerUID {
+		snapshot.Error = "owner-loss snapshot anchor differs from the durable reservation"
+		return snapshot
+	}
+	deadline := time.Now().Add(linuxV2NativeWitnessOwnerLossStopWait)
+	var lastErr error
+	for {
+		helper, lookupErr := owner.anchor.LookupHelper(ctx, grant)
+		if lookupErr != nil {
+			lastErr = lookupErr
+		} else if helper.Control == nil || helper.PID != reservation.Helper.PID || helper.Identity != reservation.Helper.Identity {
+			lastErr = errors.New("anchor returned no live exact held helper for the owner-loss snapshot")
+			_ = helper.Close()
+		} else {
+			status, statusErr := helper.Control.Status(ctx)
+			_ = helper.Close()
+			if statusErr != nil {
+				lastErr = statusErr
+			} else {
+				snapshot.Captured = true
+				snapshot.OwnerLost = status.OwnerLost
+				if evidence := status.StopEvidence; evidence != nil {
+					snapshot.ReleaseAuthorized = evidence.AnchorStop != nil && evidence.AnchorStop.GateReleaseAuthorized
+					proof := evidence.Proof
+					snapshot.StopProof = &proof
+				}
+				_ = status.Close()
+				if status.OwnerLost && status.StopEvidence != nil {
+					return snapshot
+				}
+				lastErr = errors.New("held helper has not latched owner loss with its cached stop proof yet")
+			}
+		}
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(linuxV2NativeWitnessOwnerLossPollInterval):
+		}
+	}
+	if lastErr != nil {
+		snapshot.Error = lastErr.Error()
+	}
+	return snapshot
+}
+
+// The two seams are variables so the owned ordering row can prove the snapshot is taken before the
+// recovery's first stop without a live anchor.
+var (
+	linuxV2NativeWitnessCaptureOwnerLoss = captureLinuxV2NativeWitnessOwnerLoss
+	linuxV2NativeWitnessInvokeRecovery   = recoverContainmentOnlyJournals
+)
+
 func recoverLinuxV2NativeWitnessRunKey(
 	ctx context.Context,
 	value config.Config,
 	store journalStore,
 	journal state.RunJournal,
-) error {
+	request linuxV2NativeWitnessRequest,
+) (*linuxV2NativeWitnessOwnerLoss, error) {
 	if ctx == nil || store == nil || journal.Key() == (state.RunKey{}) {
-		return errors.New("exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
+		return nil, errors.New("exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
 	}
-	recoveryContext, cancel := context.WithTimeout(ctx, value.CleanupTimeout())
-	defer cancel()
+	var recoveryContext context.Context
 	recovery := &daemon{
 		config: value,
 		store:  store,
@@ -2872,13 +3005,22 @@ func recoverLinuxV2NativeWitnessRunKey(
 			terminatePersistAuthorityWithScanSeal: terminatePersistedProcessWithAuthorityScanSeal,
 		},
 		recoveryOnly:       true,
-		background:         recoveryContext,
 		running:            make(map[state.RunKey]*runningRun),
 		recoveredStops:     make(map[state.RunKey]recoveredProcessStop),
 		retainedWorkspaces: make(map[state.RunKey]struct{}),
 	}
 	defer recovery.close()
-	return recoverContainmentOnlyJournals(recoveryContext, recovery, []state.RunJournal{journal})
+	var ownerLoss *linuxV2NativeWitnessOwnerLoss
+	if stage := linuxV2NativeWitnessOwnerLossStage(request); stage != "" && linuxV2NativeWitnessOwnerLossExpected(journal) {
+		// The capture gets its own bound: the recovery's CleanupTimeout budget starts after it.
+		captureContext, captureCancel := context.WithTimeout(ctx, linuxV2NativeWitnessOwnerLossStopWait)
+		ownerLoss = linuxV2NativeWitnessCaptureOwnerLoss(captureContext, recovery, journal, stage)
+		captureCancel()
+	}
+	recoveryContext, cancel := context.WithTimeout(ctx, value.CleanupTimeout())
+	defer cancel()
+	recovery.background = recoveryContext
+	return ownerLoss, linuxV2NativeWitnessInvokeRecovery(recoveryContext, recovery, []state.RunJournal{journal})
 }
 
 func selectLinuxV2NativeWitnessJournal(

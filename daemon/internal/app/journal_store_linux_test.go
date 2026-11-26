@@ -94,7 +94,9 @@ func TestStorelessDaemonTakesEveryLinuxStoreNilBranch(t *testing.T) {
 		}},
 		{"recoverLinuxV2NativeWitnessRunKey", func(t *testing.T, daemon *daemon) {
 			journal := state.RunJournal{RunID: key.RunID, Generation: key.Generation}
-			err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{}, daemon.store, journal)
+			_, err := recoverLinuxV2NativeWitnessRunKey(
+				context.Background(), config.Config{}, daemon.store, journal, linuxV2NativeWitnessRequest{},
+			)
 			requireErrorMessage(t, err, "exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
 		}},
 		{"persistLinuxV2Mutation refuses a missing Store", func(t *testing.T, daemon *daemon) {

@@ -230,7 +230,8 @@ func TestProductionLinuxV2StageCrashReplayMatrix(t *testing.T) {
 			stageRoot := filepath.Join(fixtureRoot, leg.name)
 			t.Setenv(leg.configEnvironment, filepath.Join(stageRoot, "config.json"))
 			t.Setenv(linuxV2StageReplayRequestEnvironment, filepath.Join(stageRoot, "request.json"))
-			runProductionLinuxV2StageCrashReplayCase(t, "native_release", linuxV2StageReplayKindLegCase(leg))
+			testCase := linuxV2StageReplayKindLegCase(leg)
+			runProductionLinuxV2StageCrashReplayCase(t, testCase.barrierStage, testCase)
 		})
 	}
 }
@@ -1308,10 +1309,22 @@ type linuxV2OwnerWitnessResponse struct {
 	NativeBinary           string                             `json:"native_binary,omitempty"`
 	NativeBinarySHA256     string                             `json:"native_binary_sha256,omitempty"`
 	Containment            *linuxV2OwnerWitnessContainment    `json:"containment,omitempty"`
+	OwnerLoss              *linuxV2OwnerWitnessOwnerLoss      `json:"owner_loss,omitempty"`
 }
 
 type linuxV2OwnerWitnessContainment struct {
 	NativeOpenReached bool `json:"native_open_reached"`
+}
+
+type linuxV2OwnerWitnessOwnerLoss struct {
+	Version           int                             `json:"version"`
+	Stage             string                          `json:"stage"`
+	Captured          bool                            `json:"captured"`
+	Helper            linuxV2OwnerWitnessProcess      `json:"helper"`
+	OwnerLost         bool                            `json:"owner_lost,omitempty"`
+	ReleaseAuthorized bool                            `json:"release_authorized,omitempty"`
+	StopProof         *authority.LinuxCgroupStopProof `json:"stop_proof,omitempty"`
+	Error             string                          `json:"error,omitempty"`
 }
 
 type linuxV2OwnerWitnessStageMarker struct {
