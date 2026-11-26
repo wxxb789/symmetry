@@ -5482,14 +5482,26 @@ section, whose pointer sentence names this one.
       goal `rf-acc-claude-stage-replay` (2026-11-26, branch `refactor/rf-acc-claude-stage-replay`,
       base `78166f2e`; plan `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md`, record
       `docs/evidence/rf-acc-claude-stage-replay-2026-11-26.md`): the crash-replay runner keeps its
-      90 s post-kill wait and its fatal for every stage whose durable boundary does not prove the
-      released-gate stop, tolerates a resident helper exactly at the two proven stages
-      (`native_release` with the held marker's `released` state, `stop_receipt_durable` with the
-      durable receipt) through `linuxV2StageReplayHelperStopIsProven`, and then requires the
-      helper's exit within 30 s after the same-RunKey recovery retires it — no validator, bound or
-      production byte changed. Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (8 rows) with
-      its inverted-predicate mutant red (record §4) and the WSL owner-loss-latch probes (record
-      §5); its fix round r1 pins the recovered tombstone at the same two stages to the held
-      helper's own released-gate proof (`linuxV2RequireHelperIssuedReleaseStopProof`, its own
-      8-row mutant-red row, record §3/§4). Delivered, pending the conductor's Bind: the Bind runs `claude_containment` once and
-      records the next stop verbatim, or green.
+      90 s post-kill wait and its unconditional fatal for every stage whose durable boundary does
+      not prove the released-gate stop, and at exactly the two proven stages (`native_release`
+      with the held marker's `released` state, `stop_receipt_durable` with the durable receipt,
+      through `linuxV2StageReplayHelperStopIsProven`) replaces that wait with the owner-loss
+      assertions fix round r2 restored on the same bytes — the exact already-open target pidfd
+      must exit (`linuxV2RequireTargetExitedBeforeRecovery`) and the held helper's authenticated
+      Status must carry the owner-loss latch plus its own helper-issued stop proof equal to the
+      durable receipt proof (`linuxV2WaitHeldHelperOwnerLostStopProof` /
+      `linuxV2RequireHeldHelperOwnerLostStopProof`) — then requires the helper's exit within 30 s
+      after the same-RunKey recovery retires it; the same assertion set covers the codex leg
+      `native_release_codex` (the class's second observed instance: main measurement run
+      `45775969711`), because both kind legs present `barrierStage == "native_release"` to the
+      shared runner and the kind-leg row pins that wiring; no validator, bound or production byte
+      changed.
+      Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (13 rows, all seven non-proven helper
+      stages) and the three r2 rows with eight byte mutants red (record §4) plus the WSL
+      owner-loss-latch probes (record §5); fix round r1 pins the recovered tombstone at the same
+      two stages to the held helper's own released-gate proof
+      (`linuxV2RequireHelperIssuedReleaseStopProof`, its own 8-row mutant-red row, record §3/§4).
+      The `checkout_ready` census residual is tracked in the
+      `## rf-acc-claude-stage-replay: residuals (2026-11-26)` section of `docs/TODO.md`.
+      Delivered, pending the conductor's Bind: the Bind runs `claude_containment` and
+      `codex_containment` once each and records the next stop verbatim, or green.

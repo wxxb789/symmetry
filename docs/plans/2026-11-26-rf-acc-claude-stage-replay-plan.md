@@ -16,7 +16,7 @@ The `claude_containment` case set runs `run_native_owner_witness claude_containm
 `run_kind_stage_replay_case … claude` (`linux-v2-native-acceptance.sh:2441-2447,3103-3106`), which
 runs exactly one subtest: `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude`
 (`production_linux_v2_native_witness_test.go:194-232`). It reds after 93.39 s at the fixture's own
-post-kill wait (`production_linux_v2_owner_cli_test.go:1986-1993` after this goal's fix; the
+post-kill wait (`production_linux_v2_owner_cli_test.go:2116-2127` at the r2 bytes; the
 planning-time anchor on the base bytes it reds at is `:1958-1964`, fatal at `:1962`):
 
 ```
@@ -25,8 +25,8 @@ witness output:     production_linux_v2_native_witness_test.go:232: A helper did
 
 Which row/helper/process: the leg's held boundary is `native_release`; the pidfd is the exact
 `reservation.Helper` identity (`-linux-owner-helper-v2`, pid 7168 in that run), opened by
-`linuxV2OpenStageOwnerPIDFD` at `owner_cli_test.go:1947`, not the released B target (pid 7182 =
-`owners.gate_pid`, captured live at `owner_cli_test.go:1953-1976`). Retained-run facts:
+`linuxV2OpenStageOwnerPIDFD` at `owner_cli_test.go:2077`, not the released B target (pid 7182 =
+`owners.gate_pid`, captured live at `owner_cli_test.go:2083-2106`). Retained-run facts:
 `claude-stage-crash-replay-native-release.json` (target `native_command_verified: true`,
 `pidfd_opened: true`, `exact_leaf_membership: true`, `provider_action_succeeded: false`), and the
 daemon StateDir inventory in the same log (rows 4517-4520) still shows the helper's recovery
@@ -71,20 +71,30 @@ Chain, all at the base revision:
    creation identity across the pidfd open, and the retained run's identity-tagged owners row
    matches.
 4. The live-helper-after-owner-loss state is the product's supported behavior, not a defect: the
-   recovery has a dedicated live-helper branch (`app/linux_owner_recovery_linux.go:1242`,
-   `1271-1292`, `1337-1340`), and the daemon-crash witness *requires* it — the helper must
-   survive the daemon SIGKILL (`production_linux_v2_native_witness_test.go:2553-2556`) and the
-   recovered tombstone's stop proof must be helper-issued with no helper exit (`:2628-2632`).
-5. The fixture contradicts that at every helper stage: `owner_cli_test.go:1986-1993` supplies the
-   wait that fails on a live helper after 90 s with the message quoted above. At the pre-release
-   stages the same wait
+   owner contract states it (`docs/evidence/goal-0006-linux-owner-design-2026-09-22.md:44`: EOF is
+   an owner-loss event and the helper "retains its recovery endpoint until an exact stop receipt
+   and release proof are durable"; `:901`: it "survives ordinary daemon death and keeps its
+   authenticated recovery endpoint until the same receipt is durable"; the Windows sibling
+   `platform/supervisor_windows_helper.go:597-598`), the recovery has a dedicated live-helper
+   branch (`app/linux_owner_recovery_linux.go:1242`, `1271-1292`, `1337-1340`) whose retirement
+   awaits the helper's pidfd exit (`platform/helper_v2_recovery.go:544`,
+   `platform/anchor_types.go:21-25`), and the daemon-crash witness *requires* the residency — the
+   helper must survive the daemon SIGKILL
+   (`production_linux_v2_native_witness_test.go:2553-2556`) and the recovered tombstone's stop
+   proof must be helper-issued with no helper exit (`:2628-2632`).
+5. The fixture contradicts that at every helper stage: on the base bytes the pre-recovery wait
+   (`owner_cli_test.go:1958-1964`; the r2 block is `:2116-2127`) supplies the wait that fails on a
+   live helper after 90 s with the message quoted above. At the pre-release stages the same wait
    passes because there the stop is unprovable (the anchor has no gate authorization and no
    authorized exec transition), `stopOwned` errors, and the helper self-kills; the released-gate
    stages (`native_release`, `stop_receipt_durable`) are exactly the ones whose stop is proven,
    so the wait can never be satisfied there. Candidate “the claude process tree outlives the
    owner” is excluded: no step of the owner-loss path is harness-specific, and the retained
    artifact binds the claude target as the single exact leaf member
-   (`exact_leaf_membership: true`, `native_command_verified: true`).
+   (`exact_leaf_membership: true`, `native_command_verified: true`). The class has a second
+   observed instance on `origin/main` `ff0975a7`: the conductor's measurement run `45775969711`
+   reds the codex kind leg `native_release_codex` with the same message
+   (`findings/main-measure-codex-synthetic.md`).
 
 Not a production defect in `daemon`/`execution` code: the product's own recovery design (item 4)
 requires this state. The fix therefore belongs on the fixture side (Stage 2), and the product-side
@@ -97,11 +107,25 @@ alternative is recorded as rejected in §3.3.
 At the two stages whose durable boundary proves the helper's owner-loss stop —
 `native_release` with the held marker's `released` state, `stop_receipt_durable` with the durable
 receipt (both already asserted by `linuxV2ValidateStageJournalBoundary`,
-`owner_cli_test.go:1509-1610`) — the leg no longer requires the helper to exit *before* the
-recovery. Instead:
+`owner_cli_test.go:1639-1740`) — the leg no longer requires the helper to exit *before* the
+recovery; fix round r2 (contract ruling R1/R5) requires instead that the owner-loss path itself
+stopped the target *before* the recovery client starts: `native_release` waits on the already-open
+exact B target pidfd (`linuxV2RequireTargetExitedBeforeRecovery`, `owner_cli_test.go:1195-1203`),
+and `stop_receipt_durable` polls the held helper's authenticated Status for the owner-loss latch
+and its own helper-issued proof equal to the durable receipt proof
+(`linuxV2WaitHeldHelperOwnerLostStopProof` / `linuxV2RequireHeldHelperOwnerLostStopProof`,
+`owner_cli_test.go:1205-1262`); `linuxV2RequireOwnerLossStopBeforeRecovery`
+(`owner_cli_test.go:1298-1317`) routes the two stages. The branch is keyed on the stage, not the
+harness: both stage-replay kind legs (`native_release_codex`, `native_release_claude`) present
+`barrierStage == "native_release"` to the same runner
+(`production_linux_v2_native_witness_test.go:194-197`, `199-205`, `233`), and the r2 row
+`TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch` pins that wiring, so the codex leg
+takes the identical assertion. In that state:
 
-- the pre-recovery helper-exit wait with its unchanged 90 s bound and unchanged message stays for
-  every other helper stage;
+- the pre-recovery helper-exit wait with its unchanged 90 s bound, unchanged message and
+  unconditional fatal stays for every other helper stage; at the two proven stages it is deleted
+  rather than tolerated, so no error class can be swallowed (ruling R2 is obviated: no tolerance
+  remains on any pre-recovery wait);
 - at the two released-gate stages the leg proceeds to the same-RunKey recovery, and then requires
   the helper's exit within 30 s (the recovery's `ReleaseAfterClear`+retire is what ends a resident
   helper: `linux_owner_recovery_linux.go:1381-1388`), so the leg still ends with a hard
@@ -113,12 +137,12 @@ recovery. Instead:
   stop receipt must be the held helper's own released-gate proof — `Kind == helper`, the held
   helper as both `Issuer` and `Reaper`, `HelperExit == nil`
   (`linuxV2RequireHelperIssuedReleaseStopProof`, `owner_cli_test.go:1175-1187`, consulted at
-  `:2035-2039`) — so a regression that routes these stages through the anchor-reap mirror path
+  `:2170-2175`) — so a regression that routes these stages through the anchor-reap mirror path
   (mirror `Kind`, anchor `Reaper`, set `HelperExit`) reds the leg explicitly at both stages
   (`native_release` had no provenance pin before r1; `stop_receipt_durable` was already chained
   through its receipt-equality block, record §3);
 - the recovery response, the RunJournal tombstone's physical stop flags, the leaf-absence check
-  and the post-recovery target-pidfd wait (`owner_cli_test.go:2060-2067`) keep their exact
+  and the post-recovery target-pidfd wait (`owner_cli_test.go:2195-2203`) keep their exact
   strength, so the owner-loss physical-stop and replay assertions are unchanged outside the two
   proven stages.
 
@@ -127,8 +151,12 @@ recovery. Instead:
 `linuxV2StageReplayHelperStopIsProven(stage, marker, journal)` carries the tolerance branch
 decision so it can be pinned without the installed guest; the r1
 `linuxV2RequireHelperIssuedReleaseStopProof(helper, file, found)` (record §3/§4) carries the
-proof-provenance decision the same way. The runner keeps only the call sites, and both predicates
-are consulted *after* the exact durable shape has already been validated
+proof-provenance decision the same way, and the r2 `linuxV2RequireOwnerLossStopBeforeRecovery`
+(`owner_cli_test.go:1298-1317`) carries the pre-recovery owner-loss decision through two pure arms
+— `linuxV2RequireTargetExitedBeforeRecovery` (the real-pidfd wait) and
+`linuxV2RequireHeldHelperOwnerLostStopProof` (the Status-shape predicate) — so both arms are
+pinned by tables and byte mutants without the guest. The runner keeps only the call sites, and the
+predicates are consulted *after* the exact durable shape has already been validated
 (`linuxV2ValidateStageJournalBoundary` / `linuxV2ValidateStageReplayJournal`), which is why they
 can key on the marker state / receipt presence.
 
@@ -144,26 +172,31 @@ if the conductor reads the residency as a product defect, that is a new goal wit
 
 ## 4. Public/API shape
 
-No production, validator, harness or fixture-script change; no new exports. Two new unexported
-predicates and their table rows in `daemon/e2e/production_linux_v2_owner_cli_test.go`, plus the
-runner sequencing above. Nothing else in the module changes.
+No production, validator, harness or fixture-script change; no new exports. Three new unexported
+predicates and their table rows in `daemon/e2e/production_linux_v2_owner_cli_test.go` (r1's
+proof-provenance predicate; r2's routing predicate with its target-pidfd and Status arms), plus
+the runner sequencing above. Nothing else in the module changes.
 
 ## 5. Per-clause baseline and proof plan
 
 | Contract clause | Base behavior (before) | Clause test / proof |
 | --- | --- | --- |
-| 1 root cause named with source + log evidence | the retained red at `owner_cli_test.go:1986-1993` (base anchor `:1958-1964`); the four candidates | plan §2 with file:line; the record's census rows; the WSL scratch residency probe (unproven→success control flow): a helper with cached stop evidence returns from `markOwnerLost` without self-kill and without closing its listener |
-| 2 fix on the wrong side, no lengthened bound | the wait is 90 s > the 30 s product bound; the released-gate stages can never satisfy it | the predicate row (`TestLinuxV2StageReplayHelperStopIsProven`) plus the r1 proof-provenance row (`TestLinuxV2StageReplayHelperIssuedReleaseStopProof`, both with their `go test -overlay` mutants red) and the runner branches; the 90 s and 30 s budgets unchanged/new-but-guaranteed (`helper_v2_stop.go:1310-1320`) |
-| 2 never weaken the owner-loss/containment/replay assertions | — | the physically unchanged validators: `linuxV2ValidateStageReplayResponse` (`:1144-1150`) / `…ResponseState` (`:1189-1323`), `…StageReplayJournal` (`:1325-1431`), the target-pidfd wait (`:2060-2067`); the helper-exit assertion is re-sequenced, not removed, and the r1 provenance pin only adds strength at the two proven stages |
-| Invariants (≤2-line comments, `go vet`, no host-layout tests) | — | comment audit; `go vet`; the row uses only struct literals |
+| 1 root cause named with source + log evidence | the retained red at the base `owner_cli_test.go:1958-1964` (r2 delivery: the pre-recovery block `:2116-2127`); the four candidates | plan §2 with file:line; the record's census rows; the WSL scratch residency probe (unproven→success control flow): a helper with cached stop evidence returns from `markOwnerLost` without self-kill and without closing its listener |
+| 2 fix on the wrong side, no lengthened bound | the wait is 90 s > the 30 s product bound; the released-gate stages can never satisfy it | the predicate row (`TestLinuxV2StageReplayHelperStopIsProven`, 13 rows covering all seven non-proven helper stages) plus the r1 proof-provenance row and the r2 rows (`TestLinuxV2OwnerLossStopBeforeRecovery`, `TestLinuxV2HeldHelperOwnerLostStopProof`, `TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch` — the last pinning that the `native_release_codex`/`native_release_claude` legs present that branch), all with their `go test -overlay` mutants red, and the runner branches; the 90 s bound now guards only the unproven stages it was sized for, and each new proven-stage fence is bounded by the product's own 30 s bounds (`helper_v2_protocol.go:31-33`, `anchor_types.go:21-25`) |
+| 2 never weaken the owner-loss/containment/replay assertions | — | the physically unchanged validators: `linuxV2ValidateStageReplayResponse` (`:1144-1150`) / `…ResponseState` (`:1319-1453`), `…StageReplayJournal` (`:1455-1561`), the post-recovery target-pidfd wait (`:2195-2203`); the pre-recovery wait at the two proven stages is replaced by an equal-strength owner-loss assertion (the target pidfd exit / the helper's own OwnerLost proof) and the unproven stages keep the byte-identical fatal; the r1 provenance pin adds strength at the same two stages |
+| Invariants (≤2-line comments, `go vet`, no host-layout tests; standing conductor rules 2026-11-26) | — | comment audit; `go vet`; the row uses only struct literals; the comment cap runs on the scratch-clone commit of the delivered code, and r2 records the assertion-removal mapping (each removed-wait guarantee → equal-strength check + red mutant) and the no-leg-order/no-shared-state statement in record §3 |
 | Acceptance (conductor Bind: the stop is gone) | — | carried to the conductor; this stage records the local rows |
 
 ## 6. Local gates
 
 From `daemon/`: `gofmt -l .`; `go vet ./...`; the FULL `go test ./...` on Windows and in WSL
 Ubuntu-24.04 (sequenced, never beside another harness); the predicate row alone in WSL; the
-mutant row with the predicate inverted (via `go test -overlay`, never written into the tree) to
-show red-first; the comment-cap script before the final re-measure; the record sanitizers on the
+predicate rows and the r2 rows (`TestLinuxV2OwnerLossStopBeforeRecovery`,
+`TestLinuxV2HeldHelperOwnerLostStopProof`, `TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch`)
+in WSL; the mutants (the predicate inverted, the
+`lease_armed` widening, the dropped OwnerLost term, the dropped proof terms, the dropped receipt
+equality, the swallowed target-exit, the widened default) via `go test -overlay`, never written
+into the tree; the comment-cap script before the final re-measure; the record sanitizers on the
 new records. Scratch work lives in the operator's scratch root, never in the worktree.
 
 ## 7. Out of scope (with reasons)
@@ -174,3 +207,7 @@ new records. Scratch work lives in the operator's scratch root, never in the wor
   verbatim; this goal removes only the asserted stop.
 - The `shared` set's pre-existing reds and the `codex_containment` leg's own next stop: reported,
   never repaired here.
+- The `checkout_ready` helper stage's pre-release self-kill remains unestablished (DS audit P3):
+  no case set runs it with a helper-exit assertion any record documents, so the kept 90 s fatal is
+  a latent false red if the stop is provable there; recorded as a `docs/TODO.md` residual, not
+  repaired here.

@@ -1159,8 +1159,8 @@ func linuxV2ExpectedStageReplayRecovery(stage string) string {
 	}[stage]
 }
 
-// linuxV2StageReplayHelperStopIsProven reports whether the already-validated held boundary proves the
-// helper's owner-loss stop, which the product leaves resident for the same-RunKey recovery client.
+// linuxV2StageReplayHelperStopIsProven reports whether the already-validated held boundary proves
+// the helper's owner-loss stop, so the pre-recovery helper-exit fence must not apply to it.
 func linuxV2StageReplayHelperStopIsProven(stage string, marker linuxV2OwnerWitnessStageMarker, journal state.RunJournal) bool {
 	switch stage {
 	case "native_release":
@@ -1184,6 +1184,136 @@ func linuxV2RequireHelperIssuedReleaseStopProof(helper *linuxV2OwnerWitnessProce
 		return errors.New("release tombstone does not carry the held helper's own owner-loss stop proof")
 	}
 	return nil
+}
+
+// linuxV2OwnerLossStopWait outlasts the product's 30 s owner-loss stop bound
+// (linuxOwnerHelperV2StopTimeout), the same pre-recovery fence the old helper-exit wait used.
+const linuxV2OwnerLossStopWait = 90 * time.Second
+
+// linuxV2RequireTargetExitedBeforeRecovery requires the owner-loss stop itself to have killed the
+// exact pinned native target before the same-RunKey recovery can supply a control-issued proof.
+func linuxV2RequireTargetExitedBeforeRecovery(targetPIDFD *os.File, timeout time.Duration) error {
+	if targetPIDFD == nil {
+		return errors.New("owner-loss stop check has no exact pinned target pidfd")
+	}
+	if err := linuxV2WaitPIDFDExited(int(targetPIDFD.Fd()), timeout); err != nil {
+		return fmt.Errorf("owner-loss stop left the exact native target live: %w", err)
+	}
+	return nil
+}
+
+// linuxV2RequireHeldHelperOwnerLostStopProof requires the held helper's authenticated Status to
+// report the owner-loss latch and its cached exact helper-issued stop proof from before recovery.
+func linuxV2RequireHeldHelperOwnerLostStopProof(
+	status *platform.LinuxOwnerHelperV2Status,
+	held *linuxV2OwnerWitnessProcess,
+	want *platform.LinuxOwnerHelperV2StopEvidence,
+) error {
+	if status == nil || held == nil || held.PID <= 0 || held.Identity == "" || !status.OwnerLost || status.ErrorCode != "" {
+		return errors.New("held helper did not report its owner-loss latch before recovery")
+	}
+	holder := authority.LinuxCgroupProcessIdentity{PID: held.PID, Identity: held.Identity}
+	if !status.Helper.Equal(holder) {
+		return errors.New("owner-loss Status does not belong to the exact held helper")
+	}
+	proof := status.StopEvidence
+	if proof == nil || proof.Proof.Kind != authority.LinuxCgroupStopProofHelper || proof.Proof.HelperExit != nil ||
+		!proof.Proof.Issuer.Equal(holder) || !proof.Proof.Reaper.Equal(holder) {
+		return errors.New("held helper OwnerLost Status lacks its own completed stop proof")
+	}
+	if want == nil || !proof.Proof.Equal(want.Proof) {
+		return errors.New("held helper OwnerLost Status proof differs from the exact durable receipt proof")
+	}
+	return nil
+}
+
+// linuxV2WaitHeldHelperOwnerLostStopProof polls the exact held helper until its authenticated
+// Status carries the owner-loss latch and the exact stop proof, bounded by linuxV2OwnerLossStopWait.
+func linuxV2WaitHeldHelperOwnerLostStopProof(
+	fixture linuxV2NativeFixture,
+	journal state.RunJournal,
+	held *linuxV2OwnerWitnessProcess,
+	want *platform.LinuxOwnerHelperV2StopEvidence,
+) error {
+	reservation := journal.ContainmentCgroup
+	if held == nil || reservation == nil || reservation.Validate() != nil || reservation.Helper == nil ||
+		journal.ContainmentAuthority == nil {
+		return errors.New("owner-loss Status check lacks the exact held helper, reservation, or authority")
+	}
+	grant, err := linuxV2OwnerAnchorGrantFromJournal(journal, reservation.Clone())
+	if err != nil {
+		return fmt.Errorf("build exact RunJournal anchor grant: %w", err)
+	}
+	deadline := time.Now().Add(linuxV2OwnerLossStopWait)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		status, err := linuxV2ReadHeldHelperStatus(fixture, grant, held)
+		if err == nil {
+			err = linuxV2RequireHeldHelperOwnerLostStopProof(status, held, want)
+			_ = status.Close()
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("held helper owner-loss Status was not observable before recovery: %w", lastErr)
+}
+
+// linuxV2ReadHeldHelperStatus authenticates the live held helper through the anchor RunKey map and
+// reads its exact Status; the caller closes the returned Status.
+func linuxV2ReadHeldHelperStatus(
+	fixture linuxV2NativeFixture,
+	grant platform.LinuxOwnerAnchorGrant,
+	held *linuxV2OwnerWitnessProcess,
+) (*platform.LinuxOwnerHelperV2Status, error) {
+	if held == nil {
+		return nil, errors.New("owner-loss Status source has no exact held helper identity")
+	}
+	client, err := platform.NewLinuxOwnerAnchorClient(fixture.value.LinuxOwnerSocket)
+	if err != nil {
+		return nil, fmt.Errorf("connect to exact A owner anchor: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	helper, err := client.LookupHelper(ctx, grant)
+	if err != nil {
+		return nil, fmt.Errorf("lookup exact held helper: %w", err)
+	}
+	defer helper.Close()
+	if helper.PID != held.PID || helper.Identity != held.Identity || helper.PIDFD == nil ||
+		helper.Control == nil || linuxV2RequireLivePIDFD(int(helper.PIDFD.Fd())) != nil {
+		return nil, errors.New("owner-loss Status source is not the exact live held helper")
+	}
+	status, err := helper.Control.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read authenticated held helper Status: %w", err)
+	}
+	return &status, nil
+}
+
+// linuxV2RequireOwnerLossStopBeforeRecovery routes the two proven stages to their pre-recovery
+// owner-loss proof: the native_release target pidfd, or the stop_receipt_durable helper Status.
+func linuxV2RequireOwnerLossStopBeforeRecovery(
+	fixture linuxV2NativeFixture,
+	stage string,
+	marker linuxV2OwnerWitnessStageMarker,
+	journal state.RunJournal,
+	targetPIDFD *os.File,
+	normalStop *platform.LinuxOwnerHelperV2StopEvidence,
+) error {
+	switch stage {
+	case "native_release":
+		return linuxV2RequireTargetExitedBeforeRecovery(targetPIDFD, linuxV2OwnerLossStopWait)
+	case "stop_receipt_durable":
+		if normalStop == nil {
+			return errors.New("stop_receipt_durable owner-loss check lacks the durable receipt proof")
+		}
+		return linuxV2WaitHeldHelperOwnerLostStopProof(fixture, journal, marker.Owners.Helper, normalStop)
+	default:
+		return fmt.Errorf("owner-loss stop check called for unproven stage %q", stage)
+	}
 }
 
 func linuxV2ValidateStageReplayResponseState(fixture linuxV2NativeFixture, stage string, response linuxV2OwnerWitnessResponse, expectedRecovery string) error {
@@ -1984,11 +2114,16 @@ func runProductionLinuxV2StageCrashReplayCase(
 		}
 	}
 	if helperPIDFD != nil {
-		// The helper's owner-loss fail-safe is bounded at linuxOwnerHelperV2StopTimeout; the
-		// fixture must wait strictly past that product bound or it races the fail-safe.
-		helperExitErr := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 90*time.Second)
-		if helperExitErr != nil && !helperStopProvenWithoutOwner {
-			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", helperExitErr)
+		if helperStopProvenWithoutOwner {
+			// The owner-loss stop itself must land before the recovery starts, or the recovery's
+			// own Control.Stop would supply the proof a skipped owner-loss stop never issued.
+			if err := linuxV2RequireOwnerLossStopBeforeRecovery(fixture, stage, marker, initial.Journal, targetPIDFD, normalStop); err != nil {
+				t.Fatalf("stage %s: the owner-loss path did not stop its target before recovery: %v", stage, err)
+			}
+		} else if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), linuxV2OwnerLossStopWait); err != nil {
+			// Unproven owner-loss stops self-kill the helper within linuxOwnerHelperV2StopTimeout,
+			// so the fixture waits strictly past that bound before the recovery can race it.
+			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", err)
 		}
 	}
 	if testCase.afterStageProcessKilled != nil {
@@ -2389,12 +2524,35 @@ func TestLinuxV2StageReplayHelperStopIsProven(t *testing.T) {
 		{name: "stop-receipt durable hold", stage: "stop_receipt_durable", journal: receiptAuthority, want: true},
 		{name: "stop-receipt durable hold without a receipt", stage: "stop_receipt_durable", journal: authorityWithoutReceipt},
 		{name: "stop-receipt durable hold without an authority", stage: "stop_receipt_durable"},
+		{name: "helper-bound hold", stage: "helper_bound"},
+		{name: "launcher-bound hold with a released marker", stage: "launcher_bound", marker: released},
+		{name: "gate-bound hold with a durable receipt", stage: "gate_bound", journal: receiptAuthority},
+		{name: "handoff-prepared hold with a released marker", stage: "handoff_prepared", marker: released},
 		{name: "pre-release hold with a released marker", stage: "handoff_committed", marker: released},
+		{name: "lease-armed hold with a released marker and a durable receipt", stage: "lease_armed", marker: released, journal: receiptAuthority},
 		{name: "pre-release hold with a durable receipt", stage: "checkout_ready", journal: receiptAuthority},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := linuxV2StageReplayHelperStopIsProven(test.stage, test.marker, test.journal); got != test.want {
 				t.Fatalf("helper-stop-proven predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+// TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch pins that every stage-replay kind leg
+// (codex and claude) presents the same native_release boundary the proven-stop predicate selects.
+func TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch(t *testing.T) {
+	if len(linuxV2StageReplayKindLegs) != 2 {
+		t.Fatalf("stage-replay kind legs = %d, want the codex and claude legs", len(linuxV2StageReplayKindLegs))
+	}
+	milestone := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
+	for _, leg := range linuxV2StageReplayKindLegs {
+		t.Run(leg.name, func(t *testing.T) {
+			testCase := linuxV2StageReplayKindLegCase(leg)
+			if testCase.barrierStage != "native_release" || testCase.requestCase != "stage_replay" ||
+				!linuxV2StageReplayHelperStopIsProven(testCase.barrierStage, milestone, state.RunJournal{}) {
+				t.Fatalf("kind leg %q does not present the shared proven native_release boundary", leg.name)
 			}
 		})
 	}
@@ -2450,6 +2608,130 @@ func TestLinuxV2StageReplayHelperIssuedReleaseStopProof(t *testing.T) {
 			}}}
 			if err := linuxV2RequireHelperIssuedReleaseStopProof(test.helper, file, true); (err == nil) != test.want {
 				t.Fatalf("helper-issued release stop proof error = %v, want ok=%t", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2OwnerLossStopBeforeRecovery(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stage string
+		ok    bool
+	}{
+		{name: "native_release without the pinned target", stage: "native_release"},
+		{name: "stop_receipt_durable without the durable receipt proof", stage: "stop_receipt_durable"},
+		{name: "unproven stage refused", stage: "reservation_durable"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := linuxV2RequireOwnerLossStopBeforeRecovery(
+				linuxV2NativeFixture{}, test.stage, linuxV2OwnerWitnessStageMarker{}, state.RunJournal{}, nil, nil,
+			)
+			if (err == nil) != test.ok {
+				t.Fatalf("owner-loss stop routing error = %v, want ok=%t", err, test.ok)
+			}
+		})
+	}
+	spawn := func(t *testing.T) (*exec.Cmd, *os.File) {
+		t.Helper()
+		command := exec.Command("sleep", "300")
+		if err := command.Start(); err != nil {
+			t.Fatalf("start local owner-loss target replica: %v", err)
+		}
+		identity, err := platform.ProcessIdentity(command.Process.Pid)
+		if err != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			t.Fatalf("read local owner-loss target replica identity: %v", err)
+		}
+		pidfd, err := linuxV2OpenExactPIDFD(command.Process.Pid, identity)
+		if err != nil {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+			t.Fatalf("pin local owner-loss target replica pidfd: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = pidfd.Close()
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		})
+		return command, pidfd
+	}
+	t.Run("local replica: owner-loss-stopped target", func(t *testing.T) {
+		command, pidfd := spawn(t)
+		if err := command.Process.Kill(); err != nil {
+			t.Fatalf("stop local owner-loss target replica: %v", err)
+		}
+		if err := linuxV2RequireTargetExitedBeforeRecovery(pidfd, 10*time.Second); err != nil {
+			t.Fatalf("stopped target replica was not observed exited: %v", err)
+		}
+	})
+	t.Run("local replica: target still live", func(t *testing.T) {
+		_, pidfd := spawn(t)
+		if err := linuxV2RequireTargetExitedBeforeRecovery(pidfd, 300*time.Millisecond); err == nil {
+			t.Fatal("live target replica passed the owner-loss stop assertion")
+		}
+	})
+	t.Run("local replica: missing target pidfd", func(t *testing.T) {
+		if err := linuxV2RequireTargetExitedBeforeRecovery(nil, 300*time.Millisecond); err == nil {
+			t.Fatal("missing target pidfd passed the owner-loss stop assertion")
+		}
+	})
+}
+
+func TestLinuxV2HeldHelperOwnerLostStopProof(t *testing.T) {
+	held := &linuxV2OwnerWitnessProcess{PID: 61, Identity: "linux:v2:helper:61"}
+	holder := authority.LinuxCgroupProcessIdentity{PID: held.PID, Identity: held.Identity}
+	other := authority.LinuxCgroupProcessIdentity{PID: 62, Identity: "linux:v2:helper:62"}
+	helperExit := authority.LinuxCgroupExitProof{Version: authority.LinuxCgroupIdentityVersion}
+	evidence := func(mutate func(*authority.LinuxCgroupStopProof)) *platform.LinuxOwnerHelperV2StopEvidence {
+		proof := authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+			Issuer: holder, Reaper: holder,
+		}
+		if mutate != nil {
+			mutate(&proof)
+		}
+		return &platform.LinuxOwnerHelperV2StopEvidence{Proof: proof}
+	}
+	status := func(mutate func(*platform.LinuxOwnerHelperV2Status)) *platform.LinuxOwnerHelperV2Status {
+		value := platform.LinuxOwnerHelperV2Status{Helper: holder, OwnerLost: true, StopEvidence: evidence(nil)}
+		if mutate != nil {
+			mutate(&value)
+		}
+		return &value
+	}
+	for _, test := range []struct {
+		name   string
+		status *platform.LinuxOwnerHelperV2Status
+		held   *linuxV2OwnerWitnessProcess
+		want   *platform.LinuxOwnerHelperV2StopEvidence
+		ok     bool
+	}{
+		{name: "owner-loss Status with the held helper's durable proof", status: status(nil), held: held, want: evidence(nil), ok: true},
+		{name: "owner-loss latch absent", status: status(func(value *platform.LinuxOwnerHelperV2Status) { value.OwnerLost = false }), held: held, want: evidence(nil)},
+		{name: "helper error code set", status: status(func(value *platform.LinuxOwnerHelperV2Status) { value.ErrorCode = "stop_unproven" }), held: held, want: evidence(nil)},
+		{name: "Status for another helper", status: status(func(value *platform.LinuxOwnerHelperV2Status) { value.Helper = other }), held: held, want: evidence(nil)},
+		{name: "stop evidence absent", status: status(func(value *platform.LinuxOwnerHelperV2Status) { value.StopEvidence = nil }), held: held, want: evidence(nil)},
+		{name: "mirror kind even with a matching receipt", status: status(func(value *platform.LinuxOwnerHelperV2Status) {
+			value.StopEvidence = evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Kind = authority.LinuxCgroupStopProofMirror })
+		}), held: held, want: evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Kind = authority.LinuxCgroupStopProofMirror })},
+		{name: "anchor-reaped proof even with a matching receipt", status: status(func(value *platform.LinuxOwnerHelperV2Status) {
+			value.StopEvidence = evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Reaper = other })
+		}), held: held, want: evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Reaper = other })},
+		{name: "foreign-issuer proof even with a matching receipt", status: status(func(value *platform.LinuxOwnerHelperV2Status) {
+			value.StopEvidence = evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Issuer = other })
+		}), held: held, want: evidence(func(proof *authority.LinuxCgroupStopProof) { proof.Issuer = other })},
+		{name: "helper-exit proof even with a matching receipt", status: status(func(value *platform.LinuxOwnerHelperV2Status) {
+			value.StopEvidence = evidence(func(proof *authority.LinuxCgroupStopProof) { proof.HelperExit = &helperExit })
+		}), held: held, want: evidence(func(proof *authority.LinuxCgroupStopProof) { proof.HelperExit = &helperExit })},
+		{name: "proof differing from the durable receipt", status: status(func(value *platform.LinuxOwnerHelperV2Status) { value.StopEvidence.Proof.CgroupPopulatedZero = true }), held: held, want: evidence(nil)},
+		{name: "durable receipt proof missing", status: status(nil), held: held},
+		{name: "held helper identity missing", status: status(nil), want: evidence(nil)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := linuxV2RequireHeldHelperOwnerLostStopProof(test.status, test.held, test.want); (err == nil) != test.ok {
+				t.Fatalf("owner-loss stop proof error = %v, want ok=%t", err, test.ok)
 			}
 		})
 	}

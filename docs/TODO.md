@@ -2001,6 +2001,20 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       cleanup racing the dead gate; not chased (conductor ruling 2026-11-26). Owner TBD by the
       conductor.
 
+## rf-acc-claude-stage-replay: residuals (2026-11-26)
+
+- [ ] `checkout_ready` helper-residency census (2026-11-26, goal `rf-acc-claude-stage-replay`;
+      DS audit P3, `findings/301-ds-audit-1.md`): the census that keeps the 90 s fatal on every
+      non-proven helper stage is established for `helper_bound`, `launcher_bound`, `gate_bound`,
+      `handoff_prepared`, `handoff_committed` and `lease_armed`, but not for `checkout_ready`,
+      whose release is in flight (`releaseAttempted == true`, `released == false`) and which no
+      case set runs with a helper-exit assertion any record documents (the `shared` set schedules
+      it, but that set has pre-existing reds and no RF-ACC evidence row for that leg). Static
+      tracing found no term that would refuse a stop there; if the helper stop is provable at that
+      boundary, the kept unconditional 90 s fatal is a latent false red. Owner: conductor (measure
+      the leg in the guest and record the helper's behaviour, or extend the predicate with that
+      stage's durable proof).
+
 ## rf-claude-schema-argv: residuals (2026-11-26)
 
 - [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
