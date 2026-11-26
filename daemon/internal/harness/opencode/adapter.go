@@ -20,6 +20,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -45,6 +46,10 @@ const (
 	probeOutputLimitBytes = 64 << 10
 	streamReadChunkSize   = 32 * 1024
 	maxReadinessLineBytes = 4096
+	// The recorded outcome readback settles with the terminal; the bound only covers a
+	// server that answers the terminal frame before its own readback is queryable.
+	sessionOutcomeReadbackTimeout  = 30 * time.Second
+	sessionOutcomeReadbackInterval = 200 * time.Millisecond
 )
 
 var (
@@ -102,6 +107,7 @@ type api interface {
 	Readiness(context.Context, int) error
 	CreateSession(context.Context, CreateSessionRequest) (SessionInfo, error)
 	Prompt(context.Context, string, PromptRequest) (PromptAdmission, error)
+	SessionOutcome(context.Context, string) (SessionState, error)
 	Interrupt(context.Context, string) error
 	OpenGlobalEvents(context.Context) (io.ReadCloser, error)
 }
@@ -305,10 +311,25 @@ func (adapter *Adapter) Probe(ctx context.Context) (harness.Capabilities, error)
 }
 
 // openCodeProbeDidNotFinish keeps a canceled or expired probe inside the tolerated
-// ErrHarnessUnavailable class so a slow probe cannot abort startup; the context error is never wrapped.
+// ErrHarnessUnavailable class while errors.Is still reaches the context sentinel.
 func openCodeProbeDidNotFinish(capabilities harness.Capabilities, step string, err error) (harness.Capabilities, error) {
-	return capabilities, fmt.Errorf("%w: opencode %s probe did not finish: %v", harness.ErrHarnessUnavailable, step, err)
+	return capabilities, &probeNotFinishedError{step: step, cause: err}
 }
+
+// probeNotFinishedError unwraps to the tolerated class and exposes the bounded probe's
+// context sentinel through Is, not as an independent joined failure.
+type probeNotFinishedError struct {
+	step  string
+	cause error
+}
+
+func (err *probeNotFinishedError) Error() string {
+	return fmt.Sprintf("%v: opencode %s probe did not finish: %v", harness.ErrHarnessUnavailable, err.step, err.cause)
+}
+
+func (err *probeNotFinishedError) Unwrap() error { return harness.ErrHarnessUnavailable }
+
+func (err *probeNotFinishedError) Is(target error) bool { return errors.Is(err.cause, target) }
 
 // openCodePlatformRefusalReason is the fail-closed Linux projection reason; it stays the
 // same reason class harness.NewOpenCodeAdapter reports so the compose rows see one refusal.
@@ -419,9 +440,8 @@ func (adapter *Adapter) Start(ctx context.Context, request harness.StartRequest,
 	if request.Resume != nil {
 		return nil, unsupportedCapability(harness.CapabilityResume, "OpenCode native resume is not verified")
 	}
-	if request.ModelProfile != "" {
-		return nil, errors.New("opencode native model profile mapping is unverified")
-	}
+	// ModelProfile is the daemon-validated admission alias (admission.model_profile
+	// must equal runtime.agent_profile); this transport selects no native model.
 	if len(request.Invocation.Args) != 0 {
 		return nil, errors.New("opencode native transport does not accept invocation arguments")
 	}
@@ -568,6 +588,10 @@ type nativeSession struct {
 	turnErr         error
 	turnCancel      context.CancelFunc
 	turnAttemptDone chan struct{}
+	turnDone        chan struct{}
+	turnSettled     bool
+	turnSettledErr  error
+	turnOutcome     string
 	stream          *streamHandle
 	streamDone      chan struct{}
 	streamErr       error
@@ -908,6 +932,7 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	session.turnCancel = turnCancel
 	turnAttemptDone := make(chan struct{})
 	session.turnAttemptDone = turnAttemptDone
+	session.turnDone = make(chan struct{})
 	handle := session.handle
 	session.mu.Unlock()
 
@@ -927,6 +952,14 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 		}
 		if !succeeded {
 			session.turnCancel = nil
+			settleErr := err
+			if settleErr == nil {
+				settleErr = session.turnErr
+			}
+			if settleErr == nil {
+				settleErr = errTurnUnverified
+			}
+			session.settleTurnLocked(settleErr)
 		}
 		session.turnStarting = false
 		if session.turnAttemptDone == turnAttemptDone {
@@ -1007,8 +1040,8 @@ func (session *nativeSession) StartTurn(ctx context.Context, request harness.Tur
 	return nil
 }
 
-// WaitTurn never treats an HTTP admission, event stream, or child exit as an
-// OpenCode turn terminal. A future mapping must explicitly replace this gate.
+// WaitTurn blocks until this session's recorded session.execution.* terminal agrees with
+// the GET /api/session/{id} outcome readback; it never returns a TaskResult.
 func (session *nativeSession) WaitTurn(ctx context.Context) error {
 	if session == nil {
 		return errors.New("opencode native session is nil")
@@ -1019,11 +1052,120 @@ func (session *nativeSession) WaitTurn(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return errTurnUnverified
+	session.mu.Lock()
+	if session.turnSettled {
+		err := session.turnSettledErr
+		session.mu.Unlock()
+		return err
+	}
+	turnDone := session.turnDone
+	started := session.turnStarted || session.turnStarting
+	session.mu.Unlock()
+	if !started || turnDone == nil {
+		return errTurnUnverified
+	}
+	return harness.WaitTurnBarrier(ctx, session.context, turnDone, session.turnTerminalError, session.turnSessionError)
 }
 
-// Wait returns a supervised process outcome but never ResultSucceeded without
-// a separately verified, exact terminal event and structured task result.
+// settleTurnLocked marks the turn settled exactly once; the first settle wins so a
+// verified terminal is never erased by a later process or stream observation.
+func (session *nativeSession) settleTurnLocked(err error) {
+	if session.turnSettled {
+		return
+	}
+	session.turnSettled = true
+	session.turnSettledErr = err
+	if session.turnDone != nil {
+		close(session.turnDone)
+		session.turnDone = nil
+	}
+}
+
+// turnTerminalError reports the settled turn error; nil means a verified terminal.
+func (session *nativeSession) turnTerminalError() error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.turnSettledErr
+}
+
+// turnSessionError reports why a turn can no longer settle after the session ended.
+func (session *nativeSession) turnSessionError() error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.turnSettled {
+		return session.turnSettledErr
+	}
+	if session.turnErr != nil {
+		return session.turnErr
+	}
+	return fmt.Errorf("%w: OpenCode native session ended before the turn settled", errTurnUnverified)
+}
+
+// settleRecordedTerminal verifies one recorded session.execution.* terminal against the
+// server's own outcome readback before settling the turn barrier.
+func (session *nativeSession) settleRecordedTerminal(eventType, outcome string) {
+	session.mu.Lock()
+	settled := session.turnSettled
+	client := session.client
+	handle := session.handle.ID
+	session.mu.Unlock()
+	if settled {
+		return
+	}
+	var readbackErr error
+	if client == nil || !isID(handle, "ses_") {
+		readbackErr = errors.New("recorded terminal arrived before the native session identity was established")
+	} else {
+		readbackErr = session.awaitRecordedOutcome(client, handle, outcome)
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.turnSettled {
+		return
+	}
+	if readbackErr == nil {
+		session.turnOutcome = outcome
+		session.settleTurnLocked(nil)
+		return
+	}
+	session.settleTurnLocked(fmt.Errorf("%w: %s terminal refused: %v", errTurnUnverified, eventType, readbackErr))
+}
+
+// awaitRecordedOutcome polls the recorded readback until it names the same terminal class
+// the stream observed; a disagreement is a verification failure, not a later correction.
+func (session *nativeSession) awaitRecordedOutcome(client api, sessionID, outcome string) error {
+	readbackContext, cancel := context.WithTimeout(session.context, sessionOutcomeReadbackTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		state, err := client.SessionOutcome(readbackContext, sessionID)
+		if err == nil {
+			lastErr = nil
+			if state.Outcome == outcome {
+				return nil
+			}
+			if state.Outcome != "" {
+				return fmt.Errorf("%w: recorded outcome %q, terminal %q", ErrIdentityMismatch, state.Outcome, outcome)
+			}
+		} else {
+			lastErr = err
+		}
+		interval := sessionOutcomeReadbackInterval
+		timer := time.NewTimer(interval)
+		select {
+		case <-readbackContext.Done():
+			timer.Stop()
+			if lastErr != nil {
+				return fmt.Errorf("recorded outcome readback did not settle: %w", lastErr)
+			}
+			return fmt.Errorf("recorded outcome readback did not settle: %w", readbackContext.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// Wait returns the supervised process outcome together with the turn outcome only when a
+// recorded terminal plus its readback verified it; otherwise the result stays unknown.
 func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, error) {
 	if session == nil {
 		return harness.TaskResult{}, errors.New("opencode native session is nil")
@@ -1034,18 +1176,31 @@ func (session *nativeSession) Wait(ctx context.Context) (harness.TaskResult, err
 	return harness.WaitResult(ctx, session.processDone, session.currentResult, harness.TaskResult{Kind: harness.ResultCancelled, Summary: "OpenCode wait cancelled"})
 }
 
-// currentResult reads the settled process outcome under the session lock.
+// currentResult reads the settled process outcome under the session lock: only a verified
+// session.execution.* terminal names the kind; every other settle stays unknown.
 func (session *nativeSession) currentResult() (harness.TaskResult, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	return harness.TaskResult{
+	result := harness.TaskResult{
 		Kind:         harness.ResultUnknown,
 		Summary:      "OpenCode process ended without a verified native terminal result",
 		Process:      session.processResult,
 		Usage:        harness.Usage{State: harness.UsageUnknown},
 		EventCount:   session.eventCount,
 		LastSequence: session.lastSequence,
-	}, nil
+	}
+	if !session.turnSettled || session.turnSettledErr != nil {
+		return result, nil
+	}
+	switch session.turnOutcome {
+	case "succeeded":
+		result.Kind, result.Summary = harness.ResultSucceeded, "OpenCode native turn succeeded"
+	case "failed":
+		result.Kind, result.Summary, result.Reason = harness.ResultFailed, "OpenCode native turn failed", new(protocol.TaskResultReasonUnknownOutcome)
+	case "interrupted":
+		result.Kind, result.Summary, result.Reason = harness.ResultCancelled, "OpenCode native turn was interrupted", new(protocol.TaskResultReasonCancelled)
+	}
+	return result, nil
 }
 
 // Control exposes only cancellation delivery. It is deliberately independent
@@ -1126,6 +1281,7 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 	session.closed = true
 	handle := session.handle.ID
 	turnStarted := session.turnStarted || session.turnStarting
+	verifiedTurn := session.turnSettled && session.turnSettledErr == nil
 	turnCancel := session.turnCancel
 	stream := session.stream
 	process := session.process
@@ -1140,7 +1296,9 @@ func (session *nativeSession) closeOnce(ctx context.Context) error {
 		turnCancel()
 	}
 	var interruptErr error
-	if turnStarted && isID(handle, "ses_") {
+	// A verified terminal has no live turn to interrupt: the pinned bytes refuse that
+	// interrupt instead of queuing it, so closing would otherwise report a false failure.
+	if turnStarted && !verifiedTurn && isID(handle, "ses_") {
 		interruptErr = session.interrupt(ctx, handle)
 	}
 	if stream != nil {
@@ -1182,6 +1340,9 @@ func (session *nativeSession) watchProcess(process nativeProcess) {
 	turnCancel := session.turnCancel
 	streamDone := session.streamDone
 	turnAttemptDone := session.turnAttemptDone
+	if !session.turnSettled {
+		session.settleTurnLocked(fmt.Errorf("%w: OpenCode serve process ended before the turn terminal", errTurnUnverified))
+	}
 	session.mu.Unlock()
 	session.finishReadiness(errors.New("OpenCode serve process exited before readiness"))
 	session.cancelEvents()
@@ -1292,6 +1453,9 @@ func (session *nativeSession) observeSessionFrames(validator *SessionEventValida
 		if event.Kind == SessionEventPromptAdmitted && (event.PromptAdmitted == nil || event.PromptAdmitted.MessageID != messageID) {
 			return fmt.Errorf("%w: expected message %q", ErrIdentityMismatch, messageID)
 		}
+		if event.Kind == SessionEventInboxEnqueued && (event.InboxEnqueued == nil || event.InboxEnqueued.InboxID != messageID) {
+			return fmt.Errorf("%w: expected inbox %q", ErrIdentityMismatch, messageID)
+		}
 		nativeEvent := harness.Event{Kind: harness.EventNativeFrame, Sequence: frame.Sequence, Code: "opencode_session_event", Message: "OpenCode durable session event observed"}
 		if event.Kind == SessionEventUnknown {
 			nativeEvent.Kind = harness.EventDiagnostic
@@ -1301,6 +1465,9 @@ func (session *nativeSession) observeSessionFrames(validator *SessionEventValida
 		}
 		if err := session.emit(session.eventContext, nativeEvent); err != nil {
 			return err
+		}
+		if outcome, terminal := executionOutcome(event.Type); terminal {
+			session.settleRecordedTerminal(event.Type, outcome)
 		}
 	}
 	return nil

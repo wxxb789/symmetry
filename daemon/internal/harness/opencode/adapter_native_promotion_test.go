@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +17,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -34,7 +35,35 @@ const (
 	nativePromotionProofFirstEventWait = 60 * time.Second
 	nativePromotionProofPollInterval   = 500 * time.Millisecond
 	nativePromotionProofGoal           = "Output the integers from 1 through 10000, one per line, with no other text. Do not use tools."
+	nativePromotionProofSuccessGoal    = "Reply exactly OPENCODE_NATIVE_SUCCESS. Do not use tools."
+	// The admitted alias a Goal admission always carries (admission.model_profile ==
+	// runtime.agent_profile); the proof must exercise a non-empty profile.
+	nativePromotionProofProfile = "implementation-default"
 )
+
+// nativePromotionProofOperation records one admitted turn's observable evidence.
+type nativePromotionProofOperation struct {
+	SessionStarted  bool
+	NativeFrames    int
+	WaitTurn        string
+	ReadbackOutcome string
+	ResultKind      string
+	ControlApplied  bool
+	Terminated      bool
+}
+
+func (operation nativePromotionProofOperation) receiptFields() map[string]any {
+	return map[string]any{
+		"session_started":  operation.SessionStarted,
+		"native_frames":    operation.NativeFrames,
+		"readiness":        map[string]any{"source_pid_accepted": true, "foreign_pid_refused": true},
+		"wait_turn":        operation.WaitTurn,
+		"readback_outcome": operation.ReadbackOutcome,
+		"result_kind":      operation.ResultKind,
+		"control_applied":  operation.ControlApplied,
+		"close_terminated": operation.Terminated,
+	}
+}
 
 type nativePromotionProofSink struct {
 	mu             sync.Mutex
@@ -66,41 +95,34 @@ func (sink *nativePromotionProofSink) snapshot() (bool, int) {
 }
 
 // TestNativePromotionProofOnThePinnedWindowsBlob is the opt-in Phase-1 Windows promotion proof:
-// Open, StartTurn, observed events and an applied cancel against the exact pinned 2.4.1 PE.
+// two admitted turns behind a non-empty profile (a verified success and an applied cancel with a
+// verified interrupted terminal) plus their outcome readbacks, on the exact pinned 2.4.1 PE.
 func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 	if os.Getenv(nativePromotionProofEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_OPENCODE_PROMOTION_PROOF=1 to run the Phase-1 Windows promotion proof")
 	}
-	executable := strings.TrimSpace(os.Getenv(nativePromotionProofExecutableEnv))
-	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute pinned OpenCode %s executable", nativePromotionProofExecutableEnv, TestedVersion)
-	}
-	receiptPath := strings.TrimSpace(os.Getenv(nativePromotionProofReceiptEnv))
-	if receiptPath == "" || !filepath.IsAbs(receiptPath) {
-		t.Fatalf("%s must name the absolute receipt path", nativePromotionProofReceiptEnv)
-	}
+	executable := nativePromotionProofEnvPath(t, nativePromotionProofExecutableEnv, "the pinned OpenCode "+TestedVersion+" executable")
+	receiptPath := nativePromotionProofEnvPath(t, nativePromotionProofReceiptEnv, "the receipt path")
+	modelsPath := nativePromotionProofEnvPath(t, nativePromotionProofModelsEnv, "the operator OMP models config")
+	sourcePath := nativePromotionProofEnvPath(t, nativePromotionProofSourceEnv, "the operator OpenCode provider config")
 	digest, size := nativePromotionProofExecutableDigest(t, executable)
 	if digest != TestedExecutableHash {
 		t.Fatalf("promotion proof executable digest = %q, want %q", digest, TestedExecutableHash)
 	}
-	credential := nativePromotionProofCredential(t)
+	credential := nativePromotionProofCredential(t, modelsPath)
 
 	root := t.TempDir()
-	workspace := filepath.Join(root, "workspace")
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		t.Fatalf("create promotion proof workspace: %v", err)
-	}
 	environment := nativeOpenCodeSmokeEnvironment(t, root)
 	configPath := filepath.Join(root, "config", "opencode.json")
 	if err := os.MkdirAll(filepath.Join(root, "managed"), 0o700); err != nil {
 		t.Fatalf("create promotion proof managed directory: %v", err)
 	}
-	nativePromotionProofWriteConfig(t, configPath)
+	nativePromotionProofWriteConfig(t, configPath, sourcePath)
 	environment = nativeOpenCodeConfigEnvironment(environment, configPath, filepath.Dir(configPath), filepath.Join(root, "managed"), nativePromotionProofCredentialEnv+"="+credential)
 	versionContext, versionCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
 	defer versionCancel()
 	versionCommand := exec.CommandContext(versionContext, executable, "--version")
-	versionCommand.Dir = workspace
+	versionCommand.Dir = root
 	versionCommand.Env = environment
 	versionOutput, err := versionCommand.Output()
 	if err != nil {
@@ -111,10 +133,63 @@ func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 		t.Fatalf("pinned OpenCode version = %q, want opencode v%s", versionLine, TestedVersion)
 	}
 
+	succeeded := nativePromotionProofRunTurn(t, executable, filepath.Join(root, "succeeded-workspace"), environment, nativePromotionProofSuccessGoal, false)
+	interrupted := nativePromotionProofRunTurn(t, executable, filepath.Join(root, "interrupted-workspace"), environment, nativePromotionProofGoal, true)
+
+	receipt := map[string]any{
+		"goos":                     "windows",
+		"tested_version":           TestedVersion,
+		"executable_sha256":        digest,
+		"executable_size":          size,
+		"version_line":             versionLine,
+		"relay_host_recorded":      false,
+		"model_profile_alias_used": true,
+		"operations": map[string]any{
+			"succeeded":   succeeded.receiptFields(),
+			"interrupted": interrupted.receiptFields(),
+		},
+		"delivered_sha256": nativePromotionProofDeliveredDigests(t),
+	}
+	encoded, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatalf("encode promotion proof receipt: %v", err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(receiptPath, encoded, 0o600); err != nil {
+		t.Fatalf("write promotion proof receipt: %v", err)
+	}
+	sum := sha256.Sum256(encoded)
+	t.Logf("promotion proof receipt written with sha256 %s", "sha256:"+hex.EncodeToString(sum[:]))
+}
+
+// nativePromotionProofEnvPath keeps the operator-proof harness free of host filesystem
+// layout: every operator input arrives as one explicit absolute environment path.
+func nativePromotionProofEnvPath(t *testing.T, name, what string) string {
+	t.Helper()
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" || !filepath.IsAbs(value) {
+		t.Fatalf("%s must name the absolute %s", name, what)
+	}
+	return value
+}
+
+// nativePromotionProofRunTurn drives one admitted turn behind a non-empty ModelProfile
+// through start, observed events, an optional applied cancel and a verified WaitTurn terminal.
+func nativePromotionProofRunTurn(t *testing.T, executable, workspace string, environment []string, goal string, cancelTurn bool) nativePromotionProofOperation {
+	t.Helper()
+	operation := nativePromotionProofOperation{}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatalf("create promotion proof workspace: %v", err)
+	}
 	sink := &nativePromotionProofSink{firstFrame: make(chan struct{})}
 	startContext, startCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
 	defer startCancel()
-	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, acceptNativeOpenCodeProcess, sink)
+	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
+		Workspace:      workspace,
+		ModelProfile:   nativePromotionProofProfile,
+		Invocation:     execution.Invocation{Env: environment},
+		PersistProcess: acceptNativeOpenCodeProcess,
+	}, sink)
 	if err != nil {
 		t.Fatalf("start pinned OpenCode promotion proof: %v", err)
 	}
@@ -173,7 +248,7 @@ func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 
 	turnContext, turnCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
 	defer turnCancel()
-	if err := staged.StartTurn(turnContext, harness.TurnRequest{Goal: nativePromotionProofGoal, Context: json.RawMessage(`{"promotion_proof":"phase1"}`)}); err != nil {
+	if err := staged.StartTurn(turnContext, harness.TurnRequest{Goal: goal, Context: json.RawMessage(`{"promotion_proof":"phase1"}`)}); err != nil {
 		t.Fatalf("start pinned OpenCode turn: %v", err)
 	}
 	select {
@@ -182,21 +257,36 @@ func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 		started, frames := sink.snapshot()
 		t.Fatalf("pinned OpenCode turn produced no native session event; session_started=%t native_frames=%d", started, frames)
 	}
-	controlContext, controlCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
-	defer controlCancel()
-	controlReceipt, controlErr := nativePromotionProofCancel(controlContext, staged)
-	if controlErr != nil {
-		t.Fatalf("cancel pinned OpenCode turn: %v", controlErr)
+	if cancelTurn {
+		controlContext, controlCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
+		controlReceipt, controlErr := nativePromotionProofCancel(controlContext, staged)
+		controlCancel()
+		if controlErr != nil {
+			t.Fatalf("cancel pinned OpenCode turn: %v", controlErr)
+		}
+		if controlReceipt.Outcome != harness.ControlApplied || controlReceipt.Capability != harness.CapabilityCancel {
+			t.Fatalf("cancel receipt = %+v, want an applied cancel capability", controlReceipt)
+		}
+		operation.ControlApplied = true
 	}
-	if controlReceipt.Outcome != harness.ControlApplied || controlReceipt.Capability != harness.CapabilityCancel {
-		t.Fatalf("cancel receipt = %+v, want an applied cancel capability", controlReceipt)
+	waitContext, waitCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
+	waitErr := staged.WaitTurn(waitContext)
+	waitCancel()
+	if waitErr != nil {
+		t.Fatalf("pinned OpenCode WaitTurn() = %v, want the verified recorded terminal", waitErr)
 	}
-	outcomeContext, outcomeCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
-	defer outcomeCancel()
-	turnOutcome, outcomeErr := nativePromotionProofWaitForTurnOutcome(outcomeContext, client, handle.ID)
-	if outcomeErr != nil {
-		t.Fatalf("observe pinned OpenCode turn outcome after cancel: %v", outcomeErr)
+	operation.WaitTurn = "verified"
+	readbackContext, readbackCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
+	readback, readbackErr := client.SessionOutcome(readbackContext, handle.ID)
+	readbackCancel()
+	expectedOutcome := "succeeded"
+	if cancelTurn {
+		expectedOutcome = "interrupted"
 	}
+	if readbackErr != nil || readback.Outcome != expectedOutcome {
+		t.Fatalf("pinned OpenCode outcome readback = %+v, %v, want %q", readback, readbackErr, expectedOutcome)
+	}
+	operation.ReadbackOutcome = readback.Outcome
 
 	closeContext, closeCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
 	defer closeCancel()
@@ -208,38 +298,22 @@ func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 		t.Fatalf("wait pinned OpenCode promotion proof: %v", err)
 	}
 	closed = true
-	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated ||
+	wantKind := harness.ResultSucceeded
+	if cancelTurn {
+		wantKind = harness.ResultCancelled
+		if result.Reason == nil || *result.Reason != protocol.TaskResultReasonCancelled {
+			t.Fatalf("cancelled result reason = %v, want %q", result.Reason, protocol.TaskResultReasonCancelled)
+		}
+	}
+	if result.Kind != wantKind || result.Semantic != nil || result.Usage.State != harness.UsageUnknown || !result.Process.Terminated ||
 		result.Process.SinkError != nil || result.Process.OutputError != nil ||
 		result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
-		t.Fatalf("pinned OpenCode promotion proof result = %+v, want unknown with bounded clean process termination", result)
+		t.Fatalf("pinned OpenCode promotion proof result = %+v, want %q with bounded clean process termination", result, wantKind)
 	}
-
-	sessionStarted, nativeFrames := sink.snapshot()
-	receipt := map[string]any{
-		"goos":                "windows",
-		"tested_version":      TestedVersion,
-		"executable_sha256":   digest,
-		"executable_size":     size,
-		"version_line":        versionLine,
-		"relay_host_recorded": false,
-		"session_started":     sessionStarted,
-		"native_frames":       nativeFrames,
-		"readiness":           map[string]any{"source_pid_accepted": true, "foreign_pid_refused": true},
-		"control":             map[string]any{"kind": string(harness.ControlCancel), "outcome": string(controlReceipt.Outcome), "capability": string(controlReceipt.Capability)},
-		"turn_outcome":        turnOutcome,
-		"close":               map[string]any{"terminated": result.Process.Terminated, "result_kind": string(result.Kind)},
-		"delivered_sha256":    nativePromotionProofDeliveredDigests(t),
-	}
-	encoded, err := json.MarshalIndent(receipt, "", "  ")
-	if err != nil {
-		t.Fatalf("encode promotion proof receipt: %v", err)
-	}
-	encoded = append(encoded, '\n')
-	if err := os.WriteFile(receiptPath, encoded, 0o600); err != nil {
-		t.Fatalf("write promotion proof receipt: %v", err)
-	}
-	sum := sha256.Sum256(encoded)
-	t.Logf("promotion proof receipt written with sha256 %s", "sha256:"+hex.EncodeToString(sum[:]))
+	operation.SessionStarted, operation.NativeFrames = sink.snapshot()
+	operation.ResultKind = string(result.Kind)
+	operation.Terminated = result.Process.Terminated
+	return operation
 }
 
 // nativePromotionProofCancel retries the cancel until the server applies it. A 2.4.1
@@ -260,38 +334,6 @@ func nativePromotionProofCancel(ctx context.Context, staged harness.StagedSessio
 	}
 }
 
-func nativePromotionProofWaitForTurnOutcome(ctx context.Context, client *Client, sessionID string) (string, error) {
-	deadline := time.Now().Add(nativePromotionProofTimeout)
-	var outcome string
-	for {
-		status, body, err := client.request(ctx, http.MethodGet, "/api/session/"+sessionID, "", nil)
-		if err != nil {
-			return outcome, err
-		}
-		if status == http.StatusOK {
-			var readback struct {
-				Data struct {
-					Outcome string `json:"outcome"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal(body, &readback); err != nil {
-				return outcome, fmt.Errorf("decode session readback: %w", err)
-			}
-			outcome = readback.Data.Outcome
-			if outcome == "interrupted" {
-				return outcome, nil
-			}
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return outcome, fmt.Errorf("session %s outcome = %q, want %q: %w", sessionID, outcome, "interrupted", ctxErr)
-		}
-		if time.Now().After(deadline) {
-			return outcome, fmt.Errorf("session %s outcome = %q, want %q", sessionID, outcome, "interrupted")
-		}
-		time.Sleep(nativePromotionProofPollInterval)
-	}
-}
-
 func nativePromotionProofExecutableDigest(t *testing.T, executable string) (string, int64) {
 	t.Helper()
 	file, err := os.Open(executable)
@@ -307,16 +349,8 @@ func nativePromotionProofExecutableDigest(t *testing.T, executable string) (stri
 	return "sha256:" + hex.EncodeToString(hasher.Sum(nil)), size
 }
 
-func nativePromotionProofCredential(t *testing.T) string {
+func nativePromotionProofCredential(t *testing.T, path string) string {
 	t.Helper()
-	path := strings.TrimSpace(os.Getenv(nativePromotionProofModelsEnv))
-	if path == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Fatalf("resolve the operator home directory: %v", err)
-		}
-		path = filepath.Join(home, ".omp", "agent", "models.yml")
-	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read the operator OMP models config: %v", err)
@@ -354,16 +388,8 @@ func nativePromotionProofCredential(t *testing.T) string {
 
 // nativePromotionProofWriteConfig narrows the operator provider block to the pinned model,
 // replacing the key with the credential environment reference; provider-level fields ride along.
-func nativePromotionProofWriteConfig(t *testing.T, path string) {
+func nativePromotionProofWriteConfig(t *testing.T, path, sourcePath string) {
 	t.Helper()
-	sourcePath := strings.TrimSpace(os.Getenv(nativePromotionProofSourceEnv))
-	if sourcePath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Fatalf("resolve the operator home directory: %v", err)
-		}
-		sourcePath = filepath.Join(home, ".config", "opencode", "opencode.json")
-	}
 	raw, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatalf("read the operator OpenCode provider config: %v", err)

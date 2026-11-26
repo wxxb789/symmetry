@@ -155,3 +155,49 @@ The record states the merge disposition explicitly: **the registration flip must
 without the client re-anchor or an explicit conductor acceptance**, because the promoted projection
 advertises `start/events/cancel` while the first `Open` call cannot survive the 2.4.1 route set;
 this stage ships the ruled rows and escalates, it does not authorise the merge.
+
+## 9. Round 2 (PR #298 round-1 MUST_FIX, F1-F6)
+
+The conductor's second ruling (2026-11-26, PR #298 round 1) settled the open questions; this
+section records only the implementation choices it left open.
+
+- **F1 — probe-cancellation chain.** Three pinned contracts collide: `probeconformance` requires
+  `errors.Is(probeErr, context.Canceled|DeadlineExceeded)`; `TestStartupProbeRejectsUnexpectedJoinedProbeError`
+  requires a *joined* `[ErrHarnessUnavailable, context.DeadlineExceeded]` to stay fatal; the R9
+  tolerance requires the adapter's canceled probe to stay inside the `ErrHarnessUnavailable`
+  class. A two-`%w` join satisfies the first but breaks the second; a bare context error satisfies
+  the first but breaks the third. The delivered shape is a typed `probeNotFinishedError` whose
+  `Unwrap` returns only `ErrHarnessUnavailable` (the tolerated class) and whose `Is` reaches the
+  context sentinel — the first error to keep all three green. `app/probe.go`'s
+  `probeErrorContainsOnly` is unchanged, so its join-rejection contract is intact.
+- **F2 — platform rows.** The composed Goal-assignment test skips off Windows (mirroring its
+  foreign-blob sibling); the truth table's production projection for opencode selects the
+  composition root's actual wiring per platform (native adapter on Windows, unavailable seam
+  elsewhere) and its expected row carries the platform sentence off Windows.
+- **F3 — model profile.** The adapter accepts the daemon-validated admission alias exactly as the
+  Claude adapter does and claims no native model identity; `admission.model_profile ==
+  runtime.agent_profile` is enforced in `goal_admission_tx.go` before `Start`. The Q-G provider
+  pin stays proof-only.
+- **F4 — recorded vocabulary and the turn barrier.** The decoder's known set is re-anchored to the
+  receipts (`session.execution.*`, `session.inbox.enqueued`, `session.step.*`,
+  `session.tool.called`/`success`); every other recorded type stays `SessionEventUnknown` and is
+  journalled as a diagnostic. `WaitTurn` blocks on a settle that requires both the recorded
+  `session.execution.*` terminal and a matching `GET /api/session/{id}` outcome readback; the
+  verified outcome names the `TaskResult` kind (succeeded/failed/cancelled) with no semantic
+  result and unknown usage. The frozen 1.18.32 decode paths stay (their only consumers are the
+  frozen `testdata/opencode/1.18.32` replay rows and the inline `session.next.*` rows; no 2.4.1
+  frame can take them, and only `session.execution.*` settles a turn). Two re-anchorings the
+  evidence forced: `durable.seq` accepts 0 (the recorded `session.created` cursor; the validator
+  boundary stays exclusive and the `sse_test.go` "bad cursor" fixture moves to `-1`), and the
+  1.18.32 terminal-candidate witness now expects `ResultUnknown` for every scenario because that
+  vocabulary carries no `session.execution` terminal.
+- **F5 — live proof.** Two admitted turns behind a non-empty `ModelProfile` on the pinned PE: a
+  verified success and an applied cancel with a verified interrupted terminal, each asserted
+  through `WaitTurn`, the readback and the settled `TaskResult`; the receipt carries per-operation
+  fields and the delivered digests.
+- **F6 — proof environment.** Every operator input (executable, receipt, models config, provider
+  config) arrives as an explicit absolute environment path; the host-relative `~` defaults are
+  gone. The CI folded-gate labels and provenance sentence name the readiness route.
+- Unchanged: no second amendment; row 4 recorded unmet; the fenced list keeps no capability; no
+  change to the 2.3.0/2.4.1 testdata bytes, the collector/suite, `daemon/e2e/**`, the
+  rootless-compose script, or the witness legs.

@@ -1105,7 +1105,7 @@ jobs:
             printf 'archive_sha256_expected=%s\n' "$archive_sha256"
             printf 'provider_credentials=none\n'
             printf 'upstream_scope=synthetic numeric loopback only\n'
-            printf 'witness_scope=Linux legacy refusal before health HTTP; not installed-v2 positive acceptance\n'
+            printf 'witness_scope=Linux legacy refusal before any readiness request; not installed-v2 positive acceptance\n'
           } > "$provenance"
 
           curl --fail --silent --show-error --location \
@@ -1161,7 +1161,7 @@ jobs:
           set -Eeuo pipefail
           gates=(
             "Prepare pinned OpenCode release=$PREPARE_OUTCOME"
-            "Require Linux legacy OpenCode refusal before health request=$REFUSAL_OUTCOME"
+            "Require Linux legacy OpenCode refusal before readiness request=$REFUSAL_OUTCOME"
             "Upload OpenCode synthetic provenance=$UPLOAD_OUTCOME"
           )
           python3 ../scripts/ci/assert-folded-gates.py --job daemon "${gates[@]}"

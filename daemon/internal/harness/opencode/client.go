@@ -229,6 +229,44 @@ func (client *Client) Interrupt(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// SessionState is the recorded GET /api/session/{id} readback subset: the server's own
+// session identity and terminal outcome spelling. It is never a usage or billing claim.
+type SessionState struct {
+	ID      string
+	Outcome string
+}
+
+// SessionOutcome reads the recorded outcome readback for one session. An empty Outcome
+// means the server has not classified the session yet; callers must still bind the
+// readback to a native terminal event before trusting it.
+func (client *Client) SessionOutcome(ctx context.Context, sessionID string) (SessionState, error) {
+	if !isID(sessionID, "ses_") {
+		return SessionState{}, fmt.Errorf("%w: session id must start with ses_", ErrInvalidSession)
+	}
+	body, err := client.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(sessionID), "", nil, http.StatusOK)
+	if err != nil {
+		return SessionState{}, err
+	}
+	object, err := responseDataObject(body)
+	if err != nil {
+		return SessionState{}, fmt.Errorf("%w: %v", ErrInvalidSession, err)
+	}
+	state := SessionState{}
+	var ok bool
+	if state.ID, ok = requiredString(object, "id"); !ok {
+		return SessionState{}, ErrInvalidSession
+	}
+	if state.ID != sessionID {
+		return SessionState{}, fmt.Errorf("%w: requested session %q, got %q", ErrIdentityMismatch, sessionID, state.ID)
+	}
+	if raw, exists := object["outcome"]; exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if state.Outcome, ok = requiredString(object, "outcome"); !ok {
+			return SessionState{}, ErrInvalidSession
+		}
+	}
+	return state, nil
+}
+
 // OpenGlobalEvents opens the private global SSE endpoint. Its caller owns the
 // returned body and must feed it through Decoder; a connection marker is not a
 // task lifecycle or completion signal.

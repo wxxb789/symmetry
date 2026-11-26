@@ -25,7 +25,6 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
-	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -364,13 +363,10 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	}
 	waitTurnCancel()
 	if waitTurnErr == nil {
-		t.Fatal("OpenCode terminal candidate WaitTurn returned nil; terminal evidence must remain unverified")
+		t.Fatal("OpenCode terminal candidate WaitTurn returned nil; the 1.18.32 vocabulary carries no session.execution terminal")
 	}
-	if errors.Is(waitTurnErr, context.Canceled) || errors.Is(waitTurnErr, context.DeadlineExceeded) {
-		t.Fatalf("OpenCode terminal candidate WaitTurn was context-bounded instead of fail-closed: %v", waitTurnErr)
-	}
-	if scenario.name == nativeOpenCodeTruncatedProvider && !errors.Is(waitTurnErr, errTurnUnverified) {
-		t.Fatalf("OpenCode truncated provider EOF WaitTurn error = %v, want exact conservative errTurnUnverified", waitTurnErr)
+	if !errors.Is(waitTurnErr, context.DeadlineExceeded) && !errors.Is(waitTurnErr, errTurnUnverified) {
+		t.Fatalf("OpenCode terminal candidate WaitTurn error = %v, want its own bound or the unverified class", waitTurnErr)
 	}
 
 	if scenario.name == nativeOpenCodeTruncatedProvider {
@@ -420,15 +416,11 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	if result.Usage.State != harness.UsageUnknown {
 		t.Fatalf("OpenCode terminal candidate usage = %+v, want unknown", result.Usage)
 	}
-	if scenario.expectCancelled {
-		if result.Kind != harness.ResultCancelled {
-			t.Fatalf("OpenCode interrupt candidate result = %+v, want exactly ResultCancelled without semantic result", result)
-		}
-		if result.Reason == nil || *result.Reason != protocol.TaskResultReasonCancelled {
-			t.Fatalf("OpenCode interrupt candidate reason = %v, want TaskResultReasonCancelled", result.Reason)
-		}
-	} else if result.Kind != harness.ResultUnknown {
-		t.Fatalf("OpenCode non-interrupt candidate result = %+v, want exactly ResultUnknown", result)
+	if result.Kind != harness.ResultUnknown || result.Reason != nil {
+		t.Fatalf("OpenCode terminal candidate result = %+v, want exactly ResultUnknown: the 1.18.32 vocabulary carries no verified terminal", result)
+	}
+	if settledErr := staged.WaitTurn(context.Background()); !errors.Is(settledErr, errTurnUnverified) {
+		t.Fatalf("OpenCode terminal candidate settled WaitTurn error = %v, want the unverified class after shutdown", settledErr)
 	}
 	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.OutputTruncated || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
 		t.Fatalf("OpenCode terminal candidate process result = %+v, want bounded clean termination", result.Process)

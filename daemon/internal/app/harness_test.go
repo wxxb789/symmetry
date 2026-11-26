@@ -1159,6 +1159,9 @@ func TestComposedOpenCodeRefusalSentenceMatchesTheUnavailableSeam(t *testing.T) 
 }
 
 func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEffects(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the composed native OpenCode adapter exists only where the platform gate admits")
+	}
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)

@@ -259,6 +259,55 @@ func TestClientInterruptRequiresTheRecordedInterruptedAnswer(t *testing.T) {
 	})
 }
 
+func TestClientSessionOutcomeReadsTheRecordedReadback(t *testing.T) {
+	t.Run("recorded outcome", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			assertAuth(t, request)
+			if request.Method != http.MethodGet || request.URL.Path != "/api/session/ses_native_1" {
+				t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+			}
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_native_1","outcome":"interrupted","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}`)
+		})
+		state, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1")
+		if err != nil || state.ID != "ses_native_1" || state.Outcome != "interrupted" {
+			t.Fatalf("SessionOutcome() = %+v, %v", state, err)
+		}
+	})
+	t.Run("unsettled readback", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_native_1","time":{"created":1}}}`)
+		})
+		state, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1")
+		if err != nil || state.ID != "ses_native_1" || state.Outcome != "" {
+			t.Fatalf("SessionOutcome() = %+v, %v, want an unsettled readback", state, err)
+		}
+	})
+	t.Run("identity mismatch", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_other","outcome":"succeeded"}}`)
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1"); !errors.Is(err, ErrIdentityMismatch) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrIdentityMismatch", err)
+		}
+	})
+	t.Run("missing session", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusNotFound)
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1"); !errors.Is(err, ErrUnexpectedStatus) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrUnexpectedStatus", err)
+		}
+	})
+	t.Run("invalid session id", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			t.Fatal("invalid session id must refuse before any request")
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "msg_native_1"); !errors.Is(err, ErrInvalidSession) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrInvalidSession", err)
+		}
+	})
+}
+
 func TestClientOpensTheAuthenticatedGlobalSSE(t *testing.T) {
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		assertAuth(t, request)

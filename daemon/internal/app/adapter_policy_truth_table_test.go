@@ -197,8 +197,15 @@ func truthTableProductionProjection(t *testing.T, kind harness.Kind) harness.Cap
 		probed, _ := omo.NewAdapter(truthAbsentCommand).Probe(context.Background())
 		capabilities = probed
 	case harness.KindOpenCode:
-		probed, _ := opencode.NewAdapterWithRunner(truthAbsentCommand, truthTableAbsentRunner{}).Probe(context.Background())
-		capabilities = probed
+		// The composition root registers the native adapter on Windows and the
+		// unavailable seam elsewhere; the production row models that wiring.
+		if runtime.GOOS == "windows" {
+			probed, _ := opencode.NewAdapterWithRunner(truthAbsentCommand, truthTableAbsentRunner{}).Probe(context.Background())
+			capabilities = probed
+		} else {
+			probed, _ := harness.NewOpenCodeAdapter().Probe(context.Background())
+			capabilities = probed
+		}
 	default:
 		t.Fatalf("no production projection for kind %q", kind)
 	}
@@ -256,6 +263,14 @@ func truthTableExpectedRows() []truthTableRow {
 			ResumeProduction:         truthRefusedOutcome(kind, harness.CapabilityStart, startReason),
 		}
 	}
+	opencodeRow := native("opencode", harness.KindOpenCode, true, truthOpenCodeStartReason)
+	if runtime.GOOS != "windows" {
+		// Off Windows the composed seam refuses with the platform sentence, not the
+		// native probe's absent-command reason.
+		platformRefusal := truthRefusedOutcome(harness.KindOpenCode, harness.CapabilityStart, truthOpenCodePlatformRejectReason)
+		opencodeRow.ProviderAccessProduction = platformRefusal
+		opencodeRow.ResumeProduction = platformRefusal
+	}
 	return []truthTableRow{
 		{
 			Wire:                     "generic",
@@ -274,7 +289,7 @@ func truthTableExpectedRows() []truthTableRow {
 		native("pi", harness.KindPi, true, truthPiStartReason),
 		native("omp", harness.KindOMP, true, truthOMPStartReason),
 		native("omo", harness.KindOmO, true, truthOmOStartReason),
-		native("opencode", harness.KindOpenCode, true, truthOpenCodeStartReason),
+		opencodeRow,
 	}
 }
 

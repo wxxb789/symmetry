@@ -17,6 +17,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 // testHangGuard bounds how long a test waits for a scripted, in-process double
@@ -218,6 +219,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 		name                  string
 		newAdapter            func(cancel context.CancelFunc) *Adapter
 		wantMessage           string
+		wantContext           error
 		wantVersionKnown      bool
 		wantTransportVerified bool
 	}{
@@ -229,6 +231,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 				}})
 			},
 			wantMessage: "context deadline exceeded",
+			wantContext: context.DeadlineExceeded,
 		},
 		{
 			name: "help probe cancellation",
@@ -239,6 +242,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 				})
 			},
 			wantMessage:      "context canceled",
+			wantContext:      context.Canceled,
 			wantVersionKnown: true,
 		},
 		{
@@ -250,6 +254,7 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 				})
 			},
 			wantMessage:           "context canceled",
+			wantContext:           context.Canceled,
 			wantVersionKnown:      true,
 			wantTransportVerified: true,
 		},
@@ -258,8 +263,8 @@ func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			capabilities, err := test.newAdapter(cancel).Probe(ctx)
-			if !errors.Is(err, harness.ErrHarnessUnavailable) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), test.wantMessage) {
-				t.Fatalf("Probe() error = %v, want the tolerated unavailable class with %q", err, test.wantMessage)
+			if !errors.Is(err, harness.ErrHarnessUnavailable) || !errors.Is(err, test.wantContext) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("Probe() error = %v, want the tolerated unavailable class with %v and %q", err, test.wantContext, test.wantMessage)
 			}
 			if err := capabilities.Validate(); err != nil {
 				t.Fatalf("cancelled probe returned an invalid projection: %v", err)
@@ -443,10 +448,19 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	if api.lastPrompt.Text != wantPrompt {
 		t.Fatalf("prompt text = %q, want %q", api.lastPrompt.Text, wantPrompt)
 	}
-	if err := staged.WaitTurn(context.Background()); !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("WaitTurn() error = %v, want ErrNativeUnverified", err)
-	}
+	// WaitTurn now blocks for a recorded session.execution.* terminal; the process ending
+	// without one settles the barrier as unverified.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- staged.WaitTurn(context.Background()) }()
 	process.finish(execution.Result{PID: 123, ExitCode: 0})
+	select {
+	case waitErr := <-waitDone:
+		if !errors.Is(waitErr, harness.ErrNativeUnverified) {
+			t.Fatalf("WaitTurn() error = %v, want ErrNativeUnverified", waitErr)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("WaitTurn did not settle after the process ended")
+	}
 	result, err := session.Wait(context.Background())
 	if err != nil || result.Kind != harness.ResultUnknown || result.Semantic != nil {
 		t.Fatalf("Wait() = %+v, %v; want unknown without semantic result", result, err)
@@ -454,6 +468,188 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+}
+
+// TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback drives the promoted barrier
+// end to end: recorded admission, a recorded session.execution.* terminal, the server's own
+// outcome readback and the settled TaskResult kind.
+func TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		terminal   string
+		reason     string
+		outcome    string
+		wantErr    bool
+		wantKind   harness.ResultKind
+		wantReason *protocol.TaskResultReason
+		interrupts int
+	}{
+		{name: "succeeded", terminal: "session.execution.succeeded", outcome: "succeeded", wantKind: harness.ResultSucceeded},
+		{name: "provider failure", terminal: "session.execution.failed", outcome: "failed", wantKind: harness.ResultFailed, wantReason: new(protocol.TaskResultReasonUnknownOutcome)},
+		{name: "interrupted", terminal: "session.execution.interrupted", reason: "user", outcome: "interrupted", wantKind: harness.ResultCancelled, wantReason: new(protocol.TaskResultReasonCancelled)},
+		{name: "readback disagrees", terminal: "session.execution.interrupted", reason: "user", outcome: "succeeded", wantErr: true, wantKind: harness.ResultUnknown, interrupts: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// The pinned bytes refuse an interrupt for a finished turn; a verified settle
+			// must close without ever issuing it.
+			api := &fakeAPI{outcome: test.outcome}
+			if !test.wantErr {
+				api.interruptErr = ErrInterruptUnapplied
+			}
+			staged, process := startStagedTestSession(t, api, &recordingSink{})
+			api.mu.Lock()
+			api.streamFactory = func(context.Context) io.ReadCloser {
+				return &recordedTurnGlobalStream{api: api, terminal: test.terminal, reason: test.reason}
+			}
+			api.mu.Unlock()
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+				t.Fatalf("StartTurn() error = %v", err)
+			}
+			waitContext, cancelWait := context.WithTimeout(context.Background(), testHangGuard)
+			waitErr := staged.WaitTurn(waitContext)
+			cancelWait()
+			if test.wantErr && waitErr == nil {
+				t.Fatal("WaitTurn() = nil, want the fail-closed refusal")
+			}
+			if !test.wantErr && waitErr != nil {
+				t.Fatalf("WaitTurn() error = %v", waitErr)
+			}
+			process.finish(execution.Result{PID: 123, ExitCode: 0})
+			result, err := staged.Wait(context.Background())
+			if err != nil {
+				t.Fatalf("Wait() error = %v", err)
+			}
+			if result.Kind != test.wantKind || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
+				t.Fatalf("Wait() = %+v, want kind %q, no semantic result and unknown usage", result, test.wantKind)
+			}
+			if test.wantReason == nil {
+				if result.Reason != nil {
+					t.Fatalf("Wait() reason = %v, want none", *result.Reason)
+				}
+			} else if result.Reason == nil || *result.Reason != *test.wantReason {
+				t.Fatalf("Wait() reason = %v, want %q", result.Reason, *test.wantReason)
+			}
+			if err := staged.Close(context.Background()); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+			api.mu.Lock()
+			interrupts := api.interruptCalls
+			api.mu.Unlock()
+			if interrupts != test.interrupts {
+				t.Fatalf("interrupt calls = %d, want %d", interrupts, test.interrupts)
+			}
+		})
+	}
+}
+
+// TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst pins that an unsettled readback
+// can never verify a terminal: an ended session context refuses instead of waiting.
+func TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst(t *testing.T) {
+	fake := &fakeAPI{}
+	sessionContext, cancel := context.WithCancel(context.Background())
+	session := newNativeSession(sessionContext, cancel, context.Background(), func() {}, &recordingSink{}, t.TempDir(),
+		func(Config) (api, error) { return fake, nil }, "opencode", "secret", nil, time.Millisecond, time.Second)
+	cancel()
+	if err := session.awaitRecordedOutcome(fake, "ses_recorded_1", "succeeded"); err == nil {
+		t.Fatal("awaitRecordedOutcome() = nil, want a refusal once the session ended")
+	}
+}
+
+// TestStartTurnRefusesARecordedAdmissionForAForeignInbox pins the 2.4.1 admission identity
+// binding: an inbox frame whose id is not the admitted message fails the turn.
+func TestStartTurnRefusesARecordedAdmissionForAForeignInbox(t *testing.T) {
+	api := &fakeAPI{}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
+	api.mu.Lock()
+	api.streamFactory = func(context.Context) io.ReadCloser {
+		return &recordedTurnGlobalStream{api: api, terminal: "session.execution.succeeded", inbox: "msg_foreign"}
+	}
+	api.mu.Unlock()
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	session := staged.(*nativeSession)
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- staged.WaitTurn(context.Background()) }()
+	select {
+	case waitErr := <-waitDone:
+		if waitErr == nil {
+			t.Fatal("WaitTurn() = nil, want the foreign-inbox refusal")
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("WaitTurn did not settle after the foreign-inbox admission")
+	}
+	session.mu.Lock()
+	streamErr, turnErr := session.streamErr, session.turnErr
+	session.mu.Unlock()
+	if !errors.Is(streamErr, ErrIdentityMismatch) || !errors.Is(turnErr, ErrIdentityMismatch) {
+		t.Fatalf("foreign-inbox errors = stream %v, turn %v, want ErrIdentityMismatch", streamErr, turnErr)
+	}
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+// recordedTurnGlobalStream serves the recorded admission and terminal shapes for the
+// session's own prompt, bound to the identities the adapter generated.
+type recordedTurnGlobalStream struct {
+	api      *fakeAPI
+	terminal string
+	reason   string
+	inbox    string
+	once     sync.Once
+	stream   io.ReadCloser
+	buildErr error
+}
+
+// waitForPrompt blocks until the fake API has observed the prompt this stream describes;
+// the watcher starts reading the stream before the prompt POST executes.
+func (stream *recordedTurnGlobalStream) waitForPrompt() (string, PromptRequest, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stream.api.mu.Lock()
+		sessionID, prompt := stream.api.lastPromptSession, stream.api.lastPrompt
+		stream.api.mu.Unlock()
+		if sessionID != "" && prompt.ID != "" {
+			return sessionID, prompt, nil
+		}
+		if time.Now().After(deadline) {
+			return "", PromptRequest{}, errors.New("recorded stream never observed the admitted prompt")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (stream *recordedTurnGlobalStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		sessionID, prompt, err := stream.waitForPrompt()
+		if err != nil {
+			stream.buildErr = err
+			return
+		}
+		reason := ""
+		if stream.reason != "" {
+			reason = fmt.Sprintf(`,"reason":%q`, stream.reason)
+		}
+		inbox := stream.inbox
+		if inbox == "" {
+			inbox = prompt.ID
+		}
+		admission := fmt.Sprintf(`{"id":"evt_recorded_admission","type":"session.inbox.enqueued","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q,"inboxID":%q,"item":{"type":"user","payload":{"text":"admit"},"delivery":"steer"}}}`, sessionID, sessionID, inbox)
+		terminal := fmt.Sprintf(`{"id":"evt_recorded_terminal","type":%q,"durable":{"aggregateID":%q,"seq":2,"version":1},"data":{"sessionID":%q%s}}`, stream.terminal, sessionID, sessionID, reason)
+		stream.stream = io.NopCloser(strings.NewReader("data: " + admission + "\n\ndata: " + terminal + "\n\n"))
+	})
+	if stream.buildErr != nil {
+		return 0, stream.buildErr
+	}
+	return stream.stream.Read(data)
+}
+
+func (stream *recordedTurnGlobalStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
 }
 
 func TestStartTurnOpensTheGlobalStreamBeforeAdmission(t *testing.T) {
@@ -871,14 +1067,20 @@ func TestStartRejectsUnsupportedOrUnsafeInputsBeforeLaunch(t *testing.T) {
 		t.Fatalf("cost Start() error = %v started=%v", err, processStarted)
 	}
 	request = startRequest(t)
-	request.ModelProfile = "  profile is not mapped  "
-	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
-		t.Fatalf("model profile Start() error = %v started=%v", err, processStarted)
-	}
-	request = startRequest(t)
 	request.Invocation.Args = []string{"--unsafe-unknown-flag"}
 	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
 		t.Fatalf("args Start() error = %v started=%v", err, processStarted)
+	}
+	// The daemon-validated admission profile alias is accepted and never mapped:
+	// this transport claims no native model identity (the claude adapter's shape).
+	request = startRequest(t)
+	request.ModelProfile = "implementation-default"
+	session, err := adapter.Start(context.Background(), request, &recordingSink{})
+	if err != nil || !processStarted {
+		t.Fatalf("admitted model profile Start() error = %v started=%v, want the alias accepted", err, processStarted)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("admitted model profile Close() error = %v", err)
 	}
 }
 
@@ -994,6 +1196,8 @@ type fakeAPI struct {
 	stream                io.ReadCloser
 	interruptStarted      chan struct{}
 	interruptRelease      <-chan struct{}
+	outcome               string
+	outcomeErr            error
 }
 
 func (api *fakeAPI) Readiness(_ context.Context, serverPID int) error {
@@ -1060,6 +1264,16 @@ func (api *fakeAPI) Interrupt(context.Context, string) error {
 		<-release
 	}
 	return err
+}
+
+func (api *fakeAPI) SessionOutcome(_ context.Context, sessionID string) (SessionState, error) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	api.callSequence = append(api.callSequence, "outcome")
+	if api.outcomeErr != nil {
+		return SessionState{}, api.outcomeErr
+	}
+	return SessionState{ID: sessionID, Outcome: api.outcome}, nil
 }
 
 func (api *fakeAPI) OpenGlobalEvents(ctx context.Context) (io.ReadCloser, error) {
@@ -1156,7 +1370,7 @@ func (stream *foreignFirstGlobalStream) Read(data []byte) (int, error) {
 		sessionID := stream.api.lastPromptSession
 		stream.api.mu.Unlock()
 		foreign := `{"id":"evt_foreign_1","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_other"}}`
-		own := fmt.Sprintf(`{"id":"evt_own_1","type":"session.step.started","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q}}`, sessionID, sessionID)
+		own := fmt.Sprintf(`{"id":"evt_own_1","type":"session.future.lifecycle","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q}}`, sessionID, sessionID)
 		stream.stream = io.NopCloser(strings.NewReader("data: " + foreign + "\n\ndata: " + own + "\n\n"))
 	})
 	return stream.stream.Read(data)

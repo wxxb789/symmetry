@@ -137,6 +137,21 @@ const (
 	SessionEventUnknown        SessionEventKind = "unknown"
 )
 
+// Recorded kinds mirror the 2.4.1 receipts' vocabulary; the frames they decode are
+// the ones the promoted transport receives.
+const (
+	SessionEventExecutionStarted     SessionEventKind = "execution_started"
+	SessionEventExecutionSucceeded   SessionEventKind = "execution_succeeded"
+	SessionEventExecutionFailed      SessionEventKind = "execution_failed"
+	SessionEventExecutionInterrupted SessionEventKind = "execution_interrupted"
+	SessionEventInboxEnqueued        SessionEventKind = "inbox_enqueued"
+	SessionEventRecordedStepStarted  SessionEventKind = "recorded_step_started"
+	SessionEventRecordedStepEnded    SessionEventKind = "recorded_step_ended"
+	SessionEventRecordedStepFailed   SessionEventKind = "recorded_step_failed"
+	SessionEventRecordedToolCalled   SessionEventKind = "recorded_tool_called"
+	SessionEventRecordedToolSuccess  SessionEventKind = "recorded_tool_success"
+)
+
 // NativeModelRef is the source-derived subset of OpenCode's Model.Ref.
 type NativeModelRef struct {
 	ID         string
@@ -260,6 +275,71 @@ type NativeRetriedEvent struct {
 	Timestamp int64
 }
 
+// RecordedExecutionEvent is one recorded session.execution.* frame; only the failed
+// class records an error object and only the interrupted class a reason.
+type RecordedExecutionEvent struct {
+	Event
+	SessionID string
+	Error     *RecordedExecutionError
+	Reason    *string
+}
+
+// RecordedExecutionError interprets only the recorded type/message pair; the upstream
+// error object is open-ended, so its other keys are never read.
+type RecordedExecutionError struct {
+	Type    string
+	Message string
+}
+
+// RecordedInboxEnqueuedEvent is the recorded prompt-admission frame.
+type RecordedInboxEnqueuedEvent struct {
+	Event
+	SessionID string
+	InboxID   string
+	Delivery  string
+}
+
+// RecordedStepStartedEvent is the recorded session.step.started frame.
+type RecordedStepStartedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+}
+
+// RecordedStepEndedEvent is the recorded session.step.ended frame.
+type RecordedStepEndedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Finish             string
+}
+
+// RecordedStepFailedEvent is the recorded session.step.failed frame.
+type RecordedStepFailedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Error              RecordedExecutionError
+}
+
+// RecordedToolCalledEvent is the recorded session.tool.called frame; executed is a
+// live payload field, never an approval marker.
+type RecordedToolCalledEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+	Executed           bool
+}
+
+// RecordedToolSuccessEvent is the recorded session.tool.success frame.
+type RecordedToolSuccessEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+}
+
 // DecodedSessionEvent is the strict, identity-bound result of decoding one durable
 // session frame; unknown native types retain only the bounded envelope and raw data.
 type DecodedSessionEvent struct {
@@ -276,6 +356,14 @@ type DecodedSessionEvent struct {
 	ToolSuccess    *NativeToolSuccessEvent
 	ToolFailed     *NativeToolFailedEvent
 	Retried        *NativeRetriedEvent
+
+	Execution           *RecordedExecutionEvent
+	InboxEnqueued       *RecordedInboxEnqueuedEvent
+	RecordedStepStarted *RecordedStepStartedEvent
+	RecordedStepEnded   *RecordedStepEndedEvent
+	RecordedStepFailed  *RecordedStepFailedEvent
+	RecordedToolCalled  *RecordedToolCalledEvent
+	RecordedToolSuccess *RecordedToolSuccessEvent
 }
 
 // SessionEvent is a concise public name for callers that do not need to
