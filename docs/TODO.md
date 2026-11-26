@@ -1935,16 +1935,6 @@ product-test stops (2026-11-26)`, and the conversion's residual is in
       closed; fix later with `ready.tmp` + `renameat` (the response path's pattern). Owner:
       conductor.
 
-- [ ] The next stop after the readback conversion is a pre-existing fresh-run wall (2026-11-26,
-      goal `rf-acc-b-process-readback`; Bind 2 run `45737002125` on `57c8c775`, record §7): verbatim
-      `production_linux_v2_native_witness_test.go:91: pre-existing RunJournal
-      c869cf0f-884e-4160-b99a-aedd1dd6d659/1 is not physically released and safe for a fresh run:
-      prior RunJournal may still own or require recovery of a process or leaf` — the e2e pi leg
-      refuses the RunJournal left by the preceding green
-      `TestProductionLinuxV2AlternateCgroupMountRefusal` leg; the check text and leg ordering are
-      identical in `2f7a38c6` (origin/main). Owner: conductor, new goal
-      `rf-acc-shared-journal-release`.
-
 - [ ] The reader stop proof stays unmeasured until a `shared` run reaches `stop_readback_reader`
       (2026-11-26, goal `rf-acc-b-process-readback`; Bind 2 run `45737002125`, record §7): the run's
       start proof passed (`MainPID=7149` after A's `CapEff` 0 row) but the set aborts before
@@ -2174,3 +2164,30 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       (reformat the file under the CI-parity toolchain, or pin the formatter version); the gate
       stays recorded as an amendment until then, and this goal's own hunks are formatter-clean
       (hunk-scoped check, record §10.10).
+
+## rf-acc-shared-journal-release: residuals (2026-11-26)
+
+The `shared` pi leg's `:91` pre-existing-RunJournal stop closed on 2026-11-26 (goal
+`rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`, base
+`7111828b`); its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
+`## rf-acc-shared-journal-release: the shared pi leg refuses the prior refusal leg's RunJournal (2026-11-26)`.
+
+- [ ] The mount-refusal leg must stay the last Store-reading leg of the `shared` arm (2026-11-26,
+      same goal; plan §4, record §3): the leg now runs after the ten fresh/released-store legs and
+      before the frozen `opencode_native_health` leg, which aborts at its pinned-version config
+      gate (`production_linux_v2_native_witness_test.go:1901`) before the prior-journal
+      precondition (`:1968-1976`). If that version gate is fixed, the opencode leg would read the
+      mount leg's claim-only row and refuse it; move the mount leg after the opencode leg (or give
+      the opencode precondition its own released-store guarantee) in the same change. Owner:
+      conductor, with the opencode pinned-version goal.
+
+- [ ] A refused pre-containment claim row is retired only by the product's terminal/cleanup path
+      (2026-11-26, same goal; plan §1(b), record §8): `seedAuthenticClaim` writes `claimed` before
+      the native-owner preflight (`linux_owner_witness_linux.go:3243` vs `:3253`), the refusal
+      exits without a release or clear step, `DeleteJournal` is reachable only through
+      `cleanupPending` (`cleanup.go:889-945`), and containment-only recovery no-ops on a row with
+      no containment effect (`linux_owner_recovery_linux.go:1622-1650`). The guest's shared
+      StateDir therefore keeps such a row until teardown; this goal orders around it instead of
+      touching durable state. A product-side retirement for a claim that provably never started
+      native work is a separate, unowned decision (contract class DECISION_NEEDED). Owner:
+      conductor.

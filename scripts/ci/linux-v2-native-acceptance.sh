@@ -3028,6 +3028,18 @@ run_alternate_mount_refusal_witness() {
   local bundle="$OWNER_NEGATIVE_ROOT/$case_name"
   local output_directory="$A_HOME/ci-fixture/witness-output/alternate-mount"
   local status=0
+  # This refusal leaves a claim-only RunJournal the product never retires here; running it
+  # before a fresh or released Store reader would fail that leg for the wrong cause.
+  local prior_events=(
+    "$v2_pi_events" "$v2_crash_events" "$v2_daemon_crash_events" "$v2_stage_replay_events"
+    "$v2_ack_loss_events" "$v2_helper_exit_before_register_events" "$v2_helper_stop_loss_events"
+    "$v2_receipt_persist_events" "$v2_pid_reuse_events" "$v2_v1_replay_events"
+  )
+  local prior
+  for prior in "${prior_events[@]}"; do
+    [[ -s "$prior" ]] ||
+      fail "alternate-mount refusal must follow every fresh or released Store-reading leg: $prior"
+  done
   prepare_owner_request \
     stage_replay_alternate_mount stage_replay \
     "$fixture_root/negative-root/$case_name/config.json" \
@@ -3155,9 +3167,6 @@ case "$fixture_case_set" in
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/fifo \
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/oversized
 
-    # This refusal is first so no unrelated Store row can mask the mount proof. Every pi leg
-    # runs above the frozen opencode health leg, which stops this set on its pinned-version gate.
-    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     run_native_owner_witness pi_provider_action "$v2_pi_events"
     run_go_test "$v2_peer_negative_pi_events" ./internal/harness/pi \
       '^TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction$' peer-negative \
@@ -3176,6 +3185,9 @@ case "$fixture_case_set" in
     run_receipt_persist_failure_witness "$v2_receipt_persist_events"
     run_literal_pid_reuse_witness "$v2_pid_reuse_events"
     run_legacy_v1_replay_witness "$v2_v1_replay_events"
+    # This refusal retains a claim-only RunJournal, so it follows every leg that reads the Store
+    # with a fresh or released precondition; its cause is pinned by the App stderr, not by order.
+    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     run_native_owner_witness opencode_native_health "$v2_opencode_events"
     run_go_test "$v2_peer_negative_opencode_events" ./internal/harness/opencode \
       '^(TestOpenCodeQualifiedStartNamespacePeerDenials|TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP)$' \

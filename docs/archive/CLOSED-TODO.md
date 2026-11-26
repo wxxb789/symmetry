@@ -5469,3 +5469,27 @@ section, whose pointer sentence names this one.
       are no longer the stop; the next stop is recorded verbatim as a new conductor goal
       (`rf-acc-shared-journal-release`) in `docs/TODO.md`, where the e2e same-class reads this
       census deferred are the goal's residual entry.
+
+## rf-acc-shared-journal-release: the shared pi leg refuses the prior refusal leg's RunJournal (2026-11-26)
+
+- [x] The next stop after the readback conversion is a pre-existing fresh-run wall (2026-11-26,
+      goal `rf-acc-b-process-readback`; Bind 2 run `45737002125` on `57c8c775`, record §7): verbatim
+      `production_linux_v2_native_witness_test.go:91: pre-existing RunJournal
+      c869cf0f-884e-4160-b99a-aedd1dd6d659/1 is not physically released and safe for a fresh run:
+      prior RunJournal may still own or require recovery of a process or leaf` — the e2e pi leg
+      refuses the RunJournal left by the preceding green
+      `TestProductionLinuxV2AlternateCgroupMountRefusal` leg; the check text and leg ordering are
+      identical in `2f7a38c6` (origin/main). Owner: conductor, new goal
+      `rf-acc-shared-journal-release`. **Delivered, pending the conductor's Bind (2026-11-26, goal
+      `rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`, base
+      `7111828b`; plan `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md`, record
+      `docs/evidence/rf-acc-shared-journal-release-2026-11-26.md`):** the row is a claim-only
+      RunJournal by design (the witness seeds the claim before the native-owner preflight; the
+      alternate cgroup bind mount is refused at the configured-vs-anchor parent identity), and the
+      product's own admission scan classifies it as unresolved, so the `shared` arm now runs the
+      refusal leg after the ten fresh/released-Store legs and pins its cause from the captured App
+      stderr; the refusal leg also requires its own retained row to stay claim-only, and a runtime
+      guard in the leg reddens if any prior leg's event file is missing. The pi leg's
+      `physically released and safe` precondition and every refusal assertion are unchanged; the
+      residual couplings stay in `docs/TODO.md` under this goal's section. The conductor's Bind on
+      the head is what removes the `:91` stop.
