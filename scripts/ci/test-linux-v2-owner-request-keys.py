@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the writer/fixture agreement on which owner-witness cases route to a Goal admission.
+"""Pin the writer/fixture agreement on the goal-route and provider-scope case sets.
 
 Both sides are read from the committed bytes, statically; a shape the parser cannot read is
 refused, never guessed around. See docs/plans/2026-11-26-rf-ci-owner-request-key-check-plan.md §2.
@@ -26,7 +26,11 @@ ENUM_MAP = re.compile(r"^\s*Enum\.map\(@([a-z_]+), fn ([a-z_]+) ->$")
 ROW_STRUCTURE = re.compile(r"^\s*(?:\] \+\+|end\) \+\+|\[|\])$")
 GOAL_ROUTE = re.compile(
     r"Enum\.split_with\(@cases, fn \{(?P<head>[^}]*)\} ->\s*"
-    r"repository_role not in \[:(?P<first>[a-z_]+), :(?P<second>[a-z_]+)\]\s*end\)"
+    r"repository_role not in \[(?P<roles>:[a-z_]+(?:, :[a-z_]+)*)\]\s*end\)"
+)
+PROVIDER_SYNC = re.compile(r'"provider_sync" => repository_role == :(?P<role>[a-z_]+)')
+PROVIDER_ACCESS_RULE = re.compile(
+    r'PROVIDER_ACCESS_CASES = \{name for name, \(_, profile, _\) in CASES\.items\(\) if profile == "(?P<profile>[^"]+)"\}'
 )
 REQUEST_CASE_RULE = re.compile(
     r"cond do\s*case_name in\s*\[(?P<fixed>(?:\s*\"[^\"]+\",?)+)\s*\]\s*->\s*case_name\s*"
@@ -127,7 +131,7 @@ def fixture_goal_roles(text: str) -> set[str]:
     match = GOAL_ROUTE.search(text)
     if match is None:
         raise Refused(
-            f"{FIXTURE.name}: no `Enum.split_with(@cases, … repository_role not in [:role, :role] end)` "
+            f"{FIXTURE.name}: no `Enum.split_with(@cases, … repository_role not in [:role, …] end)` "
             "goal-route predicate"
         )
     bindings = [binding.strip() for binding in match.group("head").split(",")]
@@ -136,7 +140,17 @@ def fixture_goal_roles(text: str) -> set[str]:
             f"{FIXTURE.name}: the goal-route predicate must bind repository_role as the 4th of 5 "
             f"tuple elements (the `@cases` role column), got {match.group('head')!r}"
         )
-    return {match.group("first"), match.group("second")}
+    return set(re.findall(r":([a-z_]+)", match.group("roles")))
+
+
+def fixture_provider_role(text: str) -> str:
+    matches = PROVIDER_SYNC.findall(text)
+    if len(matches) != 1:
+        raise Refused(
+            f"{FIXTURE.name}: `provider_sync` must be derived exactly once from the role column, "
+            f"got {len(matches)} matches"
+        )
+    return matches[0]
 
 
 def fixture_claim_case_rule(text: str) -> tuple[frozenset[str], str, str]:
@@ -151,26 +165,35 @@ def fixture_claim_case_rule(text: str) -> tuple[frozenset[str], str, str]:
     return frozenset(fixed), match.group("prefix"), match.group("collapsed")
 
 
-def writer_goal_cases(text: str) -> set[str]:
+def writer_assignments(text: str) -> dict[str, ast.expr]:
     try:
         module = ast.parse(text)
     except SyntaxError as error:
         raise Refused(f"{WRITER.name}: not valid Python ({error.msg})") from error
-    assignments = {
+    return {
         statement.targets[0].id: statement.value
         for statement in module.body
         if isinstance(statement, ast.Assign)
         and len(statement.targets) == 1
         and isinstance(statement.targets[0], ast.Name)
     }
-    cases = assignments.get("CASES")
-    if not isinstance(cases, ast.Dict):
-        raise Refused(f"{WRITER.name}: no module-level `CASES` dict assignment")
+
+
+def writer_case_names(cases: ast.Dict) -> set[str]:
     case_names: set[str] = set()
     for key in cases.keys:
         if not (isinstance(key, ast.Constant) and isinstance(key.value, str)):
             raise Refused(f"{WRITER.name}: `CASES` carries a non-string key (line {key.lineno})")
         case_names.add(key.value)
+    return case_names
+
+
+def writer_goal_cases(text: str) -> set[str]:
+    assignments = writer_assignments(text)
+    cases = assignments.get("CASES")
+    if not isinstance(cases, ast.Dict):
+        raise Refused(f"{WRITER.name}: no module-level `CASES` dict assignment")
+    case_names = writer_case_names(cases)
     raw = assignments.get("GOAL_ADMISSION_CASES")
     if raw is None:
         raise Refused(f"{WRITER.name}: no module-level `GOAL_ADMISSION_CASES` assignment")
@@ -184,6 +207,34 @@ def writer_goal_cases(text: str) -> set[str]:
     if unknown:
         raise Refused(f"{WRITER.name}: GOAL_ADMISSION_CASES names no `CASES` case: {sorted(unknown)}")
     return goals
+
+
+def writer_provider_cases(text: str) -> set[str]:
+    assignments = writer_assignments(text)
+    cases = assignments.get("CASES")
+    if not isinstance(cases, ast.Dict):
+        raise Refused(f"{WRITER.name}: no module-level `CASES` dict assignment")
+    writer_case_names(cases)
+    matches = PROVIDER_ACCESS_RULE.findall(text)
+    if len(matches) != 1:
+        raise Refused(
+            f"{WRITER.name}: `PROVIDER_ACCESS_CASES` must be the pinned profile-rule shape, got "
+            f"{len(matches)} matches"
+        )
+    profile = matches[0]
+    provider: set[str] = set()
+    for key, value in zip(cases.keys, cases.values):
+        if not (
+            isinstance(value, ast.Tuple)
+            and len(value.elts) == 3
+            and all(isinstance(element, ast.Constant) for element in value.elts)
+        ):
+            raise Refused(f"{WRITER.name}: `CASES[{key.value!r}]` is not a 3-literal row (line {value.lineno})")
+        if value.elts[1].value == profile:
+            provider.add(key.value)
+    if not provider:
+        raise Refused(f"{WRITER.name}: no `CASES` row uses the PROVIDER_ACCESS_CASES profile {profile!r}")
+    return provider
 
 
 def check_agreement(writer_text: str, fixture_text: str) -> None:
@@ -203,6 +254,25 @@ def check_agreement(writer_text: str, fixture_text: str) -> None:
             f"{WRITER.name} GOAL_ADMISSION_CASES and {FIXTURE.name}'s goal-routed rows disagree\n"
             f"writer ({len(writer_goals)}): {sorted(writer_goals)}\n"
             f"fixture ({len(fixture_goals)}): {sorted(fixture_goals)}"
+        )
+    provider_role = fixture_provider_role(fixture_text)
+    fixture_provider = {dispatched_as(name) for name, role in rows if role == provider_role}
+    if not fixture_provider <= fixture_goals:
+        raise Refused(
+            f"{FIXTURE.name}: provider-scoped rows must be goal-routed: "
+            f"{sorted(fixture_provider - fixture_goals)}"
+        )
+    writer_provider = writer_provider_cases(writer_text)
+    if not writer_provider <= writer_goals:
+        raise Refused(
+            f"{WRITER.name}: PROVIDER_ACCESS_CASES rows must be goal-routed: "
+            f"{sorted(writer_provider - writer_goals)}"
+        )
+    if writer_provider != fixture_provider:
+        raise Refused(
+            f"{WRITER.name} PROVIDER_ACCESS_CASES and {FIXTURE.name}'s provider-scoped rows disagree\n"
+            f"writer ({len(writer_provider)}): {sorted(writer_provider)}\n"
+            f"fixture ({len(fixture_provider)}): {sorted(fixture_provider)}"
         )
     legacy_collisions = sorted({dispatched_as(name) for name, role in rows if role not in goal_roles} & writer_goals)
     if legacy_collisions:
@@ -250,13 +320,67 @@ class OwnerRequestKeyAgreement(unittest.TestCase):
             check_agreement(self.writer_text, mutated)
         self.assertIn("legacy rows route to a writer case keyed as a goal admission", str(refused.exception))
 
+    def test_a_legacy_pi_provider_row_is_refused(self) -> None:
+        mutated = self.mutate(
+            self.fixture_text,
+            '"pi_provider_action", "pi-native", :pi, :pi_provider,',
+            '"pi_provider_action", "pi-native", :pi, :opencode,',
+        )
+        with self.assertRaises(Refused) as refused:
+            check_agreement(self.writer_text, mutated)
+        self.assertIn("pi_provider_action", str(refused.exception))
+
+    def test_a_provider_role_drift_is_refused(self) -> None:
+        mutated = self.mutate(
+            self.fixture_text,
+            '"provider_sync" => repository_role == :pi_provider',
+            '"provider_sync" => repository_role == :pi_durability',
+        )
+        with self.assertRaises(Refused) as refused:
+            check_agreement(self.writer_text, mutated)
+        self.assertIn("provider-scoped rows disagree", str(refused.exception))
+
+    def test_dropping_a_writer_provider_case_is_refused(self) -> None:
+        mutated = self.mutate(self.writer_text, '    "helper_sigkill_detached_child",\n', "")
+        with self.assertRaises(Refused) as refused:
+            check_agreement(mutated, self.fixture_text)
+        self.assertIn("helper_sigkill_detached_child", str(refused.exception))
+
+    def test_a_writer_profile_drift_is_refused(self) -> None:
+        mutated = self.mutate(
+            self.writer_text,
+            '"helper_sigkill_detached_child": ("pi", "pi-native", "native_turn_started"),',
+            '"helper_sigkill_detached_child": ("pi", "pi-durability", "native_turn_started"),',
+        )
+        with self.assertRaises(Refused) as refused:
+            check_agreement(mutated, self.fixture_text)
+        self.assertIn("helper_sigkill_detached_child", str(refused.exception))
+
     def test_unparseable_shapes_are_refused_with_their_location(self) -> None:
         mutations = (
             (
                 "fixture",
-                "repository_role not in [:pi_durability, :opencode_goal]",
+                "repository_role not in [:pi_provider, :pi_durability, :opencode_goal]",
                 "repository_role not in goal_roles",
                 "goal-route predicate",
+            ),
+            (
+                "fixture",
+                '"provider_sync" => repository_role == :pi_provider',
+                '"provider_sync" => repository_role == provider_role',
+                "`provider_sync` must be derived exactly once",
+            ),
+            (
+                "writer",
+                'PROVIDER_ACCESS_CASES = {name for name, (_, profile, _) in CASES.items() if profile == "pi-native"}',
+                "PROVIDER_ACCESS_CASES = {name for name in CASES}",
+                "`PROVIDER_ACCESS_CASES` must be the pinned profile-rule shape",
+            ),
+            (
+                "writer",
+                '"pi_provider_action": ("pi", "pi-native", "native_turn_started"),',
+                '"pi_provider_action": "pi",',
+                "is not a 3-literal row",
             ),
             (
                 "fixture",

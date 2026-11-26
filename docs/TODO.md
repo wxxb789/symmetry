@@ -1945,18 +1945,10 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       `stage_replay_native_release_<kind>` legs remain unexecuted (each set stops at its first
       failing leg).
 
-- [ ] `pi_provider_action` and the two crash legs still need a provider-scoped admission
-      (2026-11-26, goal `rf-acc-containment-goal-admission`, stage-1(b); evidence record
-      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §7(b)): Control composes
-      `provider_scope` (`resource_ids`, `operations_by_resource` → `["resource.sync"]`,
-      `change_target: nil`) iff `"resource.sync"` is in both `authority_policy.allowed_actions` and
-      `execution_policy.allowed_actions` (`control/lib/symmetry_control/goals/admission.ex:1218-1268`,
-      `:1304-1307`) and then adds `provider_access: true` (`:333-335`); the containment fixture's
-      goals set `allowed_actions: []` and stay provider-free by design. `pi_provider_action`,
-      `helper_sigkill_detached_child` and `daemon_sigkill_helper_survives_detached_child` keep the
-      legacy claim shape and stay latent behind the `shared` set's owner-leg stops; widening the
-      e2e admission branch to a provider-scoped admission needs its own ruling (the provider-access
-      assertions and the clone reserve would then both bind the same claim).
+The `pi_provider_action`/crash-leg provider-scoped-admission item moved to
+`docs/archive/CLOSED-TODO.md` under
+`## rf-acc-pi-provider-admission: the pi provider legs move to a provider-scoped Goal admission (2026-11-26)`
+(goal `rf-acc-pi-provider-admission`).
 
 - [ ] Bind-run observation: codex post-wall cleanup race (2026-11-26, goal
       `rf-acc-containment-goal-admission`; evidence record
@@ -2210,3 +2202,21 @@ acceptance met) (goal `rf-acc-shared-journal-release`, branch
 
 The pi `provider_action` leg's clone-reserve residual this goal unmasks stays under
 `## rf-acc-containment-goal-admission: residuals (2026-11-26)`.
+
+## rf-acc-pi-provider-admission: residuals (2026-11-26)
+
+The `pi_provider_action`/crash-leg provider-scoped admission is delivered (2026-11-26, goal
+`rf-acc-pi-provider-admission`, branch `refactor/rf-acc-pi-provider-admission`, base `b27ea691`);
+its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
+`## rf-acc-pi-provider-admission: the pi provider legs move to a provider-scoped Goal admission (2026-11-26)`.
+The Bind acceptance row is pending the conductor's Bind (`shared`) run on the PR head.
+
+- [ ] The e2e provider-scope expectation keys on each case constructor's `providerActionRequired`
+      flag, which no local check pins against the writer's `PROVIDER_ACCESS_CASES` or the fixture's
+      provider-sync role (2026-11-26, same goal; plan §3.3, record §10.2): a drift — a
+      provider-scoped leg whose witness-case constructor loses the flag, or a provider-free leg
+      that keeps it — is refused fail-closed by the witness request reader
+      (`daemon/e2e/production_linux_v2_native_witness_test.go:1682-1696`), but only on the credentialed
+      dispatch. The writer/fixture pair is pinned statically by
+      `scripts/ci/test-linux-v2-owner-request-keys.py`; a generated row test over the Go case
+      constructors would close the third side. Owner: conductor.

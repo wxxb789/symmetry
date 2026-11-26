@@ -150,16 +150,13 @@ defmodule LinuxV2ControlClaimFixture do
 
     {legacy_cases, goal_cases} =
       Enum.split_with(@cases, fn {_name, _profile, _harness, repository_role, _description} ->
-        repository_role not in [:pi_durability, :opencode_goal]
+        repository_role not in [:pi_provider, :pi_durability, :opencode_goal]
       end)
 
     work_items =
       Map.new(legacy_cases, fn {case_name, profile, _harness, repository_role, description} ->
-        repository_id =
-          case repository_role do
-            :pi_provider -> pi_repository.id
-            :opencode -> opencode_repository.id
-          end
+        :opencode = repository_role
+        repository_id = opencode_repository.id
 
         {:ok, item} =
           Workspaces.create_work_item(project.id, %{
@@ -181,12 +178,13 @@ defmodule LinuxV2ControlClaimFixture do
          }}
       end)
 
-    # The goal-routed cases get their WorkItem through Control's own Goal admission; their
-    # WorkItem must stay goal-owned for the clone fence, and test-linux-v2-owner-request-keys.py pins this pair.
+    # The goal-routed cases get their WorkItem through Control's own Goal admission; their WorkItem
+    # must stay goal-owned for the clone fence, and test-linux-v2-owner-request-keys.py pins both sets.
     goal_case_specs =
       Map.new(goal_cases, fn {case_name, profile, _harness, repository_role, description} ->
         repository_id =
           case repository_role do
+            :pi_provider -> pi_repository.id
             :pi_durability -> pi_durability_repository.id
             :opencode_goal -> opencode_repository.id
           end
@@ -195,7 +193,8 @@ defmodule LinuxV2ControlClaimFixture do
          %{
            "repository_resource_id" => repository_id,
            "agent_profile" => profile,
-           "description" => description
+           "description" => description,
+           "provider_sync" => repository_role == :pi_provider
          }}
       end)
 
@@ -451,6 +450,8 @@ defmodule LinuxV2ControlClaimFixture do
       "tree_digest" => fixture["subject"]["tree_digest"]
     }
 
+    allowed_actions = if goal_case["provider_sync"], do: ["resource.sync"], else: []
+
     acceptance = %{
       "schema_version" => "symmetry.acceptance.v1",
       "description" => "A scoped operator acceptance is required.",
@@ -474,7 +475,7 @@ defmodule LinuxV2ControlClaimFixture do
           "max_run_attempts_per_task" => 2,
           "allowed_runtime_ids" => [],
           "allowed_model_profiles" => [],
-          "allowed_actions" => [],
+          "allowed_actions" => allowed_actions,
           "allowed_resource_ids" => []
         }
       )
@@ -491,7 +492,7 @@ defmodule LinuxV2ControlClaimFixture do
           "operator_required_for_scope_change" => true,
           "operator_required_for_completion" => true,
           "publication_allowed" => false,
-          "allowed_actions" => []
+          "allowed_actions" => allowed_actions
         },
         execution_policy: execution_policy,
         context_manifest: %{
@@ -561,8 +562,8 @@ defmodule LinuxV2ControlClaimFixture do
     {:ok, goal} = Goals.fetch_goal(goal_id)
     item_id = goal.work_items |> List.first() |> Map.fetch!(:id)
 
-    # purpose=implement with no allowed provider action keeps provider_scope null
-    # (admission.ex:1304-1307), the provider-free shape the owner witness validates.
+    # Both allowed_actions lists carrying resource.sync is what makes Control compose the provider
+    # scope (admission.ex:1218-1268,:1304-1307); every other goal case keeps the provider-free shape.
     admitted =
       goal_command!(goal_id, "admit_task", %{
         work_item_id: item_id,
@@ -599,8 +600,8 @@ defmodule LinuxV2ControlClaimFixture do
   end
 
   # Goal assignment requires a native-harness runtime with adapter operations
-  # (assignment.ex:332,:519-530); the legacy claim runtimes stay adapter-free.
-  defp runtime_adapter_binding?(runtime, :pi_durability, _harness),
+  # (assignment.ex:332,:519-530); the legacy opencode claim runtimes stay adapter-free.
+  defp runtime_adapter_binding?(runtime, role, _harness) when role in [:pi_provider, :pi_durability],
     do: get_in(runtime.capabilities || %{}, ["adapter", "kind"]) == "pi"
 
   defp runtime_adapter_binding?(runtime, :opencode_goal, harness),
