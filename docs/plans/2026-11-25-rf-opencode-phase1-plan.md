@@ -65,6 +65,9 @@ fail-closed comes from the **probe platform gate**, not from a platform-conditio
   of P6.2, flagged in the record because the file is outside the contract's owned list.
 - `harness.NewOpenCodeAdapter()` stays as the explicit fail-closed projection (compose rows, e2e
   seam, tests); its reason moves to the 2.4.1/Linux text.
+- **NOTE (superseded 2026-11-26):** the conductor's fix-round ruling R9 moved this decision — the
+  composition root registers the native adapter on Windows only (`app/probe.go`); every other
+  platform keeps the unavailable seam. The evidence record §1 P6.2 and R9 carry the delivered shape.
 
 ## 3. Mechanical pin moves the contract's rows force outside the owned list
 
@@ -155,6 +158,11 @@ The record states the merge disposition explicitly: **the registration flip must
 without the client re-anchor or an explicit conductor acceptance**, because the promoted projection
 advertises `start/events/cancel` while the first `Open` call cannot survive the 2.4.1 route set;
 this stage ships the ruled rows and escalates, it does not authorise the merge.
+
+**NOTE (superseded 2026-11-26):** the conductor's review ruling R1 chose the re-anchor — this
+section's option (B) — and rejected the escalate-only disposition. In the conductor's and the
+record's numbering, option (A) is the re-anchor and option (B) the fail-closed alternative
+(evidence record §7.1, contract R1).
 
 ## 9. Round 2 (PR #298 round-1 MUST_FIX, F1-F6)
 

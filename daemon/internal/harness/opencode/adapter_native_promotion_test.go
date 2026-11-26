@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -95,8 +94,7 @@ func (sink *nativePromotionProofSink) snapshot() (bool, int) {
 }
 
 // TestNativePromotionProofOnThePinnedWindowsBlob is the opt-in Phase-1 Windows promotion proof:
-// two admitted turns behind a non-empty profile (a verified success and an applied cancel with a
-// verified interrupted terminal) plus their outcome readbacks, on the exact pinned 2.4.1 PE.
+// two admitted turns behind a non-empty profile, with verified outcome readbacks, on the pinned PE.
 func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 	if os.Getenv(nativePromotionProofEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_OPENCODE_PROMOTION_PROOF=1 to run the Phase-1 Windows promotion proof")
@@ -119,19 +117,7 @@ func TestNativePromotionProofOnThePinnedWindowsBlob(t *testing.T) {
 	}
 	nativePromotionProofWriteConfig(t, configPath, sourcePath)
 	environment = nativeOpenCodeConfigEnvironment(environment, configPath, filepath.Dir(configPath), filepath.Join(root, "managed"), nativePromotionProofCredentialEnv+"="+credential)
-	versionContext, versionCancel := context.WithTimeout(context.Background(), nativePromotionProofTimeout)
-	defer versionCancel()
-	versionCommand := exec.CommandContext(versionContext, executable, "--version")
-	versionCommand.Dir = root
-	versionCommand.Env = environment
-	versionOutput, err := versionCommand.Output()
-	if err != nil {
-		t.Fatalf("run pinned OpenCode version check: %v", err)
-	}
-	versionLine := strings.TrimSpace(string(versionOutput))
-	if versionLine != "opencode v"+TestedVersion {
-		t.Fatalf("pinned OpenCode version = %q, want opencode v%s", versionLine, TestedVersion)
-	}
+	versionLine := nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, root, environment, "opencode v"+TestedVersion, nativePromotionProofTimeout)
 
 	succeeded := nativePromotionProofRunTurn(t, executable, filepath.Join(root, "succeeded-workspace"), environment, nativePromotionProofSuccessGoal, false)
 	interrupted := nativePromotionProofRunTurn(t, executable, filepath.Join(root, "interrupted-workspace"), environment, nativePromotionProofGoal, true)

@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -177,7 +176,7 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	config := nativeOpenCodeTerminalCandidateConfig(gateway.baseURL, nativeOpenCodeTerminalCandidateModel)
 	environment := nativeOpenCodeRepositoryTaskEnvironmentWithConfig(t, root, config)
 	nativeOpenCodeTerminalCandidateAssertEnvironment(t, environment, root, gateway.baseURL)
-	nativeOpenCodeTerminalCandidateCheckVersion(t, executable, workspace, environment)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, 10*time.Second)
 
 	sink := &nativeOpenCodeTerminalCandidateSink{timeline: timeline}
 	adapter := NewAdapter(executable)
@@ -489,22 +488,6 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 		t.Fatalf("OpenCode terminal candidate normalized event sequence regressed: %+v", events)
 	}
 	t.Logf("OpenCode terminal candidate scenario=%s session=%s prompt=%s events=%d step_ended=%d global_events=%d result=%s wait_turn=%v", scenario.name, nativeOpenCodeTerminalCandidateRedactIdentity(handle.ID), nativeOpenCodeTerminalCandidateRedactIdentity(witnessAPI.PromptObservation().ID), state.events, state.stepEnded, nativeOpenCodeTerminalCandidateGlobalEventCount(globalCapture), result.Kind, waitTurnErr)
-}
-
-func nativeOpenCodeTerminalCandidateCheckVersion(t *testing.T, executable, workspace string, environment []string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, executable, "--version")
-	command.Dir = workspace
-	command.Env = environment
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("run pinned OpenCode --version: %v", err)
-	}
-	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
-		t.Fatalf("historical OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
-	}
 }
 
 func nativeOpenCodeTerminalCandidateAssertEnvironment(t *testing.T, environment []string, root, baseURL string) {

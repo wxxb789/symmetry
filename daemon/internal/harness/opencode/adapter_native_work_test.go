@@ -257,7 +257,7 @@ func TestNativePromptAdmissionPublishesTheRecordedInboxEvent(t *testing.T) {
 		t.Fatalf("create native OpenCode workspace: %v", err)
 	}
 	environment := nativeOpenCodeAdmissionInboxEnvironment(t, root)
-	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, "opencode v"+TestedVersion)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, "opencode v"+TestedVersion, nativeRepositoryTaskTimeout)
 
 	startContext, startCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 	defer startCancel()
@@ -636,7 +636,8 @@ func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.Rea
 			capture.lastType = nativeOpenCodeBoundedString(event.Type, nativeOpenCodeEventCaptureTypeMaximum)
 			if !capture.admissionObserved {
 				admitted := event.Kind == SessionEventPromptAdmitted && event.PromptAdmitted != nil && event.PromptAdmitted.MessageID == messageID
-				if admitted || nativeOpenCodeResumeFrameInboxID(frame) == messageID {
+				enqueued := event.Kind == SessionEventInboxEnqueued && event.InboxEnqueued != nil && event.InboxEnqueued.InboxID == messageID
+				if admitted || enqueued {
 					capture.admissionObserved = true
 					capture.events = append(capture.events, nativeOpenCodeResumeEventMetadata(event))
 					if len(capture.events) >= maximum {
@@ -716,20 +717,6 @@ func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.Rea
 		stop(nativeOpenCodeCaptureStopStreamEnded, nil)
 		return capture
 	}
-}
-
-// nativeOpenCodeResumeFrameInboxID reads the recorded 2.4.1 admission identity a global
-// frame carries; frames with another shape report an empty id and stay unbound.
-func nativeOpenCodeResumeFrameInboxID(frame Frame) string {
-	var event struct {
-		Data struct {
-			InboxID string `json:"inboxID"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(frame.Data, &event) != nil {
-		return ""
-	}
-	return event.Data.InboxID
 }
 
 func nativeOpenCodeResumeEventMetadata(event DecodedSessionEvent) nativeOpenCodeEventMetadata {
@@ -1096,6 +1083,21 @@ func TestNativeOpenCodeResumeCaptureRedactsIdentityInDecodeError(t *testing.T) {
 	}
 	if strings.Contains(capture.err.Error(), "ses_other") || strings.Contains(capture.err.Error(), "ses_capture") {
 		t.Fatalf("capture error leaked raw identity: %v", capture.err)
+	}
+}
+
+func TestNativeOpenCodeResumeCaptureBindsOnlyTheRecordedInboxAdmission(t *testing.T) {
+	const sessionID = "ses_capture"
+	const messageID = "msg_capture"
+	enqueued := nativeOpenCodeCaptureFrame(`{"id":"evt_enqueued","type":"session.inbox.enqueued","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture","inboxID":"msg_capture","item":{"type":"user","payload":{"text":"prompt"},"delivery":"steer"}}}`)
+	delivered := nativeOpenCodeCaptureFrame(`{"id":"evt_delivered","type":"session.inbox.delivered","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"sessionID":"ses_capture","inboxID":"msg_capture"}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(enqueued+delivered)), 16, sessionID, messageID)
+	if capture.err != nil || !capture.admissionObserved || capture.preAdmissionEvents != 0 || len(capture.events) == 0 || capture.events[0].Kind != SessionEventInboxEnqueued {
+		t.Fatalf("capture = %s, want the recorded inbox enqueue to bind admission", nativeOpenCodeEventCaptureSummary(capture))
+	}
+	deliveredOnly := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(delivered)), 16, sessionID, messageID)
+	if deliveredOnly.admissionObserved || deliveredOnly.stopReason != nativeOpenCodeCaptureStopAdmissionMissing {
+		t.Fatalf("capture = %s, want an inbox delivery alone to leave admission unbound", nativeOpenCodeEventCaptureSummary(deliveredOnly))
 	}
 }
 
@@ -1897,12 +1899,12 @@ func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Cont
 
 func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspace string, environment []string) {
 	t.Helper()
-	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, nativeRepositoryTaskTimeout)
 }
 
-func nativeOpenCodeRepositoryTaskCheckVersionLine(t *testing.T, executable, workspace string, environment []string, want string) {
+func nativeOpenCodeRepositoryTaskCheckVersionLine(t *testing.T, executable, workspace string, environment []string, want string, timeout time.Duration) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "--version")
 	command.Dir = workspace
@@ -1911,9 +1913,11 @@ func nativeOpenCodeRepositoryTaskCheckVersionLine(t *testing.T, executable, work
 	if err != nil {
 		t.Fatalf("run native OpenCode version check: %v", err)
 	}
-	if strings.TrimSpace(string(output)) != want {
-		t.Fatalf("native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), want)
+	line := strings.TrimSpace(string(output))
+	if line != want {
+		t.Fatalf("native OpenCode version = %q, want %s", line, want)
 	}
+	return line
 }
 
 func nativeOpenCodeRepositoryTaskWaitForArtifact(ctx context.Context, path string, expected []byte) error {

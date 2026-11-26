@@ -471,8 +471,7 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 }
 
 // TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback drives the promoted barrier
-// end to end: recorded admission, a recorded session.execution.* terminal, the server's own
-// outcome readback and the settled TaskResult kind.
+// end to end: recorded admission and session.execution.* terminal, the readback, the result kind.
 func TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback(t *testing.T) {
 	for _, test := range []struct {
 		name       string

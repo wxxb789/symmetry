@@ -1528,7 +1528,3 @@ func (validator *SessionEventValidator) LastCursor() uint64 {
 	}
 	return validator.last
 }
-
-func (event Event) String() string {
-	return strings.TrimSpace(event.Type)
-}

@@ -5,7 +5,6 @@ package opencode
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -57,18 +56,7 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	}
 	environment := nativeOpenCodeSmokeEnvironment(t, root)
 
-	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
-	defer versionCancel()
-	versionCommand := exec.CommandContext(versionContext, executable, "--version")
-	versionCommand.Dir = workspace
-	versionCommand.Env = environment
-	versionOutput, err := versionCommand.Output()
-	if err != nil {
-		t.Fatal("run native OpenCode version check failed")
-	}
-	if strings.TrimSpace(string(versionOutput)) != historicalNativeTestVersion {
-		t.Fatal("native OpenCode version did not equal the historical version")
-	}
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, nativeSmokeTimeout)
 	t.Logf("historical native OpenCode transport smoke: platform=%s version=%s", runtime.GOOS, historicalNativeTestVersion)
 
 	var eventMutex sync.Mutex

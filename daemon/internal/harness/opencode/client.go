@@ -236,9 +236,8 @@ type SessionState struct {
 	Outcome string
 }
 
-// SessionOutcome reads the recorded outcome readback for one session. An empty Outcome
-// means the server has not classified the session yet; callers must still bind the
-// readback to a native terminal event before trusting it.
+// SessionOutcome reads the recorded outcome readback for one session. An empty Outcome means the
+// server has not classified the session yet; callers still bind it to a terminal event first.
 func (client *Client) SessionOutcome(ctx context.Context, sessionID string) (SessionState, error) {
 	if !isID(sessionID, "ses_") {
 		return SessionState{}, fmt.Errorf("%w: session id must start with ses_", ErrInvalidSession)

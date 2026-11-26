@@ -49,7 +49,7 @@ func TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest(t *testing.T) {
 	}
 	environment := nativeOpenCodeRepositoryTaskEnvironment(t, root, gateway.URL+"/v1")
 	nativeOpenCodeRepositoryTaskCheckEnvironment(t, environment, gateway.URL+"/v1")
-	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, expectedVersionLine)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, expectedVersionLine, nativeRepositoryTaskTimeout)
 
 	adapter := NewAdapter(executable)
 	productionAPI := adapter.newAPI

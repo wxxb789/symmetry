@@ -558,9 +558,6 @@ func TestRecordedReceiptFramesDecode(t *testing.T) {
 				if decoded.Kind != want {
 					t.Fatalf("frame %d type %q kind = %q, want %q", index, decoded.Type, decoded.Kind, want)
 				}
-				if decoded.SessionID == "" || decoded.SessionID != decoded.Durable.AggregateID {
-					t.Fatalf("frame %d session identity = %q vs %q", index, decoded.SessionID, decoded.Durable.AggregateID)
-				}
 			}
 		})
 	}

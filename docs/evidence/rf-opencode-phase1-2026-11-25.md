@@ -4,15 +4,18 @@ Delivered 2026-11-26 on branch `refactor/rf-opencode-phase1`; dispatch-gate base
 `9eb874bf22eace98399e54b25d00634b2bed5418` (`origin/main` at the merge of
 `rf-opencode-230-hostname-redact` #291). Contract `goal-rf-opencode-phase1.md`; accepted plan
 `docs/plans/2026-11-25-rf-opencode-phase1-plan.md`
-(sha256 `300ed1a7e5647f284097faf89621a4b8d8e0c46b430b00fbd717cfdcf0a9de85`); proposal of
+(sha256 `e6207d7a104ab8327bb2a3e65feb7b75a6dabba37d2d2392ab046d9d1984fb87`); proposal of
 record `refactor/opencode-phase1-amendment.md` (GDD state root). The fix round below re-anchored
 the client under the conductor ruling of 2026-11-26 (review R1-R9); its comparison base is
 `550f96a3c128d3f3e397c6f03f6e003be6dfbd44` (`origin/main` #294).
 
 Round 2 (2026-11-26) re-ran the implement stage under the conductor's second ruling (PR #298
 round 1, MUST_FIX F1-F6); its comparison base is `6a0afd5f894468b148ba81209993ae05a3599e5f`.
-Round-2 changes are the F1-F6 items mapped in §8; the live proof (§2 row 7) was re-run on the
+Round-2 changes are the F1-F6 items mapped in §10; the live proof (§2 row 7) was re-run on the
 round-2 bytes and is receipt-bound to them.
+
+Round 3 (2026-11-26) applied the second simplification findings F1-F5/PD1-PD7 (§12); the live
+proof was re-run on the round-3 bytes and §§2/4/5a/11 carry the round-3 re-measurements.
 
 No credential, relay host, machine hostname or host absolute path appears here. Receipts are cited
 by repository path and sha256, never copied. The amendment **merge** revision is not knowable
@@ -43,7 +46,7 @@ against the merge revision.
   only** (fix round R9); every other platform registers `harness.NewOpenCodeAdapter()` — the
   byte-identical unavailable seam with **no native probe I/O** and the same
   `ErrHarnessUnavailable` classification and reason class the compose rows assert.
-- P6.3 CI assertions: the six `--assert` rows and the race row stay named, with two test names
+- P6.3 CI assertions: the six `--assert` rows and the race row stay named, with three test names
   re-anchored where the route they pin moved (`…RefusesBeforeReadinessRequest`,
   `…RejectsWrongLinuxV2PeerBindingsBeforeRequest`, `…FailsBeforeReadinessRequest`), updated in
   `.github/workflows/ci.yml` and `scripts/ci/linux-v2-native-acceptance.sh` in the same change.
@@ -84,8 +87,9 @@ against the merge revision.
   constructor phrase, package doc, `DecodedSessionEvent`/`DurableCursor`/validator wording); the
   readiness test is `TestReadinessAcceptsTheRecordedLineAndTheFrozenFixturePrefix` and no longer
   claims a recorded prefixed 1.18.x line; the two over-cap comments in
-  `daemon/internal/app/harness_test.go` are trimmed, and a branch-wide scan of added comment
-  blocks finds none longer than two lines.
+  `daemon/internal/app/harness_test.go` are trimmed. The round-2 branch-wide claim was wrong: the
+  conductor's comment-cap gate exits 1 on the round-2 bytes (three 3-line blocks); §12 trims them
+  and the re-run exits 0.
 - **Fix round R4.** `daemon/internal/harness/opencode/probe_promotion_test.go` parses the
   committed `testdata/opencode/2.4.1/probe-windows.json` receipt and README and asserts
   `binary.sha256 == TestedExecutableHash`, the Windows PE asset identity, and the parsed
@@ -180,14 +184,15 @@ Row 5 (pin drift): the carried pin literals are `2.4.1` —
 `linux-v2-native-tools.sh` names `opencode-linux-x64.tar.gz` `9ddd18e3…` → ELF `ec93043f…` →
 `opencode v2.4.1`; the acceptance fixture's `harness_version` map names `2.4.1`; the witness
 tested-release check accepts `2.4.1` via `opencode.TestedVersion`. Census, exact command:
-`git diff 550f96a3c128d3f3e397c6f03f6e003be6dfbd44 -U0 -- <the §5a paths> | grep -E '^\+' |
-grep -vE '^\+\+\+' | grep -cE '1\.18\.32'` → **14**, and every hit is a comment, a fixture
-command name, a round-2 witness message or record/plan prose: one synthetic profile command
-string (`daemon/internal/app/harness_test.go`), two witness messages
-(`daemon/internal/harness/opencode/adapter_native_terminal_candidate_test.go`), four comments
-(`daemon/internal/harness/opencode/sse.go`), the D1 row
-(`docs/goals/0010-refactor-program.md`), three lines of this record and three lines of the plan's
-round-2 section. Pin-scope census, exact command: `grep -rn '1\.18\.32'
+`git diff 550f96a3c128d3f3e397c6f03f6e003be6dfbd44 -U0 -- <the 27 §5a table paths, this record
+excluded> | grep -E '^\+' | grep -vE '^\+\+\+' | grep -cE '1\.18\.32'` → **11**, and every hit is
+a historical reference, not a carried pin: four comments
+(`daemon/internal/harness/opencode/sse.go`), two witness messages
+(`daemon/internal/harness/opencode/adapter_native_terminal_candidate_test.go`), one synthetic
+profile command string (`daemon/internal/app/harness_test.go`), the D1 row
+(`docs/goals/0010-refactor-program.md`) and three lines of the plan's round-2 section. The same
+census over the full range (this record included) → **17**: this record's own prose quotes the
+pin literal and makes up the difference. Pin-scope census, exact command: `grep -rn '1\.18\.32'
 scripts/ci/linux-v2-native-tools.sh scripts/ci/linux-v2-native-acceptance.sh
 .github/workflows/ci.yml daemon/internal/harness/opencode/adapter.go` → **0 hits**: no carried
 pin names V1.
@@ -195,7 +200,7 @@ pin names V1.
 Row 6 (revision binding): §5's delivered-element digests plus the amendment merge revision or a
 post-merge re-run.
 
-Row 7 (Windows live promotion proof; re-run in round 2 on the delivered bytes): the opt-in
+Row 7 (Windows live promotion proof; re-run in round 3 on the delivered bytes): the opt-in
 env-gated `TestNativePromotionProofOnThePinnedWindowsBlob` ran against the exact pinned Windows
 PE (sha256 `f3da11bf51ace25b86f52e20368d415451d200d6b48101d9f4e5d721b1d2020e`, 278,383,496
 bytes, digest re-verified by the test before launch) with the recorded relay provider and model
@@ -212,17 +217,18 @@ on this Windows host, driving two admitted turns behind a non-empty `ModelProfil
   cancelled through `Control` (a 2.4.1 interrupt arriving before the first generated token is
   refused, not queued, so the proof re-applies until the server reports it applied), `WaitTurn`
   returned the verified `session.execution.interrupted` terminal, the readback named
-  `interrupted`, and `Wait` returned `cancelled` with `TaskResultReasonCancelled` (23.57 s).
+  `interrupted`, and `Wait` returned `cancelled` with `TaskResultReasonCancelled` (round-3
+  re-run, 16.39 s wall).
 
-Receipt: `<STATE_DIR>/scratch/rf-opencode-phase1-impl2/promotion-receipt.json`, sha256
-`7bd9db34241339cc9b75ac2cad006b5ffdce4efedf072c72739e7a3a412d0655`. Its `operations` block
+Receipt: `<STATE_DIR>/scratch/rf-opencode-phase1-apply3/promotion-receipt.json`, sha256
+`047e33d048a540cff82a19e69b83e3ce15b444315356688e2dd5091b1e9d706e`. Its `operations` block
 carries `wait_turn: verified`, `readback_outcome`, `result_kind`, `control_applied`,
 `native_frames`, the readiness booleans and `close_terminated: true` per operation, plus
 `relay_host_recorded: false` and `model_profile_alias_used: true`. Its `delivered_sha256` block
 equals the delivered bytes byte-for-byte: `adapter.go` `ad572a922293…4df8`, `client.go`
-`2f9a9af4c11e…2dbc`, `sse.go` `e4188206fdf8…4f04`, `types.go` `8df924a2c543…5779`,
+`68de7e92df51…9da3`, `sse.go` `eb077b4ccf37…9688`, `types.go` `8df924a2c543…5779`,
 `probe_promotion_test.go` `ae9b0c550826…b8c6`, `adapter_native_promotion_test.go`
-`4bdf7c291c45…b692` (§5a). The credential was read at run time from the operator's OMP models
+`af362c247a2f…43cb` (§5a). The credential was read at run time from the operator's OMP models
 config, passed only through the child environment, and never entered argv, a file, a log line,
 the journal or the receipt. The first round-2 attempt failed and is kept as evidence: `Close`
 interrupted the already-succeeded turn and the server refused (`opencode interrupt did not
@@ -248,8 +254,11 @@ verified terminal is never interrupted.
 M3 and M8 redden only in the Linux CI job (`daemon`, ubuntu-latest, non-root); M1/M2/M4-M7 and
 M9-M11 redden in both `daemon` and `daemon-windows`. The compose refusal rows are constructor-seam
 assertions, so a registry-gate mutation cannot redden them; they are recorded, not silently
-skipped. Each mutant was run in a scratch copy of `daemon/`; the restored digests above are the
-delivered bytes' digests (full values in §5). Oracle note: neutering the post-open closed
+skipped. Each mutant was run in a scratch copy of `daemon/`. The restores above name the bytes the
+mutants actually ran on: `adapter.go` `65174205…2ac93a`, `client.go` `b9bb6894…d46c2c` and
+`sse.go` `7e6bcf7f…8fb9f94` are the `5b716a61` intermediate round-2 bytes, one edit before the
+round-2 delivery; §5a carries the delivered round-3 digests and §12 re-ran no mutant
+M1-M16. Oracle note: neutering the post-open closed
 re-check in `StartTurn` leaves the suite green — the cancelled stream context fails the open
 before the re-check — and that predicate is carried from the comparison base, so it needs no
 new pin; the concurrent-close row is pinned through the cancellation path
@@ -296,22 +305,23 @@ All rows below ran on the delivered bytes (§5a); the range for every diff-scope
 | `python3 -c "import yaml; yaml.safe_load(…)ci.yml"` (WSL) | repo | 0 |
 | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | repo | 0 — 55 tests OK (the same script exits 1 on Windows: its exporter cases need POSIX process control) |
 | `git diff --check 550f96a3…` | repo | 0 |
-| range added-line host-path scan (`git diff 550f96a3…`, added lines, shapes: account prefix, drive letters, `/mnt`, `/home`, `/var`, `/tmp`; the two untracked files scanned whole) | repo | 0 hits |
-| `git diff origin/main...HEAD \| grep -ci "users/"` | repo | 0 |
-| the `1.18.32` census over the range's added lines (recorded in §2 row 5) | repo | 4 hits, all historical references, no carried pin |
-| comment-block census over the range's added lines (cap: two lines) | repo | 0 blocks over two lines |
+| range added-line host-path scan (`git diff 550f96a3…`, added lines, shapes: account prefix, drive letters, `/mnt`, `/home`, `/var`, `/tmp`; the two untracked files scanned whole) | repo | 0 hits in this goal's paths; one added line in another goal's file (a runner home path in `daemon/internal/harness/claude/adapter_cmdline_linux_test.go`) disclosed in §11 |
+| account-name scan over the range's added lines (shapes described in prose; the pattern is not quoted here) | repo | 0 hits after §12 replaces this record's one quoted state-dir path; the round-2 two hits were that path and this row's own quoted pattern |
+| the V1-pin census over the range's added lines (exact commands and path set in §2 row 5) | repo | as recorded there; no carried pin |
+| comment-block census over the range's added lines (cap: two lines) | repo | round-2 bytes: 1 — three 3-line blocks over the cap; §12 trims them and the re-run exits 0 |
 | `python scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | repo | 0 for the record and six other changed docs; `docs/archive/CLOSED-TODO.md` refuses at the comparison base and at the delivered bytes with the same pre-existing finding (specimen lines), and the range's added lines carry none |
 | the R4 receipt-binding test (opencode package suite above) | `daemon/` | 0 |
 | mutants M1-M11 per §3 | scratch `daemon/` | expected red; restores digest-verified |
 
 ## 5. Delivered-element digests
 
-### 5a. sha256 rows (computed at the round-2 delivered worktree; row 6 re-binds at the merge)
+### 5a. sha256 rows (row 6 re-binds at the merge)
 
 The revision column names the bytes each row was measured at: `r1` = untouched by round 2 and
 byte-equal to the committed `6a0afd5f` blob (`git show 6a0afd5f:<path>`); `r2` = the round-2
-delivered (uncommitted) bytes. Every r2 row was recomputed after the last source edit; the live
-proof's `delivered_sha256` block equals the six OpenCode r2 rows below (§2 row 7).
+delivered bytes; `r3` = the round-3 apply bytes (§12). Every r3 row was recomputed after the last
+round-3 edit; the live proof's `delivered_sha256` block equals those six files' delivered bytes
+below (§2 row 7).
 
 | File | Revision | sha256 |
 | --- | --- | --- |
@@ -321,25 +331,25 @@ proof's `delivered_sha256` block equals the six OpenCode r2 rows below (§2 row 
 | `daemon/internal/app/probe.go` | r1 | `0ccbafd4f026472770e5f9e4a9da8146797a7049c62f95c1ba2d19a10e24ff49` |
 | `daemon/internal/harness/harness_test.go` | r1 | `3cb64f1c20af0d5063272e63e1a4ae2f9751687826b67c25ff060ce55cc76759` |
 | `daemon/internal/harness/opencode/adapter.go` | r2 | `ad572a92229343fd2859118acc3476ed78e23ba20211d2b8da97e918adfa4df8` |
-| `daemon/internal/harness/opencode/adapter_native_promotion_test.go` | r2 | `4bdf7c291c457004dbb93de7521c79f35a9cb99b194079d5750594d3e010b692` |
-| `daemon/internal/harness/opencode/adapter_native_terminal_candidate_test.go` | r2 | `cfde82059a96c4bc169a8393bb1e51c16190d97fa68f37141a9f4b6dfaa1b547` |
-| `daemon/internal/harness/opencode/adapter_native_test.go` | r1 | `5ba4c1af2cd536e126d030e648f5567a9a3bc79acd8974c7e0573ff180b2edd5` |
-| `daemon/internal/harness/opencode/adapter_native_work_linux_test.go` | r1 | `b138d11c8a66b929dad80ccd9ace6e2e98cf3fdfff92669327e3875c612ba40d` |
-| `daemon/internal/harness/opencode/adapter_native_work_test.go` | r1 | `c52c4a49ecc58cfee939db798be4a102b1046714ccfec69fd5dd6ce3e2176e78` |
-| `daemon/internal/harness/opencode/adapter_test.go` | r2 | `12c6aa6f830cd17b86ba003e7f6f5b2452837b84a8fec8593a71805c3c169cbf` |
-| `daemon/internal/harness/opencode/client.go` | r2 | `2f9a9af4c11e6891279a0fe6db25f918b684aeb2f84c80d7530862a1c0102dbc` |
+| `daemon/internal/harness/opencode/adapter_native_promotion_test.go` | r3 | `af362c247a2f119cd651391c858d412a91f8549bad55d4e05d89c730700443cb` |
+| `daemon/internal/harness/opencode/adapter_native_terminal_candidate_test.go` | r3 | `e85f57e0565f77c6fa3e2c3afe39ec7580baffc926dff8519a5b91c0a25fc485` |
+| `daemon/internal/harness/opencode/adapter_native_test.go` | r3 | `c84dc0bfe8985ad5d89c2879f2262ddea5d8cf9698d3e4d455cacfadbbc6e1ab` |
+| `daemon/internal/harness/opencode/adapter_native_work_linux_test.go` | r3 | `0b47483117477b7bcd5b9ff31a6213d7fd6b09da5b529f8ec58c170962a85512` |
+| `daemon/internal/harness/opencode/adapter_native_work_test.go` | r3 | `2cc8d159e954125f8832e16810e8eed73bac03b86d4ab098e0d0a9c675b3cee9` |
+| `daemon/internal/harness/opencode/adapter_test.go` | r3 | `d81ad1607ccff415d3b0b8aae65463009f3e16a33b41e451c5ae08b6b7fc0cae` |
+| `daemon/internal/harness/opencode/client.go` | r3 | `68de7e92df5131bf4df1d156e80bea029e1538fac5a03ccdbc5276486f219da3` |
 | `daemon/internal/harness/opencode/client_test.go` | r2 | `150ac7466a9d755f1c39671718ab2517bbf768a7cfda54fdc2f320169ef1b6d7` |
 | `daemon/internal/harness/opencode/inprocess_containment_test.go` | r1 | `9f3bdff150af99fc3775468105ed4270261ced19ef0c20b6ba19382275ace7d7` |
 | `daemon/internal/harness/opencode/peer_linux_test.go` | r1 | `e4b464c0d7adf47959012c8be803cdf31c03efe0b3c5dd94ff202d5369ada362` |
 | `daemon/internal/harness/opencode/peer_test.go` | r1 | `1a267d6874a3c2fd067c6c90318db1fa934a30909c0dfb283af82d388606e7ff` |
 | `daemon/internal/harness/opencode/probe_promotion_test.go` | r1 | `ae9b0c550826f7f1be24c1c9a230fa93f29436278ecff59805020d9abb54b8c6` |
-| `daemon/internal/harness/opencode/sse.go` | r2 | `e4188206fdf853c21ca59088a4eb224c894526863f53496c203b691ae9b84f04` |
-| `daemon/internal/harness/opencode/sse_test.go` | r2 | `dfc7713993cccb57b34efe47162d97750724b7387363cb39166ccf9d89912761` |
+| `daemon/internal/harness/opencode/sse.go` | r3 | `eb077b4ccf37c132c361329a0ba6effb52b05d59148887c563d2be865b2f9688` |
+| `daemon/internal/harness/opencode/sse_test.go` | r3 | `265e82f5bc48d31d95386edc6ae483e3d2b53fc8a4e9b76de5f29efb0a37d0c1` |
 | `daemon/internal/harness/opencode/types.go` | r2 | `8df924a2c5434ca8b4ce721401ad7e2543fdccbfe640afe2de1053d3406e5779` |
 | `daemon/internal/harness/registry.go` | r1 | `c8049e6eced97a11d325b78aff7ec9c6aa77102f1397f799164a8646d6e2ddcc` |
 | `docs/goals/0010-refactor-program.md` | r1 | `49a9f0335020773716d2f884bd6f904fb78c81bfa2b63ba72ae3b1d24be22e37` |
 | `docs/goals/README.md` | r1 | `5f2a6292408648d87d50f78a07d3c4c623bb3f87fa49ee22b4bf377e7bc6edd4` |
-| `docs/plans/2026-11-25-rf-opencode-phase1-plan.md` | r2 | `c151905bf57ed6613eb58bf2aacaf4183c7f1bc279ed1914f8142f62f28cbbe2` |
+| `docs/plans/2026-11-25-rf-opencode-phase1-plan.md` | r3 | `e6207d7a104ab8327bb2a3e65feb7b75a6dabba37d2d2392ab046d9d1984fb87` |
 | `scripts/ci/linux-v2-native-acceptance.sh` | r1 | `002915569cc7aa3b9e553cf211d3f688fa961bcba1567f38d4cef2c777948034` |
 | `scripts/ci/linux-v2-native-tools.sh` | r1 | `500ac7b47dd9a9b0f5aea2d67dafe4a0131dfd10726b0dc4b0215f4f1b410c69` |
 
@@ -504,7 +514,8 @@ below names its delivered change, its pin and its mutant; the gate rows are §4.
 
 ## 11. Round-2 gates (exact commands; cwd; exit)
 
-All rows below ran on the round-2 delivered bytes (§5a). Round 2 changes no shell script
+All rows below ran on the round-2 delivered bytes (the §5a r2 rows) unless a row says otherwise.
+Round 2 changes no shell script
 (`git diff --name-only` over `scripts/` is empty), so the `bash -n` gate has no changed script to
 cover; `.github/workflows/ci.yml` is YAML and the yaml-load row below covers it.
 
@@ -520,11 +531,11 @@ cover; `.github/workflows/ci.yml` is YAML and the yaml-load row below covers it.
 | the race row, named assertion scoped to its package: `go-test-json-gate.py --assert …/opencode TestOpenCodeV2VerifierRejectsReleasedPeer -- go test -race -count=1 -timeout 600s -json ./internal/harness/opencode -run '^TestOpenCodeV2VerifierRejectsReleasedPeer$'` (WSL) | `daemon/` | 0 — `run=1 pass=1 skip=0` |
 | the CI-exact race form: `go-test-json-gate.py --stdio-boundary --assert …/opencode TestOpenCodeV2VerifierRejectsReleasedPeer -- go test -race -count=1 -timeout 600s -json ./...` (WSL) | `daemon/` | 0 — 603 s total; `internal/app` 557.9 s of its 600 s budget; every package passes under `-race` |
 | env-gated `TestNativePromotionProofOnThePinnedWindowsBlob` (round 2, two operations) | `daemon/` | 0 (23.57 s; receipt §2 row 7) |
-| `python C:/Users/lhan/.local/state/gdd/scratch/comment-cap.py <worktree>` (conductor's script, before the final re-measure) | repo | 0 |
+| `python <STATE_DIR>/scratch/comment-cap.py <worktree>` (conductor's script) | repo | round-2 bytes: 1 — three 3-line blocks over the cap; §12 trims them and the re-run exits 0 |
 | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | repo | 0 (55 tests OK in 35.5 s) |
 | `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/ci.yml'))"` (WSL) | repo | 0 |
 | `git diff --check 550f96a3c128d3f3e397c6f03f6e003be6dfbd44` | repo | 0 |
-| the `1.18.32` and pin-scope censuses (§2 row 5) | repo | as recorded there |
+| the V1-pin and pin-scope censuses (§2 row 5) | repo | as recorded there (re-measured in §12) |
 | the added-line host-path scan over the goal's paths (shapes: account prefix, drive letters, `/mnt`, `/home`, `/var`, `/tmp`) | repo | 0 hits; the range-wide scan over the merge-inclusive diff finds exactly one added line in another goal's file (`daemon/internal/harness/claude/adapter_cmdline_linux_test.go`), outside this goal's paths and untouched by it |
 | mutants M1/M2/M12-M16 (§3a, Windows) | scratch `daemon/` copies | expected red, observed |
 | mutant M3 (§3a, WSL) | scratch `daemon/` copy | expected red, observed |
@@ -559,3 +570,56 @@ measured 557.9 s of the job's 600 s per-package budget under `-race` on this hos
 runner could time that package out on this budget; that pressure predates this increment (the
 package's race time is dominated by the `LinuxV2NativeWitness*` rows, which this increment does
 not touch).
+
+## 12. Round-3 apply sweep (2026-11-26, second simplification findings)
+
+Accepted findings F1-F5 and PD1-PD7 were applied on the round-2 delivered bytes; every number
+below was re-measured on the round-3 bytes.
+
+- F1 — deleted `Event.String()` (`sse.go`): it had no caller, and its value receiver was promoted
+  into every type embedding `Event`, reducing `%v`/`%+v` failure output to the event type.
+- F2 — dropped the vacuous session-identity clause of `TestRecordedReceiptFramesDecode`:
+  `DecodeSessionEvent` returns only after `durableSessionIdentity` proves the id non-empty and
+  equal to the durable aggregate, so the clause could not fire; the decode-error path and the
+  mismatch semantics stay pinned one line above and in the mismatch row.
+- F3 — the resume capture binds admission from the decoded frame (`SessionEventInboxEnqueued` +
+  `InboxEnqueued.InboxID`) instead of re-parsing `data.inboxID`, which also matched
+  `session.inbox.delivered` (the delivered frames of four receipts carry that field and decode to
+  `SessionEventUnknown`); the lax helper is deleted and
+  `TestNativeOpenCodeResumeCaptureBindsOnlyTheRecordedInboxAdmission` pins both arms.
+- F4 — one version-check helper with an explicit timeout parameter returning the trimmed line;
+  the remaining copies route through it with their original bounds preserved (`nativeSmokeTimeout`
+  in `adapter_native_test.go`, `nativePromotionProofTimeout` in the promotion proof, 10 s in the
+  terminal-candidate witness, `nativeRepositoryTaskTimeout` in the Linux work leg).
+- F5 — the three 3-line comment blocks trimmed to two lines; the conductor's comment-cap script
+  on the round-3 bytes exits 0 (gate row below).
+- PD1/PD2 — this record's comment-cap claims are corrected in §1/§4/§11, and the one quoted
+  state-dir path (the conductor's script invocation) is replaced with `<STATE_DIR>`.
+- PD3 — the V1-pin census is re-measured with its exact path set and result (§2 row 5).
+- PD4/PD6 — the cover re-cites the delivered plan digest; the re-anchored test-name count is
+  corrected; the round-2 disposition pointer moves to §10.
+- PD5 — §3's restore digests are labelled with the `5b716a61` intermediate revision they actually
+  are, and the dangling §5 pointer is gone.
+- PD7 — the plan's §2 and §8 carry appended superseded markers (the R9 platform gate; the R1
+  re-anchor choice and the option-letter inversion).
+
+| Command (as run) | cwd | Exit |
+| --- | --- | --- |
+| `gofmt -l .` | `daemon/` | 0 (no output) |
+| `go vet ./...` | `daemon/` | 0 |
+| `go test -count=1 -timeout 900s ./internal/harness/opencode/ ./internal/harness/ ./internal/app/` | `daemon/` | 0 (`opencode` 0.391 s, `harness` 0.207 s, `app` 91.236 s; one earlier run overlapped a 105 MB tree copy and saw `TestStagedDriverCloseDetachedRunsStartOnTheCaller` fail once — it passes `-count=3` isolated and the package passed three further unloaded runs) |
+| `go vet ./...` and `go build ./...` (WSL `Ubuntu-24.04`, user `accept`, go1.27.0) | `daemon/` | 0 and 0 |
+| `TMPDIR=/tmp go test -count=1 -timeout 600s ./internal/harness/opencode/ ./internal/harness/` (WSL) | `daemon/` | 0 (`opencode` 1.247 s, `harness` 0.042 s) |
+| env-gated `TestNativePromotionProofOnThePinnedWindowsBlob` (round-3 re-run; receipt §2 row 7) | `daemon/` | 0 (16.39 s) |
+| `python <STATE_DIR>/scratch/comment-cap.py <round-3 tree>` (conductor's script; independent scratch commit of the round-3 tree) | scratch | 0 |
+| `TestNativeOpenCodeResumeCaptureBindsOnlyTheRecordedInboxAdmission` on the M17 scratch copy | scratch `daemon/` | expected red, observed |
+| `python scripts/ci/jscpd-changed.py --base 78166f2e --head HEAD` (scratch commit of the round-3 tree) | scratch repo | 0 — 32 changed files, 1771 scanned sources, 1253 corpus clones, 8 tolerated among the added lines, none new; the gate's own notices disclose two changed files carrying added lines outside its scope (`daemon/internal/app/harness_test.go`, `docs/archive/CLOSED-TODO.md`) |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only <file>` (this record; the plan) | repo | 0 and 0 |
+
+M17 (red-first for F3): the strict admission binding replaced with the raw `data.inboxID` parse
+in a scratch copy; the row reddens on its delivered-only case (the summary shows
+`admission_observed=true` with the stream-ended stop reason, against the expected admission-missing
+refusal). The mutated file is
+`<STATE_DIR>/scratch/rf-opencode-phase1-apply3/mut/red-first/daemon/internal/harness/opencode/adapter_native_work_test.go`,
+sha256 `da6b10a3db85d1b8dba726fb3895732e0ad5183c6a26c6416fb169bedd2d8f72`; the delivered tree was
+never mutated, and no M1-M16 mutant was re-run in round 3.
