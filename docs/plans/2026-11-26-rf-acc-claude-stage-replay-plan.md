@@ -13,7 +13,8 @@ per-clause baseline, and what is out of scope.
 
 The `claude_containment` case set runs `run_native_owner_witness claude_containment` (green:
 `verified TestProductionLinuxV2ClaudeNativeContainment: run=1 pass=1 skip=0`) and then
-`run_kind_stage_replay_case … claude` (`linux-v2-native-acceptance.sh:2441-2447,3103-3106`), which
+`run_kind_stage_replay_case … claude` (`linux-v2-native-acceptance.sh:2541-2547,3203-3205` at the
+delivered bytes; `:2441-2447,3103-3106` at the base `78166f2e`), which
 runs exactly one subtest: `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude`
 (`production_linux_v2_native_witness_test.go:194-232`). It reds after 93.39 s at the fixture's own
 post-kill wait (`production_linux_v2_owner_cli_test.go:2116-2127` at the r2 bytes; the
@@ -177,10 +178,10 @@ if the conductor reads the residency as a product defect, that is a new goal wit
 
 ## 4. Public/API shape
 
-No validator, harness or fixture-script change; no new exports. Unexported predicates and their
-table rows in `daemon/e2e/production_linux_v2_owner_cli_test.go` (r1's proof-provenance predicate;
-the owner-loss snapshot predicate with its containment companion), plus the runner sequencing
-above. Round 3 additionally touches the owned witness seam
+No existing validator strength, harness or fixture-script change; no new exports. Unexported
+predicates and their table rows in `daemon/e2e/production_linux_v2_owner_cli_test.go` (r1's
+proof-provenance predicate; the owner-loss snapshot predicate with its containment companion), plus
+the runner sequencing above. Round 3 additionally touches the owned witness seam
 `daemon/internal/app/linux_owner_witness_linux.go` (the snapshot type, its stage/expected
 predicates, the bounded read, the summary field and validator, and the two injectable seam
 variables) and its unit rows in `linux_owner_witness_linux_test.go` — production bytes inside the
@@ -230,7 +231,8 @@ helper after owner loss: the recovery client process itself.
 
 - Premise, verified from code at the r3 base (this was the round's STOP-condition check; it holds):
   the witness process that runs `recoverLinuxV2NativeWitnessRunKey`
-  (`linux_owner_witness_linux.go:2852`) and the process that later runs the production
+  (`linux_owner_witness_linux.go:2985` at the delivered bytes; `:2852` at the r3 base) and the
+  process that later runs the production
   `LookupHelper` are the same process — `recoverContainmentOnlyJournals` →
   `recoverLinuxV2OwnerJournal` are called synchronously inside it — and `dialLinuxOwnerHelperV2`
   stamps the caller's own `{PID, ProcessIdentity}` (`helper_v2_protocol.go:356`). The helper admits
@@ -243,7 +245,9 @@ helper after owner loss: the recovery client process itself.
   allowed post-loss and read-only (`helper_v2_server.go:575-585` region, `handleStatus` `:646-742`).
 - The seam captures, before the recovery's first `Control.Stop`, a bounded `LookupHelper` +
   `Control.Status` poll (40 s; outlasts the product's 30 s owner-loss stop bound,
-  `helper_v2_protocol.go:31-33`) and records `OwnerLost`, the helper-issued `StopProof`, the
+  `helper_v2_protocol.go:31-33`) on its own child context (round-4 Q1: the recovery's
+  `CleanupTimeout` budget starts with the recovery, pinned by its own red-first row — record §10)
+  and records `OwnerLost`, the helper-issued `StopProof`, the
   released-gate authorization and the held helper identity in the summary's new `owner_loss` field
   (shape validator + unit rows).
 - The fixture requires the snapshot at both proven stages

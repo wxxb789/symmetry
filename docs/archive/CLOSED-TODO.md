@@ -5564,15 +5564,20 @@ section, whose pointer sentence names this one.
       assertion set covers the codex leg `native_release_codex` (the class's second observed
       instance: main measurement run `45775969711`), because both kind legs present
       `barrierStage == "native_release"` to the shared runner, the matrix now passes the leg's own
-      `testCase.barrierStage`, and the kind-leg row pins the wiring. The r2 fixture-side helper
-      dials and the pre-existing pre-kill `AnchorStop` capture are deleted (they were refused or
-      stole the helper's single post-loss recovery slot — DS audit P1-2); round 3's only
-      production byte is the owned witness seam, and no validator, bound or
-      `platform/**`/`authority/**`/`execution/**` byte changed.
+      `testCase.barrierStage`, and the kind-leg row pins the leg case's stage field. The r2
+      fixture-side helper dials and the pre-existing pre-kill `AnchorStop` capture are deleted
+      (they were refused or stole the helper's single post-loss recovery slot — DS audit P1-2);
+      round 3's only production byte is the owned witness seam, which adds the `owner_loss`
+      summary field and its shape check in `validateFinalSummary` — no existing validator check
+      was weakened, and no bound or `platform/**`/`authority/**`/`execution/**` byte changed.
+      Round 4 (contract Q1-Q5) gives the snapshot poll its own bounded deadline so the recovery's
+      `CleanupTimeout` starts with the recovery (red-first row
+      `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout`), fixes the two fail-open
+      spots in the r3 test code (Q5), and cuts the added comments to why-only (Q4) — record §10.
       Pinned by `TestLinuxV2StageReplayOwnerLossSnapshotRequired` (13 rows, all seven non-proven
       helper stages), `TestLinuxV2OwnerLossSnapshotBeforeRecovery` plus the witness-seam rows
       (`TestLinuxV2NativeWitnessOwnerLossStage`/`…SnapshotShape`/`…SnapshotPrecedesRecovery`) and
-      ten byte mutants red (record §4/§8), plus fix round r1's provenance pin
+      its byte mutants red (record §4/§8/§10), plus fix round r1's provenance pin
       (`linuxV2RequireHelperIssuedReleaseStopProof`, its own 8-row mutant-red row) and the WSL
       owner-loss-latch probes (record §5).
       The `checkout_ready` census residual is tracked in the

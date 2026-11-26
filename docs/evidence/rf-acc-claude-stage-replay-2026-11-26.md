@@ -19,7 +19,8 @@ final bytes.
 | `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `9dc0667b966cdd3568fc744e73c9c3ba383056065b9c2071c2f51b198078df40` |
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. No production,
-validator, fixture-script or `pi/**` byte changed (§4).
+validator, fixture-script or `pi/**` byte changed at the r2 bytes (§4); fix round r3 adds the owned
+witness seam (§8), so the sentence is scoped to that delivery.
 
 Fix round r3 changes the run inputs, so the delivered r3 bytes have their own table (the four
 record-only docs are not run inputs):
@@ -35,6 +36,22 @@ record-only docs are not run inputs):
 
 `linux_owner_witness_linux.go` and `journal_store_linux_test.go` are the contract's owned witness
 seam and its callers; no `platform/**`, `authority/**` or `execution/**` byte changed (§8).
+`journal_store_linux_test.go` is accepted as owned by the conductor's round-4 ruling (Q3: a
+mechanical caller of the seam, no behavior or assertion change).
+
+Fix round r4 changes the run inputs again (Q1's seam fix plus the Q4/Q5 test-code cleanups), so the
+delivered r4 bytes have their own table; every r4 code gate row in §6 ran on exactly these blobs,
+and the scratch-clone commits used for the comment cap and jscpd (`4ef2c00a`, `a54c7fd6`)
+reproduce them byte-identically:
+
+| file | sha256 at the delivered r4 bytes |
+| --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `db47b73835b3e8bd4797caf0499aa8797e0a9e18220d5de01af3f8b8a7f1df7d` (unchanged from r3) |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd` |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `f8cdf9b5ff54f5713a157c19e4e805fb6186e1eeb3ee8d272aea39926e42d6a1` |
+| `daemon/internal/app/journal_store_linux_test.go` | `bb0b8e8eedb9627e8e38a0016601f12fbca8a64808abf1efae645f1293cc24e6` (unchanged from r3) |
+| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `634cc884f8c80adfc5d5c24f6aac05bbbab0ec23197299230c27a940f60206b3` |
 
 ## 2. Stage 1 — the root cause, named verbatim
 
@@ -53,12 +70,15 @@ witness output: --- FAIL: TestProductionLinuxV2StageCrashReplayMatrix/native_rel
 ```
 
 Which row, which helper, which process: the held row is the claude kind leg
-`native_release_claude` (`production_linux_v2_native_witness_test.go:195-233`; the `claude_containment`
-case set runs exactly this subtest, `linux-v2-native-acceptance.sh:2541-2547,3204-3207`). The pidfd
-is `marker.Owners.Helper` opened at `production_linux_v2_owner_cli_test.go:1947`
+`native_release_claude` (`production_linux_v2_native_witness_test.go:195-197,226-234` at the r4
+bytes; `:195-233` at the r1 bytes; the `claude_containment` case set runs exactly this subtest,
+`linux-v2-native-acceptance.sh:2541-2547,3203-3205` at the r4 bytes). The pidfd
+is `marker.Owners.Helper` opened at `production_linux_v2_owner_cli_test.go:1991` at the r4 bytes
+(`:1947` at the `c0749664`/r1 bytes)
 (`linuxV2OpenStageOwnerPIDFD` re-verifies the exact creation identity across the open) — the
 `-linux-owner-helper-v2` process (pid 7168 in that run), **not** the released B target (pid 7182,
-captured live at `:1953-1976`; artifact `claude-stage-crash-replay-native-release.json` shows it as
+captured live at `:1997-2021` at the r4 bytes; `:1953-1976` at the r1 bytes; artifact
+`claude-stage-crash-replay-native-release.json` shows it as
 `native_command_verified: true`, `pidfd_opened: true`, `exact_leaf_membership: true`,
 `provider_action_succeeded: false`). The same run's daemon StateDir inventory (raw rows 4517-4524;
 the `s owner-….sock 0` row is 4524) still lists the helper's recovery socket
@@ -140,8 +160,8 @@ Chain, all at the base revision:
    `main-measure-codex-synthetic.md`) reds the codex kind leg `native_release_codex` with the same
    message at `production_linux_v2_native_witness_test.go:233`, and both kind legs
    (`native_release_codex`/`native_release_claude`) feed the same runner with
-   `barrierStage == "native_release"` (`:194-197`, `:199-205`, `:233`), so the fix below covers
-   both by construction.
+   `barrierStage == "native_release"` (`:194-197`, `:199-205`, `:233-234` at the r4 bytes), so the
+   fix below covers both by construction.
 
 `[INFERENCE]` on one link: the retained artifacts do not carry the helper's in-memory state, so the
 r1 record inferred “the stop succeeded” from the code paths in items 2 and 3 plus item 4's product
@@ -160,8 +180,12 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
 
 ## 3. The fix
 
+Anchors in this section are the r1/r2 delivered bytes; the delivered r3/r4 anchors for the same
+decisions are in §8 and §10.
+
 - `production_linux_v2_owner_cli_test.go` gains one pure predicate,
-  `linuxV2StageReplayHelperStopIsProven(stage, marker, journal)` (`:1162-1173`): `native_release`
+  `linuxV2StageReplayOwnerLossSnapshotRequired(stage, marker, journal)` (`:1162-1173` at the r1/r2
+  bytes; `:1162` at the r4 bytes): `native_release`
   with the held marker's `released` state, `stop_receipt_durable` with the durable receipt — the
   two shapes the stage-boundary validator has already validated exactly
   (`linuxV2ValidateStageJournalBoundary`, `:1639-1740`).
@@ -194,11 +218,15 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
   sensitivity is exact: `linuxV2WaitPIDFDExited` returns any non-timeout poll error verbatim
   (`production_linux_v2_native_witness_test.go:2600-2604`), so only its bounded-wait sentinel means
   "helper still live".
-- No validator, bound, production, harness or fixture-script change: the response validator
+- No existing validator check, bound, production, harness or fixture-script change at the r1/r2
+  bytes: the response validator
   (`linuxV2ValidateStageReplayResponse` `:1144-1150`, `linuxV2ValidateStageReplayResponseState`
   `:1319-1453`), the journal tombstone validator (`linuxV2ValidateStageReplayJournal`
   `:1455-1561`), the post-recovery target-pidfd wait (`:2195-2203`) and the leaf checks stay
-  byte-identical; the r1 and r2 predicates and their call sites are additions outside them.
+  byte-identical; the r1 and r2 predicates and their call sites are additions outside them. Fix
+  round r3 adds the `owner_loss` summary field and its shape check to `validateFinalSummary`
+  (`linux_owner_witness_linux.go:747` at the r3 bytes, §8.2) — an addition; no existing validator
+  check was weakened.
 - Fix round r2 (contract ruling R1-R6; DS audit P1 = the valid unresolved thread
   `PRRT_kwDOUMNTZc68QecV`; **superseded by fix round r3, §8**): the tolerated pre-recovery wait
   was replaced at exactly the two proven stages by the owner-loss assertions. `native_release`
@@ -216,7 +244,8 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
   why-only (ruling R4; the product-design rationale lives in this record), and DS P3's
   `checkout_ready` census is recorded as a `docs/TODO.md` residual (ruling R6). The branch is keyed
   on the stage, not the harness: both kind legs present `barrierStage == "native_release"` to the
-  same runner (`production_linux_v2_native_witness_test.go:194-197`, `199-205`, `233`).
+  same runner (`production_linux_v2_native_witness_test.go:194-197`, `199-205`, `233-234` at the
+  r4 bytes).
   **Round-3 corrections (DS r2 audit P1-1/P1-2, three consults; §8):** the r2 `native_release` arm
   measured only containment — the claude target self-exits on the App's stdin EOF (measured, exact
   pinned 2.1.323 bytes: `rc=0` 0.30 s after EOF; the App is the sole writer) — and its
@@ -264,7 +293,7 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
 ## 4. Red-first and mutant rows
 
 The tolerance branch is pinned by the row `TestLinuxV2StageReplayHelperStopIsProven` — `:2371-2401`
-at the delivered r1 bytes,
+at the delivered r1 bytes (renamed `TestLinuxV2StageReplayOwnerLossSnapshotRequired` in r3, §8.3),
 8 rows: `released native_release
 hold` and `stop-receipt durable hold` positive; the not-released/unknown marker, the receipt-less
 authority, the authority-less durable hold, and both pre-release shapes negative — and reddens
@@ -411,6 +440,30 @@ their rows on the r3 bytes (§6, WSL):
 receipt proof: an equality-only check would have accepted a mirror-kind pair (the first `m5`
 attempt stayed green and exposed exactly that gap before the rows were strengthened).
 
+Fix round r4 re-ran all ten overlays regenerated from the delivered r4 bytes plus one new red-first
+overlay for Q1 — eleven runs, each `go test -overlay=… -count=1` over the focused app + e2e filters
+(WSL, go1.27.0), every run exit 1 with exactly the red rows the r3 table above names plus Q1's row
+(counts 1/2/1/1/4/2/1/2/1/1 + 1; §6's r4 mutant row). The r4 copies, whose line offsets moved with
+the r4 comment cuts:
+
+| r4 mutant | sha256 |
+| --- | --- |
+| `m1-order.go` | `c1bafa124caa4a7c0b79079fbd22d179292767f623f6dfbce9b32746b84645e9` |
+| `m2-app-stage-widen.go` | `b95a0873ffb3d1764cfae6a74935f2fe67b9cd4334148116a271c34d64a7e03b` |
+| `m3-app-shape-drop.go` | `c0d076514f78d4ff5eca55685208b81aef14c3497102dd7ef754b140720a968b` |
+| `q1-revert.go` | `012aa12a83b75bf5278beaa49fd021219feca3ebde1841c0fe1dc810714810cd` |
+| `m4-latch-drop.go` | `a7ca81c0225a2e982eba134466e2fa0619c8e435a858689a3969ecd171179851` |
+| `m5-proof-shape-drop.go` | `a2bd6f55dfbc810e0f8716ccd1cca10a9d2bb1e09eef0fb0c006c69e91888a57` |
+| `m6-receipt-eq-drop.go` | `a8cfe36594c487728ad7092d793cfb8ea216b0962b84a7c8618081e0fe61aac3` |
+| `m7-helper-id-drop.go` | `b851c86986d41947d0b6fcae10c9edd49cdba460ea7aea1580157f68540481f7` |
+| `m8-clean-capture-drop.go` | `3254f326a1216b5e328e65c5a0af64d4c24c3d050514d5b4dd167ef5b5c3d7ee` |
+| `m9-release-auth-drop.go` | `48eea6344a9a53dc950f4a9b9014ea3d1277b33713d14f34ba6d4d7c20547ac4` |
+| `m10-required-widen.go` | `d736c4ca85faf223b371d094b728d48a2390e7434c72c59056811bde94e8ef99` |
+
+`q1-revert` reds only the new row (`owner-loss capture deadline offset = 100.0096ms, want the
+capture's own 40 s bound`, `linux_owner_witness_linux_test.go:2503`) while the r3 seam rows stay
+green; the ten r3 mutants red exactly the rows named above.
+
 ## 5. Root-cause probes (scratch, WSL, never in the tree)
 
 Fix round r2's local replica of the target-exit arm is delivered inside the fixture row
@@ -454,7 +507,11 @@ The full suites ran one at a time, never beside another harness, and the formatt
 rows, mutants, suites and anchor sweep above were all run at the delivered r2 bytes of §1. The
 `accept`/022 row is the CI-parity surface (the CI daemon job runs as the non-root runner user); the
 root row re-ran on the r2 bytes with the identical refusal set, and the as-is-umask row is this
-host's implement-stage environment record, kept with its base attribution.
+host's implement-stage environment record, kept with its base attribution. The r2 full-suite rows
+ran on `15e000f4`, four seconds before the `c52468cd` merge (ruling Y2, restored by round-4 Q6):
+the two §1-hashed r2 run-input files are byte-identical at `15e000f4` and `94e36995`
+(`3c8759c4…`, `9dc0667b…`), so the r2 suite rows do not cover the `origin/main` content merged in
+afterwards; the r3/r4 rows below carry that coverage.
 
 Fix round r3 re-ran the whole sequence on the delivered r3 bytes (§1's r3 table), one surface at a
 time:
@@ -474,6 +531,34 @@ time:
 The r3 mutants were regenerated from the final e2e bytes after the comment compression and re-run
 (§4's hashes are those files); the app-package mutants are byte-stable because
 `linux_owner_witness_linux.go` did not change after them.
+
+Fix round r4 re-ran every r3 gate on the delivered r4 bytes (§1's r4 table), one surface at a
+time:
+
+| Gate (r4) | Command (working directory `daemon/` unless noted) | Exit | Result |
+| --- | --- | --- | --- |
+| formatting + vet | `gofmt -l .`; `go vet ./...` (Windows go1.27.4 and WSL Ubuntu-24.04 go1.27.0) | 0 / 0 | both clean on both surfaces |
+| focused rows, app | `go test -count=1 -v -run '^(TestLinuxV2NativeWitnessOwnerLossStage\|TestLinuxV2NativeWitnessOwnerLossSummaryShape\|TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery\|TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout)$' ./internal/app/` (WSL) | 0 | `ok`, 18 subtest PASS rows plus the new top-level capture row, 0 FAIL |
+| focused rows, e2e | `go test -count=1 -v -run '^(TestLinuxV2StageReplayOwnerLossSnapshotRequired\|TestLinuxV2OwnerLossSnapshotBeforeRecovery\|TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch\|TestLinuxV2StageReplayHelperIssuedReleaseStopProof)$' ./e2e/` (WSL) | 0 | `ok`, 42 subtest PASS rows, 0 FAIL |
+| r4 mutant rows | the eleven overlays in §4, `go test -overlay=… -count=1 -run … ./internal/app/ ./e2e/` (WSL) | 1 × 11 | §4: the ten r3 counts 1 / 2 / 1 / 1 / 4 / 2 / 1 / 2 / 1 / 1 plus `q1-revert`'s 1 row |
+| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 3 `no test files`, 0 FAIL, 3m8.4s (the rerun on the final bytes; see the flake note below) |
+| full suite (WSL, `accept`, `umask 022`) | `go test -count=1 ./...` as user `accept` | 0 | 31 `ok`, 3 `no test files`, 0 FAIL |
+| comment cap | `python comment-cap.py <scratch clone>` (official; merge-base default) and `… 91df192f`, on the scratch-clone commit `4ef2c00a`, whose six run-input blobs equal §1's r4 digests | 0 / 0 | empty output on both bases — no added comment block over 2 lines |
+| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 91df192f --head HEAD` in the same scratch clone (doc-final commit `a54c7fd6`; junctioned `node_modules/jscpd` 4.3.0) | 0 | 7 changed file(s), 1782 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new; notices: `production_linux_v2_owner_cli_test.go` and `CLOSED-TODO.md` above the audited `--max-lines 5000` ceiling (the pre-existing class) |
+| sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc | 0/0/0/1 | record/plan/TODO pass; `CLOSED-TODO` exit 1 identical at base (the added lines carry no host path: the `git diff` added-line host-path census is 0) |
+| anchors | `python anchor_sweep.py` (scratch; parses every backticked citation in the record and the plan, checks the cited line exists, content-checks the delivered-head tokens) | 0 | 244 citations existence-checked, 53 content-checked, 0 failed, 0 skipped |
+
+The r4 comment cap ran before the final re-measure, on the scratch-clone commit `4ef2c00a`; the
+focused rows, the mutants and the suites ran on the same worktree bytes (the clone's six run-input
+blobs are byte-identical to §1's r4 table).
+
+Flake attribution for the first final-bytes Windows suite run: it went red only on
+`TestRunReconnectBackoffDoesNotBusySpin` (`daemon/internal/notification`, an untouched package —
+`git diff origin/main -- daemon/internal/notification` is empty; `dial attempts = 2, want bounded
+retries without busy spin`, a dial-backoff timing bound). The package re-ran green at the same
+bytes (`go test -count=3 -run '^TestRunReconnectBackoffDoesNotBusySpin$' ./internal/notification/`,
+exit 0), no `known-flakes.md` entry matches, and the rerun of the full suite above is the row; the
+conductor may want a flake-ledger entry for it.
 
 ## 7. Residual risks and limits
 
@@ -520,7 +605,8 @@ honestly.
 
 Verified from code at the r3 base; the premise holds, so the fix proceeds.
 
-- **Same process.** `recoverLinuxV2NativeWitnessRunKey` (`linux_owner_witness_linux.go:2995`)
+- **Same process.** `recoverLinuxV2NativeWitnessRunKey` (`linux_owner_witness_linux.go:2985` at
+  the r4 bytes; `:2995` at the r3 bytes)
   constructs the recovery daemon and calls `recoverContainmentOnlyJournals`
   (`linux_owner_recovery_linux.go:1622`) synchronously; that reaches
   `recoverLinuxV2OwnerJournal` → `owner.anchor.LookupHelper` (`:169`) and the recovery's own
@@ -551,27 +637,32 @@ Verified from code at the r3 base; the premise holds, so the fix proceeds.
 
 ### 8.2 What the seam records and what the fixture asserts (Z1, Z2)
 
+- The seam anchors below are the r4 (delivered) bytes; the r3 values differ where round-4 Q4 cut
+  comments and Q1 moved the capture (round-4 Q6 re-anchored this list).
 - `linux_owner_witness_linux.go` gains the snapshot type `linuxV2NativeWitnessOwnerLoss`
-  (`:2866`), the stage predicate `linuxV2NativeWitnessOwnerLossStage` (`:2879`, exactly
+  (`:2864`), the stage predicate `linuxV2NativeWitnessOwnerLossStage` (`:2875`, exactly
   `stage_replay` with `Barrier.HoldAfter` in `{native_release, stop_receipt_durable}`), the
-  committed-live boundary predicate `linuxV2NativeWitnessOwnerLossExpected` (`:2892`), the bounded
-  read `captureLinuxV2NativeWitnessOwnerLoss` (`:2916`: `LookupHelper` + `Control.Status` poll,
+  committed-live boundary predicate `linuxV2NativeWitnessOwnerLossExpected` (`:2886`), the bounded
+  read `captureLinuxV2NativeWitnessOwnerLoss` (`:2906`: `LookupHelper` + `Control.Status` poll,
   40 s bound, 250 ms interval; records `OwnerLost`, the cached `StopProof`, the released-gate
   authorization and the held helper identity; never erroring), the shape validator
-  `validateLinuxV2NativeWitnessOwnerLoss` (`:2900`, called from `validateFinalSummary` `:747`),
-  the summary field `owner_loss` (`:316`), and the two injectable seam variables (`:2991`).
+  `validateLinuxV2NativeWitnessOwnerLoss` (`:2892`, called from `validateFinalSummary` `:747`),
+  the summary field `owner_loss` (`:316`), and the two injectable seam variables (`:2981-2982`).
+  Round-4 Q1 gives the poll its own child context (`:3014-3018`), so the recovery context created
+  at `:3020-3022` starts with the full configured `CleanupTimeout`.
 - The fixture mirrors the field (`production_linux_v2_native_witness_test.go:1312`) and asserts it
   at the two stages via `linuxV2RequireOwnerLossSnapshotBeforeRecovery`
-  (`production_linux_v2_owner_cli_test.go:1208`, call `:2096`): a clean capture of the exact held
+  (`production_linux_v2_owner_cli_test.go:1202`, call `:2096`): a clean capture of the exact held
   helper, `OwnerLost`, a helper-issued proof (`Kind == helper`,
   `Issuer == Reaper == held helper`, `HelperExit == nil`), `GateReleaseAuthorized` at
   `native_release`, and equality to the receipt proof — the final release tombstone's proof at
   `native_release`, the pre-existing durable receipt proof at `stop_receipt_durable`. The
   `native_release` target-pidfd wait is kept as a *containment* check only
-  (`linuxV2RequireTargetContainedBeforeRecovery`, `:1196`).
+  (`linuxV2RequireTargetContainedBeforeRecovery`, `:1191`).
 - The helper response-loss runner re-anchors its `stop_receipt_durable` receipt checks to the
-  journal receipt plus the same snapshot field (`:4350`), with the receipt proof taken from the
-  journal (`:4273-4279`).
+  journal receipt plus the same snapshot field (`:4523` at the r4 bytes; `:4350` at the r3 bytes),
+  with the receipt proof taken from the journal (`:4374-4380` at the r4 bytes; `:4273-4279` at the
+  r3 bytes).
 - Honest limits. The snapshot is witness telemetry: its trust root is the recovery process's own
   response (the same trust as every other witness field, weaker than a fixture dial). Its ordering
   before the recovery's first stop is structural — the capture call precedes the
@@ -583,7 +674,9 @@ Verified from code at the r3 base; the premise holds, so the fix proceeds.
   owner-loss stop's proof existed before the recovery acted (the skip-`stopOwned` mutant leaves
   the snapshot without a proof, but its end-to-end red needs the privileged guest, §8.5).
   `release-run`-finalized helpers are out of scope: if the helper is already finalized the capture
-  records a bounded failure and the recovery proceeds as before.
+  records a bounded failure; the *witness* proceeds (`validateLinuxV2NativeWitnessOwnerLoss`
+  accepts `Captured && Error != ""`), while the *fixture* fatals at both proven stages
+  (`linuxV2RequireOwnerLossSnapshotBeforeRecovery` requires a clean capture).
 
 ### 8.3 Deletions (Z3)
 
@@ -595,10 +688,13 @@ the helper response-loss runner; `linuxV2StageReplayHelperStopIsProven` is renam
 `linuxV2StageReplayOwnerLossSnapshotRequired` with its logic unchanged (the name and doc no longer
 claim the boundary *proves* a stop), and
 `linuxV2RequireTargetExitedBeforeRecovery` is renamed
-`linuxV2RequireTargetContainedBeforeRecovery`. No other actor's state changes: the runner deletion
-is inside one leg before its recovery starts; the response-loss runner's receipt equality is now
-journal-sourced; the recovery's inputs (marker, journal, socket), the response/journal validators
-and the post-recovery polls are untouched.
+`linuxV2RequireTargetContainedBeforeRecovery`. The deleted fixture dials changed no other actor's
+state: every deletion is inside one leg before its recovery starts; the response-loss runner's
+receipt equality is now journal-sourced; the recovery's inputs (marker, journal, socket), the
+response/journal validators and the post-recovery polls are untouched. One other actor's state is
+changed by design: the witness process — the recovery client itself — claims the helper's single
+post-loss `recoveryOwner` slot with its `LookupHelper` before the recovery does, and the helper
+admits the same peer identity afterwards (§8.1).
 
 ### 8.4 Red-first rows and mutants (Z4)
 
@@ -636,31 +732,142 @@ the green and mutant cases, so it carries no attribution claim (the round's P1-1
 superseded; P1-1 (measured claude stdin-EOF self-exit on the exact pinned 2.1.323 bytes; the App is
 the sole writer) and P1-2 (fixture peer refusal / single-slot claim) are recorded as facts; the
 DS P3-2 matrix-literal hole is fixed; the DS P3s kept open are the guest-only product-mutant row
-(§8.5) and the `checkout_ready` census residual (`docs/TODO.md`). The assertion mapping is in §3;
-the Bind-2 section below is relabelled diagnostic for the r2 bytes it bound.
+(§8.5) and the `checkout_ready` census residual (`docs/TODO.md`). The “no other actor's state
+changes” claim is removed (§8.3 — the witness process itself claims the single post-loss slot
+before the recovery does). The assertion mapping is in §3; the Bind-2 section below is relabelled
+diagnostic for the r2 bytes it bound. Round-4 Q3 restores the two Y3 TODO residuals, drops the
+“no validator change” overclaim, labels the r1/r2 anchors and fixes §8.2's witness/fixture
+sentence; §10 carries the round.
 
 ### 8.7 Ruling checklist (Z1-Z5)
 
 | Item | State | Evidence |
 | --- | --- | --- |
-| Z1 witness-hosted pre-recovery `LookupHelper` + `Control.Status` into a validated response field, no `platform/**`/`authority/**`/`execution/**` change | done | §8.1/§8.2; `linux_owner_witness_linux.go:2866-3026`; premise verified (same-peer admission) |
-| Z2 honest fixture assertions (snapshot proof at `native_release`; latch + cached proof = durable receipt at `stop_receipt_durable`; target wait labelled containment) | done | §8.2; `linuxV2RequireOwnerLossSnapshotBeforeRecovery` (`owner_cli_test.go:1208`), `linuxV2RequireTargetContainedBeforeRecovery` (`:1196`) |
-| Z3 delete the fixture dials and the pre-kill `normalStop`/`AnchorStop` capture; re-anchor `stop_receipt_durable` to journal receipt + the Z1 field | done | §8.3; the response-loss runner's journal-sourced receipt proof (`:4273-4279`) and snapshot assertion (`:4350`) |
+| Z1 witness-hosted pre-recovery `LookupHelper` + `Control.Status` into a validated response field, no `platform/**`/`authority/**`/`execution/**` change | done | §8.1/§8.2; `linux_owner_witness_linux.go:2864-3024` (r4 bytes; `:2866-3026` at r3); premise verified (same-peer admission) |
+| Z2 honest fixture assertions (snapshot proof at `native_release`; latch + cached proof = durable receipt at `stop_receipt_durable`; target wait labelled containment) | done | §8.2; `linuxV2RequireOwnerLossSnapshotBeforeRecovery` (`owner_cli_test.go:1202`), `linuxV2RequireTargetContainedBeforeRecovery` (`:1191`) (r4 bytes; `:1208`/`:1196` at r3) |
+| Z3 delete the fixture dials and the pre-kill `normalStop`/`AnchorStop` capture; re-anchor `stop_receipt_durable` to journal receipt + the Z1 field | done | §8.3; the response-loss runner's journal-sourced receipt proof (`:4374-4380`) and snapshot assertion (`:4523`) (r4 bytes; `:4273-4279`/`:4350` at r3) |
 | Z4 red-first rows: skip-`stopOwned` (guest, §8.5), seam ordering, latch, evidence replacement, codex+claude kind legs | done locally | §8.4/§4: ordering row + ten mutants, 16 rows red; the product mutant's guest row is the residual |
-| Z5 records: no “equal-strength”/“no other actor”, P1-1/P1-2 as facts, DS P3s | done | this section, §3, the plan §8, `docs/TODO.md`, `CLOSED-TODO` closure |
+| Z5 records: no “equal-strength” overclaim; “no other actor” scoped to the deleted fixture dials (§8.3); P1-1/P1-2 as facts; DS P3s | done (round-4 Q3 completed the residue) | this section, §3, §10, the plan §8, `docs/TODO.md`, `CLOSED-TODO` closure |
 
 ## 9. Close-out
 
 Delivered, pending the conductor's Bind (both containment sets, `claude_containment` and
-`codex_containment`): the implement round plus fix rounds r1, r2 (superseded) and r3 — the
-contract's round-3 ruling Z1-Z5 (§8), on top of the r1 review findings STD-A01/STD-A02, the DS r1
-P1 (the valid unresolved thread `PRRT_kwDOUMNTZc68QecV`, contract ruling R1-R6) and the DS r2
-P1-1/P1-2 plus the three round-3 consults. The r3 row set and its ten mutants are §8.4/§4; the
-deleted r2 arms and the r1 pin remain as the r1/r2 record. The closure row in
-`docs/archive/CLOSED-TODO.md` carries the plan/record paths and the r3 assertions; `docs/TODO.md`
-carries the `checkout_ready` census residual and the round-3 guest-only product-mutant residual.
-The last step ran the comment cap *before* the final re-measure: §1's r3 digests were re-read at
-the delivered bytes and are unchanged across every gate row above.
+`codex_containment`): the implement round plus fix rounds r1, r2 (superseded), r3 and r4 — the
+contract's round-3 ruling Z1-Z5 (§8) and round-4 ruling Q1-Q6 (§10), on top of the r1 review
+findings STD-A01/STD-A02, the DS r1 P1 (the valid unresolved thread `PRRT_kwDOUMNTZc68QecV`,
+contract ruling R1-R6), the DS r2 P1-1/P1-2 plus the three round-3 consults, and the round-3
+reviews (Sol `301-opus-review-3.md`, Sec `301-sec-review-3.md`, DS `301-ds-audit-3.md`). The r3
+row set and its mutants are §8.4/§4; round 4 re-ran eleven overlays on the delivered r4 bytes
+(§10/§6). The closure row in `docs/archive/CLOSED-TODO.md` carries the plan/record paths and the
+delivered assertions; `docs/TODO.md` carries the `checkout_ready` census residual, the round-3
+guest-only product-mutant residual, the router call-site pin and the Q4 comment disposition.
+Round 4 re-ran every gate on the final run inputs named in §1's r4 table (§6); the last step ran
+the comment cap *before* the final re-measure, and §1's r4 digests were re-read at the delivered
+bytes and are unchanged across every gate row above. Bind 3 below is diagnostic for `91df192f`;
+the conductor's re-Bind runs both containment sets on this head.
+
+## 10. Fix round r4 — Q1-Q6 (the capture's own deadline; round-3 residue)
+
+Round 4 is the final fix round of the conductor's ruling (Sol FIX-FIRST, Sec r3 F1-F6, DS r3).
+The delivered run inputs are §1's r4 table; every r4 row was run on exactly those blobs.
+
+- **Q1 (production byte, `linux_owner_witness_linux.go`).** `recoverLinuxV2NativeWitnessRunKey`
+  (`:2985`) now runs the owner-loss capture on its own child of the caller's context with the same
+  40 s bound (`:3014-3018`), and creates the recovery's `CleanupTimeout` context only after the
+  capture returns (`:3020-3022`), so the capture cannot spend the recovery's budget and the
+  recovery starts with its full configured timeout; `recovery.background` and the `terminatePersist`
+  closure bind to that context. Red-first row:
+  `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout`
+  (`linux_owner_witness_linux_test.go:2459-2511`): with `cleanup_timeout_ms = 100` (≤ 40 s) and a
+  capture stub that waits 250 ms, the capture's deadline must be its own 40 s bound, the recovery
+  must be admitted live, and its remaining budget must be the full configured 100 ms.
+  `q1-revert.go` (sha256 `012aa12a83b75bf5278beaa49fd021219feca3ebde1841c0fe1dc810714810cd`, an
+  overlay copy restoring the pre-r4 structure) reds the row with `owner-loss capture deadline
+  offset = 100.0096ms, want the capture's own 40 s bound` (`:2503`) while the r3 seam rows stay
+  green — it pins exactly the new ordering.
+- **Q2 (gates on the final bytes).** §6's r4 table re-ran every r3 gate on the final run inputs:
+  the focused app and e2e rows, eleven overlays regenerated from the final bytes, formatting/vet
+  on both surfaces, both full suites, the comment cap on the scratch-clone commit (whose six
+  run-input blobs equal §1's r4 digests), jscpd on the same clone, and the record sanitizers. §1
+  names the tested blobs; the PR body carries the same numbers.
+- **Q3 (records).** §3's header and §2's pidfd paragraph now label the r1/r2- versus r4-byte
+  anchors; the r1 predicate name (`linuxV2StageReplayHelperStopIsProven`) is gone from §3; the
+  "no validator … change" overclaim is scoped to the r1/r2 bytes and replaced by the round-3
+  `validateFinalSummary` addition (§3); plan §1/§8 are re-anchored to the delivered bytes
+  (`linux-v2-native-acceptance.sh:2541-2547,3203-3205`; `linux_owner_witness_linux.go:2985`); §8.2
+  says the witness proceeds while the fixture fatals on a failed capture; §8.3's "no other actor"
+  claim is replaced by the deletion-impact statement plus the by-design single-slot claim of the
+  recovery client; the two Y3 TODO residuals are restored (`docs/TODO.md`: the router call-site
+  wiring unpinned locally, and the comment residual superseded by Q4); `journal_store_linux_test.go`
+  is recorded as accepted as owned (§1).
+- **Q4 (comments).** The r3 hunks added 25 comment lines; the r4 diff adds 11 lines in seven
+  blocks, every block ≤ 2 lines and why-only — 10 of the 25 kept (one of them trimmed) plus Q1's
+  one line. Per-location dispositions, covering every block `findings/301-ds-audit-3.md` lists:
+
+  | r3-byte location | block | r4 action |
+  | --- | --- | --- |
+  | `owner_cli_test.go:1162-1163` | `linuxV2StageReplayOwnerLossSnapshotRequired` what | deleted |
+  | `owner_cli_test.go:1193-1194` | `linuxV2RequireTargetContainedBeforeRecovery` what+why | cut to one why-only line beside the wait (`:1195`) |
+  | `owner_cli_test.go:1205-1206` | `linuxV2RequireOwnerLossSnapshotBeforeRecovery` what | deleted |
+  | `linux_owner_witness_linux.go:2864-2865` | snapshot-type what | deleted |
+  | `linux_owner_witness_linux.go:2877-2878` | stage-predicate what incl. the unsupported “every other hold” census clause | deleted |
+  | `linux_owner_witness_linux.go:2890-2891` | expected-predicate what | deleted |
+  | `linux_owner_witness_linux.go:2898-2899` | shape-validator what | deleted |
+  | `linux_owner_witness_linux.go:2914-2915` | capture what | deleted |
+  | `owner_cli_test.go:1189-1190` (r4 `:1187-1188`) | 90 s bound source (why) | kept |
+  | `owner_cli_test.go` (not in DS's list; r4 `:2130`) | same-RunKey retirement hard end state (why) | kept |
+  | `linux_owner_witness_linux.go:2857-2858` | 40 s bound source (why) | kept |
+  | `linux_owner_witness_linux.go:2988-2989` (r4 `:2978-2979`) | seam-var rationale (why) | kept |
+  | `owner_cli_test.go:2041-2042` (r4 `:2038-2039`) | unproven-stop race (why) | kept |
+  | `linux_owner_witness_linux.go:3015` (new) | the capture's own bound (why) | added |
+
+  The comment cap on the scratch-clone commit is §6's row; the deleted comments are gone with the
+  r2 helpers they restated (the r3 rename kept only the seam comments above).
+- **Q5 (fail-open/redundant spots).** `TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch`
+  (`:2589-2601`) drops the tautological third disjunct (with an empty journal it was equivalent to
+  the `barrierStage` term) and pins each leg case's stage field and request case; the helper
+  response-loss runner's snapshot gate now keys on the pre-kill `initial` journal (the
+  request/stage, mirroring the matrix's `ownerLossSnapshotRequired`), so a release-proof-only
+  first journal can no longer skip the assertion (`:4523`).
+- **Q6 (DS r3 supplement).** §8.1/§8.2/§8.3/§8.7 are re-anchored to the r4 bytes (the five fixture
+  anchors `:1202`/`:1191`/`:2096`/`:4523`/`:4374-4380` plus the seam list); the Y2 statement (the
+  r2 full-suite rows ran on `15e000f4`, pre-merge) is restored in §6; §6 carries the r4
+  anchor-sweep row (the sweep script over the cited `file:line` set and its exit); the Q4 census
+  above covers every comment location `findings/301-ds-audit-3.md` lists.
+- **Comment policy (the conductor's r4 standing update).** No new function carries a doc comment:
+  the r3-era doc blocks are deleted or — the containment rationale — moved beside the wait it
+  guards (`:1195`); the remaining added blocks are magic-value sources (`:1187-1188`,
+  `linux_owner_witness_linux.go:2857-2858`), inline hazard/wait rationale (`:2038-2039`, `:2130`,
+  `linux_owner_witness_linux.go:3015`) or the deliberate seam-var indirection
+  (`linux_owner_witness_linux.go:2978-2979`), every block at most 2 lines and why-only; the
+  census is 11 added comment lines in seven blocks.
+- **Adversarial satisfaction (the conductor's r4 standing update).** (a) The new row
+  `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout` reads only values the function
+  under test itself produced — the capture's `ctx.Deadline()` and the live context and remaining
+  budget handed to `linuxV2NativeWitnessInvokeRecovery` — so the only real event that could
+  satisfy it without Q1's wiring is the pre-fix wiring itself, which the `q1-revert` overlay shows
+  red (`:2503`); the stubs are invoked through the production seam calls, never in place of them.
+  (b) The strengthened helper response-loss gate (`owner_cli_test.go:4523`) is a live-system
+  assertion: an event that could satisfy it without the recovery client's pre-stop snapshot would
+  have to produce a clean `owner_loss` carrying the latch and a helper-issued proof; excluded
+  because `witness.summary.OwnerLoss` has exactly one non-test writer, the capture seam
+  (`linux_owner_witness_linux.go:509`), the capture runs before the recovery's first `Stop` on the
+  pinned ordering row (§8.1), and a skip-`stopOwned` latch leaves `StopEvidence == nil` (no
+  proof) — the guest-only product mutant is that event's end-to-end oracle (§8.5). (c) The r3
+  snapshot assertions' adversarial satisfaction is §8.2's limits plus the same guest-only mutant:
+  a response could carry the proof only from the owner-loss stop itself or from the recovery's
+  later stop, and the latter is excluded by the capture-before-recovery ordering pin.
+
+Ruling checklist (round 4):
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| Q1 capture's own 40 s deadline; recovery starts with its full `CleanupTimeout`; red-first row with `cleanup_timeout_ms` ≤ 40 s | done | `linux_owner_witness_linux.go:2985-3024`; `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout`; `q1-revert` red (`:2503`) |
+| Q2 every r3/r4 gate re-run on the final bytes; §1/§6/§9 and the PR body refreshed; tested blob named | done | §1's r4 table, §6's r4 table, the PR body |
+| Q3 records fixes (predicate name, labels, validator wording, plan §1, §8.2, §8.3, Y3 TODOs, owned caller) | done | §2/§3/§8.2/§8.3/§7 changes; plan §1/§8; `docs/TODO.md`; §1 |
+| Q4 comments cut to why-only; the `checkout_ready`-census source comment deleted | done | the census table above; comment cap in §6 |
+| Q5 the two fail-open/redundant spots fixed | done | the kind-leg row (`:2589-2601`) and the `initial`-journal gate (`:4523`) |
+| Q6 §8.2/§8.3 re-anchored; Y2 statement; r4 anchor-sweep row; Q4 covers all DS r3 comment locations | done | §8.1/§8.2/§8.3/§8.7; §6's Y2 paragraph and sweep row; the census table above |
 
 ## Bind — diagnostic: binding run on the pre-r2 PR head c0749664 (claude_containment)
 
@@ -799,5 +1006,76 @@ once, then the scratch branch deleted and the temporary worktree removed. Full r
 | `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
 
 The Go-file digest equals §1's delivered r2 digest; the shim carries the recovered blob unchanged,
+and the workflow carries the single `case_sets` delta (`claude_containment` first,
+`codex_containment` second). The four record-only docs are not run inputs.
+
+## Bind 3 — diagnostic: binding run on the r3 PR head 91df192f (claude_containment + codex_containment)
+
+The conductor's Bind on the exact PR-head bytes plus the two scratch-only files, watched once, then
+the scratch branch deleted and the temporary worktree removed. Full report:
+`findings/301-binding-run-3.md`; the run log is retained at
+`scratch/bind301r3/run-45789880465.log` under the GDD state root (sha256
+`fa24967b79b5ae5a14185366b4f037be3bb8565d2bc18e64709a4694c312366c`, 5151 lines).
+
+- Run `45789880465` (event `push`, `run_attempt=1`, head
+  `08b287f4b04d32301fa4ddf0e6592192284c9b7a` = `91df192f` + the two scratch-only files, created
+  09:12:53Z, conclusion **success**); `total_count=1` at every read (right after creation, after
+  settlement, immediately before the branch deletion and after it).
+- `claude_containment`: the recorded stop `A helper did not exit with owner loss after the
+  stage-replay kill` is **gone** (0 occurrences; 0 of `exact process pidfd remained live beyond the
+  bounded wait`, `did not exit with owner loss`, `Go native acceptance event gate failed`,
+  `--- FAIL` and `pass=0`); `TestProductionLinuxV2ClaudeNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` verify green
+  (`run=1 pass=1 skip=0`, log 3068, 3642-3643) beside the seven AppArmor rows (2487-2493);
+  `Case set claude_containment exited 0`; the export manifest is `status: "passed"` with
+  `missing_allowlisted_files: []`.
+- `codex_containment`: the same stop is **gone**; `TestProductionLinuxV2CodexNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_codex` verify green
+  (`run=1 pass=1 skip=0`, log 4423, 4985-4986) beside the seven AppArmor rows (3836-3842);
+  `Case set codex_containment exited 0` and `All 2 case sets exited 0.`; the export manifest is
+  `status: "passed"` with `missing_allowlisted_files: []`. No first failing line (0 `pass=0`
+  rows); both jobs `success`.
+- The r3 `owner_loss` snapshot is exported in both stage-replay members
+  (`owner_witness_response.owner_loss`): `captured` true, `owner_lost` true,
+  `release_authorized` true, `stop_proof.kind` `helper` with issuer = reaper = the held helper
+  (`native_release`; `claude_containment` pid 7242, `codex_containment` pid 7290) and
+  `stop_proof.helper_exit` nil; the exported `helper.pidfd_verified` false is the fixture mirror's
+  zero value (the daemon wire helper carries only pid/identity; the fixture assertion checks
+  pid/identity, kind/issuer/reaper, nil `helper_exit` and `release_authorized`).
+- Artifacts (sha256 = zip bytes = API `digest`): `linux-v2-native-evidence-45789880465-1` id
+  `15102940374` sha256
+  `81276eb01d1d66befe7152946d3fd922b32c7f87c93573b8e0d6bbbf3d8873c4` (members
+  `claude_containment/manifest.json`
+  `d74faf5d2df25e555765f7397f8b895b1aab767a1b2b2834fea49fb45e3bf44f`;
+  `claude_containment/claude-native-containment.json`
+  `197f58340e91d7a9e4fa9f4197993a03feb1768d1da968094dce907a0fb7bb02`;
+  `claude_containment/claude-stage-crash-replay-native-release.json`
+  `ed13904628cc0bd665d3d964002ff1824453591af848f72811a851153cc85a53`;
+  `codex_containment/manifest.json`
+  `883a1dcaa2ec70323c516add5101e075d022ad385c2e75ceb376fc75151d65fe`;
+  `codex_containment/codex-native-containment.json`
+  `3d8850e914dd80b2442338dae4536f9205b1d9a6f9c574d98f7e973d6db956a3`;
+  `codex_containment/codex-stage-crash-replay-native-release.json`
+  `9378aa013f6d44bf4a18a783b659ae36c035d300f0116db63b9bd130d358a19c`);
+  `linux-v2-host-prerequisite-45789880465-1` id `15102650615` sha256
+  `365d542b0f6b006faf0a477322381675fbb33fd76610f8b00c494420c6fdb349` (`status: passed`,
+  `source_commit` = the run head).
+- Run-input sha256 equality (run head `08b287f4` vs PR head `91df192f`): the pushed commit's
+  parent is exactly `91df192f`, and `git diff --name-status 91df192f 08b287f4` is exactly the two
+  scratch-only rows; every other tree file is byte-identical by construction. Executed run inputs:
+
+| file | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `4fe0c3c52e96d878f4ac1c2fa17e7944be344837edaa0c602d381cf39c3b55b9` | `4fe0c3c52e96d878f4ac1c2fa17e7944be344837edaa0c602d381cf39c3b55b9` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | yes |
+| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | yes |
+| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | yes |
+| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `3eaada89cf74e116282fe74cfd1fbda8c418197c09f6c29785cd6533060d7f04` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The Go-file digest equals §1's delivered r3 digest; the shim carries the recovered blob unchanged,
 and the workflow carries the single `case_sets` delta (`claude_containment` first,
 `codex_containment` second). The four record-only docs are not run inputs.

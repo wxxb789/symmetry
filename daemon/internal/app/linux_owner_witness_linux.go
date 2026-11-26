@@ -2861,8 +2861,6 @@ const (
 	linuxV2NativeWitnessOwnerLossPollInterval = 250 * time.Millisecond
 )
 
-// linuxV2NativeWitnessOwnerLoss is the recovery client's own pre-stop view of the held helper:
-// its owner-loss latch and the helper-issued stop proof it had cached before recovery could stop it.
 type linuxV2NativeWitnessOwnerLoss struct {
 	Version           int                             `json:"version"`
 	Stage             string                          `json:"stage"`
@@ -2874,8 +2872,6 @@ type linuxV2NativeWitnessOwnerLoss struct {
 	Error             string                          `json:"error,omitempty"`
 }
 
-// linuxV2NativeWitnessOwnerLossStage names the stage-replay holds whose stop proof must exist before
-// the recovery's own stop; every other hold either self-kills the helper or has no stop left.
 func linuxV2NativeWitnessOwnerLossStage(request linuxV2NativeWitnessRequest) string {
 	if request.Case != "stage_replay" {
 		return ""
@@ -2887,16 +2883,12 @@ func linuxV2NativeWitnessOwnerLossStage(request linuxV2NativeWitnessRequest) str
 	return ""
 }
 
-// linuxV2NativeWitnessOwnerLossExpected requires the committed-live boundary those holds carry: a
-// committed authority over the reservation's exact helper that has not exited yet.
 func linuxV2NativeWitnessOwnerLossExpected(journal state.RunJournal) bool {
 	reservation := journal.ContainmentCgroup
 	return reservation != nil && reservation.Helper != nil && reservation.Helper.Validate() == nil &&
 		reservation.HelperExit == nil && journal.ContainmentAuthority != nil
 }
 
-// validateLinuxV2NativeWitnessOwnerLoss pins the snapshot shape: a snapshot either captured the
-// held helper's Status or carries the bounded reason why it could not, at the exact held stage.
 func validateLinuxV2NativeWitnessOwnerLoss(snapshot *linuxV2NativeWitnessOwnerLoss, request linuxV2NativeWitnessRequest) error {
 	if snapshot == nil {
 		return nil
@@ -2911,8 +2903,6 @@ func validateLinuxV2NativeWitnessOwnerLoss(snapshot *linuxV2NativeWitnessOwnerLo
 	return nil
 }
 
-// captureLinuxV2NativeWitnessOwnerLoss reads the held helper's own Status in the recovery client
-// process, the legitimate first post-loss attacher, and reports bounded telemetry; it never errors.
 func captureLinuxV2NativeWitnessOwnerLoss(
 	ctx context.Context,
 	recovery *daemon,
@@ -3002,8 +2992,7 @@ func recoverLinuxV2NativeWitnessRunKey(
 	if ctx == nil || store == nil || journal.Key() == (state.RunKey{}) {
 		return nil, errors.New("exact owner-witness recovery requires its live context, locked Store, and selected RunJournal")
 	}
-	recoveryContext, cancel := context.WithTimeout(ctx, value.CleanupTimeout())
-	defer cancel()
+	var recoveryContext context.Context
 	recovery := &daemon{
 		config: value,
 		store:  store,
@@ -3016,7 +3005,6 @@ func recoverLinuxV2NativeWitnessRunKey(
 			terminatePersistAuthorityWithScanSeal: terminatePersistedProcessWithAuthorityScanSeal,
 		},
 		recoveryOnly:       true,
-		background:         recoveryContext,
 		running:            make(map[state.RunKey]*runningRun),
 		recoveredStops:     make(map[state.RunKey]recoveredProcessStop),
 		retainedWorkspaces: make(map[state.RunKey]struct{}),
@@ -3024,8 +3012,14 @@ func recoverLinuxV2NativeWitnessRunKey(
 	defer recovery.close()
 	var ownerLoss *linuxV2NativeWitnessOwnerLoss
 	if stage := linuxV2NativeWitnessOwnerLossStage(request); stage != "" && linuxV2NativeWitnessOwnerLossExpected(journal) {
-		ownerLoss = linuxV2NativeWitnessCaptureOwnerLoss(recoveryContext, recovery, journal, stage)
+		// The capture gets its own bound: the recovery's CleanupTimeout budget starts after it.
+		captureContext, captureCancel := context.WithTimeout(ctx, linuxV2NativeWitnessOwnerLossStopWait)
+		ownerLoss = linuxV2NativeWitnessCaptureOwnerLoss(captureContext, recovery, journal, stage)
+		captureCancel()
 	}
+	recoveryContext, cancel := context.WithTimeout(ctx, value.CleanupTimeout())
+	defer cancel()
+	recovery.background = recoveryContext
 	return ownerLoss, linuxV2NativeWitnessInvokeRecovery(recoveryContext, recovery, []state.RunJournal{journal})
 }
 

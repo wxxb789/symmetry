@@ -2455,3 +2455,57 @@ func TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout(t *testing.T) {
+	helper := authority.LinuxCgroupProcessIdentity{PID: 71, Identity: "linux:v2:held-helper"}
+	journal := state.RunJournal{
+		RunID: "owner-loss-budget-run", Generation: 1,
+		RunContainmentState: state.RunContainmentState{
+			ContainmentCgroup:    &state.LinuxCgroupReservation{Helper: &helper},
+			ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+		},
+	}
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open budget-row Store: %v", err)
+	}
+	defer store.Close()
+	originalCapture, originalRecover := linuxV2NativeWitnessCaptureOwnerLoss, linuxV2NativeWitnessInvokeRecovery
+	defer func() {
+		linuxV2NativeWitnessCaptureOwnerLoss = originalCapture
+		linuxV2NativeWitnessInvokeRecovery = originalRecover
+	}()
+	const cleanup = 100 * time.Millisecond
+	start := time.Now()
+	var captureDeadline time.Time
+	linuxV2NativeWitnessCaptureOwnerLoss = func(ctx context.Context, _ *daemon, _ state.RunJournal, _ string) *linuxV2NativeWitnessOwnerLoss {
+		captureDeadline, _ = ctx.Deadline()
+		select {
+		case <-ctx.Done():
+		case <-time.After(250 * time.Millisecond):
+		}
+		return &linuxV2NativeWitnessOwnerLoss{Version: 1, Stage: "native_release", Captured: true}
+	}
+	var recoveryLive bool
+	var recoveryRemaining time.Duration
+	linuxV2NativeWitnessInvokeRecovery = func(ctx context.Context, _ *daemon, _ []state.RunJournal) error {
+		recoveryLive = ctx.Err() == nil
+		if deadline, ok := ctx.Deadline(); ok {
+			recoveryRemaining = time.Until(deadline)
+		}
+		return nil
+	}
+	request := linuxV2NativeWitnessRequest{Case: "stage_replay", Barrier: linuxV2NativeWitnessBarrier{HoldAfter: "native_release"}}
+	if _, err := recoverLinuxV2NativeWitnessRunKey(context.Background(), config.Config{CleanupTimeoutMS: int64(cleanup / time.Millisecond)}, store, journal, request); err != nil {
+		t.Fatalf("owner-loss budget row recovery error = %v", err)
+	}
+	if own := captureDeadline.Sub(start); own < 30*time.Second {
+		t.Fatalf("owner-loss capture deadline offset = %s, want the capture's own 40 s bound", own)
+	}
+	if !recoveryLive {
+		t.Fatal("recovery was admitted with the capture's exhausted context; its CleanupTimeout must start with the recovery")
+	}
+	if recoveryRemaining <= 0 || recoveryRemaining > 2*cleanup {
+		t.Fatalf("recovery context remaining = %s, want its full configured %s cleanup timeout", recoveryRemaining, cleanup)
+	}
+}

@@ -1987,7 +1987,7 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       must red `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` and
       `…/native_release_codex` through the recovery client's `owner_loss` snapshot (no cached
       proof before the recovery's first `Stop`, which would otherwise supply one) and the
-      daemon-crash witness; the ten local overlay mutants pin only the decision layers (record
+      daemon-crash witness; the local overlay mutants pin only the decision layers (record
       §4/§8.4), so the privileged guest is that mutant's first end-to-end oracle. Owner:
       conductor (dispatch the mutant through the acceptance job, or record it unreached).
 
@@ -1998,6 +1998,24 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       row), not proved in-band by the helper, which cannot tell same-identity callers apart.
       Owner: conductor (accept the structural pin for this goal, or fund a helper-side ordering
       artifact as a new goal).
+
+- [ ] Stage-replay router stage→arm mapping unpinned locally (2026-11-26, goal
+      `rf-acc-claude-stage-replay`; contract round-2 ruling Y3 P3-3, restored by round-4 Q3): the
+      stage predicate's arms are each pinned locally (its 13 rows, the 16 snapshot rows, the ten
+      overlay mutants), but no local row observes the matrix's call-site wiring — which stage's
+      leg takes the recovery-client snapshot arm and which keeps the unconditional 90 s unproven
+      wait. The guest is fail-closed there (a swapped arm fatals on the mismatched durable
+      boundary), so this is a local discrimination gap, not a silent-pass hole. Owner: conductor
+      (add the call-site pin before the next Bind, or accept the guest's fail-closed behaviour as
+      the oracle). No code change in this round.
+
+- [ ] Round-2 ruling Y3's second residual (P3-5, six 2-line "what" doc comments on unexported
+      helpers) is superseded by round-4 Q4 and closed: the round-3-added comment lines were cut to
+      why-only (the final diff adds 11 comment lines in seven ≤ 2-line blocks: 10 of the 25 r3
+      lines kept — one trimmed — plus Q1's one line; record §10's census), the deleted comments are
+      gone with their helpers, and the comment cap runs on the scratch-clone commit of the
+      delivered bytes (record §6). No "what" doc-comment residual remains; the standing rule is
+      the comment cap.
 
 ## rf-claude-schema-argv: residuals (2026-11-26)
 

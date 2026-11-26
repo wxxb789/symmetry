@@ -1159,8 +1159,6 @@ func linuxV2ExpectedStageReplayRecovery(stage string) string {
 	}[stage]
 }
 
-// linuxV2StageReplayOwnerLossSnapshotRequired reports whether the already-validated held boundary
-// carries the held helper whose own pre-recovery owner-loss evidence the snapshot must show.
 func linuxV2StageReplayOwnerLossSnapshotRequired(stage string, marker linuxV2OwnerWitnessStageMarker, journal state.RunJournal) bool {
 	switch stage {
 	case "native_release":
@@ -1190,20 +1188,17 @@ func linuxV2RequireHelperIssuedReleaseStopProof(helper *linuxV2OwnerWitnessProce
 // (linuxOwnerHelperV2StopTimeout), the same pre-recovery fence the old helper-exit wait used.
 const linuxV2OwnerLossStopWait = 90 * time.Second
 
-// linuxV2RequireTargetContainedBeforeRecovery requires the exact pinned native target to be gone
-// before the recovery is admitted: containment only, never stop attribution (claude self-exits on EOF).
 func linuxV2RequireTargetContainedBeforeRecovery(targetPIDFD *os.File, timeout time.Duration) error {
 	if targetPIDFD == nil {
 		return errors.New("pre-recovery containment check has no exact pinned target pidfd")
 	}
+	// Containment only, never stop attribution: the claude target self-exits on its stdin EOF.
 	if err := linuxV2WaitPIDFDExited(int(targetPIDFD.Fd()), timeout); err != nil {
 		return fmt.Errorf("native target remained live before its same-RunKey recovery: %w", err)
 	}
 	return nil
 }
 
-// linuxV2RequireOwnerLossSnapshotBeforeRecovery requires the recovery client's own pre-stop snapshot:
-// the held helper had latched owner loss and cached its own stop proof before recovery could stop it.
 func linuxV2RequireOwnerLossSnapshotBeforeRecovery(
 	snapshot *linuxV2OwnerWitnessOwnerLoss,
 	stage string,
@@ -2595,13 +2590,11 @@ func TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch(t *testing.T) {
 	if len(linuxV2StageReplayKindLegs) != 2 {
 		t.Fatalf("stage-replay kind legs = %d, want the codex and claude legs", len(linuxV2StageReplayKindLegs))
 	}
-	milestone := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
 	for _, leg := range linuxV2StageReplayKindLegs {
 		t.Run(leg.name, func(t *testing.T) {
 			testCase := linuxV2StageReplayKindLegCase(leg)
-			if testCase.barrierStage != "native_release" || testCase.requestCase != "stage_replay" ||
-				!linuxV2StageReplayOwnerLossSnapshotRequired(testCase.barrierStage, milestone, state.RunJournal{}) {
-				t.Fatalf("kind leg %q does not present the shared owner-loss snapshot native_release boundary", leg.name)
+			if testCase.barrierStage != "native_release" || testCase.requestCase != "stage_replay" {
+				t.Fatalf("kind leg %q does not present the shared native_release stage-replay boundary", leg.name)
 			}
 		})
 	}
@@ -4527,7 +4520,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		if !finalFound || proof == nil || proof.StopReceipt == nil || !proof.StopReceipt.LinuxProof.Equal(*receiptProof) {
 			t.Fatal("same-RunKey replay did not release from the exact durable receipt")
 		}
-		if linuxV2StageReplayOwnerLossSnapshotRequired(responseLoss.hold, marker, firstJournal.Journal) {
+		if linuxV2StageReplayOwnerLossSnapshotRequired(responseLoss.hold, marker, initial.Journal) {
 			if err := linuxV2RequireOwnerLossSnapshotBeforeRecovery(replayResponse.OwnerLoss, responseLoss.hold, marker.Owners.Helper, receiptProof); err != nil {
 				t.Fatalf("ack-stop-receipt replay lacks its pre-recovery owner-loss snapshot: %v", err)
 			}
