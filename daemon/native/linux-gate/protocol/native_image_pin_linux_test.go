@@ -52,12 +52,15 @@ func TestNativeImagePinVerdictOnTheSystemShell(t *testing.T) {
 	config := OwnerConfig{AUID: uint32(os.Getuid()), AGID: uint32(os.Getgid())}
 	resolved, err := filepath.EvalSymlinks("/bin/sh")
 	if err != nil {
-		t.Fatalf("resolve the system /bin/sh: %v", err)
+		t.Skipf("this environment has no resolvable system /bin/sh to pin: %v", err)
 	}
 	if resolved == "/bin/sh" {
 		t.Skip("this environment's /bin/sh is not a symlink; there is no unresolved-path verdict to pin")
 	}
 	if err := trustedNativeImagePinChain(filepath.Dir(resolved), config); err != nil {
+		t.Skipf("resolved system shell %q is not A-approvable in this environment: %v", resolved, err)
+	}
+	if err := trustedNativeImagePinImage(resolved, config); err != nil {
 		t.Skipf("resolved system shell %q is not A-approvable in this environment: %v", resolved, err)
 	}
 	pinned, err := pinNativeImage(resolved, config)
@@ -123,6 +126,20 @@ func trustedNativeImagePinChain(directory string, config OwnerConfig) error {
 		if info.Mode().Perm()&0o022 != 0 || info.Mode().Perm()&0o111 == 0 {
 			return fmt.Errorf("%s is group/world writable or not traversable", current)
 		}
+	}
+	return nil
+}
+
+func trustedNativeImagePinImage(path string, config OwnerConfig) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || (stat.Uid != 0 && uint32(stat.Uid) != config.AUID) ||
+		info.Mode().Perm()&0o022 != 0 || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 ||
+		stat.Nlink == 0 || info.Size() <= 0 || info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("image %q must be a root/A-owned regular executable without set-ID bits or B write access", path)
 	}
 	return nil
 }

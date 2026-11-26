@@ -20,8 +20,14 @@ measured evidence that closed them.
 | Invariants: `go vet` compile-check, never `-o /dev/null` | `daemon/` | §5 rows (linux and windows) |
 | Invariants: records rule (red mutants or greps), a red row per new branch | new helper branches + probe rows | §6 rows M-P1…M-P5; the greps in §2.3 |
 | Invariants: FULL `go test ./...` on Windows plus WSL; comment-cap before the final re-measure | `daemon/` | §5 rows |
-| Acceptance: the conductor's Bind runs `synthetic_goal_cleanup` once on the PR head | run `45791682543` on `90157ff4` | Bound (V10): the `:499 … stage=none` stop is gone; the next stop, the labelled `clone_checkout` leg, is recorded verbatim in `docs/TODO.md` under `## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)` |
+| Acceptance: the conductor's Bind runs `synthetic_goal_cleanup` once on the PR head | run `45791682543` on `90157ff4`; re-Bind `45803728792` on `5f744370` (round-2 ruling W3) | Bound (V10): the `:499 … stage=none` stop is gone; the next stop, the labelled `clone_checkout` leg, is recorded verbatim in `docs/TODO.md` under `## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)`; Bind 2 reproduces the identical stop on the final comment-stripped bytes |
 | Owned: the witness and its e2e helpers, a plan, an evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | This file, `docs/evidence/rf-acc-synthetic-cleanup-release-2026-11-26.md`, the TODO carve |
+
+Round-2 ruling (PR #302, W1-W4, 2026-11-26): W1 extends the §4 probe's asymmetry guard with an
+`Lstat` image predicate (`trustedNativeImagePinImage`; never `pinNativeImage`, so the row stays
+non-tautological) and skips an unresolvable `/bin/sh`; W2-W4 are records corrections (preamble,
+Bind 2 folding, §5.1 full-tree base-vs-head row). The W1 edit is not an executed input of the case
+set (record §Bind 2), so the binding acceptance stays Bind 2.
 
 ## 2. Root cause (Stage 1)
 
