@@ -5423,11 +5423,14 @@ section, whose pointer sentence names this one.
       (`TestLinuxV2NativeWitnessLeaseAckStagesThePlainNativeReleaseHold`) and retires the latent
       codex/claude ACK-loss double write and peer leak
       (`TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage`). No e2e
-      validator, fixture byte or `pi/**` file changed. Delivered, pending the conductor's Bind:
-      Bind `45720019801` reached the `native_release` hold on the pre-fold head and recorded the
-      migration case's next stop (the initial-lease ACK the round-1 fold now stages); the post-fix
-      Bind re-runs `migration` and `claude_containment` on the new head, each next stop recorded
-      verbatim or green. The entry's intermittent aborted-release stop measurement
+      validator, fixture byte or `pi/**` file changed. Delivered and measured by Bind 2 (run
+      `45735420588`, record §14): the `migration` set is green (the `native_release` hold is
+      reached and the denial and retention assertions pass) and the claude durable-stage stop
+      (`positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage`)
+      is gone; the `claude_containment` set's next stop is its stage-replay matrix leg, carried to
+      a new conductor goal. The pre-fold Bind `45720019801` reached the `native_release` hold and
+      recorded the migration case's next stop (the initial-lease ACK the round-1 fold stages).
+      The entry's intermittent aborted-release stop measurement
       (`dial unixpacket: connect: connection refused` in runs `45555828634`/`45579163968`, absent in
       `45557621798`/`45564071868`) is a measurement note on the arm the AppArmor fix superseded; a
       recurrence would ride the rf-acc-release-recovery-diagnostics entry still in `docs/TODO.md`.

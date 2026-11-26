@@ -17,7 +17,7 @@ is the conductor's; this record carries the local code, unit and compile rows.
 
 The rows above are the revision §10–§12 measured; the round-1 fold (§13) refreshes the two code
 digests to `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` /
-`86c8f7ff5593ee23718e5cd853e04042c972e391db947e90f17d439a39d40a5d` and the plan to
+`d58d4c05674568ef59591a33ec0fa3dedfa2533984964eeaab2115dab3217686` and the plan to
 `384fa88f55dfaca21b70bed1c08f0ea287fda080bf3dfe1bd0997545acea9880`.
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. The
@@ -136,10 +136,14 @@ Runner, with the exact released target as evidence:
 
 Recorded behavior consequence, not hidden: the opencode health leg (frozen bytes, fixed
 `native_release` hold) would now also stage a release hold if it reached its release; it aborts
-earlier on its own pinned-version gate, so no observed row changes. Rejected alternatives and their
-reasons are in plan §3 (a Pi-only special case would encode the defect's shape rather than the
-launch-path fact; changing `pi/**` is not owned; staging without the namespace/pidfd evidence would
-be rejected by the e2e marker contract).
+earlier on its own pinned-version gate, so no observed row changes. The opencode `wsl2_denial` leg
+(`hold_after="none"`) also gains the lease bit from the round-1 staging (§13.1) — the ACK now
+stages for any hold but the runner-held `lease_armed` boundary — so its witness summary can carry
+`initial_lease_acked=true` where it previously could not (the bit the witness's durable-stage check
+requires once `Target.PID > 0`); it is not dispatched by the acceptance workflow, so no CI row
+changes. Rejected alternatives and their reasons are in plan §3 (a Pi-only special case would
+encode the defect's shape rather than the launch-path fact; changing `pi/**` is not owned; staging
+without the namespace/pidfd evidence would be rejected by the e2e marker contract).
 
 ## 5. Gate rows (commands, working directory, exit)
 
@@ -308,7 +312,7 @@ after the runs):
 | M4 | the same body `return kind == harness.KindPi || kind == harness.KindOpenCode` | `6bc71f6fbb7e622be29d9e487dc5516ca537327d6469aa534bb04901e0d5972a` | §6 M4 row |
 | M5 | `request.Harness != value.Runtime.HarnessKind || ` deleted from the request validation predicate | `e948b34bb903b005ffd5de5e9724e10c2cf1aa4767b61440a37f48dd3a3695eb` | §6 M5 row |
 
-## 12. Bind run (2026-11-26) — the `migration` case set on the PR head
+## 12. Bind run (2026-11-26) — the `migration` case set on the PR head (Bind297; hold evidence on `c665bf4f`)
 
 The conductor's Bind ran the `migration` case set exactly once on the exact PR-head bytes plus the
 two scratch-only files below (run head `ecfabe81a58a58c930eda366ad38a7cce8e6b876` = `c665bf4f` +
@@ -514,3 +518,116 @@ overlap there by design; the `watcher_not_yet_staged` subtest is the discriminat
 Delivered, pending the conductor's Bind: the round-1 code digests are `1fd4c17f…` (witness source)
 and `d58d4c05…` (unit file); the post-fix Bind runs `migration` and `claude_containment` once each
 on the new head.
+
+## 14. Bind 2 (2026-11-26) — the post-fix scratch run on the PR head (`migration` + `claude_containment`)
+
+The conductor's Bind ran both case sets in one scratch run on the exact current PR-head bytes plus
+the two scratch-only files (run head `410091ff48a2c3f100c7d7f5fc24cf1ebb8ce5ba` = `c06770c5` + the
+two files), watched once; the scratch branch `scratch/rf-acc-containment-goal-admission` and its
+temporary worktree are deleted; `total_count=1` at creation, after settlement, before the deletion
+and after it. `refs/pull/297/head` read immediately before the push, after the push, and after the
+deletion: `c06770c5…` throughout; no push ever touched the PR branch. §12 (Bind297) remains the
+hold evidence on `c665bf4f` (the round-0 head); this section is the post-fix measurement the §13.4
+"post-fix Bind" row was pending. The delta against §12 is only the head and the second case set:
+the scratch workflow is the bytes recovered from `b0ba2694` with `case_sets=(migration
+claude_containment)` as the sole change (`codex_containment` → `migration`; one-hunk `diff`), and
+the shim is byte-identical (sha256
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`).
+
+**Run `45735420588`** (event `push`, head `410091ff…`, workflow `Scratch containment goal-admission
+probe`, attempt 1, created 01:23:18Z, updated 01:31:28Z): `contracts` success
+(01:23:20Z–01:24:08Z); `linux-native-v2-acceptance` failure (01:24:10Z–01:31:27Z). Raw-log line
+cites below are from `gh run view 45735420588 --log` (4,841 lines; auxiliary copy at the GDD state
+root `scratch/bind297r2/run-45735420588.log`, sha256
+`aa5cb3574fc5a489740130f2746c9d4c49048d8101b6a908ccd254f0661ce0e2`). The runner selected the
+scratch head (log 2325), and the step echoes the edited array (`migration` / `claude_containment`,
+log 2278-2279).
+
+### 14.1 `migration` — green: the hold is reached, and the denial and retention assertions pass
+
+- `verified TestProductionLinuxV2MigrationDenialRetainsJournal: run=1 pass=1 skip=0` (log 3069),
+  then `Linux amd64 installed A/B case set migration passed after verified guest/Control stop and
+  allowlisted evidence export; private journals/checkouts remain retained, and guest teardown is
+  not a containment StopReceipt.` (log 3073) and `Case set migration exited 0` (log 3074).
+- 0 log occurrences of `Store checkout readiness lacks the earlier initial lease ACK` (the §12
+  stop) and of every migration-chain message §12 listed as absent (`did not reach its requested
+  durable stage`, `read exact native_release marker`, `native_release migration boundary is not
+  exact`, `external observer did not verify exact B process`, the move/identity messages, `wait
+  for fail-closed migration recovery`, `read redacted migration recovery response`, `did not
+  retain the exact unproven RunJournal`). The test's own `run=1 pass=1` row is the measurement
+  that the denial assertion (`linuxV2ValidateStageReplayResponseState(…, "native_release",
+  response, "unresolved")`, `:4252`) and the retention assertion (`linuxV2ValidateStageReplayJournal`,
+  `:4255`, plus `:4261`/`:4263-4266`) both pass.
+- The sanitized `migration-denial.json` carries the fixed predicate — `stages.initial_lease_acked:
+  true` beside `checkout_ready: true`, with `native_released: true`, `native_release_state:
+  "released"`, `outcome`/`recovery_state` `unresolved`, `failure_category` `containment_unproven`,
+  `journal_unproven: true`, `no_target_abort: false`, `migration_observed: true`, and the target
+  `pidfd_verified: true` / `same_pid_exec: true`.
+
+### 14.2 `claude_containment` — the recorded stop is gone; the next stop is the stage-replay matrix
+
+- `verified TestProductionLinuxV2ClaudeNativeContainment: run=1 pass=1 skip=0` (log 3837); 0 log
+  occurrences of `positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE
+  stage`.
+- The containment summary event (log 4688) reads `"owner_witness_outcome":"completed"`,
+  `"recovery_state":"released"`, `"native_binary":"/usr/local/bin/claude"`,
+  `"native_open_reached":true`; the sanitized `claude-native-containment.json` shows every stage
+  flag the summary check requires — the eleven including `initial_lease_acked`, plus
+  `stop_receipt_durable`, `leaf_removed`, `journal_cleared` — with
+  `containment.native_open_reached: true`.
+- The set still exits 1 at its next leg, the stage-replay matrix. Gate (log 4411): `Go native
+  acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0;
+  TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude=run:1,pass:0,skip:0,
+  skipped=[], fail_events=3, invalid_json_lines=0`. First failing line (log 4415); its producer is
+  `production_linux_v2_owner_cli_test.go:1962`, attributed at the `t.Helper()` call site:
+
+```
+    production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after the stage-replay kill: exact process pidfd remained live beyond the bounded wait
+```
+
+- Then `Case set claude_containment exited 1` / `Failed case sets: claude_containment` (log
+  4691-4692); the export refused (`redacted evidence export failed: containment replay witness does
+  not bind the pinned kind and version line`) and the manifest was removed, while the witness's
+  sanitized case documents remain in the artifact below (the paired
+  `claude-stage-crash-replay-native-release.json` records the failing leg with
+  `native_command_verified: true`, `provider_action_succeeded: false`,
+  `leaf_absent_after_receipt: false`).
+
+### 14.3 Artifacts
+
+Both zips downloaded; each zip's sha256 equals the API `digest`:
+
+| Artifact | id | size | zip sha256 | members (sha256) |
+| --- | --- | --- | --- | --- |
+| `linux-v2-native-evidence-45735420588-1` | `15078459926` | 7386 B | `7e8bd1e31575cc579b20f22f560fe2a3c5f4ccf971834a88907c5e56940aa7fa` | `migration/manifest.json` `d9a0a6d712623436b729e3468085c2cca77b67ab112a02cf1701642ae720c1df` (`status: "passed"`); `migration/migration-denial.json` `a443b60cf6eb8a170db258e11baa45410872e4266372af520bddd2e0e4a38cb8`; `claude_containment/claude-native-containment.json` `3d3d51c3799c8da2efaff0ac1276a52ce077045387cd2af8cc076b5b4552f66d`; `claude_containment/claude-stage-crash-replay-native-release.json` `db4ca61831c5527d1a67f09c770b28c89fc4ebe3c15674d12d12a8c20f377ba1` |
+| `linux-v2-host-prerequisite-45735420588-1` | `15079111140` | 674 B | `1c4df47de19cc7fb739d9f48324a4b6030616d110cbe0d7036a166c29913055f` | `linux-v2-host-prerequisite-45735420588-1.json` `ba6bc8804000e4eb7baecf009d9e3866ea81d94f8e6721639a6f5b927da715e1` |
+
+The migration manifest carries `case_set: "migration"`, `source_commit` = the run head,
+`status: "passed"`, `missing_allowlisted_files: []`; the host-prerequisite document carries the
+same `source_commit`, `status: "passed"`, `delegated_leaf_probe_passed: true`,
+`cross_uid_peer_probe_passed: true`.
+
+### 14.4 Run-input sha256 equality (run head `410091ff` vs PR head `c06770c5`)
+
+`git cat-file -p <rev>:<f> | sha256sum` at both revisions; `git diff --name-status 2f7a38c6
+c06770c5` (the branch's delta over the merged main tip) is exactly the six rows below, and `git
+diff --name-status c06770c5 410091ff` is exactly the two scratch-only rows. The two code digests
+equal §13's delivered-byte digests (`1fd4c17f…` / `d58d4c05…`).
+
+| File | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` | `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` | yes |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `d58d4c05674568ef59591a33ec0fa3dedfa2533984964eeaab2115dab3217686` | `d58d4c05674568ef59591a33ec0fa3dedfa2533984964eeaab2115dab3217686` | yes |
+| `docs/TODO.md` | `aa5b06c24f66fc35a587286c3d4d5479c5a3c94d9decd1a7ca80e501a9b997fb` | `aa5b06c24f66fc35a587286c3d4d5479c5a3c94d9decd1a7ca80e501a9b997fb` | yes |
+| `docs/archive/CLOSED-TODO.md` | `18cc5fc07af22b2897debabedbb6326d9daf91123ad3ddd697c8ff25e86931a3` | `18cc5fc07af22b2897debabedbb6326d9daf91123ad3ddd697c8ff25e86931a3` | yes |
+| `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md` | `0804edb69ddcc620bbcd2df9d742c1cf7b6e1ecfa154c20b165db625e6844eae` | `0804edb69ddcc620bbcd2df9d742c1cf7b6e1ecfa154c20b165db625e6844eae` | yes |
+| `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md` | `384fa88f55dfaca21b70bed1c08f0ea287fda080bf3dfe1bd0997545acea9880` | `384fa88f55dfaca21b70bed1c08f0ea287fda080bf3dfe1bd0997545acea9880` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `d3ca1eed5742e2ea5e2f43f72d95ba195032c1e686e1f8eb135423a699ed1c67` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+Bind 2 verdict: on the post-fix head, `migration` **passes** — the `native_release` hold is
+reached, the `Store checkout readiness lacks the earlier initial lease ACK` stop is gone, and the
+denial and retention assertions pass (`Case set migration exited 0`); `claude_containment`'s
+recorded `positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage`
+stop is gone and its containment witness passes (`completed`/`released`), with the set's first
+failing line now the stage-replay matrix subtest `native_release_claude` quoted above.
