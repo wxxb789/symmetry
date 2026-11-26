@@ -12,8 +12,6 @@ import (
 	"testing"
 )
 
-// TestNativeImagePinRefusesSymlinkedComponents pins the approval every release leg depends
-// on: A's pin opens each component O_NOFOLLOW and refuses without a release sub-step.
 func TestNativeImagePinRefusesSymlinkedComponents(t *testing.T) {
 	config := OwnerConfig{AUID: uint32(os.Getuid()), AGID: uint32(os.Getgid())}
 	staging, err := os.MkdirTemp(trustedNativeImagePinBase(t, config), "symmetry-pin-")
@@ -50,8 +48,6 @@ func TestNativeImagePinRefusesSymlinkedComponents(t *testing.T) {
 	assertUnlabelledNativeImagePinRefusal(t, linkedImage, config, "is not A-approved")
 }
 
-// TestNativeImagePinVerdictOnTheSystemShell records the measured shape behind the synthetic
-// cleanup stop: the distro /bin/sh path is refused while its resolved target is approved.
 func TestNativeImagePinVerdictOnTheSystemShell(t *testing.T) {
 	config := OwnerConfig{AUID: uint32(os.Getuid()), AGID: uint32(os.Getgid())}
 	resolved, err := filepath.EvalSymlinks("/bin/sh")
@@ -60,6 +56,9 @@ func TestNativeImagePinVerdictOnTheSystemShell(t *testing.T) {
 	}
 	if resolved == "/bin/sh" {
 		t.Skip("this environment's /bin/sh is not a symlink; there is no unresolved-path verdict to pin")
+	}
+	if err := trustedNativeImagePinChain(filepath.Dir(resolved), config); err != nil {
+		t.Skipf("resolved system shell %q is not A-approvable in this environment: %v", resolved, err)
 	}
 	pinned, err := pinNativeImage(resolved, config)
 	if err != nil {
@@ -89,8 +88,6 @@ func assertUnlabelledNativeImagePinRefusal(t *testing.T, path string, config Own
 	}
 }
 
-// trustedNativeImagePinBase returns a directory whose whole path already satisfies the
-// pin's trusted-parent rule, so a planted symlink is the only possible refusal.
 func trustedNativeImagePinBase(t *testing.T, config OwnerConfig) string {
 	t.Helper()
 	home, err := os.UserHomeDir()
@@ -100,6 +97,11 @@ func trustedNativeImagePinBase(t *testing.T, config OwnerConfig) string {
 	if err := trustedNativeImagePinChain(home, config); err != nil {
 		t.Skipf("HOME %q is not a trusted native-image pin base in this environment: %v", home, err)
 	}
+	probe, err := os.MkdirTemp(home, "symmetry-pin-base-")
+	if err != nil {
+		t.Skipf("HOME %q is a trusted native-image pin base but not writable for staging: %v", home, err)
+	}
+	_ = os.RemoveAll(probe)
 	return home
 }
 

@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// TestLinuxV2CleanupApprovedWorkerProgram pins the resolution the controlled B worker
-// release depends on, including every unusable shape's named refusal.
 func TestLinuxV2CleanupApprovedWorkerProgram(t *testing.T) {
 	resolvedWorkerShell, err := linuxV2CleanupApprovedWorkerProgram(linuxV2CleanupWorkerShell)
 	if err != nil {

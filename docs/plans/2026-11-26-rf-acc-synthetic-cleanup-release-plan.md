@@ -16,11 +16,11 @@ measured evidence that closed them.
 | Change 1: if it is a production defect → DECISION_NEEDED | the pin's symlink-free rule is the A-side image-approval contract | Not a production defect: every production profile and every green leg already releases a symlink-free installed image (§2.3); the leg is on the wrong side |
 | Change 2: fix on the wrong side, never weaken the RELEASE-outcome resolution or any cleanup assertion | the witness's own image choice | §3 changes the program choice only; `git diff` shows no assertion edit |
 | Invariants: fences and idempotency preserved | `daemon/native/linux-gate/**` production, `gate.c` | Untouched; the probe only reads the pin |
-| Invariants: comments ≤ 2 lines | added comment lines in the three delivered files | §5 gate row (comment-cap) |
+| Invariants: comments ≤ 2 lines | added comment lines in the three delivered files | §5 gate row (comment-cap); round-2 standing rule: no doc comments on the new functions/tests, one 2-line why comment beside the const |
 | Invariants: `go vet` compile-check, never `-o /dev/null` | `daemon/` | §5 rows (linux and windows) |
 | Invariants: records rule (red mutants or greps), a red row per new branch | new helper branches + probe rows | §6 rows M-P1…M-P5; the greps in §2.3 |
 | Invariants: FULL `go test ./...` on Windows plus WSL; comment-cap before the final re-measure | `daemon/` | §5 rows |
-| Acceptance: the conductor's Bind runs `synthetic_goal_cleanup` once on the PR head | not runnable here | Delivered, pending the conductor's Bind (§7) |
+| Acceptance: the conductor's Bind runs `synthetic_goal_cleanup` once on the PR head | run `45791682543` on `90157ff4` | Bound (V10): the `:499 … stage=none` stop is gone; the next stop, the labelled `clone_checkout` leg, is recorded verbatim in `docs/TODO.md` under `## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)` |
 | Owned: the witness and its e2e helpers, a plan, an evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | This file, `docs/evidence/rf-acc-synthetic-cleanup-release-2026-11-26.md`, the TODO carve |
 
 ## 2. Root cause (Stage 1)
@@ -116,8 +116,9 @@ Readings: (i) a new probe that exercises the shared production helper the leg fa
 (ii) only existing files that literally share a helper with the e2e leg are. Recommendation and
 selection: (i). The probe is test-only, adds no production byte, and is the only way the root cause
 stays pinned; the e2e leg itself cannot import those unexported helpers, so a probe in the owning
-package is the only place the refusal rules can be pinned. Recorded here for the conductor; the
-change reverts trivially if the stricter reading is preferred.
+package is the only place the refusal rules can be pinned. Recorded here for the conductor;
+confirmed in the PR #302 round-1 ruling (V6, 2026-11-26): reading (i) stands and the file is owned.
+It stays test-only and reverts trivially under the stricter reading.
 
 ## 7. Out of scope
 

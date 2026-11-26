@@ -5495,9 +5495,14 @@ section, whose pointer sentence names this one.
       `helper_v2_server.go:1200,:1211`, `linux_owner_v2_linux.go:1066`). The witness now releases
       `linuxV2CleanupApprovedWorkerProgram("/bin/sh")` — the resolved, symlink-free
       `/usr/bin/dash` (`dash 0.5.12-12ubuntu3`), with a named local refusal for any degenerate
-      shape — and no release, cleanup or containment assertion changed. Delivered, pending the
-      conductor's Bind (one `synthetic_goal_cleanup` run on the PR head: the `:499` stop is gone;
-      the next stop is recorded verbatim, or green).
+      shape — and no release, cleanup or containment assertion changed. Bound by the conductor's
+      Bind (run `45791682543` on `90157ff4`, one `synthetic_goal_cleanup`
+      run, `total_count=1`): the `:499 … stage=none` stop is gone — the worker is released as
+      `/usr/bin/dash` — and the next stop is the labelled `clone_checkout` leg
+      (`release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
+      guest_stage=seed errno=13`), recorded verbatim under the new goal
+      `rf-acc-synthetic-cleanup-seed` in `docs/TODO.md`
+      (`## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)`).
 
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 

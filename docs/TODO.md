@@ -2152,19 +2152,6 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death` (the clone reserve
       is no longer among them).
 
-- [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
-      `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
-      (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) returns unlabelled refusals,
-      so `linuxOwnerHelperV2ReleaseErrorDetailFor`
-      (`daemon/internal/platform/helper_v2_protocol.go:591`) renders `stage=none` and a new leg
-      whose release image is not symlink-free would stop with the same cryptic class. The refusal
-      is correct and load-bearing; the witness's own resolution check and the pin probe
-      (`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go`) are the current guards.
-      Labelling the pin refusals is a production change (helper detail vocabulary) needing its own
-      ruling, and it lands with its probe update: `assertUnlabelledNativeImagePinRefusal` pins
-      today's unlabelled shape, so the labelling change flips that assertion to require the named
-      stage in the same change (branch review 2026-11-26). Owner: conductor.
-
 - [ ] The pi durability witnesses bind `native_binary`/`native_binary_sha256`/`native_version_line`
       from the e2e publisher, not from the daemon (2026-11-24, same goal): the daemon's
       same-RunKey recovery path publishes no executable digest
@@ -2219,3 +2206,37 @@ acceptance met) (goal `rf-acc-shared-journal-release`, branch
 
 The pi `provider_action` leg's clone-reserve residual this goal unmasks stays under
 `## rf-acc-containment-goal-admission: residuals (2026-11-26)`.
+
+## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)
+
+The conductor's Bind (run `45791682543` on `90157ff4`, one `synthetic_goal_cleanup` run,
+`total_count=1`) confirms the bound fix: the `:499 … release_outcome_unknown; stage=none` stop is
+gone and the worker is released as `/usr/bin/dash`. The round-2 comment-rule strip changed the two
+`./e2e` files the case set builds by comments only, so a re-Bind on the final bytes is due (record
+§Bind). The next stop and this goal's residual follow.
+
+- [ ] The next stop is the labelled clone_checkout leg (2026-11-26, new goal
+      `rf-acc-synthetic-cleanup-seed`, gated on PR #302): first failing line, verbatim:
+      `production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the
+      real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2
+      RELEASE result is unresolved: Linux owner helper release outcome is unresolved
+      (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
+      guest_stage=seed errno=13)`. The set is not green: `Case set synthetic_goal_cleanup exited
+      1`; the seven AppArmor rows that ran are green; the export refused
+      (`pi durability witness is unavailable: synthetic-goal-cleanup.json`), so no manifest and no
+      `linux-v2-native-evidence-*` artifact exists. Owner: conductor.
+
+- [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
+      `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
+      (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) returns unlabelled refusals,
+      so `linuxOwnerHelperV2ReleaseErrorDetailFor`
+      (`daemon/internal/platform/helper_v2_protocol.go:591`) renders `stage=none` and a new leg
+      whose release image is not symlink-free would stop with the same cryptic class. The refusal
+      is correct and load-bearing; the witness's own resolution check refuses a non-canonical image
+      before the release, and the pin probe
+      (`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go`) pins the pin's refusal
+      shapes. A labelling change lands at the `PreparedGate.Release` call site
+      (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:928-932`), which the pin probe
+      does not exercise (it calls `pinNativeImage` directly), so it needs its own
+      `PreparedGate.Release`-level row; labelling is a production change (helper detail vocabulary)
+      needing its own ruling (PR #302 round-1 ruling V1, 2026-11-26). Owner: conductor.
