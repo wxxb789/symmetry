@@ -466,24 +466,13 @@ PR-head file executed by the run is byte-identical by construction; the table pi
 executed inputs (each row measured at both revisions with `git cat-file -p <rev>:<f> | sha256sum`,
 equal).
 
+Every other run-input row is byte-equal at both revs to the `## Bind` table above (the same 13 sha256 values); Bind302r2 measured them at 5f744370 and 7918757f.
+
 | File | sha256 (both revs) |
 | --- | --- |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` |
 | `daemon/e2e/production_linux_v2_cleanup_worker_shell_test.go` | `e9e95d049df3dab8e6f5a78a7d28fd2fbed04cef1291994fb67bc6d4f5d194d9` |
 | `daemon/native/linux-gate/protocol/native_image_pin_linux_test.go` | `59fbbb43f27291fd618dc28f570dddf96c7353133aa231c267819e9932f1883e` |
-| `daemon/native/linux-gate/protocol/proc_identity_linux.go` | `b210f968bb5d0e52095e46142b37c5fdba43dd39b13e0fe8c9ed66999a0f2ade` |
-| `daemon/internal/platform/helper_v2_protocol.go` | `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75` |
-| `daemon/internal/execution/linux_owner_v2_linux.go` | `c5da521dda3c0d7f05fb008f9a5761d33a4cdb8a917d354d3b6930b031a36099` |
-| `daemon/internal/app/linux_owner_witness_linux.go` | `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `2403b2f4aa3584d2cfa0b83dfe12e3210a967c0fbf16e1172ba14f005329516b` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` |
-| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` |
-| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` |
-| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` |
-| `.github/workflows/linux-native-v2-acceptance.yml` | `2d5500ce4b411e979cf974c19028514dceb5a729b3c73e8971add50f55bc27d8` |
-| `.github/workflows/ci.yml` | `f3e29fab798f010fb256dd0a49a78711abe232d84b9fc843461aa0d092fc73f7` |
 | `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `7c44af6fc2322804e84b7fcdefd9594c7154c62b45857b0ae86c42a87ff49034` (scratch-only; push trigger `scratch/bind-302`, `case_sets=(synthetic_goal_cleanup)`) |
 | `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` (scratch-only; byte-identical to `b0ba2694`) |
 
