@@ -41,12 +41,14 @@ what is out of scope.
    existing clause, reworded). `expected_capabilities` is unchanged and now holds on both routes
    (`{"provider_access": true}` for the three; `{}` for every provider-free goal leg).
 4. **e2e predicate and scope check.** `linuxV2GoalAdmissionRequestCases` gains the three
-   `{harness: "pi", requestCase: …}` rows; the admission branch requires the exact
-   Control-composed scope for `providerActionRequired` rows and `provider_scope == nil` otherwise,
-   through a new pure helper `linuxV2AdmissionProviderScopeIsExact(*protocol.ProviderScope,
-   resourceID)`; the row test flips the three pi rows to `true` and a new table test
-   `TestLinuxV2AdmissionAllowsProviderSyncRows` pins the helper (exact scope true; nil, wrong
-   resource, extra/wrong operations, non-nil change target false).
+   `{harness: "pi", requestCase: …}` rows; the admission branch's dispatch is the pure predicate
+   `linuxV2AdmissionProviderScopeRefusal(providerActionRequired, scope, resourceID)`:
+   `providerActionRequired` rows require the exact Control-composed scope via
+   `linuxV2AdmissionProviderScopeIsExact` (nil scope, wrong resource, extra or wrong operation
+   and non-nil change target all false), and any non-nil scope is refused otherwise. The row
+   test flips the three pi rows to `true`; `TestLinuxV2AdmissionAllowsProviderSyncRows` and
+   `TestLinuxV2AdmissionProviderScopeRefusalRows` pin the scope check and both dispatch
+   directions with the verbatim refusals (review r1, REV-A02).
 5. **Scope amendment (one file): `scripts/ci/register-linux-v2-claim-machine.py`.** Control's goal
    assignment admits only runtimes whose `capabilities` contain both the adapter block and
    `task.required_capabilities` (`assignment.ex:322-341`, `:505-530`), so the three goal-routed legs

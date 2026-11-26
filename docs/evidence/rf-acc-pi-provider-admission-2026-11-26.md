@@ -16,15 +16,21 @@ Bind row to the bind stage (§7).
 | `scripts/ci/write-linux-v2-owner-request.py` | `a6d007374c7c4d64a96b0cc9a7fefc73d4120d4dba31f6ce796a30f5730d677a` | the three pi legs join `GOAL_ADMISSION_CASES`; the goal branch pins the exact provider scope for `provider_case` rows and `provider_scope: null` for the provider-free ones |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3` | `:pi_provider` is goal-routed; the goal specs carry `provider_sync`; `resource.sync` lands in BOTH policies for those cases; the pi arms of `runtime_adapter_binding?` demand adapter kind `pi`; the legacy branch binds `:opencode` in its fn pattern instead of re-asserting the destructured role |
 | `scripts/ci/test-linux-v2-owner-request-keys.py` | `09ea677b3b867a6ce5a91f753473d0e665282fad50259725e54d5d42d63c8398` | N-role goal-route predicate, provider-sync role parse, writer profile rule, the provider-pair comparison, four refusal mutants, the fixture's both-policies `allowed_actions` refusal table; the writer's shared `writer_cases` accessor replaces the duplicated `CASES` preamble |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `823681b38cb07d92312a291e9e075f7f27367678ae0d65e6cf50fdf94844c911` | the three pi `(harness, request_case)` rows require the admission; the provider rows require the exact composed scope through the pure helper `linuxV2AdmissionProviderScopeIsExact`; two row tests pin both |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `b4141da9face795573dc1d3d5619625197743575cf6f65e462fb372e8cd79d08` | the three pi `(harness, request_case)` rows require the admission; the admission branch's dispatch is the pure predicate `linuxV2AdmissionProviderScopeRefusal` (exact composed scope for provider rows, any non-nil scope refused for provider-free ones, both directions table-tested); three row/table tests pin the map, the scope check and the dispatch |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `25b04fbcbe37cc9d678b7c07aa98690bd5cd276f4e08e1c89553eace166e3087` | the pi-native runtime spec becomes a goal-assigned native spec (`pi`/`1.5.2` + adapter block) with `provider_access: true` |
-| `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md` | `5ba9f4a49b44218a906ff1a9dd50bbcbcbd4a2bf9de0909b68029bdef811a5fa` | the accepted plan in the repo's plan location (helper renamed to `linuxV2AdmissionProviderScopeIsExact`; five provider-free goal rows) |
+| `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md` | `5a671160bbf8072214b28bc0afca44872c2156ea12a475913a03a2f31f1071d4` | the accepted plan in the repo's plan location (helper renamed to `linuxV2AdmissionProviderScopeIsExact`; five provider-free goal rows; §2.4 amended at the fix stage to the delivered dispatch predicate and its table tests) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the closed residual moves out of `TODO`; this goal's bounded residual is appended |
 
 The apply stage (`rf-acc-pi-provider-admission-apply`, 2026-11-26) delivered the four re-bound rows
 above from the accepted simplify findings F1-F4 (and the D1/D2 record corrections); §5 holds its
-re-runs and §6 its new mutants M9/M10. The writer and register rows are byte-identical to the
-implement stage.
+re-runs and §6 its new mutants M9/M10. The fix stage (`rf-acc-pi-provider-admission-fix`,
+2026-11-26) applied the review r1 findings REV-A01..A04: the doc comment above
+`linuxV2AdmissionProviderScopeIsExact` is deleted (REV-A01); the admission branch's dispatch is
+extracted into the pure predicate `linuxV2AdmissionProviderScopeRefusal`, pinned both directions by
+the new table test `TestLinuxV2AdmissionProviderScopeRefusalRows` (REV-A02; the pre-fix gap is
+characterized in §6 M11); §4.1 and §6 name their measured revisions (REV-A03); §4.3 and §5 state
+the changed e2e file for the formatter gate (REV-A04). The writer and register rows are
+byte-identical to the implement stage; §5 quotes the fix-stage re-runs.
 
 Byte-identical to the dispatch head (declared, not changed): `daemon/e2e/production_linux_v2_owner_cli_test.go`
 (`d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6`),
@@ -34,7 +40,7 @@ lists the owner-cli test and the witness seam; both were verified to need no cha
 request reader keys provider authority on the case name and the ClaimResponse
 (`linux_owner_witness_linux.go:2616-2652`), never on the admission shape, and the owner-cli test
 carries no legacy/goal admission assertion (the only admission branch in the e2e is
-`production_linux_v2_native_witness_test.go:1682-1696`).
+`production_linux_v2_native_witness_test.go:1682-1690`).
 
 ## 2. Clause census at the dispatch head
 
@@ -82,9 +88,10 @@ scope for those legs; and a goal-assignable pi-native runtime for Control's assi
 Probe `<scratch>/p1-probe.exs` (scratch only) ran `mix run` (prod) from the main checkout's
 `control/` project (its `control/` bytes are byte-identical to the dispatch head; the checkout's
 `deps/` and `_build/prod` were reused) against the ephemeral local database `symmetry_linux_v2_pi_probe` on
-`127.0.0.1:5432`, with `GITHUB_ACTIONS=true`/`GITHUB_RUN_ID=local` so the delivered fixture's
-`require_ephemeral_ci!` gate was satisfied, and with the delivered fixture bytes required
-(sha256 `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`; the probe evaluates the
+`127.0.0.1:5432`, with `GITHUB_ACTIONS=true`/`GITHUB_RUN_ID=local` so the fixture's
+`require_ephemeral_ci!` gate was satisfied, and with the implement-stage fixture bytes required
+(sha256 `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`, the commit-`66e4bc00`
+fixture; revision binding below); the probe evaluates the
 module definition only, because the file's own `System.argv()` dispatch would otherwise consume the
 probe's arguments). The fixture's `prepare` ran its own `@expected_fixture_runs` check (48 cases:
 46 goal + 2 legacy) and created the three resources; the probe registered the five runtimes from
@@ -114,6 +121,18 @@ spec (adapter-free, `provider_access` capability only, as at the dispatch head):
 pi_provider_action` raised verbatim `** (RuntimeError) Control did not assign the exact isolated
 owner-witness Task` (`await_assigned_run!/2` after its 30 s wait) — the register-script change is
 load-bearing for goal assignment (`assignment.ex:322-341`, `:505-530`).
+
+Revision binding (review r1, REV-A03): P1 and its mutant half measured the implement-stage fixture
+bytes `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`, not the delivered
+`82668512…`. The delta to the delivered bytes is exactly one hunk: `git diff --stat
+66e4bc00..dadb474d -- scripts/ci/provision-linux-v2-control-claims.exs` reports `1 file changed, 1
+insertion(+), 2 deletions(-)` — the legacy branch's `Map.new(legacy_cases, …)` moves the
+`:opencode` role check from the fn body into the fn head pattern. Every P1 row is goal-routed
+(`:pi_provider`/`:pi_durability`/`:opencode_goal`); no goal-routed row, `goal_case_specs` entry or
+`provision_goal_admission!` byte is in the delta, so the per-case rows and the M6 mutant read the
+same fixture bytes at both revisions. The apply stage's F3 probe (§12.2) re-ran `prepare` on the
+delivered bytes (`work_items=2 goal_cases=46`); the runtimes came from the delivered register
+script, byte-identical to the implement stage.
 
 ### 4.2 P2 — writer and register-script probes against a stub Control endpoint
 
@@ -157,15 +176,18 @@ operation block, `structured_input` true and `provider_access` true.
 
 ### 4.3 P3 — Go rows, formatting, vet
 
-`gofmt -l` on both changed e2e files: 0 files (exit 0). The row tests run in the package's existing
-CI job and locally on `go1.27.0 linux/amd64` (WSL, `GOTOOLCHAIN=auto`):
+`gofmt -l` on the changed e2e file (`production_linux_v2_native_witness_test.go`, the only e2e file
+in the changed set): 0 files (exit 0; fix-stage re-run). The row tests run in the package's
+existing CI job and locally on `go1.27.0 linux/amd64` (WSL, `GOTOOLCHAIN=auto`):
 
 ```
 === RUN   TestLinuxV2WitnessRequiresGoalAdmissionRows
 --- PASS: TestLinuxV2WitnessRequiresGoalAdmissionRows (0.00s)
 === RUN   TestLinuxV2AdmissionAllowsProviderSyncRows
 --- PASS: TestLinuxV2AdmissionAllowsProviderSyncRows (0.00s)
-ok  	github.com/wxxb789/symmetry/daemon/e2e	0.023s
+=== RUN   TestLinuxV2AdmissionProviderScopeRefusalRows
+--- PASS: TestLinuxV2AdmissionProviderScopeRefusalRows (0.00s)
+ok  	github.com/wxxb789/symmetry/daemon/e2e	0.016s
 ```
 
 `GOOS=linux go vet ./...` from `daemon/` (WSL) exit 0; `go vet ./...` from `daemon/` (Windows)
@@ -179,7 +201,8 @@ the same host `native/linux-gate/protocol` reddened on its first full-suite appe
 FD-census probe) and is `ok` (8.520s, exit 0) on the isolated re-run. Deterministic per-package
 exits in WSL: `go test ./e2e/ -count=1` → 0, `go test ./internal/platform/... -count=1` → 1,
 `go test ./native/linux-gate/protocol/... -count=1` → 0 at the implement stage (the apply stage
-re-ran the suite after a host regression, below). Attribution: the only changed Go file is
+re-ran the suite after a host regression, below; the fix stage re-ran it on the final bytes).
+Attribution: the only changed Go file is
 `daemon/e2e/production_linux_v2_native_witness_test.go` (package `e2e_test`); neither failing
 package references `daemon/e2e` (`grep -rn "daemon/e2e" internal/platform native/linux-gate/protocol`
 → 0 matches), so their build closure is byte-identical at base and head, and the failures are
@@ -195,6 +218,13 @@ now fails three tests (`TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescripto
 carries `/usr/include/linux/capability.h` (`fatal error: linux/capability.h: No such file or
 directory` in each probe's C compile); a `b27ea691` checkout of the package fails identically
 (3 occurrences), so its bytes and build closure are unchanged and the failure is host-level.
+
+The fix stage re-ran the WSL full suite on the final bytes: `daemon/e2e` `ok` (1.399s),
+`internal/platform` exit 1 on the same 13 root-only refusals, and `native/linux-gate/protocol`
+`ok` again (11.046s, 0 occurrences of the C-compile error) — the host carries
+`/usr/include/linux/capability.h` (present at the fix-stage probe), so the apply stage's three
+failures there recorded host state, not delivered bytes; the package's bytes and build closure
+are unchanged at base and head.
 
 ### 4.4 Elixir formatter probe on the changed fixture
 
@@ -238,34 +268,35 @@ Apply-stage artifacts (scratch, deleted after the stage; the two probes are carr
 
 | Command (working directory) | Exit | Note |
 | --- | --- | --- |
-| `python scripts/ci/test-linux-v2-owner-request-keys.py` (root, Windows) | 0 | 10 tests: the committed pair, four provider refusal mutants, the both-policies `allowed_actions` refusal table |
-| `python3 scripts/ci/test-linux-v2-{control-receipt,evidence,go-events,host-prerequisite-probe,owner-request-keys,source-subject}.py` (root, WSL) | 0 each | apply re-run on the delivered bytes: all six suites `OK`; on Windows the evidence and host-prerequisite suites fail on Linux-only fixtures (systemd-unit path validation, `bash`-driven printer fixtures) with the same base bytes — the changed files are not inputs to the failing assertions, and the single head input the evidence suite reads (`linuxV2OwnerWitnessStderrLogLines`) is untouched |
-| `python -m py_compile` on the changed Python script | 0 | syntax (apply re-run) |
-| `gofmt -l` on both e2e files (WSL) | 0 | no files listed; the witness file is the only changed one (apply re-run) |
-| `GOOS=linux go vet ./...` (`daemon/`, WSL) | 0 | linux/amd64 compile gate (apply re-run) |
-| `go vet ./...` (`daemon/`, Windows) | 0 | host compile gate (apply re-run) |
-| `go test ./...` (`daemon/`, Windows) | 0 | 27 `ok` packages, 0 `FAIL` (apply re-run; the Linux/amd64-tagged e2e file is absent from the Windows build closure) |
-| `go test ./...` (`daemon/`, WSL) | `e2e` 0 / `platform` 1 / `gate` 1 | apply re-run: 29 `ok` packages including `daemon/e2e` (2.585s); `internal/platform` exit 1 on the 13 root-only refusals; `native/linux-gate/protocol` exit 1 on its three C-probe tests because the host lacks `linux/capability.h` — the `b27ea691` checkout fails identically (§4.3) |
-| `go test ./e2e/ -run 'TestLinuxV2WitnessRequiresGoalAdmissionRows\|TestLinuxV2AdmissionAllowsProviderSyncRows' -count=1` (WSL) | 0 | apply re-run: both rows PASS, `ok … 0.037s` (§4.3) |
+| `python scripts/ci/test-linux-v2-owner-request-keys.py` (root, Windows) | 0 | 10 tests: the committed pair, four provider refusal mutants, the both-policies `allowed_actions` refusal table (apply and fix re-runs) |
+| `python3 scripts/ci/test-linux-v2-{control-receipt,evidence,go-events,host-prerequisite-probe,owner-request-keys,source-subject}.py` (root, WSL) | 0 each | apply and fix re-runs on the delivered bytes: all six suites `OK`; on Windows the evidence and host-prerequisite suites fail on Linux-only fixtures (systemd-unit path validation, `bash`-driven printer fixtures) with the same base bytes — the changed files are not inputs to the failing assertions, and the single head input the evidence suite reads (`linuxV2OwnerWitnessStderrLogLines`) is untouched |
+| `python -m py_compile` on the changed Python script | 0 | syntax (apply re-run; the fix stage changed no Python byte) |
+| `gofmt -l` on the changed e2e file (WSL) | 0 | no files listed (apply and fix re-runs; the witness file is the only e2e file in the changed set) |
+| `GOOS=linux go vet ./...` (`daemon/`, WSL) | 0 | linux/amd64 compile gate (apply and fix re-runs) |
+| `go vet ./...` (`daemon/`, Windows) | 0 | host compile gate (apply and fix re-runs) |
+| `go test ./...` (`daemon/`, Windows) | 0 | fix-stage re-run: 27 `ok` packages, 0 `FAIL` (the Linux/amd64-tagged e2e file is absent from the Windows build closure) |
+| `go test ./...` (`daemon/`, WSL) | `e2e` 0 / `platform` 1 / rest 0 | fix-stage re-run: 30 `ok` packages including `daemon/e2e` (1.399s); `internal/platform` exit 1 on the 13 root-only refusals; `native/linux-gate/protocol` `ok` (11.046s) — the apply stage's three C-probe failures there were a host-state regression, the header is present again (§4.3) |
+| `go test ./e2e/ -run 'TestLinuxV2WitnessRequiresGoalAdmissionRows\|TestLinuxV2AdmissionAllowsProviderSyncRows\|TestLinuxV2AdmissionProviderScopeRefusalRows' -count=1` (WSL) | 0 | fix-stage re-run: all three PASS, `ok … 0.016s` (§4.3) |
 | Elixir: `mix format --dot-formatter` probe on base/delivered copies | 0 | apply re-run: body-identical rewrites (389 diff lines each), no hunk touches the changed region (§4.4); `mix format --check-formatted` with the project config cannot run as a repo gate for `scripts/ci/*.exs` (not in the project's inputs) |
 | `MIX_ENV=test mix test` over `test/symmetry_control/goals/commands_test.exs`, `test/symmetry_control/orchestration_assignment_test.exs`, `test/symmetry_control/orchestration_claims_test.exs`, `test/symmetry_control_web/controllers/provider_action_controller_test.exs` (WSL, `symmetry_control_test` created and migrated) | 0 | 129 tests, 0 failures (39.3s) |
 | `MIX_ENV=prod mix compile --warnings-as-errors` (WSL) | 0 | the unchanged `control/` bytes compile clean |
 | `MIX_ENV=dev mix credo --strict` + `python3 scripts/ci/assert-credo-strict-baseline.py --log …` (WSL) | 30 / 0 | apply re-run: the ratchet passes, 564 issues (5 warnings, 326 refactoring, 160 readability, 73 design) over 225 files at the baseline recorded from `95d1df45`; inputs byte-identical to base |
-| `python3 scripts/ci/check-record-cleanliness.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed record(s) pass the root-only check` (apply re-run) |
-| `python3 scripts/ci/check-citation-existence.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed document(s) pass the path and symbol check (686 path citation(s))`; the three notes name pre-existing gitignore-covered citations, not additions (apply re-run) |
-| `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` on the plan and this record | 0 / 0 | no host absolute path in the changed docs (apply) |
-| `python3 scripts/ci/jscpd-changed.py --base b27ea691 --head <scratch-clone commit>` | 0 | `9 changed file(s), 1782 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new` (apply) |
-| `python <scratch>/comment-cap.py <scratch clone>` | 0 | no comment block longer than 2 lines among the added lines (apply) |
+| `python3 scripts/ci/check-record-cleanliness.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed record(s) pass the root-only check` (apply and fix re-runs; re-verified on the final record commit) |
+| `python3 scripts/ci/check-citation-existence.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed document(s) pass the path and symbol check (686 path citation(s))`; the three notes name pre-existing gitignore-covered citations, not additions (apply and fix re-runs; re-verified on the final record commit) |
+| `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` on the plan and this record | 0 / 0 | no host absolute path in the changed docs (apply and fix re-runs; re-verified on the final record commit) |
+| `python <scratch>/comment-cap.py <scratch clone>` | 0 | no comment block longer than 2 lines among the added lines (apply and fix re-runs; re-verified on the final record commit) |
+| `python3 scripts/ci/jscpd-changed.py --base b27ea691 --head <scratch-clone commit>` | 0 | apply and fix re-runs: `9 changed file(s), 1782 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new`; re-verified on the final record commit; the one notice is `docs/archive/CLOSED-TODO.md` (added lines outside the configured scan scope) |
 | jscpd 4.3.0 census, `--min-tokens 25` over the five changed code files (the simplify stage's invocation) | 0 | 1 clone: the pre-existing `provision-linux-v2-control-claims.exs` self-clone (50 tokens, 8 lines), present at `b27ea691` too; the writer preamble duplication is gone (`grep -c writer_case_names` on the delivered file → 0; the shared `writer_cases` accessor replaced it) |
 | F3 probe: `run!("prepare", …)` on the delivered fixture over the ephemeral DB (§12.2) | 0 | `work_items=2 goal_cases=46`, legacy profiles `["opencode-native", "opencode-native"]`, `P1-APPLY-PROBE OK` |
-| M9 pin: `go test ./e2e/ -run TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` (§12.1) | 0 | `--- PASS`; the provider-free control request returns `nil`, the mutant refused verbatim |
+| M9 pin: `go test ./e2e/ -overlay <scratch overlay adding daemon/e2e/zz_apply_probe_test.go> -run TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` (§12.1) | 0 | apply and fix re-runs: `--- PASS`; the provider-free control request returns `nil`, the mutant refused verbatim (`ok … 0.228s` at the fix stage) |
 
 Final-bytes binding: the delivered bytes of §1 are the revision every gate above measured —
-key test `09ea677b…`, fixture `82668512…`, e2e file `823681b3…`, plan `5ba9f4a4…` — with one
+key test `09ea677b…`, fixture `82668512…`, e2e file `b4141da9…`, plan `5a671160…` — with one
 scope limit: the Windows `go vet`/`go test` pair cannot build the Linux/amd64-tagged e2e file, so
-it binds it only through the unchanged closure. Every WSL gate, the two probes (§12.1/§12.2),
-jscpd-changed, comment-cap and the record checks ran on the delivered bytes (the scratch-clone
-commit for the last four).
+it binds it only through the unchanged closure. Every fix-stage WSL gate, the M9 probe (§12.1) and
+the mutants (§6, §12.4) ran on the final e2e bytes; the apply-stage Elixir gates keep binding the
+unchanged fixture/key-test bytes; jscpd-changed, comment-cap and the record checks ran on the
+delivered bytes (the scratch-clone commit for the last four).
 
 ## 6. Mutants
 
@@ -276,10 +307,12 @@ commit for the last four).
 | M3 | writer: one pi leg dropped from `GOAL_ADMISSION_CASES` | key-agreement test refuses, naming the leg |
 | M4 | writer: one pi leg's profile changed to another profile | key-agreement test refuses, naming the leg |
 | M5 | writer: exact-scope ClaimResponse mutated (null scope, extra operation, wrong resource, non-nil change target) | writer exits 1, no request written, exact message (§4.2) |
-| M6 | register script: base adapter-free pi spec | Control refuses assignment: `Control did not assign the exact isolated owner-witness Task` (§4.1) |
-| M7 | e2e: one goal-admission map row dropped (`helper_sigkill_detached_child`) | `TestLinuxV2WitnessRequiresGoalAdmissionRows` exit 1: `helper_sigkill_detached_child: linuxV2WitnessRequiresGoalAdmission = false, want true`; restored file sha256 back to `df3b7ed3…` |
-| M8 | e2e: `linuxV2AdmissionProviderScopeIsExact` relaxed to `return scope != nil` | `TestLinuxV2AdmissionAllowsProviderSyncRows` exit 1 on `two_resources`, `other_resource`, `extra_operation`, `wrong_operation` and `change_target` (`= true, want false`); restored file sha256 back to `df3b7ed3…` |
-| M9 | e2e reader: a provider-free goal row (`pi`/`stage_replay`) request whose admission carries a fixture-side provider scope | `linuxV2ReadOwnerWitnessRequest` refuses verbatim `provider-free owner-witness admission carries a provider scope`; the same request with `provider_scope: null` passes the whole reader (probe §12.1, exit 0) |
+| M6 | register script: base adapter-free pi spec | Control refuses assignment: `Control did not assign the exact isolated owner-witness Task` (measured on the implement-stage fixture `ac1cfea8…`; the delivered delta is outside this row, §4.1) |
+| M7 | e2e: one goal-admission map row dropped (`helper_sigkill_detached_child`, patch §12.4) | fix-stage re-run on the final bytes: `TestLinuxV2WitnessRequiresGoalAdmissionRows` exit 1: `helper_sigkill_detached_child: linuxV2WitnessRequiresGoalAdmission = false, want true`; restored file sha256 back to `b4141da9…` |
+| M8 | e2e: `linuxV2AdmissionProviderScopeIsExact` relaxed to `return scope != nil` (patch §12.4) | fix-stage re-run: `TestLinuxV2AdmissionAllowsProviderSyncRows` exit 1 on `two_resources`, `other_resource`, `extra_operation`, `wrong_operation` and `change_target` (`= true, want false`) and `TestLinuxV2AdmissionProviderScopeRefusalRows` exit 1 on `provider_change_target`; restored file sha256 back to `b4141da9…` |
+| M9 | e2e reader: a provider-free goal row (`pi`/`stage_replay`) request whose admission carries a fixture-side provider scope | fix-stage re-run on the final bytes (§12.1): `linuxV2ReadOwnerWitnessRequest` refuses verbatim `provider-free owner-witness admission carries a provider scope`; the same request with `provider_scope: null` passes the whole reader (exit 0) |
+| M11 | e2e: the refusal predicate's dispatch flag inverted (`if !providerActionRequired`, patch §12.4); pre-fix characterization: the same arm swap on the inline branch left the whole `daemon/e2e` package green (`ok` 0.916s, REV-A02) | `TestLinuxV2AdmissionProviderScopeRefusalRows` exit 1 on `provider_exact_scope` (refused with the provider-free message), `provider_nil_scope`, `provider_change_target`, `provider_free_nil_scope` (refused with the provider message) and `provider_free_exact_scope`; reddens in CI's `daemon` job (`.github/workflows/ci.yml`, ubuntu-latest, non-root runner: the full race pass runs `go test -race -count=1 ./...` over the linux/amd64-tagged e2e package) |
+| M12 | e2e: the refusal predicate's provider-free arm deleted (`_ = scope; return nil`, patch §12.4) | `TestLinuxV2AdmissionProviderScopeRefusalRows` exit 1: `provider_free_exact_scope: … = <nil>, want "provider-free owner-witness admission carries a provider scope"`; same CI job and non-root runner user as M11 |
 | M10 | fixture: the `allowed_actions` binding replaced by a constant, one policy's consumption dropped, or a third consumer added outside both policies | the delivered `test_allowed_actions_policy_drift_is_refused` subtests refuse verbatim: `bound exactly once to the provider_sync conditional, got 0 matches`; `consumed exactly once per policy, got execution_policy=0, authority_policy=1` (mirror: `execution_policy=1, authority_policy=0`); `consumed exactly twice, got 3` |
 
 ## 7. The conductor's Bind (acceptance clause)
@@ -315,18 +348,19 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 ## 10. Residuals and known limits
 
 1. The Bind acceptance row is unmeasured here (§7) — by design, per the contract.
-2. The e2e's provider-scope expectation keys on the per-case `providerActionRequired` flag, which
-   no local check pins against the writer's `PROVIDER_ACCESS_CASES` or the fixture's
-   provider-sync role; a drift there is refused fail-closed by the witness request reader, but only
-   on the credentialed dispatch. Recorded in `docs/TODO.md` with the conductor as owner.
+2. The e2e's per-case `providerActionRequired` flag — the dispatcher input the fix stage pins both
+   directions through `TestLinuxV2AdmissionProviderScopeRefusalRows` — is not pinned against the
+   writer's `PROVIDER_ACCESS_CASES` or the fixture's provider-sync role; a drift in the flag's
+   per-case values is refused fail-closed by the witness request reader, but only on the
+   credentialed dispatch. Recorded in `docs/TODO.md` with the conductor as owner.
 3. The Windows runs of `test-linux-v2-evidence.py` and `test-linux-v2-host-prerequisite-probe.py`
    fail on their Linux-only fixtures at base and head alike (§5); the WSL runs are the recorded
    gate. `test-linux-v2-control-receipt.py` refuses without root (the WSL run had root). The WSL
    full Go suite carries known environment refusals (§4.3): `internal/platform`'s root-only
-   privilege fixture (13 refusals, exit 1) and, on the apply stage's re-run,
-   `native/linux-gate/protocol`'s three C-probe tests, which no longer compile because the WSL
-   host lacks `linux/capability.h` (the `b27ea691` checkout fails identically); both packages'
-   bytes and build closures are identical at base and head.
+   privilege fixture (13 refusals, exit 1); the apply stage's `native/linux-gate/protocol`
+   C-probe failures (host header absent) were host state — the fix-stage re-run has the package
+   `ok` again with the header present (§4.3). Both packages' bytes and build closures are
+   identical at base and head.
 4. `mix format --check-formatted` with the project's Styler config cannot be run as a gate for
    `scripts/ci/*.exs` (outside the project's `inputs`); the body-identical rewrite probe (§4.4) is
    the replacement proof.
@@ -339,8 +373,8 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 | Contract clause | Executable row |
 | --- | --- |
 | `resource.sync` in BOTH `authority_policy.allowed_actions` and `execution_policy.allowed_actions` (Ruling) | key test `test_the_committed_pair_agrees` plus `test_allowed_actions_policy_drift_is_refused` (M10); the §4.1 per-case rows |
-| Provider-free goals stay provider-free (`provider_scope: null`, `allowed_actions: []`, no `provider_access`) | writer probe row `codex_containment` with a provider scope → exit 1 (§4.2); the key test's provider-pair equality; the e2e reader mutant M9 |
-| No weakened provider-access assertion, clone reserve, or Subject binding | e2e row tests `TestLinuxV2WitnessRequiresGoalAdmissionRows`, `TestLinuxV2AdmissionAllowsProviderSyncRows` (§4.3); the clone reserve and the witness reader are declared byte-identical (§1) |
+| Provider-free goals stay provider-free (`provider_scope: null`, `allowed_actions: []`, no `provider_access`) | writer probe row `codex_containment` with a provider scope → exit 1 (§4.2); the key test's provider-pair equality; the e2e reader mutant M9; the refusal table's `provider_free_*` rows (`TestLinuxV2AdmissionProviderScopeRefusalRows`, §4.3) |
+| No weakened provider-access assertion, clone reserve, or Subject binding | e2e row tests `TestLinuxV2WitnessRequiresGoalAdmissionRows`, `TestLinuxV2AdmissionAllowsProviderSyncRows`, `TestLinuxV2AdmissionProviderScopeRefusalRows` and the dispatch mutants M11/M12 (§4.3, §6, §12.4); the clone reserve and the witness reader are declared byte-identical (§1) |
 | No new credentials in CI | register-script payload delta (§4.2): exactly one runtime key changed, no credential field |
 | Key agreement stays green | §5, first row (exit 0) |
 | Comments at most 2 lines; Elixir changes run format, compile, Credo strict, relevant tests | comment-cap (§5); the §4.4 formatter probe; §5's Credo ratchet row; §12.2's compile-and-run probe |
@@ -349,16 +383,20 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 ## 12. Appendix — scratch probes and mutants (verbatim, full sha256)
 
 The probes below ran only from the stage's scratch directory and were never committed; each
-exercised the delivered bytes of §1. Each sha256 binds its probe's exact file bytes (LF).
+exercised the delivered bytes of §1. Each sha256 binds its probe's exact file bytes (LF). The fix
+stage re-ran §12.1 on the final bytes and added no probe; its mutant patches are §12.4.
 
 ### 12.1 M9 pin — `zz_apply_probe_test.go` (sha256 `f4e499d87c6071bdced3e5103233f02c98e5d72307790e542fa97b002dbf2ace`, 110 lines)
 
-Ran in a scratch clone of the delivered bytes as `daemon/e2e/zz_apply_probe_test.go`
+Ran at the apply stage in a scratch clone of the delivered bytes as `daemon/e2e/zz_apply_probe_test.go`
 (`//go:build linux && amd64`): `GOTOOLCHAIN=auto go test ./e2e/ -run
 TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` → `--- PASS`, `ok
 github.com/wxxb789/symmetry/daemon/e2e 0.325s`, and the log line `mutant refused verbatim:
 provider-free owner-witness admission carries a provider scope`. The provider-free control request
-(`provider_scope: null`) returned `nil` from the whole reader.
+(`provider_scope: null`) returned `nil` from the whole reader. Re-ran at the fix stage against the
+final e2e bytes through a `go test -overlay` added-file mapping for that package path (repo
+untouched; the probe creates its own root-owned barrier directory): same command → `--- PASS`,
+`ok … 0.228s`, same log line.
 
 ```go
 //go:build linux && amd64
@@ -528,3 +566,76 @@ IO.puts("P1-APPLY-PROBE OK")
 The four M10 refusals are produced by the delivered test's own
 `test_allowed_actions_policy_drift_is_refused` subtests (`binding`, `execution`, `authority`,
 `outside`): the committed refusal table is the pin, so no scratch artifact is carried for M10.
+
+### 12.4 Fix-stage mutant patches (verbatim, full sha256)
+
+Each patch applies to the delivered `daemon/e2e/production_linux_v2_native_witness_test.go`
+(`b4141da9…`) as change-line-only hunks (no context) and was executed through a `go test -overlay`
+replacement mapping for that package path; the mutated bytes were left only in scratch. M11/M12
+redden the new refusal table (`TestLinuxV2AdmissionProviderScopeRefusalRows`); the baseline patch
+reproduces the pre-fix REV-A02 gap on the pre-fix bytes (whole `daemon/e2e` package green); M7/M8
+re-bind the earlier rows to the final bytes. The CI job/user that reddens them is in §6.
+
+| Mutant | Patch sha256 | Mutated file sha256 |
+| --- | --- | --- |
+| baseline (pre-fix arm swap) | `06f9fa52821ef5cef15818388dafbc4f9c8c7b87e146ff646c86756d5bc01486` | `2edbdb9c02ca198a50183fa54a824a2e22a2c8fbe2b7e63b1352a2bd6cf571cb` |
+| M7 | `5da65b176a2b902389fd91fd5a69d389df88243aff20814c706537aa0135e7b4` | `e4051d74a81b7ac45f82a1aa313e932c88b90c4b39362c365b6148190f5bc4e1` |
+| M8 | `aa50e4674b5512d4165da037b90829eaa7f25502fbf663c11748caf2d265e4c2` | `b45110bde0454c9a0836075218ea28ac863f5012fa7b7989e954456147f1da6f` |
+| M11 | `5ee5c625fef340491a57076cbe29ab729744cf394400f4dae1ae7c1d454e9f5e` | `27bbfbcdcb0dd55fc99064f873b7f58779780594f103a36b0d827d63a32bc53a` |
+| M12 | `d23efef331d27d797d8d37f5a1752327472fb8cd85397ff4a2d547f33ed189dd` | `df7f6a0ab68a3d5ee8ba3ad3fc857ee19a65cc34696e8184d6fa593c387892ef` |
+
+```diff
+--- a/daemon/e2e/production_linux_v2_native_witness_test.go
++++ b/daemon/e2e/production_linux_v2_native_witness_test.go
+@@ -1687 +1687 @@
+-		if testCase.providerActionRequired {
++		if !testCase.providerActionRequired {
+```
+
+```diff
+--- a/daemon/e2e/production_linux_v2_native_witness_test.go
++++ b/daemon/e2e/production_linux_v2_native_witness_test.go
+@@ -1785 +1784,0 @@
+-	{harness: "pi", requestCase: "helper_sigkill_detached_child"}:                 true,
+```
+
+```diff
+--- a/daemon/e2e/production_linux_v2_native_witness_test.go
++++ b/daemon/e2e/production_linux_v2_native_witness_test.go
+@@ -1870,0 +1871 @@
++	return scope != nil
+```
+
+```diff
+--- a/daemon/e2e/production_linux_v2_native_witness_test.go
++++ b/daemon/e2e/production_linux_v2_native_witness_test.go
+@@ -1880 +1880 @@
+-	if providerActionRequired {
++	if !providerActionRequired {
+```
+
+```diff
+--- a/daemon/e2e/production_linux_v2_native_witness_test.go
++++ b/daemon/e2e/production_linux_v2_native_witness_test.go
+@@ -1886,3 +1886 @@
+-	if scope != nil {
+-		return errors.New("provider-free owner-witness admission carries a provider scope")
+-	}
++	_ = scope
+```
+
+### 12.5 Line-anchor re-measurement at the fix stage
+
+Every anchor in this record and the plan was re-measured at the fix stage against the revision it
+names: the delivered changed files by their §1 hashes; the byte-identical files by the hashes below
+(`sha256sum` on the worktree); the plan's dispatch-head anchors re-read from `b27ea691` with
+`git show … | sed -n`.
+
+| Anchor(s) | Measured file sha256 | Verified content |
+| --- | --- | --- |
+| e2e `production_linux_v2_native_witness_test.go:1682-1690` | `b4141da9…` | the goal-admission branch and the dispatch call |
+| `control/lib/symmetry_control/goals/admission.ex:1218-1268`, `:1304-1307`, `:333-335` | `24ee858e96e739c0f54e534269fc79df93830d0ef0e8e8a486b81853ddd02770` | `admission_provider_scope!`; `provider_operation_allowed?` (both policies); `require_provider_access` |
+| `control/lib/symmetry_control/orchestration/assignment.ex:322-341`, `:505-530` | `4b8c0a3f292177b06748fb29a22d97fb5ee63a50ca40ff6f299f2efa27048a3d` | the `@> required_capabilities` and `@> adapter_requirement` query; `goal_runtime_matches?` |
+| `daemon/internal/state/linux_clone_journal.go:864-878` | `5a8455b80ad1b2f53678fab1904056f6739357aa984fce8105340f98a2018ede` | `requireLinuxCloneJournalFence` and its admitted-Subject match |
+| `daemon/internal/app/linux_owner_witness_linux.go:2616-2652`, `:3340-3362`, `:4257-4290` | `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` | the case-name provider keying; `prepareClone`; `seedAuthenticClaim` |
+| plan §1 dispatch-head anchors: e2e `:1682-1690`, `:1780-1793`, `:1796-1822`; writer `:29-38`, `:199-217`; fixture `:41-140`, `:152-154`, `:186-256`, `:447-570`, `:603-610`; register `:129-160`; key test `:27-30`, `:189-215` | re-read from `b27ea691` | each range starts at the named construct (registered as dispatch-head readings) |
