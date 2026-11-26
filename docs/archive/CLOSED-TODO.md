@@ -5520,27 +5520,34 @@ section, whose pointer sentence names this one.
       for the same-RunKey recovery client that retires it (record §2, plan §2), and delivered by
       goal `rf-acc-claude-stage-replay` (2026-11-26, branch `refactor/rf-acc-claude-stage-replay`,
       base `78166f2e`; plan `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md`, record
-      `docs/evidence/rf-acc-claude-stage-replay-2026-11-26.md`): the crash-replay runner keeps its
-      90 s post-kill wait and its unconditional fatal for every stage whose durable boundary does
-      not prove the released-gate stop, and at exactly the two proven stages (`native_release`
-      with the held marker's `released` state, `stop_receipt_durable` with the durable receipt,
-      through `linuxV2StageReplayHelperStopIsProven`) replaces that wait with the owner-loss
-      assertions fix round r2 restored on the same bytes — the exact already-open target pidfd
-      must exit (`linuxV2RequireTargetExitedBeforeRecovery`) and the held helper's authenticated
-      Status must carry the owner-loss latch plus its own helper-issued stop proof equal to the
-      durable receipt proof (`linuxV2WaitHeldHelperOwnerLostStopProof` /
-      `linuxV2RequireHeldHelperOwnerLostStopProof`) — then requires the helper's exit within 30 s
-      after the same-RunKey recovery retires it; the same assertion set covers the codex leg
-      `native_release_codex` (the class's second observed instance: main measurement run
-      `45775969711`), because both kind legs present `barrierStage == "native_release"` to the
-      shared runner and the kind-leg row pins that wiring; no validator, bound or production byte
-      changed.
-      Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (13 rows, all seven non-proven helper
-      stages) and the three r2 rows with eight byte mutants red (record §4) plus the WSL
-      owner-loss-latch probes (record §5); fix round r1 pins the recovered tombstone at the same
-      two stages to the held helper's own released-gate proof
-      (`linuxV2RequireHelperIssuedReleaseStopProof`, its own 8-row mutant-red row, record §3/§4).
+      `docs/evidence/rf-acc-claude-stage-replay-2026-11-26.md`): fix round r3 delivers the
+      contract's Z1-Z5 — the crash-replay runner keeps its 90 s post-kill wait and its
+      unconditional fatal for every stage whose durable boundary does not carry the held helper,
+      and at exactly the two stages (`native_release` with the held marker's `released` state,
+      `stop_receipt_durable` with the durable receipt, through
+      `linuxV2StageReplayOwnerLossSnapshotRequired`) requires the *recovery client's* own
+      pre-stop snapshot (`owner_loss`, read in the owned witness seam before
+      `recoverContainmentOnlyJournals`): the held helper's owner-loss latch plus its own
+      helper-issued stop proof (`Kind == helper`, `Issuer == Reaper == held helper`,
+      `HelperExit == nil`, released-gate authorization at `native_release`) equal to the durable
+      receipt proof, with the already-open target pidfd kept only as a containment check; then
+      requires the helper's exit within 30 s after the same-RunKey recovery retires it. The same
+      assertion set covers the codex leg `native_release_codex` (the class's second observed
+      instance: main measurement run `45775969711`), because both kind legs present
+      `barrierStage == "native_release"` to the shared runner, the matrix now passes the leg's own
+      `testCase.barrierStage`, and the kind-leg row pins the wiring. The r2 fixture-side helper
+      dials and the pre-existing pre-kill `AnchorStop` capture are deleted (they were refused or
+      stole the helper's single post-loss recovery slot — DS audit P1-2); round 3's only
+      production byte is the owned witness seam, and no validator, bound or
+      `platform/**`/`authority/**`/`execution/**` byte changed.
+      Pinned by `TestLinuxV2StageReplayOwnerLossSnapshotRequired` (13 rows, all seven non-proven
+      helper stages), `TestLinuxV2OwnerLossSnapshotBeforeRecovery` plus the witness-seam rows
+      (`TestLinuxV2NativeWitnessOwnerLossStage`/`…SnapshotShape`/`…SnapshotPrecedesRecovery`) and
+      ten byte mutants red (record §4/§8), plus fix round r1's provenance pin
+      (`linuxV2RequireHelperIssuedReleaseStopProof`, its own 8-row mutant-red row) and the WSL
+      owner-loss-latch probes (record §5).
       The `checkout_ready` census residual is tracked in the
       `## rf-acc-claude-stage-replay: residuals (2026-11-26)` section of `docs/TODO.md`.
       Delivered, pending the conductor's Bind: the Bind runs `claude_containment` and
-      `codex_containment` once each and records the next stop verbatim, or green.
+      `codex_containment` once each, and the `shared` `stop_receipt_durable` leg if it is
+      reachable (otherwise recorded unreached), and records the next stop verbatim, or green.

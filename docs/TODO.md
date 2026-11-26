@@ -1989,6 +1989,23 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       the leg in the guest and record the helper's behaviour, or extend the predicate with that
       stage's durable proof).
 
+- [ ] Guest-only product-mutant row, fix round r3 (2026-11-26, goal `rf-acc-claude-stage-replay`;
+      record §8.5): the mutant "`markOwnerLost` latches owner loss without calling `stopOwned`"
+      must red `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` and
+      `…/native_release_codex` through the recovery client's `owner_loss` snapshot (no cached
+      proof before the recovery's first `Stop`, which would otherwise supply one) and the
+      daemon-crash witness; the ten local overlay mutants pin only the decision layers (record
+      §4/§8.4), so the privileged guest is that mutant's first end-to-end oracle. Owner:
+      conductor (dispatch the mutant through the acceptance job, or record it unreached).
+
+- [ ] Owner-loss snapshot trust and ordering (2026-11-26, goal `rf-acc-claude-stage-replay`;
+      record §8.2): the `owner_loss` field is witness telemetry — its trust root is the recovery
+      process's own response, and its "before the recovery's first stop" ordering is structural
+      (the capture call precedes `recoverContainmentOnlyJournals`, pinned by the owned ordering
+      row), not proved in-band by the helper, which cannot tell same-identity callers apart.
+      Owner: conductor (accept the structural pin for this goal, or fund a helper-side ordering
+      artifact as a new goal).
+
 ## rf-claude-schema-argv: residuals (2026-11-26)
 
 - [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,

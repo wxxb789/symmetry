@@ -21,6 +21,21 @@ final bytes.
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. No production,
 validator, fixture-script or `pi/**` byte changed (§4).
 
+Fix round r3 changes the run inputs, so the delivered r3 bytes have their own table (the four
+record-only docs are not run inputs):
+
+| file | sha256 at the delivered r3 bytes |
+| --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `0d2aa2a252dff51e47f697a8f68a17a90784cbfba2c8688f52d4a2e96c72e5a5` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `db47b73835b3e8bd4797caf0499aa8797e0a9e18220d5de01af3f8b8a7f1df7d` |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `bb0587666f8dffb7e0970d11a6ca1a7984ca60b20b3b13cf7efe8e9082c7980a` |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `0755eab396b9040d855faa3f130353eba8a102c3b971c0ba950eefd3e506c463` |
+| `daemon/internal/app/journal_store_linux_test.go` | `bb0b8e8eedb9627e8e38a0016601f12fbca8a64808abf1efae645f1293cc24e6` |
+| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `6c08587f48b66368d73a5666d93cce200947e142dd6129231df68f7aeebaeee6` |
+
+`linux_owner_witness_linux.go` and `journal_store_linux_test.go` are the contract's owned witness
+seam and its callers; no `platform/**`, `authority/**` or `execution/**` byte changed (§8).
+
 ## 2. Stage 1 — the root cause, named verbatim
 
 **The helper's owner-loss stop at `native_release` succeeds, and the product leaves a helper whose
@@ -130,14 +145,14 @@ Chain, all at the base revision:
 
 `[INFERENCE]` on one link: the retained artifacts do not carry the helper's in-memory state, so the
 r1 record inferred “the stop succeeded” from the code paths in items 2 and 3 plus item 4's product
-requirement. Fix round r2 supersedes the inference with a pre-recovery measurement at both stages
-(§3): `native_release` must observe the exact target pidfd exit (the owner-loss stop physically
-stopped B) and `stop_receipt_durable` must observe the held helper's authenticated Status carrying
-the owner-loss latch and its own helper-issued proof equal to the durable receipt proof. The old
-90 s survival itself already bounds the alternative reading: an *unproven* owner-loss stop returns
-an error and self-kills the helper through `requestAnchorTakeover` within the 30 s
-`linuxOwnerHelperV2StopTimeout` (`platform/helper_v2_recovery.go:153-156,191-238,241-267`), so a
-helper still resident past the old wait cannot be a hanging stop.
+requirement. Fix round r3 supersedes the inference with the recovery client's own pre-stop
+snapshot at both stages (§8): the witness process reads the held helper's `OwnerLost` latch and
+its cached helper-issued stop proof before the recovery's first `Stop`. §8 states the snapshot's
+limits honestly (witness telemetry; structural ordering). The old 90 s survival itself already
+bounds the alternative reading: an *unproven* owner-loss stop returns an error and self-kills the
+helper through `requestAnchorTakeover` within the 30 s `linuxOwnerHelperV2StopTimeout`
+(`platform/helper_v2_recovery.go:153-156,191-238,241-267`), so a helper still resident past the
+old wait cannot be a hanging stop.
 
 Not a production defect in `daemon`/`execution` code outside the witness: the product's recovery
 design (item 4) needs this state, so Stage 2 fixes the fixture side. The rejected product-side
@@ -185,44 +200,49 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
   `:1455-1561`), the post-recovery target-pidfd wait (`:2195-2203`) and the leaf checks stay
   byte-identical; the r1 and r2 predicates and their call sites are additions outside them.
 - Fix round r2 (contract ruling R1-R6; DS audit P1 = the valid unresolved thread
-  `PRRT_kwDOUMNTZc68QecV`): the tolerated pre-recovery wait is replaced at exactly the two proven
-  stages by the owner-loss assertions that restore the dropped strength. `native_release` requires
-  the already-open exact B target pidfd to have exited inside the same 90 s fence
-  (`linuxV2RequireTargetExitedBeforeRecovery`, `:1195-1203`); the target is the fixture's own
-  capture (`:2083-2106`, `targetPIDFD`) and its exit can only come from the helper's owner-loss
-  stop (no other actor runs before the recovery). `stop_receipt_durable` has no live target left
-  (its receipt is already durable), so it requires the held helper's authenticated Status instead:
-  `OwnerLost`, the exact held identity, and its own cached stop proof — `Kind == helper`,
-  `Issuer == Reaper == held helper`, `HelperExit == nil` — *equal to the durable receipt proof*
-  (`linuxV2RequireHeldHelperOwnerLostStopProof` / `linuxV2WaitHeldHelperOwnerLostStopProof`,
-  `:1205-1262`), read through the anchor RunKey map (`NewLinuxOwnerAnchorClient` → `LookupHelper` →
-  `Control.Status`, `:1264-1296`) before the recovery process starts;
-  `linuxV2RequireOwnerLossStopBeforeRecovery` (`:1298-1317`) routes the two stages and refuses any
-  other. The old wait with its unconditional fatal stays for every unproven helper stage, so no
+  `PRRT_kwDOUMNTZc68QecV`; **superseded by fix round r3, §8**): the tolerated pre-recovery wait
+  was replaced at exactly the two proven stages by the owner-loss assertions. `native_release`
+  required the already-open exact B target pidfd to have exited inside the same 90 s fence
+  (`linuxV2RequireTargetExitedBeforeRecovery`); `stop_receipt_durable` required the held helper's
+  authenticated Status — `OwnerLost`, the exact held identity, its own cached stop proof
+  (`Kind == helper`, `Issuer == Reaper == held helper`, `HelperExit == nil`) equal to the durable
+  receipt proof (`linuxV2RequireHeldHelperOwnerLostStopProof` /
+  `linuxV2WaitHeldHelperOwnerLostStopProof`), polled by the *fixture* through the anchor RunKey map
+  (`LookupHelper` → `Control.Status`); `linuxV2RequireOwnerLossStopBeforeRecovery` routed the two
+  stages. The old wait with its unconditional fatal stays for every unproven helper stage, so no
   tolerance remains and every poll error is fatal (ruling R2 closed by obviation). The predicate
-  table now covers all seven non-proven helper stages (ruling R3, `:2506-2541`), the stale “must
-  wait strictly past that product bound” comment is gone with the wait it described and the kept
-  comments are 2-line why-only (ruling R4; the product-design rationale lives in this record), and
-  DS P3's `checkout_ready` census is recorded as a `docs/TODO.md` residual (ruling R6). The branch
-  is keyed on the stage, not the harness: both kind legs present `barrierStage == "native_release"`
-  to the same runner (`production_linux_v2_native_witness_test.go:194-197`, `199-205`, `233`), so
-  `native_release_codex` takes the identical target-pidfd assertion; the r2 row
-  `TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch` (`:2543-2559`) pins that wiring and
-  reddens per leg under the predicate-inversion mutant (§4).
-- Assertion-removal mapping (standing conductor rule, 2026-11-26): r2 removes exactly one assertion
-  form — the pre-recovery helper-exit wait at the two proven stages — and lists what it proved,
-  each mapped to an equal-strength check with a red mutant:
+  table covers all seven non-proven helper stages (ruling R3), the stale “must wait strictly past
+  that product bound” comment is gone with the wait it described and the kept comments are 2-line
+  why-only (ruling R4; the product-design rationale lives in this record), and DS P3's
+  `checkout_ready` census is recorded as a `docs/TODO.md` residual (ruling R6). The branch is keyed
+  on the stage, not the harness: both kind legs present `barrierStage == "native_release"` to the
+  same runner (`production_linux_v2_native_witness_test.go:194-197`, `199-205`, `233`).
+  **Round-3 corrections (DS r2 audit P1-1/P1-2, three consults; §8):** the r2 `native_release` arm
+  measured only containment — the claude target self-exits on the App's stdin EOF (measured, exact
+  pinned 2.1.323 bytes: `rc=0` 0.30 s after EOF; the App is the sole writer) — and its
+  `stop_receipt_durable` arm was unrunnable: the fixture is not `initialOwner`, and the first
+  post-loss non-anchor peer claims the single `recoveryOwner` slot, so the fixture's dial is
+  refused or steals the slot the real recovery needs (`platform/helper_v2_server.go:497-508`).
+  Round 3 deletes both fixture dials and moves the read into the recovery client (§8).
+- Assertion-removal mapping (standing conductor rule, 2026-11-26): the two removal events are the
+  r2 replacement of the pre-recovery helper-exit wait at the two proven stages, and the r3
+  replacement of the r2 arms themselves. Every guarantee is mapped to a surviving or new check
+  with a red mutant:
   1. “the owner-loss path itself stopped the target before recovery” (the arm the r1 relaxation
-     dropped; DS P1) — mapped to the `native_release` target-pidfd exit (`:1195-1203`) and the
-     `stop_receipt_durable` OwnerLost + own-proof Status (`:1205-1262`); red mutants `m5` (target
-     exit swallowed), `m2` (latch dropped), `m3` (proof terms dropped), `m4` (receipt equality
-     dropped), §4.
+     dropped; DS P1) — r2 mapped it to the target-pidfd exit and the fixture-side Status poll, and
+     r3 re-maps it to the recovery client's own pre-stop snapshot: the held helper had latched
+     owner loss and cached its own helper-issued stop proof (Kind helper, Issuer/Reaper = held
+     helper, HelperExit nil, released-gate authorization) before the recovery's first Stop, equal
+     to the durable receipt proof (§8; `linuxV2RequireOwnerLossSnapshotBeforeRecovery`). Red
+     mutants: `m1` (snapshot taken after the recovery call), `m4` (latch dropped), `m5` (proof
+     shape dropped), `m6` (receipt equality dropped), `m9` (released-gate authorization dropped),
+     §4/§8.
   2. “an unproven owner-loss stop cannot leave the helper resident” — carried by the product's own
      fail-safe (self-kill in ≤30 s; the §5 probe
      `TestScratchUnprovenOwnerLossStopSelfKillsTheHelper` observes it) and, on the recovery route,
-     by the r1 provenance pin (`:2170-2175`); the unproven-stage wait itself is byte-identical in
-     effect (same call, bound and message, fatal on every error), so no new branch exists there;
-     red mutant `m8` (mirror proof accepted) pins the recovery route, and the unproven-stage
+     by the r1 provenance pin; the unproven-stage wait itself is byte-identical in effect (same
+     call, bound and message, fatal on every error), so no new branch exists there; red mutant
+     `m8`/`m5`-class (mirror proof accepted) pins the recovery route, and the unproven-stage
      fatal's own oracle is the guest, unchanged from the base bytes.
   3. “no helper outlives the containment lifecycle” — carried by the recovery's `RetireHelper`
      pidfd-exit gate (`platform/helper_v2_recovery.go:544`, `platform/anchor_types.go:21-25`) and
@@ -232,13 +252,14 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
   when the helper self-killed (the unproven-stop case the released gate cannot produce) and its
   red arm conflated correct residency with a skipped stop — the r1 root cause.
 - No leg-order or shared-state change (standing conductor rule, 2026-11-26): r2 alters only checks
-  inside one leg before its recovery starts. The pidfd poll reads a descriptor; the added anchor
-  `LookupHelper` + `Control.Status` calls are the read-only pattern the fixture already runs
-  (`linuxV2CaptureNormalAnchorStopEvidence`, `:2219-2275`; `helper_v2_server.go:583-585` routes
-  `status` to the response-only `handleStatus`, permitted even after owner loss). The recovery's
-  inputs (marker, journal, socket), the response/journal validators and the post-recovery polls are
-  byte-identical, so every downstream consumer sees the same state the r1 wait left — minus the
-  dead time at the proven stages.
+  inside one leg before its recovery starts. The r2 fixture-side `LookupHelper` + `Control.Status`
+  calls were *not* the read-only pattern the fixture could run: the fixture is a different peer and
+  the helper admits exactly one post-loss recovery peer
+  (`platform/helper_v2_server.go:497-508`; DS r2 audit P1-2). Round 3 deletes them (§8) and moves
+  the read into the recovery client process, which is the same peer as the subsequent production
+  `LookupHelper` (§8 premise). The recovery's inputs (marker, journal, socket), the
+  response/journal validators and the post-recovery polls are byte-identical, so every downstream
+  consumer sees the same state the r1 wait left — minus the dead time at the proven stages.
 
 ## 4. Red-first and mutant rows
 
@@ -368,6 +389,28 @@ beside `claude_containment`. The runner's two-arm branch is the same
 `if helperStopProvenWithoutOwner` decision the extended predicate table pins
 (call site `:2116-2127`).
 
+Fix round r3 replaces the r2 row set: the deleted r2 rows/mutants above describe the r2 bytes and
+are kept as the r2 record; the delivered r3 rows are enumerated in §8.4, and their ten mutants
+(`m1`…`m10`, scratch copies + `go test -overlay`, never written into the tree) each go red at
+their rows on the r3 bytes (§6, WSL):
+
+| mutant (sha256) | change | red rows (focused run, exit 1) |
+| --- | --- | --- |
+| `m1-order.go` `31413904f767b15f470c6e56b52ed95d61fb72d8ffb792319f6bcdbd771ec2fa` | the seam capture moved after the recovery invocation | `TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery` (`owner-loss seam order = [recovery snapshot]`) |
+| `m2-app-stage-widen.go` `f406e291462610b874cb0bd381a6a54a1f9f72fc5bbec015fd76dea7502127b6` | `lease_armed` added to the app stage predicate | `…OwnerLossStage/pre-release_hold` + `…SnapshotPrecedesRecovery/unproven_hold_carries_no_snapshot` (2 rows) |
+| `m3-app-shape-drop.go` `77c8e4e9181222320283f94b4cef92f956188d1a61d806e8b83c54b62ad1b82e` | the app "captured or explained" shape check dropped | `…OwnerLossSummaryShape/silent_failure` (1 row) |
+| `m4-latch-drop.go` `e73f9799322eeeb666e0197c7edebfbfa196f54bcf0e21f1fbad4acaa38c17dd` | the `OwnerLost` term dropped | `owner-loss latch absent` (1 row) |
+| `m5-proof-shape-drop.go` `ce505865e1cfc801b6de36fdaf65cc134a33cad79a292a9013203b6a2fbfd8dc` | the four proof-shape terms dropped | `mirror kind` / `foreign issuer` / `anchor-reaped` / `helper-exit proof even when the receipt matches` (4 rows) |
+| `m6-receipt-eq-drop.go` `630cde026debcc3734159d9e0ec822c7990ec1d933a34e8dc20b237046383f0a` | the receipt equality and its nil guard dropped | `proof replaced after the snapshot`, `receipt proof missing` (2 rows) |
+| `m7-helper-id-drop.go` `6982ce328b5af0bd87a59692f6f8a692f584829e9a80db4df2a4c47c7f31c152` | the held-helper identity check dropped | `snapshot for another helper` (1 row) |
+| `m8-clean-capture-drop.go` `238ded9ce1bd8932681f4f98647af0d706fb7109eae0580e231f7d2e9d79d366` | the stage/clean-capture checks dropped | `capture failed`, `snapshot for the wrong stage` (2 rows) |
+| `m9-release-auth-drop.go` `e339b54bd5d1bc8a727c7a5cf7b216d09a2c8d1b65456b589495a62e07ddea95` | the released-gate authorization check dropped | `released-gate authorization missing` (1 row) |
+| `m10-required-widen.go` `4a57da5739a3cc5f16e5d87062f6d3ba2644887dae70178f7728134c12930903` | `lease_armed` widened into the snapshot-required predicate | `lease-armed hold with a released marker and a durable receipt` (1 row) |
+
+`m5` is why the four shape rows carry the mutation in *both* the snapshot proof and the expected
+receipt proof: an equality-only check would have accepted a mirror-kind pair (the first `m5`
+attempt stayed green and exposed exactly that gap before the rows were strengthened).
+
 ## 5. Root-cause probes (scratch, WSL, never in the tree)
 
 Fix round r2's local replica of the target-exit arm is delivered inside the fixture row
@@ -413,11 +456,32 @@ rows, mutants, suites and anchor sweep above were all run at the delivered r2 by
 root row re-ran on the r2 bytes with the identical refusal set, and the as-is-umask row is this
 host's implement-stage environment record, kept with its base attribution.
 
+Fix round r3 re-ran the whole sequence on the delivered r3 bytes (§1's r3 table), one surface at a
+time:
+
+| Gate (r3) | Command (working directory `daemon/` unless noted) | Exit | Result |
+| --- | --- | --- | --- |
+| formatting + vet | `gofmt -l .`; `go vet ./...` (Windows go1.27.4 and WSL Ubuntu-24.04 go1.27.0) | 0 / 0 | both clean on both surfaces |
+| focused rows, app | `go test -count=1 -v -run '^(TestLinuxV2NativeWitnessOwnerLossStage\|TestLinuxV2NativeWitnessOwnerLossSummaryShape\|TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery)$' ./internal/app/` (WSL) | 0 | `ok`, 18 subtest PASS rows, 0 FAIL |
+| focused rows, e2e | `go test -count=1 -v -run '^(TestLinuxV2StageReplayOwnerLossSnapshotRequired\|TestLinuxV2OwnerLossSnapshotBeforeRecovery\|TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch\|TestLinuxV2StageReplayHelperIssuedReleaseStopProof)$' ./e2e/` (WSL) | 0 | `ok`, 42 subtest PASS rows, 0 FAIL |
+| r3 mutant rows | the ten overlays in §4, `go test -overlay=… -count=1 -run … ./internal/app/ ./e2e/` (WSL) | 1 × 10 | §4: 1 / 2 / 1 / 1 / 4 / 2 / 1 / 2 / 1 / 1 rows red |
+| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 3 `no test files`, 0 FAIL |
+| full suite (WSL, `accept`, `umask 022`) | `go test -count=1 ./...` as user `accept` | 0 | 31 `ok`, 3 `no test files`, 0 FAIL |
+| comment cap | `python comment-cap.py <scratch clone> 94e36995` on the scratch-clone commit whose `production_linux_v2_owner_cli_test.go` sha256 equals §1's r3 `0d2aa2a2…` | 0 | empty output — no added comment block over 2 lines (the first r3 attempt flagged a 3-line doc comment at `:1193`; it was compressed to 2 lines and the cap re-ran clean) |
+| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 94e36995 --head HEAD` in the same scratch clone (junctioned `node_modules/jscpd` 4.3.0) | 0 | 9 changed file(s), 1780 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated, none new; notices: `production_linux_v2_owner_cli_test.go` and `CLOSED-TODO.md` still above the audited `--max-lines 5000` ceiling (the r2 rows' pre-existing class) |
+| sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc | 0/0/0/1 | record/plan/TODO pass; `CLOSED-TODO` exit 1 identical at base (pre-existing quoted specimens; the added lines carry no host path) |
+
+The r3 mutants were regenerated from the final e2e bytes after the comment compression and re-run
+(§4's hashes are those files); the app-package mutants are byte-stable because
+`linux_owner_witness_linux.go` did not change after them.
+
 ## 7. Residual risks and limits
 
-- The r1 `[INFERENCE]` of §2 is closed by fix round r2's pre-recovery measurement (and by the 30 s
-  self-kill bound, which rules out a hanging stop behind the old 90 s survival); the end-to-end
-  firing of the r2 assertions still needs the privileged guest (see the oracle bullet below).
+- The r1 `[INFERENCE]` of §2 is closed by fix round r3's recovery-client pre-stop snapshot (§8;
+  and by the 30 s self-kill bound, which rules out a hanging stop behind the old 90 s survival);
+  the snapshot is witness telemetry and its ordering is structural, not proved in-band by the
+  helper — §8 states both limits — and the end-to-end firing still needs the privileged guest (see
+  the oracle bullet below).
 - The acceptance legs' *next* stop after this wait is unknown until the Bind, which now runs both
   containment sets (the conductor's main measurement run `45775969711` reds `native_release_codex`
   with the same class, §2 item 5; the diagnostic Bind301 below observed `claude_containment`
@@ -428,10 +492,10 @@ host's implement-stage environment record, kept with its base attribution.
 - The product-side alternative (plan §3.3) remains available to the conductor as a new goal if the
   helper's post-stop residency is ruled a defect; it would need `platform/**` ownership plus a
   change to the daemon-crash witness's `Kind == helper`/`HelperExit == nil` requirement.
-- At the two proven stages the pre-recovery wait is now the owner-loss assertion (`native_release`:
-  the target pidfd; `stop_receipt_durable`: the helper Status); every unproven stage keeps the
-  90 s fatal, and the stage-replay matrix and the `stale_leaf` witness exercise those boundaries
-  with their own recovered-evidence assertions unchanged.
+- At the two proven stages the pre-recovery evidence is now the recovery client's own snapshot
+  (§8) plus the `native_release` target-containment wait; every unproven stage keeps the 90 s
+  fatal, and the stage-replay matrix and the `stale_leaf` witness exercise those boundaries with
+  their own recovered-evidence assertions unchanged.
 - Fix round r1: the two proven stages pin the recovered tombstone to the held helper's own
   released-gate proof (§3, call site `:2170-2175`), so a product regression that routes them
   through the anchor-reap mirror path reds the leg at that assertion instead of passing on the
@@ -446,17 +510,157 @@ host's implement-stage environment record, kept with its base attribution.
   inside its added lines are not checked by that gate, before or after this change. Raising the
   audited ceiling is a separate gate change, outside this goal's owned files.
 
-## 8. Close-out
+## 8. Fix round r3 — the recovery-client pre-stop snapshot (contract Z1-Z5)
+
+Round 3 is the contract's A3/D1 choice: the witness seam — an owned production byte — hosts the
+pre-recovery read, the fixture's helper dials are deleted, and the two arms' claims are re-worded
+honestly.
+
+### 8.1 Premise (the round's STOP-condition check): the witness process is the recovery peer
+
+Verified from code at the r3 base; the premise holds, so the fix proceeds.
+
+- **Same process.** `recoverLinuxV2NativeWitnessRunKey` (`linux_owner_witness_linux.go:2995`)
+  constructs the recovery daemon and calls `recoverContainmentOnlyJournals`
+  (`linux_owner_recovery_linux.go:1622`) synchronously; that reaches
+  `recoverLinuxV2OwnerJournal` → `owner.anchor.LookupHelper` (`:169`) and the recovery's own
+  `Control.Stop` (`bindRecoveredV2UnhandedHelperStop`, call `:274`). `LookupHelper`
+  (`linux_owner_anchor_linux.go:479`) dials the helper from the *caller* process:
+  `dialLinuxOwnerHelperV2` (`helper_v2_protocol.go:338`) stamps
+  `client: {PID: os.Getpid(), Identity: ProcessIdentity(os.Getpid())}` (`:363`). The snapshot runs
+  in that same process, before the recovery call, so both dials carry the identical peer identity.
+- **The helper admits it, and the slot the recovery needs is not consumed.**
+  `serveOwnerConnection` (`helper_v2_server.go:475-562`): pre-loss, a non-anchor peer that is not
+  the authenticated StartHelper caller is refused (`:497-500` — the snapshot's dial is therefore
+  refused until the owner-death latch fires, which the bounded poll waits out); post-loss
+  (`recoveryOnly := helper.ownerLost`), the **first** non-anchor peer claims `helper.recoveryOwner`
+  and a later connection is refused only when it is a *different* peer
+  (`recoveryOwner.Equal(peerIdentity)`, `:503-508`). The snapshot's connection claims the slot as
+  the recovery client itself; the recovery's own `LookupHelper` from the same process is admitted
+  by that equality. Nothing else is consumed: the anchor's `handleLookup`
+  (`anchor_session.go:248-317`) is stateless and re-dups the helper-pidfd/leaf/parent pins per
+  call, and `status` is on the post-loss allowlist
+  (`helper_v2_server.go:579-581`) and read-only (`handleStatus`, `:646-742`; pinned by
+  `TestLinuxOwnerHelperV2StatusDoesNotLatchExpiredLease`). A same-peer re-lookup is therefore
+  admitted, including the `Control.Status` parallel connection (`openParallelControl`,
+  `linux_owner_helper_v2_linux.go:788-823`).
+- **What this closes.** DS audit P1-2: the fixture is a different peer, so its dials were refused
+  pre-loss and, post-loss, claimed the single slot the recovery needs. Round 3 deletes them (§8.3)
+  and moves the read into the recovery client, where the design already places the first post-loss
+  attacher.
+
+### 8.2 What the seam records and what the fixture asserts (Z1, Z2)
+
+- `linux_owner_witness_linux.go` gains the snapshot type `linuxV2NativeWitnessOwnerLoss`
+  (`:2866`), the stage predicate `linuxV2NativeWitnessOwnerLossStage` (`:2879`, exactly
+  `stage_replay` with `Barrier.HoldAfter` in `{native_release, stop_receipt_durable}`), the
+  committed-live boundary predicate `linuxV2NativeWitnessOwnerLossExpected` (`:2892`), the bounded
+  read `captureLinuxV2NativeWitnessOwnerLoss` (`:2916`: `LookupHelper` + `Control.Status` poll,
+  40 s bound, 250 ms interval; records `OwnerLost`, the cached `StopProof`, the released-gate
+  authorization and the held helper identity; never erroring), the shape validator
+  `validateLinuxV2NativeWitnessOwnerLoss` (`:2900`, called from `validateFinalSummary` `:747`),
+  the summary field `owner_loss` (`:316`), and the two injectable seam variables (`:2991`).
+- The fixture mirrors the field (`production_linux_v2_native_witness_test.go:1312`) and asserts it
+  at the two stages via `linuxV2RequireOwnerLossSnapshotBeforeRecovery`
+  (`production_linux_v2_owner_cli_test.go:1208`, call `:2096`): a clean capture of the exact held
+  helper, `OwnerLost`, a helper-issued proof (`Kind == helper`,
+  `Issuer == Reaper == held helper`, `HelperExit == nil`), `GateReleaseAuthorized` at
+  `native_release`, and equality to the receipt proof — the final release tombstone's proof at
+  `native_release`, the pre-existing durable receipt proof at `stop_receipt_durable`. The
+  `native_release` target-pidfd wait is kept as a *containment* check only
+  (`linuxV2RequireTargetContainedBeforeRecovery`, `:1196`).
+- The helper response-loss runner re-anchors its `stop_receipt_durable` receipt checks to the
+  journal receipt plus the same snapshot field (`:4350`), with the receipt proof taken from the
+  journal (`:4273-4279`).
+- Honest limits. The snapshot is witness telemetry: its trust root is the recovery process's own
+  response (the same trust as every other witness field, weaker than a fixture dial). Its ordering
+  before the recovery's first stop is structural — the capture call precedes the
+  `recoverContainmentOnlyJournals` call, pinned by the owned ordering row, not proved in-band by
+  the helper (the helper cannot tell same-identity callers apart). At `stop_receipt_durable` the
+  helper's cached proof predates the kill and `stopOwned` returns it from its cached fast path
+  (`platform/helper_v2_stop.go:716-721`), so the claim there is latch + resident retention +
+  receipt identity, not a new stop; at `native_release` the claim is that the released-gate
+  owner-loss stop's proof existed before the recovery acted (the skip-`stopOwned` mutant leaves
+  the snapshot without a proof, but its end-to-end red needs the privileged guest, §8.5).
+  `release-run`-finalized helpers are out of scope: if the helper is already finalized the capture
+  records a bounded failure and the recovery proceeds as before.
+
+### 8.3 Deletions (Z3)
+
+Deleted from `production_linux_v2_owner_cli_test.go`: `linuxV2ReadHeldHelperStatus`,
+`linuxV2WaitHeldHelperOwnerLostStopProof`, `linuxV2RequireHeldHelperOwnerLostStopProof`,
+`linuxV2RequireOwnerLossStopBeforeRecovery`, `linuxV2CaptureNormalAnchorStopEvidence`, and the
+pre-kill `normalStop`/`AnchorStop` captures at `stop_receipt_durable` in both the stage matrix and
+the helper response-loss runner; `linuxV2StageReplayHelperStopIsProven` is renamed
+`linuxV2StageReplayOwnerLossSnapshotRequired` with its logic unchanged (the name and doc no longer
+claim the boundary *proves* a stop), and
+`linuxV2RequireTargetExitedBeforeRecovery` is renamed
+`linuxV2RequireTargetContainedBeforeRecovery`. No other actor's state changes: the runner deletion
+is inside one leg before its recovery starts; the response-loss runner's receipt equality is now
+journal-sourced; the recovery's inputs (marker, journal, socket), the response/journal validators
+and the post-recovery polls are untouched.
+
+### 8.4 Red-first rows and mutants (Z4)
+
+New/renamed rows (all local, WSL): `TestLinuxV2NativeWitnessOwnerLossStage` (8 stage rows plus the
+committed-live/helper-exit predicate arms), `TestLinuxV2NativeWitnessOwnerLossSummaryShape`
+(8 shape rows), `TestLinuxV2NativeWitnessOwnerLossSnapshotPrecedesRecovery` (the ordering row plus
+the unproven-hold and legacy-journal no-snapshot rows — the seam-ordering pin with the injectable
+capture/recovery variables), `TestLinuxV2StageReplayOwnerLossSnapshotRequired` (13 rows, the r2
+enumeration kept), `TestLinuxV2OwnerLossSnapshotBeforeRecovery` (16 predicate rows plus the three
+local containment-replica rows) and the extended
+`TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch` (both kind legs). Ten byte mutants
+(`go test -overlay`, never written into the tree) each go red at their rows: the seam order
+reversed (m1), the app stage predicate widened (m2), the app shape check dropped (m3), the latch
+term dropped (m4), the four proof-shape terms dropped (m5, four rows), the receipt equality
+dropped (m6, two rows), the held-helper identity check dropped (m7), the stage/clean-capture
+checks dropped (m8, two rows), the released-gate authorization dropped (m9), and the required
+predicate widened to `lease_armed` (m10) — table and hashes in §4, runs in §6. The two Bind-leg
+decisions the ruling asks for are covered as far as the local surfaces can: both kind legs present
+`barrierStage == "native_release"` and the matrix now passes `testCase.barrierStage` into the
+runner (DS P3-2 remediation), and the app-side stage table pins the same two literals the legs'
+requests carry.
+
+### 8.5 Guest-only rows (recorded, not claimed)
+
+The product-level mutant “`markOwnerLost` latches owner loss without calling `stopOwned`” reds the
+`native_release`/`native_release_codex` snapshot assertion (no cached proof in the snapshot; the
+recovery's later `Stop` would otherwise supply one) and the daemon-crash witness — the dispatch
+job's matrix legs are that mutant's first end-to-end oracle, exactly as in r1/r2. The
+`native_release` containment wait is satisfied by the claude target's stdin-EOF self-exit in both
+the green and mutant cases, so it carries no attribution claim (the round's P1-1 correction).
+
+### 8.6 Records (Z5)
+
+“Equal-strength” is removed from the record, plan and closure text; the r2 arms are marked
+superseded; P1-1 (measured claude stdin-EOF self-exit on the exact pinned 2.1.323 bytes; the App is
+the sole writer) and P1-2 (fixture peer refusal / single-slot claim) are recorded as facts; the
+DS P3-2 matrix-literal hole is fixed; the DS P3s kept open are the guest-only product-mutant row
+(§8.5) and the `checkout_ready` census residual (`docs/TODO.md`). The assertion mapping is in §3;
+the Bind-2 section below is relabelled diagnostic for the r2 bytes it bound.
+
+### 8.7 Ruling checklist (Z1-Z5)
+
+| Item | State | Evidence |
+| --- | --- | --- |
+| Z1 witness-hosted pre-recovery `LookupHelper` + `Control.Status` into a validated response field, no `platform/**`/`authority/**`/`execution/**` change | done | §8.1/§8.2; `linux_owner_witness_linux.go:2866-3026`; premise verified (same-peer admission) |
+| Z2 honest fixture assertions (snapshot proof at `native_release`; latch + cached proof = durable receipt at `stop_receipt_durable`; target wait labelled containment) | done | §8.2; `linuxV2RequireOwnerLossSnapshotBeforeRecovery` (`owner_cli_test.go:1208`), `linuxV2RequireTargetContainedBeforeRecovery` (`:1196`) |
+| Z3 delete the fixture dials and the pre-kill `normalStop`/`AnchorStop` capture; re-anchor `stop_receipt_durable` to journal receipt + the Z1 field | done | §8.3; the response-loss runner's journal-sourced receipt proof (`:4273-4279`) and snapshot assertion (`:4350`) |
+| Z4 red-first rows: skip-`stopOwned` (guest, §8.5), seam ordering, latch, evidence replacement, codex+claude kind legs | done locally | §8.4/§4: ordering row + ten mutants, 16 rows red; the product mutant's guest row is the residual |
+| Z5 records: no “equal-strength”/“no other actor”, P1-1/P1-2 as facts, DS P3s | done | this section, §3, the plan §8, `docs/TODO.md`, `CLOSED-TODO` closure |
+
+## 9. Close-out
 
 Delivered, pending the conductor's Bind (both containment sets, `claude_containment` and
-`codex_containment`): the implement round plus fix rounds r1 and r2 (review findings
-STD-A01/STD-A02 and the DS P1, which is the valid unresolved thread `PRRT_kwDOUMNTZc68QecV`;
-contract ruling R1-R6, §3/§4/§7), with the r1 and r2 rows and mutants in §4 at the delivered bytes
-of §1. The closure row in `docs/archive/CLOSED-TODO.md` carries the plan/record paths and the r2
-assertions; `docs/TODO.md` dropped the entry that carried this stop as its next stop and now
-carries the `checkout_ready` census residual. The last step ran the comment cap *before* the final
-re-measure: §1's fixture and plan digests were re-read at the delivered bytes and are unchanged
-across every gate row above; the §2/§3/§4/§5 anchors were re-read at these bytes.
+`codex_containment`): the implement round plus fix rounds r1, r2 (superseded) and r3 — the
+contract's round-3 ruling Z1-Z5 (§8), on top of the r1 review findings STD-A01/STD-A02, the DS r1
+P1 (the valid unresolved thread `PRRT_kwDOUMNTZc68QecV`, contract ruling R1-R6) and the DS r2
+P1-1/P1-2 plus the three round-3 consults. The r3 row set and its ten mutants are §8.4/§4; the
+deleted r2 arms and the r1 pin remain as the r1/r2 record. The closure row in
+`docs/archive/CLOSED-TODO.md` carries the plan/record paths and the r3 assertions; `docs/TODO.md`
+carries the `checkout_ready` census residual and the round-3 guest-only product-mutant residual.
+The last step ran the comment cap *before* the final re-measure: §1's r3 digests were re-read at
+the delivered bytes and are unchanged across every gate row above.
 
 ## Bind — diagnostic: binding run on the pre-r2 PR head c0749664 (claude_containment)
 
@@ -532,3 +736,68 @@ under the GDD state root (sha256
 
 The Go-file digest equals §1's delivered digest; the four record-only docs (`docs/TODO.md`,
 `docs/archive/CLOSED-TODO.md`, the plan, this record) are not run inputs.
+
+## Bind 2 — diagnostic: binding run on the r2 PR head 94e36995 (claude_containment + codex_containment)
+
+Diagnostic only, superseded by the round-3 delivery: this run is GREEN on `94e36995` — the r2
+bytes, exactly the ones this record's r2 gate rows used, and before the round-3 seam/fixture
+change that moves the owner-loss read into the recovery client and deletes the r2 arms (§8) — and
+every digest below describes those bytes, not the delivered r3 bytes. It is kept because it is the
+last observed end-to-end oracle of both legs on the r2 assertion set.
+
+The conductor's post-fix Bind on the exact PR-head bytes plus the two scratch-only files, watched
+once, then the scratch branch deleted and the temporary worktree removed. Full report:
+`findings/301-binding-run-2.md`; the run log is retained at
+`scratch/bind301r2/run-45780779253.log` under the GDD state root (sha256
+`524271801356c5bd5c2cfb9f35657495a184a7d037ed0d0e825dd9630f78ddd9`, 1065891 B, 5155 lines).
+
+- Run `45780779253` (event `push`, `run_attempt=1`, head
+  `dbd71f408b3b010dde7344350c48cd063a0503be` = `94e36995` + the two scratch-only files, created
+  08:09:20Z, conclusion **success**); `total_count=1` at every read (right after creation, after
+  settlement, immediately before the branch deletion and after it).
+- `claude_containment`: the recorded stop `A helper did not exit with owner loss after the
+  stage-replay kill` is **gone** (0 occurrences; 0 of `exact process pidfd remained live beyond the
+  bounded wait`, `did not exit with owner loss`, `Go native acceptance event gate failed`,
+  `--- FAIL` and `pass=0`); `TestProductionLinuxV2ClaudeNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` verify green
+  (`run=1 pass=1 skip=0`, log 3073, 3647-3648) beside the seven AppArmor rows (2486-2492);
+  `Case set claude_containment exited 0`; the export manifest is `status: "passed"` with
+  `missing_allowlisted_files: []`.
+- `codex_containment`: the same stop is **gone**; `TestProductionLinuxV2CodexNativeContainment`,
+  `TestProductionLinuxV2StageCrashReplayMatrix` and
+  `TestProductionLinuxV2StageCrashReplayMatrix/native_release_codex` verify green
+  (`run=1 pass=1 skip=0`, log 4416, 4990-4991) beside the seven AppArmor rows (3841-3847);
+  `Case set codex_containment exited 0` and `All 2 case sets exited 0.`; the export manifest is
+  `status: "passed"` with `missing_allowlisted_files: []`. No first failing line (0 `pass=0`
+  rows); both jobs `success`.
+- Artifacts (sha256 = zip bytes = API `digest`): `linux-v2-native-evidence-45780779253-1` id
+  `15098945253` sha256
+  `71d00ea649188edabed710a3500e582aea4445eed9cb3ee147da1d92ee056eeb` (members
+  `claude_containment/manifest.json`
+  `bcd82c24ba16894dbdaf79f57c5d631c6c1b072faf62eb21b12bac864201d4a6`;
+  `claude_containment/claude-native-containment.json`
+  `230273d2c0a773b0d531d586631d42fa94d9ddb8fa742e18f540a3f3584d0b78`;
+  `claude_containment/claude-stage-crash-replay-native-release.json`
+  `bb36978939d9604ad56fe3c57e4d9f8420c2028dbd04bb51c253c1f10ba3298d`;
+  `codex_containment/manifest.json`
+  `bd52ec658330c4ec4f9eac6cecb320247f25ba5610f91459fbe83d67e62314c2`;
+  `codex_containment/codex-native-containment.json`
+  `0824fdeec2c10176b6c02cbe2f32e100ea250e5402b83a5069723ced4be5e43b`;
+  `codex_containment/codex-stage-crash-replay-native-release.json`
+  `4ffb5fc836b347155c1200686fc47d8bd6a6f0631ec0e30e6b5945b8e541f405`);
+  `linux-v2-host-prerequisite-45780779253-1` id `15098856013` sha256
+  `c0eaa75d111f76d0b5f30175fccd163b9120d0c9c0fc5b7fabe6231e7aaffed5` (`status: passed`,
+  `source_commit` = the run head).
+- Run-input sha256 equality (run head `dbd71f408b` vs PR head `94e36995`):
+
+| file | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `3c8759c4aa83ddea43e542edff78d75f7c798c3ec1102e04f8cfe2b0885a028d` | `3c8759c4aa83ddea43e542edff78d75f7c798c3ec1102e04f8cfe2b0885a028d` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `6c7efcf062a3190a2559e35505c38cf036bd62a40f6f889bd6724733c33c973b` | `6c7efcf062a3190a2559e35505c38cf036bd62a40f6f889bd6724733c33c973b` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `3eaada89cf74e116282fe74cfd1fbda8c418197c09f6c29785cd6533060d7f04` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The Go-file digest equals §1's delivered r2 digest; the shim carries the recovered blob unchanged,
+and the workflow carries the single `case_sets` delta (`claude_containment` first,
+`codex_containment` second). The four record-only docs are not run inputs.
