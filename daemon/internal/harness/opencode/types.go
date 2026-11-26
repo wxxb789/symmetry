@@ -150,6 +150,9 @@ const (
 	SessionEventRecordedStepFailed   SessionEventKind = "recorded_step_failed"
 	SessionEventRecordedToolCalled   SessionEventKind = "recorded_tool_called"
 	SessionEventRecordedToolSuccess  SessionEventKind = "recorded_tool_success"
+	// SessionEventRecordedUninterpreted marks a recorded 2.4.1 type this build knows the
+	// pinned bytes emit but deliberately does not interpret; it is never an unknown diagnostic.
+	SessionEventRecordedUninterpreted SessionEventKind = "recorded_uninterpreted"
 )
 
 // NativeModelRef is the source-derived subset of OpenCode's Model.Ref.

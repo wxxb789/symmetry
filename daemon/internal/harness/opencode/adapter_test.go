@@ -109,16 +109,16 @@ func TestProbeRejectsWrongBlobDigest(t *testing.T) {
 	}
 }
 
-// The pinned 2.4.1 bytes print the bare readiness line; the prefixed spelling exists only
-// in the frozen synthetic fixtures. Both forms must bind the loopback port.
-func TestReadinessAcceptsTheRecordedLineAndTheFrozenFixturePrefix(t *testing.T) {
+// The pinned 2.4.1 bytes print the bare readiness line; the prefixed spelling exists only in
+// the inline synthetic streams. Both forms must bind the loopback port.
+func TestReadinessAcceptsTheRecordedLineAndTheInlinePrefixedForm(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		line string
 		want int
 	}{
 		{name: "2.4.1 bare line", line: "server listening on http://127.0.0.1:46345\n", want: 46345},
-		{name: "historical prefixed line", line: "opencode server listening on http://127.0.0.1:43123\n", want: 43123},
+		{name: "prefixed inline line", line: "opencode server listening on http://127.0.0.1:43123\n", want: 43123},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			session := newNativeSession(context.Background(), func() {}, context.Background(), func() {}, &recordingSink{}, t.TempDir(), nil, "opencode", "secret", nil, time.Millisecond, time.Second)
@@ -551,6 +551,141 @@ func TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst(t *testing.T) {
 	cancel()
 	if err := session.awaitRecordedOutcome(fake, "ses_recorded_1", "succeeded"); err == nil {
 		t.Fatal("awaitRecordedOutcome() = nil, want a refusal once the session ended")
+	}
+}
+
+// recordedSessionEventStream renders a committed 2.4.1 receipt's durable frames as one SSE
+// body, dropping the seq-0 creation frame the watcher opens its stream after; it returns the
+// watched session's own frame count.
+func recordedSessionEventStream(t *testing.T, name, sessionID string) (string, int) {
+	t.Helper()
+	var body strings.Builder
+	own := 0
+	for _, item := range recordedReceiptEvents(t, name) {
+		var envelope struct {
+			Durable json.RawMessage `json:"durable"`
+			Data    struct {
+				SessionID string `json:"sessionID"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(item, &envelope) != nil || len(envelope.Durable) == 0 {
+			continue
+		}
+		var durable struct {
+			Seq uint64 `json:"seq"`
+		}
+		if err := json.Unmarshal(envelope.Durable, &durable); err != nil {
+			t.Fatalf("parse durable cursor of %s: %v", name, err)
+		}
+		if durable.Seq == 0 {
+			continue
+		}
+		if envelope.Data.SessionID == sessionID {
+			own++
+		}
+		body.WriteString("data: ")
+		body.Write(item)
+		body.WriteString("\n\n")
+	}
+	return body.String(), own
+}
+
+// recordedWatcherSession builds the bare session the recorded-frame watcher rows drive; the
+// client and handle are seeded so a recorded terminal settles against the fake readback.
+func recordedWatcherSession(t *testing.T, fake *fakeAPI, sink harness.EventSink, sessionID string) *nativeSession {
+	t.Helper()
+	sessionContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	session := newNativeSession(sessionContext, cancel, context.Background(), func() {}, sink, t.TempDir(),
+		func(Config) (api, error) { return fake, nil }, "opencode", "secret", func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+			return func(context.Context, net.Conn) error { return nil }
+		}, time.Millisecond, time.Second)
+	session.mu.Lock()
+	session.client = fake
+	session.handle = harness.NativeSessionHandle{ID: sessionID}
+	session.mu.Unlock()
+	return session
+}
+
+func recordedWatcherCodes(sink *recordingSink) (native, unknown int) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, event := range sink.events {
+		switch event.Code {
+		case "opencode_session_event":
+			native++
+		case "opencode_unknown_session_event":
+			unknown++
+		}
+	}
+	return native, unknown
+}
+
+// TestRecordedSuccessSessionProducesNoUnknownDiagnostics replays the committed success
+// receipt through the watcher: every recorded type is known, so no frame becomes an unknown
+// diagnostic and the recorded succeeded terminal verifies against the readback.
+func TestRecordedSuccessSessionProducesNoUnknownDiagnostics(t *testing.T) {
+	const sessionID = "ses_ded027fb8ffeXP18hMb482YQFe"
+	const inboxID = "msg_be5a0bc1cfe3a506c506dd0b"
+	body, expectedFrames := recordedSessionEventStream(t, "windows-2026-11-25-r2.json", sessionID)
+	fake := &fakeAPI{outcome: "succeeded"}
+	sink := &recordingSink{}
+	session := recordedWatcherSession(t, fake, sink, sessionID)
+	done := make(chan struct{})
+	go session.watchSessionEvents(&streamHandle{body: io.NopCloser(strings.NewReader(body))}, done, sessionID, inboxID)
+	select {
+	case <-done:
+	case <-time.After(testHangGuard):
+		t.Fatal("the recorded success session replay did not finish")
+	}
+	native, unknown := recordedWatcherCodes(sink)
+	if unknown != 0 || native != expectedFrames {
+		t.Fatalf("recorded success replay = %d native, %d unknown, want %d native and zero unknown", native, unknown, expectedFrames)
+	}
+	if err := session.turnTerminalError(); err != nil {
+		t.Fatalf("recorded succeeded terminal did not verify: %v", err)
+	}
+}
+
+// TestWaitTurnSettlesTheRecordedProviderFailureTerminal drives the committed provider-failure
+// receipt through the watcher, so the recorded terminal payload settles the turn barrier and
+// the readback names the same failed outcome.
+func TestWaitTurnSettlesTheRecordedProviderFailureTerminal(t *testing.T) {
+	const sessionID = "ses_ded021257ffeokLGbODupUg0Wh"
+	const inboxID = "msg_bca9f1dac9ec4d4c9e6b83dd"
+	body, expectedFrames := recordedSessionEventStream(t, "windows-2026-11-25-provider-failure.json", sessionID)
+	fake := &fakeAPI{outcome: "failed"}
+	sink := &recordingSink{}
+	session := recordedWatcherSession(t, fake, sink, sessionID)
+	done := make(chan struct{})
+	go session.watchSessionEvents(&streamHandle{body: io.NopCloser(strings.NewReader(body))}, done, sessionID, inboxID)
+	select {
+	case <-done:
+	case <-time.After(testHangGuard):
+		t.Fatal("the recorded provider-failure replay did not finish")
+	}
+	native, unknown := recordedWatcherCodes(sink)
+	if unknown != 0 || native != expectedFrames {
+		t.Fatalf("recorded provider-failure replay = %d native, %d unknown, want %d native and zero unknown", native, unknown, expectedFrames)
+	}
+	if err := session.turnTerminalError(); err != nil {
+		t.Fatalf("recorded provider-failure terminal did not verify: %v", err)
+	}
+	result, err := session.currentResult()
+	if err != nil || result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != protocol.TaskResultReasonUnknownOutcome || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
+		t.Fatalf("currentResult() = %+v, %v; want a failed result with unknown outcome and unknown usage", result, err)
+	}
+	fake.mu.Lock()
+	calls := append([]string(nil), fake.callSequence...)
+	fake.mu.Unlock()
+	sawOutcome := false
+	for _, call := range calls {
+		if call == "outcome" {
+			sawOutcome = true
+		}
+	}
+	if !sawOutcome {
+		t.Fatalf("recorded terminal settled without the readback; calls = %v", calls)
 	}
 }
 

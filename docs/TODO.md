@@ -2020,6 +2020,27 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       may read it as V2 promotion evidence. Linux admission stays fail-closed until one dispatched
       `linux-native-v2-acceptance` `opencode_native_health` run is green.
 
+## rf-opencode-phase1: promoted 2.4.1 cross-harness residuals (2026-11-26)
+
+- [ ] Launch-time exact-blob re-verification (gdd review 3 STD-A05, 2026-11-26, goal
+      `rf-opencode-phase1`): the digest binds the executable at probe time only. `Start` hands the
+      bare program name to the execution runner, which re-resolves it via its own `LookPath`, and
+      `execution.Invocation` exposes no expected-digest field, so bytes swapped between the probe
+      and a later assignment launch are executed with the session workspace as CWD and the session
+      credential in the environment while start/events/cancel stay advertised. The shape is
+      identical in pi, codex and opencode, so a one-harness fix would fork the convention: fix the
+      shared `harness/execution` seam and re-pin all three. Owner: conductor (new goal).
+
+- [ ] Pre-connect SSE replay assumption (gdd review 3 STD-A08, 2026-11-26, goal
+      `rf-opencode-phase1`): the per-turn validator opens at the exclusive boundary `after=0`, so a
+      watched frame carrying `durable.seq == 0` fails the turn closed (`ErrCursorRegression`). The
+      session is created in `Open` and the global stream is opened later in `StartTurn`; the
+      recorded `session.created` cursor is 0 and the watcher rows skip seq-0 frames because the
+      stream opens after session creation. If `/api/event` ever replays a pre-connect frame for the
+      watched session, a promoted turn fails closed. The live promotion proof shows no backlog and
+      the guard stays as-is (fail-closed is the accepted direction); the item closes on a live
+      replay observation. Owner: conductor (new goal).
+
 - [ ] rf-acc-witness-unresolved-exit: the App exits 0 on the `unresolved` stage-replay recovery while
       its own e2e requires a deliberate non-zero exit (2026-11-25, goal `rf-acc-pi-durability-matrices`;
       conductor ruling on implement `DECISION_NEEDED` #2; evidence record §4b, plan §3.10 class 1):

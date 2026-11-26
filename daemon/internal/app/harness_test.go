@@ -893,106 +893,160 @@ func TestOpenCodeLegacyAssignmentFailsBeforeRunningWorkspaceAndProcess(t *testin
 	}
 }
 
-// A blob-mismatched OpenCode executable on the promoting platform must reach the same no-effect
-// boundary an absent one does: fail-closed projection, refusal before any workspace/process work.
+// A foreign blob stays a tolerated fail-closed projection; a wrong --version is the startup
+// refusal. Neither may reach workspace, process, session or event work before the refusal.
 func TestOpenCodeForeignBlobGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEffects(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("the blob gate is only reachable where the platform gate admits")
 	}
-	admission, present, err := parseAdmissionInput(validAdmissionInput())
-	if err != nil || !present {
-		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
-	}
-	now := time.Date(2026, 11, 14, 1, 2, 3, 0, time.UTC)
-	admission.Limits.DeadlineAt = now.Add(time.Hour).Format(time.RFC3339)
-	if err := admission.Validate(); err != nil {
-		t.Fatalf("validate admission: %v", err)
-	}
-	input, err := json.Marshal(admission)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store, err := state.New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	controlClient := &nativeAdmissionControl{
-		fakeControl:         &fakeControl{},
-		work:                protocol.Work{Goal: "implement the admitted change", Input: input},
-		admission:           admission,
-		claimLeaseExpiresAt: now.Add(time.Minute),
-	}
-	workspaceService := &fakeWorkspace{}
-	starts := 0
-	value := testConfig(t)
-	value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
-	value.Runtime.HarnessVersion = opencode.TestedVersion
-	value.Runtime.AdapterVersion = "configured-adapter"
-	value.Runtime.AdapterProtocolVersion = 1
-	value.Runtime.AgentProfile = admission.ModelProfile
-	value.Runtime.RepositoryResourceID = admission.Subject.ResourceID
-	profile := value.AgentProfiles[value.Runtime.AgentProfile]
-	profile.Command = "opencode-foreign-blob"
-	value.AgentProfiles[value.Runtime.AgentProfile] = profile
-	registry := newHarnessRegistry(profile)
-	if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner(profile.Command, nativeProbeDigestFixtures{
-		responses: openCodeExactBlobProbeResponses(),
-		digest:    "sha256:" + strings.Repeat("0", 64),
-	})); err != nil {
-		t.Fatal(err)
-	}
-	key := state.RunKey{RunID: "run-opencode-foreign-blob", Generation: 3}
-	daemon := &daemon{
-		config:          value,
-		store:           store,
-		control:         controlClient,
-		workspace:       workspaceService,
-		harnessRegistry: registry,
-		log:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
-			starts++
-			return nil, errors.New("foreign-blob OpenCode must not reach the process launcher")
+	for _, test := range []struct {
+		name         string
+		command      string
+		runID        string
+		probe        nativeProbeDigestFixtures
+		wantProbeErr error
+		wantReason   string
+	}{
+		{
+			name:    "foreign blob",
+			command: "opencode-foreign-blob",
+			runID:   "run-opencode-foreign-blob",
+			probe: nativeProbeDigestFixtures{
+				responses: openCodeExactBlobProbeResponses(),
+				digest:    "sha256:" + strings.Repeat("0", 64),
+			},
+			wantReason: "exact tested executable blob",
 		},
-		options:      options{newID: ids(), clock: func() time.Time { return now }, localClock: func() time.Time { return now }},
-		runtimeID:    "runtime-1",
-		runtimeEpoch: 7,
-		running:      map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{starting: true, cancel: func() {}, slotHeld: true}, cleanupBlocked: true}},
-		slots:        make(chan struct{}, 1),
-	}
-	if err := daemon.ensureHarnessProbe(context.Background()); err != nil {
-		t.Fatalf("ensureHarnessProbe() error = %v, want the fail-closed projection", err)
-	}
-	capabilities := daemon.harnessCapabilities
-	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
-		t.Fatalf("capabilities = %+v, want no promoted operation for a foreign blob", capabilities)
-	}
-	daemon.slots <- struct{}{}
-	daemon.startAssigned(context.Background(), key, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
+		{
+			name:    "wrong version",
+			command: "opencode-wrong-version",
+			runID:   "run-opencode-wrong-version",
+			probe: nativeProbeDigestFixtures{
+				responses: map[string][]byte{
+					"--version":    []byte("opencode v2.3.0\n"),
+					"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+				},
+				digest: opencode.TestedExecutableHash,
+			},
+			wantProbeErr: harness.ErrUnsupportedVersion,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			admission, present, err := parseAdmissionInput(validAdmissionInput())
+			if err != nil || !present {
+				t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
+			}
+			now := time.Date(2026, 11, 14, 1, 2, 3, 0, time.UTC)
+			admission.Limits.DeadlineAt = now.Add(time.Hour).Format(time.RFC3339)
+			if err := admission.Validate(); err != nil {
+				t.Fatalf("validate admission: %v", err)
+			}
+			input, err := json.Marshal(admission)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store, err := state.New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			controlClient := &nativeAdmissionControl{
+				fakeControl:         &fakeControl{},
+				work:                protocol.Work{Goal: "implement the admitted change", Input: input},
+				admission:           admission,
+				claimLeaseExpiresAt: now.Add(time.Minute),
+			}
+			workspaceService := &fakeWorkspace{}
+			starts := 0
+			value := testConfig(t)
+			value.Runtime.HarnessKind = config.RuntimeHarnessOpenCode
+			value.Runtime.HarnessVersion = opencode.TestedVersion
+			value.Runtime.AdapterVersion = "configured-adapter"
+			value.Runtime.AdapterProtocolVersion = 1
+			value.Runtime.AgentProfile = admission.ModelProfile
+			value.Runtime.RepositoryResourceID = admission.Subject.ResourceID
+			profile := value.AgentProfiles[value.Runtime.AgentProfile]
+			profile.Command = test.command
+			value.AgentProfiles[value.Runtime.AgentProfile] = profile
+			registry := newHarnessRegistry(profile)
+			if err := registry.Register(harness.KindOpenCode, opencode.NewAdapterWithRunner(profile.Command, test.probe)); err != nil {
+				t.Fatal(err)
+			}
+			key := state.RunKey{RunID: test.runID, Generation: 3}
+			daemon := &daemon{
+				config:          value,
+				store:           store,
+				control:         controlClient,
+				workspace:       workspaceService,
+				harnessRegistry: registry,
+				log:             slog.New(slog.NewJSONHandler(io.Discard, nil)),
+				start: func(context.Context, execution.Invocation, execution.Sink) (Process, error) {
+					starts++
+					return nil, errors.New("unpromoted OpenCode must not reach the process launcher")
+				},
+				options:      options{newID: ids(), clock: func() time.Time { return now }, localClock: func() time.Time { return now }},
+				runtimeID:    "runtime-1",
+				runtimeEpoch: 7,
+				running:      map[state.RunKey]*runningRun{key: {runLifecycle: runLifecycle{starting: true, cancel: func() {}, slotHeld: true}, cleanupBlocked: true}},
+				slots:        make(chan struct{}, 1),
+			}
+			probeErr := daemon.ensureHarnessProbe(context.Background())
+			if test.wantProbeErr != nil {
+				if !errors.Is(probeErr, test.wantProbeErr) {
+					t.Fatalf("ensureHarnessProbe() error = %v, want the version-gate startup refusal", probeErr)
+				}
+				if !strings.Contains(probeErr.Error(), "OpenCode 2.3.0") {
+					t.Fatalf("ensureHarnessProbe() error = %v, want the version gate to name the refused version", probeErr)
+				}
+				sessions, err := store.ListGoalSessions()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.LoadJournal(key); !state.IsNotFound(err) {
+					t.Fatalf("LoadJournal() error = %v, want no run journal for a refused probe", err)
+				}
+				if controlClient.claimCalls != 0 || len(controlClient.calls) != 0 || len(controlClient.fenceCalls) != 0 || controlClient.eventCalls != 0 ||
+					workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 || starts != 0 || len(sessions) != 0 {
+					t.Fatalf("wrong-version OpenCode reached claim/workspace/process/session/event work: claims=%d calls=%v prepares=%d recovers=%d starts=%d sessions=%+v events=%d",
+						controlClient.claimCalls, controlClient.calls, workspaceService.prepareCalls, workspaceService.recoverCalls, starts, sessions, controlClient.eventCalls)
+				}
+				return
+			}
+			if probeErr != nil {
+				t.Fatalf("ensureHarnessProbe() error = %v, want the fail-closed projection", probeErr)
+			}
+			capabilities := daemon.harnessCapabilities
+			if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel {
+				t.Fatalf("capabilities = %+v, want no promoted operation for an unpromoted executable", capabilities)
+			}
+			daemon.slots <- struct{}{}
+			daemon.startAssigned(context.Background(), key, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
 
-	journal, err := store.LoadJournal(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if controlClient.claimCalls != 1 || journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "failed" {
-		t.Fatalf("foreign-blob claim/journal = claims %d, journal %+v, want one fenced failed transition", controlClient.claimCalls, journal)
-	}
-	var failure map[string]string
-	if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
-		t.Fatal(err)
-	}
-	if failure["stage"] != "goal_admission" || !strings.Contains(failure["error"], "opencode unsupported harness capability start") || !strings.Contains(failure["error"], "exact tested executable blob") {
-		t.Fatalf("Goal failure = %#v, want the exact-blob refusal before native launch", failure)
-	}
-	sessions, err := store.ListGoalSessions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 || starts != 0 || journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.HasProcessDetails() {
-		t.Fatalf("foreign-blob OpenCode caused workspace/process side effects: prepares=%d recovers=%d starts=%d journal=%+v", workspaceService.prepareCalls, workspaceService.recoverCalls, starts, journal)
-	}
-	if len(sessions) != 0 || len(controlClient.calls) != 0 || len(controlClient.fenceCalls) != 0 || len(journal.PendingGoalDeliveries) != 0 || len(journal.PendingEvents) != 0 || controlClient.eventCalls != 0 {
-		t.Fatalf("foreign-blob OpenCode caused session/event side effects: sessions=%+v calls=%v fences=%+v events=%d", sessions, controlClient.calls, controlClient.fenceCalls, controlClient.eventCalls)
+			journal, err := store.LoadJournal(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if controlClient.claimCalls != 1 || journal.LocalState != "terminal_pending" || journal.TerminalState != "failed" || len(journal.PendingTransitions) != 1 || journal.PendingTransitions[0].State != "failed" {
+				t.Fatalf("unpromoted claim/journal = claims %d, journal %+v, want one fenced failed transition", controlClient.claimCalls, journal)
+			}
+			var failure map[string]string
+			if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
+				t.Fatal(err)
+			}
+			if failure["stage"] != "goal_admission" || !strings.Contains(failure["error"], "opencode unsupported harness capability start") || !strings.Contains(failure["error"], test.wantReason) {
+				t.Fatalf("Goal failure = %#v, want the %q refusal before native launch", failure, test.wantReason)
+			}
+			sessions, err := store.ListGoalSessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workspaceService.prepareCalls != 0 || workspaceService.recoverCalls != 0 || starts != 0 || journal.WorkspaceRecoveryRequired || journal.WorkspacePath != "" || journal.HasProcessDetails() {
+				t.Fatalf("unpromoted OpenCode caused workspace/process side effects: prepares=%d recovers=%d starts=%d journal=%+v", workspaceService.prepareCalls, workspaceService.recoverCalls, starts, journal)
+			}
+			if len(sessions) != 0 || len(controlClient.calls) != 0 || len(controlClient.fenceCalls) != 0 || len(journal.PendingGoalDeliveries) != 0 || len(journal.PendingEvents) != 0 || controlClient.eventCalls != 0 {
+				t.Fatalf("unpromoted OpenCode caused session/event side effects: sessions=%+v calls=%v fences=%+v events=%d", sessions, controlClient.calls, controlClient.fenceCalls, controlClient.eventCalls)
+			}
+		})
 	}
 }
 
@@ -1159,9 +1213,6 @@ func TestComposedOpenCodeRefusalSentenceMatchesTheUnavailableSeam(t *testing.T) 
 }
 
 func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEffects(t *testing.T) {
-	if runtime.GOOS != "windows" {
-		t.Skip("the composed native OpenCode adapter exists only where the platform gate admits")
-	}
 	admission, present, err := parseAdmissionInput(validAdmissionInput())
 	if err != nil || !present {
 		t.Fatalf("parse admission = %+v, %t, %v", admission, present, err)
@@ -1226,8 +1277,12 @@ func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEff
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := adapter.(*opencode.Adapter); !ok {
-		t.Fatalf("OpenCode adapter = %T, want the composed native adapter", adapter)
+	if runtime.GOOS == "windows" {
+		if _, ok := adapter.(*opencode.Adapter); !ok {
+			t.Fatalf("OpenCode adapter = %T, want the composed native adapter", adapter)
+		}
+	} else if _, ok := adapter.(*harness.UnavailableAdapter); !ok {
+		t.Fatalf("OpenCode adapter = %T, want the unavailable platform seam", adapter)
 	}
 	app.slots <- struct{}{}
 	app.startAssigned(context.Background(), key, protocol.Assignment{RunID: key.RunID, Generation: key.Generation, Work: controlClient.work})
@@ -1247,7 +1302,11 @@ func TestOpenCodeGoalAssignmentFailsBeforeWorkspaceProcessSessionAndEventSideEff
 	if err := json.Unmarshal(journal.PendingTransitions[0].Payload, &failure); err != nil {
 		t.Fatal(err)
 	}
-	if failure["stage"] != "goal_admission" || !strings.Contains(failure["error"], "opencode unsupported harness capability start") || !strings.Contains(failure["error"], "opencode version probe failed") {
+	wantPlatformRefusal := "opencode version probe failed"
+	if runtime.GOOS != "windows" {
+		wantPlatformRefusal = "promoted on Windows only"
+	}
+	if failure["stage"] != "goal_admission" || !strings.Contains(failure["error"], "opencode unsupported harness capability start") || !strings.Contains(failure["error"], wantPlatformRefusal) {
 		t.Fatalf("Goal failure = %#v, want the composed fail-closed OpenCode capability boundary", failure)
 	}
 	sessions, err := store.ListGoalSessions()

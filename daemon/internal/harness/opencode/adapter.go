@@ -58,8 +58,8 @@ var (
 	errNilNativeProcess   = errors.New("opencode native process starter returned a nil process")
 	versionPattern        = regexp.MustCompile(`^(?:opencode v)?([0-9]+\.[0-9]+\.[0-9]+)$`)
 	unsupportedOperations = "OpenCode V2 2.4.1 operation is not covered by the exact-blob promotion evidence"
-	// The frozen fixtures spell the readiness line with the `opencode ` prefix; 2.4.1 prints
-	// the bare form recorded in every testdata/opencode/2.4.1 receipt, so both are accepted.
+	// The recorded 2.4.1 receipts print the bare readiness line; the optional `opencode `
+	// form stays accepted for the inline synthetic streams that spell it that way.
 	listeningLinePattern = regexp.MustCompile(`^(?:opencode )?server listening on http://127\.0\.0\.1:([1-9][0-9]{0,4})$`)
 )
 

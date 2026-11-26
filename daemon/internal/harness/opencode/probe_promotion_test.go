@@ -8,35 +8,38 @@ import (
 	"testing"
 )
 
-// TestOpenCodeTestdataBindsThePromotedWindowsDigest keeps TestedExecutableHash receipt-backed:
-// the committed 2.4.1 probe receipt and README must carry the digest and version line it gates.
-func TestOpenCodeTestdataBindsThePromotedWindowsDigest(t *testing.T) {
+type openCodeProbeReceipt struct {
+	Binary struct {
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+		Magic  string `json:"magic"`
+		Asset  string `json:"asset"`
+	} `json:"binary"`
+	Observations []struct {
+		Command  []string `json:"command"`
+		ExitCode int      `json:"exit_code"`
+		Stdout   string   `json:"stdout"`
+	} `json:"observations"`
+}
+
+// assertProbeReceiptBindsDigest keeps a promoted digest receipt-backed: the committed 2.4.1
+// probe receipt and README must carry the digest, identity and version line it gates.
+func assertProbeReceiptBindsDigest(t *testing.T, fileName, magic, asset, digest string) {
+	t.Helper()
 	directory := filepath.Join("..", "testdata", "opencode", TestedVersion)
-	encoded, err := os.ReadFile(filepath.Join(directory, "probe-windows.json"))
+	encoded, err := os.ReadFile(filepath.Join(directory, fileName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var receipt struct {
-		Binary struct {
-			Size   int64  `json:"size"`
-			SHA256 string `json:"sha256"`
-			Magic  string `json:"magic"`
-			Asset  string `json:"asset"`
-		} `json:"binary"`
-		Observations []struct {
-			Command  []string `json:"command"`
-			ExitCode int      `json:"exit_code"`
-			Stdout   string   `json:"stdout"`
-		} `json:"observations"`
-	}
+	var receipt openCodeProbeReceipt
 	if err := json.Unmarshal(encoded, &receipt); err != nil {
 		t.Fatalf("probe receipt: %v", err)
 	}
-	if got, want := "sha256:"+receipt.Binary.SHA256, TestedExecutableHash; got != want {
-		t.Fatalf("receipt blob digest = %q, want TestedExecutableHash %q", got, want)
+	if got, want := "sha256:"+receipt.Binary.SHA256, digest; got != want {
+		t.Fatalf("receipt blob digest = %q, want %q", got, want)
 	}
-	if receipt.Binary.Size <= 0 || receipt.Binary.Magic != "4d5a" || receipt.Binary.Asset != "opencode-windows-x64.zip" {
-		t.Fatalf("receipt blob identity = %+v, want the pinned Windows PE asset", receipt.Binary)
+	if receipt.Binary.Size <= 0 || receipt.Binary.Magic != magic || receipt.Binary.Asset != asset {
+		t.Fatalf("receipt blob identity = %+v, want the pinned %s asset", receipt.Binary, asset)
 	}
 	if len(receipt.Observations) != 2 {
 		t.Fatalf("receipt observations = %d, want the version and help captures", len(receipt.Observations))
@@ -57,6 +60,14 @@ func TestOpenCodeTestdataBindsThePromotedWindowsDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(readme), receipt.Binary.SHA256) {
-		t.Fatal("2.4.1 README does not carry the receipt's promoted blob digest")
+		t.Fatalf("2.4.1 README does not carry the receipt's %s digest", asset)
 	}
+}
+
+func TestOpenCodeTestdataBindsThePromotedWindowsDigest(t *testing.T) {
+	assertProbeReceiptBindsDigest(t, "probe-windows.json", "4d5a", "opencode-windows-x64.zip", TestedExecutableHash)
+}
+
+func TestOpenCodeTestdataBindsTheRecordedLinuxDigest(t *testing.T) {
+	assertProbeReceiptBindsDigest(t, "probe-linux.json", "7f454c46", "opencode-linux-x64.tar.gz", testedLinuxExecutableHash)
 }

@@ -177,8 +177,8 @@ const (
 	toolFailedEventType     = "session.next.tool.failed"
 	retriedEventType        = "session.next.retried"
 
-	// Recorded 2.4.1 vocabulary; the 1.18.32 names above stay because the frozen
-	// testdata/opencode/1.18.32 rows decode their frames through them.
+	// Recorded 2.4.1 vocabulary; the 1.18.32 names above stay for the frozen 1.18.32
+	// fixtures, the inline decode rows and the 1.18.32-pinned candidate witness.
 	executionStartedEventType     = "session.execution.started"
 	executionSucceededEventType   = "session.execution.succeeded"
 	executionFailedEventType      = "session.execution.failed"
@@ -323,6 +323,9 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 		if err := validateJSONValue(event.Data); err != nil {
 			return DecodedSessionEvent{}, fmt.Errorf("%w: unknown event data: %v", ErrMalformedEvent, err)
 		}
+		if _, recorded := recordedUninterpretedEventTypes[event.Type]; recorded {
+			decoded.Kind = SessionEventRecordedUninterpreted
+		}
 	}
 	return decoded, nil
 }
@@ -461,6 +464,24 @@ func knownDurableEventVersion(eventType string) (uint64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// recordedUninterpretedEventTypes are the durable 2.4.1 types this build knows the pinned
+// bytes emit but deliberately does not interpret; they stay known, never an unknown diagnostic.
+var recordedUninterpretedEventTypes = map[string]struct{}{
+	"session.created":              {},
+	"session.deleted":              {},
+	"session.inbox.delivered":      {},
+	"session.instructions.updated": {},
+	"session.reasoning.ended":      {},
+	"session.reasoning.started":    {},
+	"session.renamed":              {},
+	"session.step.first-token":     {},
+	"session.step.streamed":        {},
+	"session.text.ended":           {},
+	"session.text.started":         {},
+	"session.tool.input.ended":     {},
+	"session.tool.input.started":   {},
 }
 
 func strictEventObject(raw json.RawMessage) (map[string]json.RawMessage, error) {

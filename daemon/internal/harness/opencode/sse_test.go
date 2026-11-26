@@ -512,24 +512,29 @@ var recordedReceiptKinds = map[string]SessionEventKind{
 	"session.step.failed":           SessionEventRecordedStepFailed,
 	"session.tool.called":           SessionEventRecordedToolCalled,
 	"session.tool.success":          SessionEventRecordedToolSuccess,
+	// Recorded types the promoted transport journals without interpreting.
+	"session.created":              SessionEventRecordedUninterpreted,
+	"session.deleted":              SessionEventRecordedUninterpreted,
+	"session.inbox.delivered":      SessionEventRecordedUninterpreted,
+	"session.instructions.updated": SessionEventRecordedUninterpreted,
+	"session.reasoning.ended":      SessionEventRecordedUninterpreted,
+	"session.reasoning.started":    SessionEventRecordedUninterpreted,
+	"session.renamed":              SessionEventRecordedUninterpreted,
+	"session.step.first-token":     SessionEventRecordedUninterpreted,
+	"session.step.streamed":        SessionEventRecordedUninterpreted,
+	"session.text.ended":           SessionEventRecordedUninterpreted,
+	"session.text.started":         SessionEventRecordedUninterpreted,
+	"session.tool.input.ended":     SessionEventRecordedUninterpreted,
+	"session.tool.input.started":   SessionEventRecordedUninterpreted,
 }
 
 // recordedReceiptFrames returns the receipt's durable event frames in arrival order;
 // non-durable frames never reach the session validator on the global stream.
 func recordedReceiptFrames(t *testing.T, name string) []Frame {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "testdata", "opencode", TestedVersion, name))
-	if err != nil {
-		t.Fatalf("read recorded receipt %s: %v", name, err)
-	}
-	var record struct {
-		Events []json.RawMessage `json:"events"`
-	}
-	if err := json.Unmarshal(raw, &record); err != nil {
-		t.Fatalf("parse recorded receipt %s: %v", name, err)
-	}
-	frames := make([]Frame, 0, len(record.Events))
-	for _, item := range record.Events {
+	record := recordedReceiptEvents(t, name)
+	frames := make([]Frame, 0, len(record))
+	for _, item := range record {
 		var envelope struct {
 			Durable json.RawMessage `json:"durable"`
 		}
@@ -541,8 +546,24 @@ func recordedReceiptFrames(t *testing.T, name string) []Frame {
 	return frames
 }
 
+// recordedReceiptEvents reads one committed 2.4.1 receipt and returns its raw event envelopes.
+func recordedReceiptEvents(t *testing.T, name string) []json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "opencode", TestedVersion, name))
+	if err != nil {
+		t.Fatalf("read recorded receipt %s: %v", name, err)
+	}
+	var record struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("parse recorded receipt %s: %v", name, err)
+	}
+	return record.Events
+}
+
 // TestRecordedReceiptFramesDecode classifies every durable frame of every committed 2.4.1
-// receipt: recorded types decode to their kind and everything else stays unknown.
+// receipt: every recorded type must decode to its expected kind, never to unknown.
 func TestRecordedReceiptFramesDecode(t *testing.T) {
 	for _, name := range recordedReceiptFiles {
 		t.Run(name, func(t *testing.T) {
@@ -551,9 +572,9 @@ func TestRecordedReceiptFramesDecode(t *testing.T) {
 				if err != nil {
 					t.Fatalf("frame %d decode error = %v", index, err)
 				}
-				want := recordedReceiptKinds[decoded.Type]
-				if want == "" {
-					want = SessionEventUnknown
+				want, ok := recordedReceiptKinds[decoded.Type]
+				if !ok {
+					t.Fatalf("frame %d recorded type %q has no expected kind", index, decoded.Type)
 				}
 				if decoded.Kind != want {
 					t.Fatalf("frame %d type %q kind = %q, want %q", index, decoded.Type, decoded.Kind, want)
