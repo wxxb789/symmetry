@@ -27,9 +27,12 @@ STAGE_REPLAY_NATIVE_RELEASE_CASES = {
     "stage_replay_unprovisioned_refusal",
 }
 PROVIDER_ACCESS_CASES = {name for name, (_, profile, _) in CASES.items() if profile == "pi-native"}
-# Exactly the cases whose fixture route commissions a Control Goal; the profile name is not the routing
-# fact, and test-linux-v2-owner-request-keys.py pins this set against the fixture's goal-routed rows.
+# Exactly the cases whose fixture route commissions a Control Goal; the pi-native rows carry the
+# provider-scoped admission and test-linux-v2-owner-request-keys.py pins both facts against the fixture.
 GOAL_ADMISSION_CASES = {
+    "pi_provider_action",
+    "helper_sigkill_detached_child",
+    "daemon_sigkill_helper_survives_detached_child",
     "stage_replay",
     "codex_containment",
     "claude_containment",
@@ -212,10 +215,21 @@ def main() -> int:
             },
             "goal-routed ClaimResponse admission Subject differs from the requested Subject",
         )
-        require(
-            "provider_scope" in work_input and work_input["provider_scope"] is None,
-            "goal-routed ClaimResponse admission carries a provider scope",
-        )
+        if provider_case:
+            require(
+                work_input.get("provider_scope")
+                == {
+                    "resource_ids": [run["repository_resource_id"]],
+                    "operations_by_resource": {run["repository_resource_id"]: ["resource.sync"]},
+                    "change_target": None,
+                },
+                "provider-scoped ClaimResponse admission does not scope exactly resource.sync",
+            )
+        else:
+            require(
+                "provider_scope" in work_input and work_input["provider_scope"] is None,
+                "provider-free ClaimResponse admission carries a provider scope",
+            )
     else:
         require(
             work_input.get("repository_resource_id") == run["repository_resource_id"],
