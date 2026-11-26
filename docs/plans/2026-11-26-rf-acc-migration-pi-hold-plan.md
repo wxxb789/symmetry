@@ -43,9 +43,11 @@ implementation choices those leave open, the per-clause baseline, and what is ou
 
 ## 2. Public/API shape
 
-All changes stay inside the two owned sources; no e2e, fixture-script or `pi/**` change is needed
-(the migration arm already requests the `native_release` hold on the pi-durability vehicle, and the
-e2e already validates the marker exactly).
+All changes stay inside the witness source, the goal's records and the witness unit file the
+conductor ruled accepted for the mutant pins (§3.5); no e2e, fixture-script or `pi/**` change is
+needed (the migration arm already requests the `native_release` hold on the pi-durability vehicle,
+and the e2e already validates the marker exactly). The round-1 fold adds the lease-ACK staging and
+the two latent-config fixes below; record §13 is its authoritative row.
 
 1. `daemon/internal/app/linux_owner_witness_linux.go`
    - No launch-time release-seam store: the `DropAckAfter` wrapper derives the launched kind from
@@ -63,13 +65,19 @@ e2e already validates the marker exactly).
      validator-permitted configuration that differs — a `native_release` ACK-loss drop on a
      `daemon.start`-wired adapter — captures the released target, and no generated row is affected
      because the ACK-loss selectors are built from the pi-only `pi-durability.json` template.
+   - Round-1 (ruling L1): the same wrapper stages `lease_armed` when the execution layer delivers
+     the initial lease ACK, unless the runner-held lease boundary or a replay already owns it; the
+     stale-closure re-stage for a `daemon.start`-wired ACK-loss release is dropped and its replaced
+     peer pidfd is closed by `captureReleasedNativeTarget`; `linuxV2NativeWitnessUserNamespace`
+     splits its nsfs shape into `linuxV2NativeWitnessUserNamespaceFromStat` so the arm is pinnable.
    - The Pi turn failures keep their message and gain the inner cause (`%w`), which is the bounded
      log-only instrument Stage 1 asks for: the fixture prints a bounded stderr tail
      (`linuxV2ReportOwnerWitnessFailure` → `linuxV2OwnerWitnessStderrBoundedLines`).
 2. `daemon/internal/app/linux_owner_witness_linux_test.go`
    - The release-hold test (exact marker evidence + the hold engaging, with the release file the
      test writes) and the exclusion test (codex/claude still stage only from `daemon.start`; the
-     ACK-loss release keeps staging + `ErrLinuxV2MutationAckLost`).
+     ACK-loss release keeps the closure's marker byte-identical, retires its replaced peer and
+     returns `ErrLinuxV2MutationAckLost`).
 
 ## 3. Implementation choices the plan left open
 
@@ -156,3 +164,12 @@ suite.
 - Any `pi/**` change (not owned; contract requires `DECISION_NEEDED` instead) and any production
   daemon change outside the witness file.
 - The credentialed Bind: conductor-dispatched; this stage records the local rows.
+
+## 7. Round-1 fold (2026-11-26, conductor ruling round 1)
+
+`rf-acc-initial-lease-ack` is superseded and folded in (contract ruling, PR #297 round 1): the
+witness seam stages the initial `lease_armed` from the execution layer's lease ACK (L1), each of the
+three fail-closed arms gains a unit row that reddens when the arm is weakened, and the latent
+codex/claude `drop_ack_after=native_release` configuration stops re-writing the closure's release
+marker and retires the replaced peer pidfd. Gates, mutants and the red-first rows are in record
+§13; the post-fix Bind (`migration` + `claude_containment`) is the conductor's.

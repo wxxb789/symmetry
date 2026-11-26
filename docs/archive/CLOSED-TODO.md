@@ -5377,11 +5377,17 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       exact released same-PID target (journal/authority/gate agreement, verified live pidfd, nsfs
       user and host network namespaces) as its marker evidence; the hold engaging and the evidence
       shape are pinned locally by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`,
-      `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` and
-      `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with five mutant rows. No e2e
-      validator, fixture byte or `pi/**` file changed. Carried, not closed: the guest row, which the
-      goal's acceptance assigns to the conductor's Bind (one `migration` run on the PR head, its
-      next stop recorded verbatim or green). The entry's intermittent aborted-release stop measurement
+      `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` (the plain daemon.start hold)
+      and `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with five mutant rows. The
+      round-1 fold (record §13) stages the initial `lease_armed` from the same callback
+      (`TestLinuxV2NativeWitnessLeaseAckStagesThePlainNativeReleaseHold`) and retires the latent
+      codex/claude ACK-loss double write and peer leak
+      (`TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage`). No e2e
+      validator, fixture byte or `pi/**` file changed. Delivered, pending the conductor's Bind:
+      Bind `45720019801` reached the `native_release` hold on the pre-fold head and recorded the
+      migration case's next stop (the initial-lease ACK the round-1 fold now stages); the post-fix
+      Bind re-runs `migration` and `claude_containment` on the new head, each next stop recorded
+      verbatim or green. The entry's intermittent aborted-release stop measurement
       (`dial unixpacket: connect: connection refused` in runs `45555828634`/`45579163968`, absent in
       `45557621798`/`45564071868`) is a measurement note on the arm the AppArmor fix superseded; a
       recurrence would ride the rf-acc-release-recovery-diagnostics entry still in `docs/TODO.md`.

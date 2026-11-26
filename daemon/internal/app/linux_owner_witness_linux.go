@@ -2058,6 +2058,7 @@ func (witness *linuxV2NativeWitnessRun) captureReleasedNativeTarget(store journa
 		return err
 	}
 	witness.mu.Lock()
+	previous := witness.peer
 	witness.peer = &execution.LinuxV2Peer{
 		PID: pid, Identity: identity,
 		UserNamespace: platform.LinuxUserNamespaceIdentity{Device: userNamespace.Device, Inode: userNamespace.Inode},
@@ -2069,7 +2070,8 @@ func (witness *linuxV2NativeWitnessRun) captureReleasedNativeTarget(store journa
 		NetworkNamespace: networkNamespace, SamePIDExec: true,
 	}
 	witness.mu.Unlock()
-	return nil
+	// A daemon.start-launched adapter already holds a peer; retire it with the replacement.
+	return previous.Close()
 }
 
 func linuxV2NativeWitnessNamespaceStat(pid int, namespace string, nsfs string) (unix.Stat_t, error) {
@@ -2104,6 +2106,10 @@ func linuxV2NativeWitnessUserNamespace(pid int) (linuxV2NativeWitnessNamespace, 
 	if err != nil {
 		return linuxV2NativeWitnessNamespace{}, err
 	}
+	return linuxV2NativeWitnessUserNamespaceFromStat(native)
+}
+
+func linuxV2NativeWitnessUserNamespaceFromStat(native unix.Stat_t) (linuxV2NativeWitnessNamespace, error) {
 	if native.Mode&unix.S_IFMT != unix.S_IFREG || native.Dev == 0 || native.Ino == 0 {
 		return linuxV2NativeWitnessNamespace{}, errors.New("native process user namespace is not an exact nsfs inode")
 	}
@@ -4019,19 +4025,31 @@ func (witness *linuxV2NativeWitnessRun) wrapLinuxV2Callbacks(
 		}
 		selected := witness.request.DropAckAfter == stage
 		runnerRelease := false
-		if stage == linuxV2NativeWitnessReleaseStage {
+		ackLease := false
+		switch stage {
+		case linuxV2NativeWitnessReleaseStage:
 			kind, err := harness.ParseKind(witness.request.Harness)
 			if err != nil {
 				return fmt.Errorf("derive the owner witness release seam from its request harness: %w", err)
 			}
 			runnerRelease = !linuxV2NativeWitnessStagesReleaseFromStartProcess(kind)
+		default:
+			witness.mu.Lock()
+			// The ACK stages the lease unless the runner seam or a replay already owns it.
+			ackLease = !witness.stages.InitialLeaseAcked &&
+				witness.request.Barrier.HoldAfter != linuxV2NativeWitnessLeaseStage
+			witness.mu.Unlock()
 		}
-		if (!selected && !runnerRelease) || ownerEffectAlreadyAckedOnEntry {
+		if (!selected && !runnerRelease && !ackLease) || ownerEffectAlreadyAckedOnEntry {
 			return nil
 		}
 		if stage == linuxV2NativeWitnessReleaseStage {
 			if err := witness.captureReleasedNativeTarget(store); err != nil {
 				return err
+			}
+			if !runnerRelease {
+				// The daemon.start seam already staged and held this exact marker.
+				return witness.dropAckAfterStage(stage, ownerEffectAlreadyAckedOnEntry)
 			}
 		}
 		if err := witness.stage(stage, daemon, store, true); err != nil {

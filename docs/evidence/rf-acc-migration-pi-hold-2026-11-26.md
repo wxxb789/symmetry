@@ -7,13 +7,18 @@ Plan: `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md`. All paths are re
 repository or to the GDD state root. The goal's acceptance row (`migration` opens on a PR-head Bind)
 is the conductor's; this record carries the local code, unit and compile rows.
 
-## 1. Delivered files and digests
+## 1. Delivered files and digests (round-0 delivered bytes, `c665bf4f`; the round-1 fold is §13)
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `d73c42af80d54571d3eb3cff52448c34b22970093dc1e090764421870050af17` |
 | `daemon/internal/app/linux_owner_witness_linux_test.go` | `1882d4af5fdafa1d14ef7a5611ee2dc12a5856405b7c8cbdd4fa223f82a33dfd` |
 | `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md` | `d45e1a7c4f079d741d5deb4b286efbe3dd3e1d49f0c3000b1d2fc45738fea13b` (record revision; not run-bound) |
+
+The rows above are the revision §10–§12 measured; the round-1 fold (§13) refreshes the two code
+digests to `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` /
+`86c8f7ff5593ee23718e5cd853e04042c972e391db947e90f17d439a39d40a5d` and the plan to
+`384fa88f55dfaca21b70bed1c08f0ea287fda080bf3dfe1bd0997545acea9880`.
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. The
 `linux_owner_witness_linux_test.go` row is a recorded scope addition (plan §3.5): the contract's
@@ -138,8 +143,9 @@ be rejected by the e2e marker contract).
 
 ## 5. Gate rows (commands, working directory, exit)
 
-All commands run in WSL `Ubuntu-24.04` (`<HOST-PATH>/daemon`, `CGO_ENABLED=0`, `GOFLAGS=-mod=mod`),
-on the §1 delivered bytes (§10 records the apply-stage re-run on the same digests):
+All commands run in WSL `Ubuntu-24.04` (`<HOST-PATH>/daemon`, `CGO_ENABLED=0`, `GOFLAGS=-mod=mod`)
+as the apply-stage snapshot: §10 records the re-run on the same apply-stage digests, §11 holds the
+round-0 delivered-byte gate rows and §13 the round-1 fold's rows.
 
 | gate | command | exit | result |
 | --- | --- | --- | --- |
@@ -178,7 +184,7 @@ M5 is the red row for the validation equality the derivation relies on.
 | 2 no `pi/**` change, no new provider access, no second authority | `git status`/`git diff` scope (§1 files only); the release ACK is the existing App-owned seam; no new store, scheduler or provider path |
 | 3 records name the root cause verbatim | §2 |
 | Invariants (denial/retention assertions, ≤2-line comments, `go vet`, host-layout independence) | no e2e validator or fixture byte changed; every added comment is ≤2 lines; §5 rows; the new test reads `/proc/self/ns/*` and the journal, never a host layout |
-| Acceptance | carried: the conductor's Bind runs `migration` once on the PR head; its next stop or green is recorded there |
+| Acceptance | Bind `45720019801` reached the `native_release` hold on the round-0 head and recorded the next stop (the initial-lease ACK; §12); the round-1 fold stages it (§13), and the post-fix Bind re-runs `migration` + `claude_containment` on the new head; delivered, pending that Bind |
 
 ## 8. Residual risks and limits
 
@@ -301,3 +307,210 @@ after the runs):
 | M3 | `linuxV2NativeWitnessStagesReleaseFromStartProcess` body `return true` | `62b0bb07da2527c9b7dad6cdbb503ae20380da69083de2f64180d1769c96caa3` | §6 M3 row |
 | M4 | the same body `return kind == harness.KindPi || kind == harness.KindOpenCode` | `6bc71f6fbb7e622be29d9e487dc5516ca537327d6469aa534bb04901e0d5972a` | §6 M4 row |
 | M5 | `request.Harness != value.Runtime.HarnessKind || ` deleted from the request validation predicate | `e948b34bb903b005ffd5de5e9724e10c2cf1aa4767b61440a37f48dd3a3695eb` | §6 M5 row |
+
+## 12. Bind run (2026-11-26) — the `migration` case set on the PR head
+
+The conductor's Bind ran the `migration` case set exactly once on the exact PR-head bytes plus the
+two scratch-only files below (run head `ecfabe81a58a58c930eda366ad38a7cce8e6b876` = `c665bf4f` +
+the two files), watched once; the scratch branch `scratch/rf-acc-containment-goal-admission` and
+its temporary worktree are deleted; `total_count=1` right after creation, after settlement, and
+after the deletion. `refs/pull/297/head` read before the push, after the push, and after the
+deletion: `c665bf4f…` throughout; no push ever touched the PR branch.
+
+**Run `45720019801`** (event `push`, head `ecfabe81…`, workflow `Scratch containment goal-admission
+probe`, attempt 1): `contracts` success; `linux-native-v2-acceptance` failure (23:16:58Z–23:22:05Z);
+`Case set migration exited 1` / `Failed case sets: migration`. Raw-log line cites below are from
+`gh run view 45720019801 --log` (3,508 lines; auxiliary copy at the GDD state root
+`scratch/bind297/run-45720019801.log`, sha256
+`1df6f55ee7064fea0298c2459f5d1e58c2494c8b1e6d12011d5267a0f66d2fad`).
+
+**The `native_release` hold is reached.** The single failing check is the migration case's denial
+assertion; 0 log occurrences of `did not reach its requested durable stage`, `wait for authentic Pi
+owner witness turn`, `read exact native_release marker`, `native_release migration boundary is not
+exact`, `external observer did not verify exact B process`, or each migration-move and
+fail-closed-recovery message. The failure line attributes to
+`production_linux_v2_native_witness_test.go:728` (the `t.Helper()` call site of
+`runProductionLinuxV2MigrationDenial`), whose only reachable predecessor chain is
+`production_linux_v2_owner_cli_test.go:4149` (exact `native_release` boundary wait) → `:4153`
+(marker) → `:4158` (RunJournal) → `:4162` (boundary) → `:4165` (external B capture) →
+`:4195`/`:4220` (A-owned alternate leaf + move) → `:4226` (outside the pinned leaf) →
+`:4234`/`:4238` (SIGKILL + fail-closed recovery) → `:4241` (redacted response) → `:4245`
+(recovery exit status, deliberate nonzero for `unresolved`; log 3077).
+
+**Next stop, verbatim** (log 3072):
+
+```
+    production_linux_v2_native_witness_test.go:728: migration did not fail closed through the production App: Store checkout readiness lacks the earlier initial lease ACK
+```
+
+So the migration case proceeds past the hold into its **denial assertion**
+`linuxV2ValidateStageReplayResponseState(fixture, "native_release", response, "unresolved")`
+(`production_linux_v2_owner_cli_test.go:4252`), which first rejects at `:1209-1210`: the response
+carries `stages.checkout_ready=true` with `stages.initial_lease_acked=false` (same bits in the
+sanitized `migration-denial.json`; the `stage_replay` response also shows
+`native_release_state: "released"`, `outcome`/`recovery_state` `unresolved`, `failure_category`
+`containment_unproven`, `journal_unproven: true`, `no_target_abort: false`, `migration_observed:
+true`, `migration_path_hash`
+`cee8ccf0667b2723732993cef25c0880cacb1748d8ff58988be2e504995ac226`). The same bits also violate the
+two later release/checkout relations (`:1212-1213`, `:1220-1222`), which the validator does not
+reach because it returns the first violation. The **retention assertion**
+`linuxV2ValidateStageReplayJournal` (`:4255`) plus the `Journal.NoUnprovenContainment = false` and
+pinned-leaf-identity retention checks (`:4261-4266`) were not reached — unmeasured in this run, not
+failed.
+
+Artifacts (both downloaded; zip sha256 equals the API `digest`):
+
+| Artifact | id | size | zip sha256 | members (sha256) |
+| --- | --- | --- | --- | --- |
+| `linux-v2-native-evidence-45720019801-1` | `15072047105` | 3161 B | `5c4ef30e86863577f07cc445edb1710876976f44272bdd916003a0b863c32c6f` | `migration/manifest.json` `7b5355d17ec57f6a530bc95142fbf22d247ccd3d3d4b17aaa274080df1cb4236`; `migration/migration-denial.json` `9c9d94e87fc9891761434907519a4db824038f10a55c47e54223c261c43d98a3` |
+| `linux-v2-host-prerequisite-45720019801-1` | `15071537762` | 673 B | `a12e8ed7f09e083970278361543d06fff78f28f92b6047a5c8c432eec04e47d5` | `linux-v2-host-prerequisite-45720019801-1.json` `b6454d08fc595a709ebe4693df03b9cb0373553855814aeb9480db5d7224d5ee` |
+
+The evidence manifest carries `case_set: "migration"`, `source_commit` = the run head,
+`status: "failed"`, `missing_allowlisted_files: []`; the host-prerequisite document carries the
+same `source_commit`, `status: "passed"`, `delegated_leaf_probe_passed: true`.
+
+### Run-input sha256 equality (run head `ecfabe81` vs PR head `c665bf4f`) (2026-11-26)
+
+`git cat-file -p <rev>:<f> | sha256sum` at both revisions; `git diff --name-status dcfb1675
+c665bf4f` (the branch's own delta over the merged main tip) is exactly the six rows below, and
+`git diff --name-status c665bf4f ecfabe81` is exactly the two scratch-only rows. The two code
+digests equal §1's delivered-byte digests verbatim; the record row is this file's PR-head blob (the
+uncommitted §Bind edit is not part of the run inputs).
+
+| File | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `d73c42af80d54571d3eb3cff52448c34b22970093dc1e090764421870050af17` | `d73c42af80d54571d3eb3cff52448c34b22970093dc1e090764421870050af17` | yes |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `1882d4af5fdafa1d14ef7a5611ee2dc12a5856405b7c8cbdd4fa223f82a33dfd` | `1882d4af5fdafa1d14ef7a5611ee2dc12a5856405b7c8cbdd4fa223f82a33dfd` | yes |
+| `docs/TODO.md` | `677682dca14dc721c63205a1dc88c5aaba371b9f271e06c55f345ea1f50f28a2` | `677682dca14dc721c63205a1dc88c5aaba371b9f271e06c55f345ea1f50f28a2` | yes |
+| `docs/archive/CLOSED-TODO.md` | `e2e669ce78a1ce30f22b32a4b6f4958b4016858f3e0465805f2129290886a4fa` | `e2e669ce78a1ce30f22b32a4b6f4958b4016858f3e0465805f2129290886a4fa` | yes |
+| `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md` | `c23b10c2507ef1ae6bb5516ad9ebf82d2cf2c9b163a020181eb6d282de492209` | `c23b10c2507ef1ae6bb5516ad9ebf82d2cf2c9b163a020181eb6d282de492209` | yes |
+| `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md` | `d45e1a7c4f079d741d5deb4b286efbe3dd3e1d49f0c3000b1d2fc45738fea13b` | `d45e1a7c4f079d741d5deb4b286efbe3dd3e1d49f0c3000b1d2fc45738fea13b` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `7340bd28e989c2cd27ff1ada98c5d02fa3bdac7b1c8e448550823c0bd44c3da5` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+Bind verdict: the `native_release` hold is reached; the migration case's next stop is the denial
+assertion (`store checkout readiness lacks the earlier initial lease ACK`), recorded verbatim
+above; the retention assertion is unmeasured because the denial assertion aborts the case first.
+
+## 13. Round-1 fold (2026-11-26, ruling round 1: lease-ACK L1 + fail-closed arms + latent ACK-loss path)
+
+Contract ruling round 1 (last section of `goal-rf-acc-migration-pi-hold.md`) folds
+`rf-acc-initial-lease-ack` in here. Scope: the witness seam and its unit file (ruled accepted, §1),
+this record, the plan, `docs/TODO.md` and `docs/archive/CLOSED-TODO.md`. No e2e validator, fixture
+byte, acceptance-script line or `pi/**` file changed; the validators stay untouched.
+
+### 13.1 The change
+
+- **L1, the initial lease ACK.** `callbacks.DropAckAfter` (`linux_owner_witness_linux.go:4022-4059`)
+  stages `lease_armed` when the execution layer delivers the initial lease ACK
+  (`execution/linux_owner_v2_linux.go:837-838`, `sequence == 1`), under the pre-existing
+  `ownerEffectAlreadyAckedOnEntry` replay skip plus two guards: `Barrier.HoldAfter != lease_armed`
+  (the runner-held boundary's watcher owns that marker, `:3886`) and
+  `!stages.InitialLeaseAcked` (a restored replay marker already owns it). The ACK fires inside
+  `armInitialLease` (`execution/runner.go:823-841`) on every launch path — the pi/opencode adapters'
+  own `runnerProcessStarter` (`pi/adapter.go:81,105,176`; `opencode/adapter.go:73,204,213`) and the
+  codex/claude `StartProcess` closure (`codex/adapter.go:149`; `claude/adapter.go:145-146`) all run
+  this same `runner.Start` — so one seam covers every adapter, the claude
+  `hold_after=native_release` request the ruling names included.
+- **The claude path receives the ACK.** Its delivery follows from the start ordering, not
+  assumption: `armInitialLease` runs before `resumeTarget` (`execution/runner.go:603-609`), so the
+  parked target cannot resume/exec until the initial renewal settled — the same settlement that
+  sets `owner.leaseAck` (`execution/linux_owner_v2_linux.go:862-872`, `:871`) and then invokes the
+  callback (`:837-838`). The Bind295 claude run observed the live exec'd B process
+  (`native_command_verified=true`; `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7's bind
+  row), so the ACK was delivered and no-oped at the delivered bytes — L1 is confirmed, not
+  refuted, for the claude path. The *guest effect* of the new staging stays the post-fix Bind's row.
+- **Fail-closed arms.** Identity-after-`PidfdOpen` and pidfd-liveness stay in
+  `openExactLiveLinuxV2WitnessPIDFD` (`:1975-1996`); the nsfs shape moved to
+  `linuxV2NativeWitnessUserNamespaceFromStat` (`:2112-2117`, called by
+  `linuxV2NativeWitnessUserNamespace` `:2104-2110`) so a synthetic stat can reach it. §13.2 rows
+  pin all three; §13.3 mutants redden them.
+- **Latent codex/claude `drop_ack_after=native_release`.** `captureReleasedNativeTarget`
+  (`:2022-2075`) retires the peer it replaces (`return previous.Close()`, `:2074`), so the
+  `daemon.start`-published pidfd is closed instead of leaked; and the wrapper no longer re-writes
+  the release marker when the `daemon.start` seam owns it (`:4050-4053`): the closure's marker
+  (staged, and held, at `:3583`; `DropAckAfter` stamped by `witness.stage`) stays byte-identical,
+  while the callback still captures the released target and returns `ErrLinuxV2MutationAckLost`.
+  Both were latent — the generated ACK-loss selectors come from the pi-only `pi-durability`
+  template (`scripts/ci/linux-v2-native-acceptance.sh` ACK-loss legs; record §4) — and are now
+  pinned by `TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage` instead of
+  left latent.
+
+### 13.2 Unit rows
+
+| row (file `daemon/internal/app/linux_owner_witness_linux_test.go`) | assertion |
+| --- | --- |
+| `TestLinuxV2NativeWitnessLeaseAckStagesThePlainNativeReleaseHold` `:2123` (`migration_pi`, `claude_hold_after_native_release`) | the initial ACK stages `lease_armed` with `hold_after=native_release`, `not_released`, no drop stamp and no B-peer proof; `InitialLeaseAcked=true`; the release marker is not staged |
+| `...LeaseAckDoesNotTouchTheRunnerLeaseBoundary` `:2158` (`watcher_not_yet_staged`, `watcher_staged`) | the ACK never writes the `hold_after=lease_armed` boundary: absent before the watcher, byte-identical after it (journal moved on) |
+| `...LeaseAckReplayStagesNothing` `:2207` (`restored_marker`, `acked_on_entry`) | a restored marker or an acked-on-entry ACK stages nothing and stays byte-identical |
+| `TestLinuxV2NativeWitnessPIDFDIdentityArmRefusesAChangedTarget` `:2240` | an identity that changed after `PidfdOpen` refuses with the post-open arm |
+| `TestLinuxV2NativeWitnessPIDFDLivenessArmRefusesAnExitedTarget` `:2255` | an exited (zombie) target whose pidfd is readable refuses |
+| `TestLinuxV2NativeWitnessUserNamespaceShapeArmRefusesNonNsfsInodes` `:2296` | directory mode, zero device and zero inode refuse; an exact nsfs stat passes through |
+| `TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage` `:2003` | the ACK-loss callback keeps the closure's marker bytes, closes the replaced peer, publishes the capture and returns `ErrLinuxV2MutationAckLost` |
+
+The delivered bytes pass all rows (focused run, `ok`, exit 0; §13.5); each row reddens under its
+§13.3 mutant.
+
+### 13.3 Mutants (each an overlay of the delivered source; the tree was never written)
+
+Each mutant ran as `go test -overlay <mutant>.json ./internal/app/ -run <row> -count=1` in WSL;
+exit 1 below is the test's own status. The two source files' sha256 before and after the whole
+series are `1fd4c17f…` (source) and `d58d4c05…` (unit file), byte-identical, so no mutant touched
+the delivered bytes: every run was a read-only overlay.
+
+| # | mutant delta against the delivered bytes | judged row | observed (exit 1 each) |
+| --- | --- | --- | --- |
+| M-L1 | the L1 staging removed from the wrapper (round-0 body restored) | `LeaseAckStagesThePlainNativeReleaseHold/{migration_pi,claude_hold_after_native_release}` | `linux_owner_witness_linux_test.go:2137: read the lease_armed stage marker: … no such file or directory` (both subtests) |
+| M-L2 | the runner-held-boundary guard dropped (`ackLease = !witness.stages.InitialLeaseAcked` only) | `…LeaseAckDoesNotTouchTheRunnerLeaseBoundary/watcher_not_yet_staged` | `linux_owner_witness_linux_test.go:2173: the ACK staged over the runner-held lease boundary: <nil>` |
+| M-L3 | the restored-marker guard dropped (`ackLease = HoldAfter != lease_armed` only) | `…LeaseAckReplayStagesNothing/restored_marker` | `linux_owner_witness_linux_test.go:2222: replayed lease ACK callback: existing owner witness stage marker differs from exact replay` |
+| M-L4 | the `ownerEffectAlreadyAckedOnEntry` skip dropped from the early return | `…LeaseAckReplayStagesNothing/acked_on_entry` | `linux_owner_witness_linux_test.go:2235: acked-on-entry lease callback staged a marker: <nil>` |
+| M-A1 | identity-after-`PidfdOpen` weakened (`current == ""` instead of `current != identity`) | `PIDFDIdentityArmRefusesAChangedTarget` | `linux_owner_witness_linux_test.go:2248: pidfd capture accepted an identity that changed after PidfdOpen` |
+| M-A2 | pidfd-liveness weakened to the error branch only | `PIDFDLivenessArmRefusesAnExitedTarget` | `linux_owner_witness_linux_test.go:2289: pidfd capture accepted a target whose pidfd already signalled its exit` |
+| M-A3 | nsfs shape weakened to `false` | `UserNamespaceShapeArmRefusesNonNsfsInodes` (3 subtests) | `linux_owner_witness_linux_test.go:2307: user-namespace shape arm accepted a stat outside the exact nsfs inode` (×3) |
+| M-P1 | the closure-owned skip removed (unconditional release re-stage) | `StartProcessReleaseAckLossKeepsTheClosureStage` | `linux_owner_witness_linux_test.go:2032: ACK-loss release callback error = existing owner witness stage marker differs from exact replay, want the lost-ACK category` |
+| M-P2 | the replaced-peer retirement removed (`return nil`) | `StartProcessReleaseAckLossKeepsTheClosureStage` | `linux_owner_witness_linux_test.go:2039: ACK-loss release callback leaked the replaced launch-transferred peer pidfd` |
+
+M1-M4 and M-P1/M-P2 are the red rows for every new branch in §13.1 (the L1 staging and its two
+guards plus the shared replay skip; the closure-owned release skip and the peer retirement); M-A1-M-A3
+are the three fail-closed arms the ruling names. M-L2's `watcher_staged` subtest stays green under
+its own mutant because the restored-marker guard independently catches that state (the two guards
+overlap there by design; the `watcher_not_yet_staged` subtest is the discriminating one).
+
+### 13.4 Ruling items and records
+
+| ruling item | disposition |
+| --- | --- |
+| L1 stages `lease_armed` for a plain `native_release` hold | delivered (§13.1); rows §13.2; M-L1 reddens both |
+| L1 also covers the claude path | delivered: no claude-specific code was needed (the shared lease ACK seam); delivery argument in §13.1; the guest effect is the post-fix Bind's row |
+| the lease is not staged twice; replay stays byte-identical; codex keeps its order | two guards plus the shared replay skip (§13.1); rows `…DoesNotTouchTheRunnerLeaseBoundary` and `…ReplayStagesNothing`; M-L2/M-L3/M-L4 redden them; the codex plain-hold row `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` stays green (focused run, §13.5) |
+| fail-closed arms each get a red-when-weakened row | rows `…PIDFDIdentityArm…`, `…PIDFDLivenessArm…`, `…UserNamespaceShapeArm…`; M-A1/M-A2/M-A3 redden them |
+| latent codex/claude `drop_ack_after=native_release`: peer leak and double write fixed or proven unreachable | both fixed (§13.1) and pinned by `…AckLossKeepsTheClosureStage`; M-P1/M-P2 redden the two halves |
+| scope: the unit file is accepted | §1's scope note plus §13.2's rows; plan §3.5 unchanged in intent |
+| records: §5 cites the delivered-byte gate numbers | §5 recaptioned as the apply-stage snapshot, pointing at §11 (round-0) and §13 (round-1) |
+| records: CLOSED-TODO says "delivered, pending the conductor's Bind" | the `rf-acc-migration-pi-hold` entry's closing sentence now reads exactly that |
+| records: Bind297 kept as the hold evidence, diagnostic for the new head | §12 kept verbatim; its recorded next stop (`store checkout readiness lacks the earlier initial lease ACK`) is the stop §13 removes |
+| records: claude residual updated | `docs/TODO.md` residual entry reads "addressed by L1, pending the conductor's Bind" |
+| validators untouched | no e2e validator, fixture byte, acceptance-script line or `pi/**` file is in §13's delta |
+| post-fix Bind | carried: `migration` and `claude_containment` once each on the new head; delivered, pending the conductor's Bind |
+
+### 13.5 Gates (round-1 delivered bytes)
+
+| gate | command | exit | result |
+| --- | --- | --- | --- |
+| format | `gofmt -l .` (daemon, Windows Go 1.27.4) | 0 | no output |
+| vet (GOOS=linux) | `GOOS=linux go vet ./...` (daemon) | 0 | no output |
+| vet (GOOS=windows) | `GOOS=windows go vet ./...` (daemon) | 0 | no output |
+| focused witness race | WSL Ubuntu-24.04 (user `accept`), `go test -race -count=1 ./internal/app/ -run 'LinuxOwnerWitness\|Witness'` | 0 | `ok … 6.599s` |
+| full unit package | WSL, `go test -count=1 ./internal/app/` | 0 | `ok … 154.782s` (unprivileged `accept`); `ok … 150.995s` as root |
+| e2e compile gate | WSL, `go test -count=1 -run XXX_NONE ./e2e/` | 0 | `ok … [no tests to run]` |
+| module suite (WSL) | WSL, `go test -count=1 ./...` | 1 | unprivileged `accept`: 27 of the 30 test packages pass; `internal/linuxpreflight`, `internal/platform`, `internal/workspace` fail on this host (missing AppArmor parser, world-writable temp parents) with **the same 31 failing rows at the round-0 delivered revision** (byte-identical failing-row lists). Root: 29 pass, `internal/platform` fails (14 rows, also identical at the base revision) |
+| module suite (Windows) | `go test -count=1 ./...` (daemon, Windows) | 0 | all packages ok |
+| mutants | the nine §13.3 overlay mutants | 1 each | 9/9 red |
+| jscpd | `jscpd-changed.py --base dcfb1675 --head <round-1 scratch commit>` over the six changed files (script and `.jscpd.json` byte-identical to the scanned revision; a scratch jscpd 4.3.0, the root devDependency pin, because this host cannot reach `registry.npmjs.org` for a frozen-lockfile workspace install) | 0 | 6 changed file(s), 1762 scanned source(s), 1262 clone(s) in the corpus, none new |
+| comment-cap | `comment-cap.py <round-1 scratch commit>` | 0 | no added comment block over 2 lines |
+| sanitize | `model-routing-record-sanitize.py --check --root-only` per changed doc | 0/1/0/0 | TODO/evidence/plan pass; `CLOSED-TODO` refuses exactly as its round-0 bytes do (pre-existing quoted specimens; the added lines carry no host path) |
+| record-cleanliness | `check-record-cleanliness.py --base dcfb1675 --head <round-1 scratch commit>` | 0 | 1 changed record passes |
+
+Delivered, pending the conductor's Bind: the round-1 code digests are `1fd4c17f…` (witness source)
+and `d58d4c05…` (unit file); the post-fix Bind runs `migration` and `claude_containment` once each
+on the new head.

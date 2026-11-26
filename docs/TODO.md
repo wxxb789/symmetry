@@ -1947,8 +1947,13 @@ section below.
       `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
       `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): verbatim `positive owner witness
       lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` [INFERENCE:
-      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Owner:
-      TBD, a new conductor goal; the stop is the owner witness's durable-stage summary check
+      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Addressed by
+      L1, pending the conductor's Bind: the round-1 fold (PR #297, record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md` §13) stages `lease_armed` from the
+      execution layer's initial lease ACK (`daemon/internal/execution/linux_owner_v2_linux.go:837-838`)
+      for every adapter, so the tripped `initial_lease_acked` bit is set before this check; the
+      post-fix Bind's `claude_containment` run records the set's next stop verbatim or green. The
+      stop is the owner witness's durable-stage summary check
       (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
       `validatePhysicalStopSummary`, reached only via `validateFinalSummary`).
 
