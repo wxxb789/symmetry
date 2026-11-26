@@ -822,3 +822,79 @@ gofmt alignment change no executed byte's behaviour, and every round-2/merged re
 Log: `gh run view 45811007804 --repo wxxb789/symmetry --log`, 3,552 lines, sha256
 `264d792732a4feeec20c34987822754f76fe8e16d58db00303d79bcae4201970`; watched once
 (`gh run watch 45811007804 --interval 60 --exit-status`, single invocation).
+
+## 14. Bind 2 — scratch run `45817758808` on `5ae35230` (case set `shared`) — BINDING
+
+Bind 2 is the BINDING run on `5ae35230` and supersedes §13, which judged the replaced
+`22d6c411`. The binding head is `5ae35230a26a0caa1659941ea5207854a1a1ddc3` (round-1 `104c5fe9`
+merged with `origin/main` `b0206393`), executed as the PR head plus the two scratch-only files in
+one push: commit `0d503ebc72450436041341dbea352d20d53c1f9f`, parent exactly the PR head and diff
+exactly those two files, whose bytes repeat the ratified pair recovered from `b0ba2694` (workflow
+sha256 `bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b`, shim
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`). Run `45817758808`
+(workflow `Scratch containment goal-admission probe`, attempt 1, created 12:14:11Z, settled
+`completed`/`failure` 12:20:10Z; the only failing step is `Run isolated A/B Linux v2 acceptance
+case sets`) was listed `total_count=1` at the creation read (12:14:24Z), before the branch
+deletion (12:20:51Z), after it (12:21:27Z) and at the final read (12:21:29Z); the branch was
+deleted on the first attempt, the temporary worktree removed, and `refs/pull/303/head` read
+`5ae35230…` at every check.
+
+- **The refusal the clause names stays absent.** `Linux clone intent does not match the current
+  admitted Subject` and the substring `clone intent` occur **0** times in the full 3,549-line log
+  (sha256 `1ba29255466b34603354e0c00aafcd93d2e3cf8c25b6eb749b15b1bf211c6479`); so do
+  `reserve owner witness clone before source Git effects`, `pre-existing RunJournal`,
+  `is not physically released` and `may still own or require recovery`. The retained journal again
+  projects `{"local_state":"claimed","has_claim_grant":true,"has_clone_intent":true,"has_seed_receipt":true,"recovery_required":true}`
+  (raw 3118), and the exported member carries `clone.checkout_ready: true`.
+- **First failing line** (raw 3111, 12:19:59.7649572Z): `production_linux_v2_native_witness_test.go:91:
+  wait for isolated production owner-witness command: hidden owner-witness command exited
+  unsuccessfully: exit status 1` — the same stage §13 reached. Its stderr (raw 3116) reads
+  `-linux-v2-native-owner-witness: wait for authentic Pi owner witness turn: pi rpc final
+  assistant message did not stop normally: "error"`, and the test closes with
+  `--- FAIL: TestProductionLinuxV2PiNativeProviderAction (5.46s)` (raw 3113); the gate line
+  (raw 3108) is `Go native acceptance event gate failed:
+  bad=TestProductionLinuxV2PiNativeProviderAction=run:1,pass:0,skip:0, skipped=[], fail_events=2,
+  invalid_json_lines=0`.
+- **Verified rows**: all 21 that ran are green (`run=1 pass=1 skip=0`), the same set as §13
+  (raw 2492, 2502-2508, 2516-2528), timestamped 12:19:18–12:19:51Z; the pi leg and every later leg
+  contribute none.
+- **`stop_readback_reader` did not run**: the dispatch aborted inside the `case` block at the pi
+  leg, before the stop call site `:3226` — 0 lines containing `readback-reader:`, 0
+  `stop_readback_reader`; only the start proof, `root readback reader ready:
+  unit=symmetry-ci-readback-reader.service MainPID=7199` (raw 2515). Unmeasured, not failed.
+- **Export/manifest**: `redacted evidence export failed: pi durability witness is unavailable:
+  ack-loss-replay-checkout_ready.json` (raw 3398); no manifest shipped; `Failed case sets: shared`
+  and `Case set shared exited 1` (raw 3401-3402).
+- **Artifacts**: `linux-v2-native-evidence-45817758808-1` (id `15117050850`, 2010 B, zip sha256
+  `3e790df0650942ea635d71620e1428780508c5890508ace547e3d055589fb583`) holds
+  `shared/pi-native-provider-action.json` (3223 B,
+  `de57743a5ecf1c3d407632ee29ac0b40234937e59a9dc25f13dd6038a7923a20`; `subject.commit` = the run
+  head, `installed_owner_verified: true`, `provider_action_succeeded: false`) and
+  `shared/unprovisioned-owner-refusal.json` (691 B,
+  `a46ab494c35862406e878c71d3e9658eed418ee69ec78bf20e965f59cd4b0f3b`, `owner_witness_outcome:
+  unprovisioned_refused`); `linux-v2-host-prerequisite-45817758808-1` (id `15117195010`, 675 B,
+  zip sha256 `e1d2289759c076ecb0fbcc113645c13abea9a67628b7078d3ed943e016b1caa8`, member
+  `2f87f0537a3e664c9b3debb9bf52a131de7f3240322f54412986a9e40df13984`, `status: passed`,
+  `source_commit` = the run head).
+
+Changed rows only, against §13's table; the other nine of its eleven rows are byte-identical (the
+seven scripts `linux-v2-native-acceptance.sh`, `linux-v2-source-subject.py`,
+`export-linux-v2-redacted-evidence.py`, `linux-v2-host-prerequisite-probe.sh`,
+`linux-v2-native-rootfs-base.sh`, `assert-go-test-json.py`, `linux-v2-native-tools.sh`, plus the
+two scratch-only files repeating the pair above). Rows are hashed at the PR head, equal to the run
+head modulo the two scratch-only files.
+
+| File | §13 row (`22d6c411`) | Bind 2 row (`5ae35230`) |
+| --- | --- | --- |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `b4141da9face795573dc1d3d5619625197743575cf6f65e462fb372e8cd79d08` | `d988ca3bf8a0364f7d2f1c9aabe4cef14b53216e501a6002c49950e18d508abf` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` |
+
+Two further run inputs changed where §13 had no row:
+`daemon/internal/app/linux_owner_witness_linux.go`
+(`1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` →
+`3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd`; compiled into the
+`symmetry-daemon` binary whose hidden `-linux-v2-native-owner-witness` command the witness starts)
+and `scripts/ci/register-linux-v2-claim-machine.py`
+(`25b04fbcbe37cc9d678b7c07aa98690bd5cd276f4e08e1c89553eace166e3087` →
+`f6029087c0acf8c42478018f0f9672fdf7a914a715d4e49d0eb3c3ee128ad773`; invoked by the acceptance
+script at `:1534`).
