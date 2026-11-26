@@ -26,7 +26,7 @@ record-only docs are not run inputs):
 
 | file | sha256 at the delivered r3 bytes |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `0d2aa2a252dff51e47f697a8f68a17a90784cbfba2c8688f52d4a2e96c72e5a5` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `4fe0c3c52e96d878f4ac1c2fa17e7944be344837edaa0c602d381cf39c3b55b9`; delivered bytes = r3 `0d2aa2a252dff51e47f697a8f68a17a90784cbfba2c8688f52d4a2e96c72e5a5` (pre-merge r3 value) + the origin/main merge `c52468cd` (brings #300's changes to this file) + one comment-only deletion (the 3-line doc comment above `TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch`); no assertion changed |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `db47b73835b3e8bd4797caf0499aa8797e0a9e18220d5de01af3f8b8a7f1df7d` |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `bb0587666f8dffb7e0970d11a6ca1a7984ca60b20b3b13cf7efe8e9082c7980a` |
 | `daemon/internal/app/linux_owner_witness_linux_test.go` | `0755eab396b9040d855faa3f130353eba8a102c3b971c0ba950eefd3e506c463` |

@@ -2591,9 +2591,6 @@ func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
 	}
 }
 
-// TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch pins that every stage-replay kind leg
-// (codex and claude) presents the shared native_release boundary the snapshot predicate selects,
-// and that the matrix passes the leg's own stage field rather than a second literal.
 func TestLinuxV2StageReplayKindLegsShareTheProvenReleaseBranch(t *testing.T) {
 	if len(linuxV2StageReplayKindLegs) != 2 {
 		t.Fatalf("stage-replay kind legs = %d, want the codex and claude legs", len(linuxV2StageReplayKindLegs))
