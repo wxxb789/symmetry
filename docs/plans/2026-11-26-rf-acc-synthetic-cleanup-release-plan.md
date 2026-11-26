@@ -47,10 +47,11 @@ AppArmor rows of run `45644664168`), which the observed `stage=none` excludes.
 
 ### 2.2 Measured on the guest-identical userspace
 
-`/var/lib/machines/probe-resolute` (the resolute replica kept by `rf-acc-b-process-readback`,
-`Ubuntu 26.04 LTS`, `dash 0.5.12-12ubuntu3`, uutils `coreutils 9.5-1ubuntu2+0.0.0~ubuntu25`) is the
-same userspace the fixture debootstraps. The new probe run there as the guest's A shape
-(`setpriv --reuid=52000`, `HOME=/home/probe-a`) prints:
+`path-sha256:dba63390a9da5f52d3a7ffab205e03c8a75c3c703da0942ac059b6dad88a28ec` (the resolute
+replica kept by `rf-acc-b-process-readback`, `Ubuntu 26.04 LTS`, `dash 0.5.12-12ubuntu3`, uutils
+`coreutils 9.5-1ubuntu2+0.0.0~ubuntu25`) is the same userspace the fixture debootstraps. The new
+probe run there as the guest's A shape (`setpriv --reuid=52000`,
+`HOME=path-sha256:ec3459ebf2a5788e2ff90499117aae5439a79dc15090561bb8b2a50bf9cc5c83`) prints:
 
 ```
 native image pin refusal for "/bin/sh": open native-image parent component "bin" without following symlinks: not a directory

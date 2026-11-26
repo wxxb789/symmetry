@@ -142,7 +142,7 @@ userspace (§2.3), with (iii) the probe rows and mutants (§6) holding the rules
 | Run | Command | Exit | Attribution |
 | --- | --- | --- | --- |
 | WSL full suite, root | `(cd daemon && go test -count=1 ./...)` as root | 1 | 13 rows of `daemon/internal/platform` refuse with `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0` (`anchor_shape_table_test.go:251` etc.); every other package `ok`. The rows require a non-root A; environment, not code |
-| WSL full suite, `accept` (umask 002) | same as `sudo -u accept -i` | 1 | `daemon/internal/workspace` clone-seed rows refuse (`linux_clone_linux_test.go:1465: validate A-owned Git source: final directory must be A-owned and not group/world writable`). Measured cause: Go 1.27's `t.TempDir()` creates its numbered directory with `os.Mkdir(dir, 0o777)` (`/usr/local/lib/go1.27.0/src/testing/testing.go:1635`) and `accept`'s umask is `0002`, so the tree is `0775` and the production A-ownership rule (`mode&0o022 != 0`) refuses it; a scratch copy of the production validator prints `path=path-sha256:7760009c20ff3b77cbf0e7cd071fd4bebe07e85f7491ec740d9c936ae97a8690 uid=1000 euid=1000 mode=040775`. All other packages `ok` |
+| WSL full suite, `accept` (umask 002) | same as `sudo -u accept -i` | 1 | `daemon/internal/workspace` clone-seed rows refuse (`linux_clone_linux_test.go:1465: validate A-owned Git source: final directory must be A-owned and not group/world writable`). Measured cause: Go 1.27's `t.TempDir()` creates its numbered directory with `os.Mkdir(dir, 0o777)` (`src/testing/testing.go:1634` at the `GOTOOLCHAIN=go1.27.0` toolchain's `GOROOT`) and `accept`'s umask is `0002`, so the tree is `0775` and the production A-ownership rule (`mode&0o022 != 0`) refuses it; a scratch copy of the production validator prints `path=path-sha256:7760009c20ff3b77cbf0e7cd071fd4bebe07e85f7491ec740d9c936ae97a8690 uid=1000 euid=1000 mode=040775`. All other packages `ok` |
 | base-vs-head, `internal/workspace` | the same single test at the base bytes (`git archive HEAD daemon` in `/tmp`, ext4) as `accept`, umask 002 | 1 | identical failure `validate A-owned Git source: final directory must be A-owned and not group/world writable` at base, so the row is pre-existing and unrelated to this change |
 | WSL full suite, `accept` umask 022 | `sudo -u accept -i bash -lc 'umask 022; cd daemon && go test -count=1 ./...'` | 0 | 32 package rows, every one `ok` (no skips attributed, no failures), including `e2e 1.417s`, `internal/platform 39.600s`, `internal/workspace 49.919s`, `native/linux-gate/protocol 5.661s` |
 | Windows full suite | `(cd daemon && go test -count=1 ./...)` on the Windows host, Go 1.27.4 | 0 | 30 package rows, every one `ok` (the linux-only probe files are not built on Windows), including `e2e 0.301s`, `internal/app 149.775s`, `internal/workspace 140.467s` |
@@ -173,6 +173,17 @@ byte-identical after each row):
 | M-P4 | witness helper: `os.ModeSetuid\|os.ModeSetgid\|os.ModeSticky` → `0` | same row for `"…/setid-shell"` | 1 | `97c472b0…` |
 | M-P5 | witness helper: drop `!info.Mode().IsRegular()` | same row for `"…/directory-shell"` | 1 | `97c472b0…` |
 | M-P6 | revert half of the fix: `Program: linuxV2CleanupWorkerShell` | not runnable on this host (guest-only clause): the red evidence is the recorded `:499` stop (§2.1) and the replica refusal (§2.3) | — | — |
+
+CI reach (the mutant→CI map at the delivered bytes): both probe files build only under
+`//go:build linux && amd64` and carry no `-run` gating, so the PR `daemon` job's race pass
+(`go test -race -count=1 -timeout 600s -json ./...` on ubuntu-latest) and `coverage-daemon`'s
+coverage pass execute the probes that M-P1…M-P5 redden, under the runner's non-root account; the
+pin probe's trusted-base guard skips with a reason (never a false red) where that account's `$HOME`
+is not a trusted image base, and `daemon-windows` does not build these files. M-P6's red is
+guest-only: the dispatch-only `linux-native-v2-acceptance` workflow runs the cleanup case set
+(`TestProductionLinuxV2CloneCleanupAuthenticatedScratch`, mode `synthetic-cleanup`, as the A user
+`symmetry-a`), whose red shape is the recorded stop (§2.1); no mutant row reddens outside CI, so no
+oracle gap is recorded.
 
 ## 7. Ruling-item checklist (contract clause → disposition + evidence)
 

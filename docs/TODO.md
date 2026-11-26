@@ -2161,7 +2161,9 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       is correct and load-bearing; the witness's own resolution check and the pin probe
       (`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go`) are the current guards.
       Labelling the pin refusals is a production change (helper detail vocabulary) needing its own
-      ruling. Owner: conductor.
+      ruling, and it lands with its probe update: `assertUnlabelledNativeImagePinRefusal` pins
+      today's unlabelled shape, so the labelling change flips that assertion to require the named
+      stage in the same change (branch review 2026-11-26). Owner: conductor.
 
 - [ ] The pi durability witnesses bind `native_binary`/`native_binary_sha256`/`native_version_line`
       from the e2e publisher, not from the daemon (2026-11-24, same goal): the daemon's
