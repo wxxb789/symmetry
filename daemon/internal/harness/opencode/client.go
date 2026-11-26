@@ -111,20 +111,34 @@ func parseLoopbackURL(value string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// Health performs the authenticated readiness boundary. HTTP reachability is
-// insufficient: OpenCode must return exactly a healthy boolean response.
-func (client *Client) Health(ctx context.Context) error {
-	body, err := client.do(ctx, http.MethodGet, "/api/health", nil, http.StatusOK)
+// Readiness performs the authenticated readiness-identity boundary the pinned 2.4.1 bytes
+// answer on GET /api/info: server process pid and exactly TestedVersion; host metadata, never logged.
+func (client *Client) Readiness(ctx context.Context, serverPID int) error {
+	if serverPID <= 0 {
+		return fmt.Errorf("%w: server pid must be positive", ErrInvalidConfig)
+	}
+	status, body, err := client.request(ctx, http.MethodGet, "/api/info", "", nil)
 	if err != nil {
 		return err
 	}
+	if status == http.StatusServiceUnavailable {
+		return fmt.Errorf("%w: /api/info answered %d", ErrNotReady, status)
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("%w: got %d, want %d", ErrUnexpectedStatus, status, http.StatusOK)
+	}
 	object, err := strictObject(body)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidHealth, err)
+		return fmt.Errorf("%w: %v", ErrInvalidIdentity, err)
 	}
-	raw, ok := object["healthy"]
-	if !ok || !bytes.Equal(bytes.TrimSpace(raw), []byte("true")) {
-		return ErrInvalidHealth
+	rawPID, ok := object["pid"]
+	var pid int64
+	if !ok || json.Unmarshal(rawPID, &pid) != nil || pid <= 0 {
+		return fmt.Errorf("%w: pid", ErrInvalidIdentity)
+	}
+	version, ok := requiredString(object, "version")
+	if !ok || version != TestedVersion || pid != int64(serverPID) {
+		return fmt.Errorf("%w: pid %d, version %q", ErrInvalidIdentity, pid, version)
 	}
 	return nil
 }
@@ -135,7 +149,7 @@ func (client *Client) CreateSession(ctx context.Context, request CreateSessionRe
 	if err := request.validate(); err != nil {
 		return SessionInfo{}, err
 	}
-	body, err := client.do(ctx, http.MethodPost, "/api/session", request, http.StatusOK)
+	body, err := client.do(ctx, http.MethodPost, "/api/session", "", request, http.StatusOK)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -164,18 +178,16 @@ func (client *Client) Prompt(ctx context.Context, sessionID string, request Prom
 	}
 	payload := struct {
 		ID       string `json:"id"`
-		Prompt   any    `json:"prompt"`
+		Text     string `json:"text"`
 		Delivery string `json:"delivery"`
 		Resume   bool   `json:"resume"`
 	}{
-		ID: request.ID,
-		Prompt: struct {
-			Text string `json:"text"`
-		}{Text: request.Text},
+		ID:       request.ID,
+		Text:     request.Text,
 		Delivery: request.Delivery,
 		Resume:   request.Resume,
 	}
-	body, err := client.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/prompt", payload, http.StatusOK)
+	body, err := client.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/prompt", "", payload, http.StatusOK)
 	if err != nil {
 		return PromptAdmission{}, err
 	}
@@ -193,20 +205,65 @@ func (client *Client) Prompt(ctx context.Context, sessionID string, request Prom
 	return admission, nil
 }
 
-// Interrupt issues the documented cancellation control. It does not establish
-// pause, resume, process shutdown, or a terminal native result.
+// Interrupt issues the recorded 2.4.1 cancellation control: POST /api/session/{id}/interrupt
+// with resume=false answers 200 {"interrupted":bool}; a false answer refuses as unapplied, not delivered.
 func (client *Client) Interrupt(ctx context.Context, sessionID string) error {
 	if !isID(sessionID, "ses_") {
 		return fmt.Errorf("%w: session id must start with ses_", ErrInvalidSession)
 	}
-	body, err := client.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/interrupt", nil, http.StatusNoContent)
+	body, err := client.do(ctx, http.MethodPost, "/api/session/"+url.PathEscape(sessionID)+"/interrupt", "resume=false", nil, http.StatusOK)
 	if err != nil {
 		return err
 	}
-	if len(body) != 0 {
-		return fmt.Errorf("%w: interrupt response must be empty", ErrMalformedResponse)
+	object, err := strictObject(body)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrMalformedResponse, err)
+	}
+	interrupted, ok := requiredBool(object, "interrupted")
+	if !ok {
+		return ErrMalformedResponse
+	}
+	if !interrupted {
+		return ErrInterruptUnapplied
 	}
 	return nil
+}
+
+// SessionState is the recorded GET /api/session/{id} readback subset: the server's own
+// session identity and terminal outcome spelling. It is never a usage or billing claim.
+type SessionState struct {
+	ID      string
+	Outcome string
+}
+
+// SessionOutcome reads the recorded outcome readback for one session. An empty Outcome means the
+// server has not classified the session yet; callers still bind it to a terminal event first.
+func (client *Client) SessionOutcome(ctx context.Context, sessionID string) (SessionState, error) {
+	if !isID(sessionID, "ses_") {
+		return SessionState{}, fmt.Errorf("%w: session id must start with ses_", ErrInvalidSession)
+	}
+	body, err := client.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(sessionID), "", nil, http.StatusOK)
+	if err != nil {
+		return SessionState{}, err
+	}
+	object, err := responseDataObject(body)
+	if err != nil {
+		return SessionState{}, fmt.Errorf("%w: %v", ErrInvalidSession, err)
+	}
+	state := SessionState{}
+	var ok bool
+	if state.ID, ok = requiredString(object, "id"); !ok {
+		return SessionState{}, ErrInvalidSession
+	}
+	if state.ID != sessionID {
+		return SessionState{}, fmt.Errorf("%w: requested session %q, got %q", ErrIdentityMismatch, sessionID, state.ID)
+	}
+	if raw, exists := object["outcome"]; exists && !bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		if state.Outcome, ok = requiredString(object, "outcome"); !ok {
+			return SessionState{}, ErrInvalidSession
+		}
+	}
+	return state, nil
 }
 
 // OpenGlobalEvents opens the private global SSE endpoint. Its caller owns the
@@ -214,16 +271,6 @@ func (client *Client) Interrupt(ctx context.Context, sessionID string) error {
 // task lifecycle or completion signal.
 func (client *Client) OpenGlobalEvents(ctx context.Context) (io.ReadCloser, error) {
 	return client.openSSE(ctx, "/api/event", "")
-}
-
-// OpenSessionEvents opens OpenCode's durable replay stream using its exclusive
-// sequence cursor. The stream itself remains untrusted until every frame is
-// accepted by SessionEventValidator.
-func (client *Client) OpenSessionEvents(ctx context.Context, sessionID string, after uint64) (io.ReadCloser, error) {
-	if !isID(sessionID, "ses_") {
-		return nil, fmt.Errorf("%w: session id must start with ses_", ErrInvalidDurableCursor)
-	}
-	return client.openSSE(ctx, "/api/session/"+url.PathEscape(sessionID)+"/event", "after="+fmt.Sprintf("%d", after))
 }
 
 func (client *Client) openSSE(ctx context.Context, endpoint, rawQuery string) (io.ReadCloser, error) {
@@ -259,26 +306,38 @@ func (client *Client) openSSE(ctx context.Context, endpoint, rawQuery string) (i
 	return response.Body, nil
 }
 
-func (client *Client) do(ctx context.Context, method, endpoint string, payload any, expectedStatus int) ([]byte, error) {
+func (client *Client) do(ctx context.Context, method, endpoint, rawQuery string, payload any, expectedStatus int) ([]byte, error) {
+	status, body, err := client.request(ctx, method, endpoint, rawQuery, payload)
+	if err != nil {
+		return nil, err
+	}
+	if status != expectedStatus {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedStatus, status, expectedStatus)
+	}
+	return body, nil
+}
+
+func (client *Client) request(ctx context.Context, method, endpoint, rawQuery string, payload any) (int, []byte, error) {
 	if client == nil || client.baseURL == nil || client.httpClient == nil {
-		return nil, fmt.Errorf("%w: client is nil", ErrInvalidConfig)
+		return 0, nil, fmt.Errorf("%w: client is nil", ErrInvalidConfig)
 	}
 	endpointURL := *client.baseURL
 	endpointURL.Path = path.Clean(endpoint)
+	endpointURL.RawQuery = rawQuery
 	if !strings.HasPrefix(endpointURL.Path, "/api/") {
-		return nil, fmt.Errorf("%w: invalid endpoint", ErrInvalidConfig)
+		return 0, nil, fmt.Errorf("%w: invalid endpoint", ErrInvalidConfig)
 	}
 	var body io.Reader
 	if payload != nil {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
-			return nil, fmt.Errorf("%w: encode request: %v", ErrInvalidConfig, err)
+			return 0, nil, fmt.Errorf("%w: encode request: %v", ErrInvalidConfig, err)
 		}
 		body = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, endpointURL.String(), body)
 	if err != nil {
-		return nil, fmt.Errorf("%w: create request: %v", ErrInvalidConfig, err)
+		return 0, nil, fmt.Errorf("%w: create request: %v", ErrInvalidConfig, err)
 	}
 	request.SetBasicAuth(client.username, client.password)
 	request.Header.Set("Accept", "application/json")
@@ -287,21 +346,18 @@ func (client *Client) do(ctx context.Context, method, endpoint string, payload a
 	}
 	response, err := client.httpClient.Do(request)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	defer response.Body.Close()
 	limited := io.LimitReader(response.Body, client.maxBodyBytes+1)
 	responseBody, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if int64(len(responseBody)) > client.maxBodyBytes {
-		return nil, ErrResponseTooLarge
+		return 0, nil, ErrResponseTooLarge
 	}
-	if response.StatusCode != expectedStatus {
-		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedStatus, response.StatusCode, expectedStatus)
-	}
-	return responseBody, nil
+	return response.StatusCode, responseBody, nil
 }
 
 func responseDataObject(body []byte) (map[string]json.RawMessage, error) {
@@ -347,9 +403,6 @@ func decodeSessionInfo(object map[string]json.RawMessage) (SessionInfo, error) {
 func decodeAdmission(object map[string]json.RawMessage) (PromptAdmission, error) {
 	admission := PromptAdmission{}
 	var ok bool
-	if admission.AdmittedSeq, ok = requiredPositiveInt(object, "admittedSeq"); !ok {
-		return PromptAdmission{}, ErrInvalidPrompt
-	}
 	if admission.ID, ok = requiredString(object, "id"); !ok {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
@@ -359,26 +412,31 @@ func decodeAdmission(object map[string]json.RawMessage) (PromptAdmission, error)
 	if admission.Delivery, ok = requiredString(object, "delivery"); !ok {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
-	if admission.TimeCreated, ok = requiredPositiveInt64(object, "timeCreated"); !ok {
+	kind, ok := requiredString(object, "type")
+	if !ok || kind != "user" {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
-	rawPrompt, exists := object["prompt"]
+	rawTime, exists := object["time"]
 	if !exists {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
-	prompt, err := strictObject(rawPrompt)
+	timeObject, err := strictObject(rawTime)
 	if err != nil {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
-	if admission.Text, ok = requiredString(prompt, "text"); !ok {
+	if admission.TimeCreated, ok = requiredPositiveInt64(timeObject, "created"); !ok {
 		return PromptAdmission{}, ErrInvalidPrompt
 	}
-	if raw, exists := object["promotedSeq"]; exists {
-		var promoted uint64
-		if json.Unmarshal(raw, &promoted) != nil || promoted == 0 {
-			return PromptAdmission{}, ErrInvalidPrompt
-		}
-		admission.PromotedSeq = &promoted
+	rawPayload, exists := object["payload"]
+	if !exists {
+		return PromptAdmission{}, ErrInvalidPrompt
+	}
+	payload, err := strictObject(rawPayload)
+	if err != nil {
+		return PromptAdmission{}, ErrInvalidPrompt
+	}
+	if admission.Text, ok = requiredString(payload, "text"); !ok {
+		return PromptAdmission{}, ErrInvalidPrompt
 	}
 	return admission, nil
 }

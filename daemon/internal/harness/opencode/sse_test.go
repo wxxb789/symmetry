@@ -89,7 +89,7 @@ func TestEventDecodersFailClosed(t *testing.T) {
 		{name: "durable global", input: "data: {\"id\":\"evt_1\",\"type\":\"server.connected\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":1,\"version\":1},\"data\":{}}\n\n", global: true, want: ErrUnsupportedEvent},
 		{name: "unknown session", input: "data: {\"id\":\"evt_1\",\"type\":\"session.future\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":1,\"version\":1},\"data\":{}}\n\n", want: ErrUnsupportedEvent},
 		{name: "missing durable", input: "data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"data\":{}}\n\n", want: ErrUnsupportedEvent},
-		{name: "bad cursor", input: "data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":0,\"version\":1},\"data\":{}}\n\n", want: ErrInvalidDurableCursor},
+		{name: "bad cursor", input: "data: {\"id\":\"evt_1\",\"type\":\"session.next.prompt.admitted\",\"durable\":{\"aggregateID\":\"ses_1\",\"seq\":-1,\"version\":1},\"data\":{}}\n\n", want: ErrInvalidDurableCursor},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -104,6 +104,38 @@ func TestEventDecodersFailClosed(t *testing.T) {
 			}
 			if !errors.Is(err, test.want) {
 				t.Fatalf("decode error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+func TestGlobalFrameSessionIDFiltersAndFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		input   string
+		wantID  string
+		wantOK  bool
+		wantErr error
+	}{
+		{name: "2.4.1 non-session global event", input: `{"id":"evt_1","type":"integration.updated","created":1795614933128,"location":{"directory":"/repo"},"data":{}}`, wantOK: false},
+		{name: "server connected", input: `{"id":"evt_1","type":"server.connected","data":{}}`, wantOK: false},
+		{name: "session event", input: `{"id":"evt_2","type":"session.step.started","created":1,"durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantID: "ses_capture", wantOK: true},
+		{name: "foreign session event", input: `{"id":"evt_3","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_other"}}`, wantID: "ses_other", wantOK: true},
+		{name: "durable non-session event", input: `{"id":"evt_4","type":"project.updated","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantOK: false},
+		{name: "session frame without durable", input: `{"id":"evt_5","type":"session.step.started","data":{"sessionID":"ses_capture"}}`, wantOK: false},
+		{name: "identity mismatch", input: `{"id":"evt_6","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantErr: ErrIdentityMismatch},
+		{name: "missing session id", input: `{"id":"evt_7","type":"session.step.started","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{}}`, wantErr: ErrMalformedEvent},
+		{name: "invalid created", input: `{"id":"evt_8","type":"integration.updated","created":0,"data":{}}`, wantErr: ErrMalformedEvent},
+		{name: "unknown envelope field", input: `{"id":"evt_9","type":"session.step.started","extra":true,"durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture"}}`, wantErr: ErrMalformedEvent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			frames, err := NewDecoder(1024).Feed([]byte("data: " + test.input + "\n\n"))
+			if err != nil || len(frames) != 1 {
+				t.Fatalf("Feed() = %#v, %v", frames, err)
+			}
+			sessionID, ok, err := GlobalFrameSessionID(frames[0])
+			if !errors.Is(err, test.wantErr) || ok != test.wantOK || sessionID != test.wantID {
+				t.Fatalf("GlobalFrameSessionID() = %q, %t, %v; want %q, %t, %v", sessionID, ok, err, test.wantID, test.wantOK, test.wantErr)
 			}
 		})
 	}
@@ -454,4 +486,187 @@ func frame(t *testing.T, data string) Frame {
 		t.Fatalf("frame decode = %#v, %v", frames, err)
 	}
 	return frames[0]
+}
+
+// recordedReceiptFiles are the committed 2.4.1 records whose durable frames the promoted
+// decoder must classify; the evidence record's class matrix cites them per receipt.
+var recordedReceiptFiles = []string{
+	"probe-windows.json",
+	"probe-linux.json",
+	"windows-2026-11-25-r2.json",
+	"linux-2026-11-25.json",
+	"windows-2026-11-25-provider-failure.json",
+	"linux-2026-11-25-provider-failure.json",
+	"windows-2026-11-25-truncation.json",
+	"linux-2026-11-25-truncation.json",
+}
+
+var recordedReceiptKinds = map[string]SessionEventKind{
+	"session.execution.started":     SessionEventExecutionStarted,
+	"session.execution.succeeded":   SessionEventExecutionSucceeded,
+	"session.execution.failed":      SessionEventExecutionFailed,
+	"session.execution.interrupted": SessionEventExecutionInterrupted,
+	"session.inbox.enqueued":        SessionEventInboxEnqueued,
+	"session.step.started":          SessionEventRecordedStepStarted,
+	"session.step.ended":            SessionEventRecordedStepEnded,
+	"session.step.failed":           SessionEventRecordedStepFailed,
+	"session.tool.called":           SessionEventRecordedToolCalled,
+	"session.tool.success":          SessionEventRecordedToolSuccess,
+	// Recorded types the promoted transport journals without interpreting.
+	"session.created":              SessionEventRecordedUninterpreted,
+	"session.deleted":              SessionEventRecordedUninterpreted,
+	"session.inbox.delivered":      SessionEventRecordedUninterpreted,
+	"session.instructions.updated": SessionEventRecordedUninterpreted,
+	"session.reasoning.ended":      SessionEventRecordedUninterpreted,
+	"session.reasoning.started":    SessionEventRecordedUninterpreted,
+	"session.renamed":              SessionEventRecordedUninterpreted,
+	"session.step.first-token":     SessionEventRecordedUninterpreted,
+	"session.step.streamed":        SessionEventRecordedUninterpreted,
+	"session.text.ended":           SessionEventRecordedUninterpreted,
+	"session.text.started":         SessionEventRecordedUninterpreted,
+	"session.tool.input.ended":     SessionEventRecordedUninterpreted,
+	"session.tool.input.started":   SessionEventRecordedUninterpreted,
+}
+
+// recordedReceiptFrames returns the receipt's durable event frames in arrival order;
+// non-durable frames never reach the session validator on the global stream.
+func recordedReceiptFrames(t *testing.T, name string) []Frame {
+	t.Helper()
+	record := recordedReceiptEvents(t, name)
+	frames := make([]Frame, 0, len(record))
+	for _, item := range record {
+		var envelope struct {
+			Durable json.RawMessage `json:"durable"`
+		}
+		if json.Unmarshal(item, &envelope) != nil || len(envelope.Durable) == 0 {
+			continue
+		}
+		frames = append(frames, Frame{Sequence: uint64(len(frames) + 1), Data: item})
+	}
+	return frames
+}
+
+// recordedReceiptEvents reads one committed 2.4.1 receipt and returns its raw event envelopes.
+func recordedReceiptEvents(t *testing.T, name string) []json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "opencode", TestedVersion, name))
+	if err != nil {
+		t.Fatalf("read recorded receipt %s: %v", name, err)
+	}
+	var record struct {
+		Events []json.RawMessage `json:"events"`
+	}
+	if err := json.Unmarshal(raw, &record); err != nil {
+		t.Fatalf("parse recorded receipt %s: %v", name, err)
+	}
+	return record.Events
+}
+
+// TestRecordedReceiptFramesDecode classifies every durable frame of every committed 2.4.1
+// receipt: every recorded type must decode to its expected kind, never to unknown.
+func TestRecordedReceiptFramesDecode(t *testing.T) {
+	for _, name := range recordedReceiptFiles {
+		t.Run(name, func(t *testing.T) {
+			for index, frame := range recordedReceiptFrames(t, name) {
+				decoded, err := DecodeSessionEvent(frame)
+				if err != nil {
+					t.Fatalf("frame %d decode error = %v", index, err)
+				}
+				want, ok := recordedReceiptKinds[decoded.Type]
+				if !ok {
+					t.Fatalf("frame %d recorded type %q has no expected kind", index, decoded.Type)
+				}
+				if decoded.Kind != want {
+					t.Fatalf("frame %d type %q kind = %q, want %q", index, decoded.Type, decoded.Kind, want)
+				}
+			}
+		})
+	}
+}
+
+// TestRecordedReceiptTerminalsCarryTheRecordedPayload pins the decoded terminal payloads the
+// promotion decision rests on: the provider failure error and the interrupted reason.
+func TestRecordedReceiptTerminalsCarryTheRecordedPayload(t *testing.T) {
+	find := func(t *testing.T, name, eventType string) DecodedSessionEvent {
+		t.Helper()
+		for _, frame := range recordedReceiptFrames(t, name) {
+			decoded, err := DecodeSessionEvent(frame)
+			if err != nil {
+				t.Fatalf("decode %s frame: %v", eventType, err)
+			}
+			if decoded.Type == eventType {
+				return decoded
+			}
+		}
+		t.Fatalf("%s carries no %s frame", name, eventType)
+		return DecodedSessionEvent{}
+	}
+	succeeded := find(t, "windows-2026-11-25-r2.json", "session.execution.succeeded")
+	if succeeded.Kind != SessionEventExecutionSucceeded || succeeded.Execution == nil || succeeded.Execution.Error != nil || succeeded.Execution.Reason != nil {
+		t.Fatalf("succeeded terminal = %+v", succeeded)
+	}
+	interrupted := find(t, "linux-2026-11-25.json", "session.execution.interrupted")
+	if interrupted.Kind != SessionEventExecutionInterrupted || interrupted.Execution == nil || interrupted.Execution.Reason == nil || *interrupted.Execution.Reason != "user" {
+		t.Fatalf("interrupted terminal = %+v", interrupted)
+	}
+	failed := find(t, "windows-2026-11-25-provider-failure.json", "session.execution.failed")
+	if failed.Kind != SessionEventExecutionFailed || failed.Execution == nil || failed.Execution.Error == nil || failed.Execution.Error.Type != "provider.auth" {
+		t.Fatalf("failed terminal = %+v", failed)
+	}
+	admission := find(t, "windows-2026-11-25-r2.json", "session.inbox.enqueued")
+	if admission.Kind != SessionEventInboxEnqueued || admission.InboxEnqueued == nil || admission.InboxEnqueued.InboxID != "msg_be5a0bc1cfe3a506c506dd0b" || admission.InboxEnqueued.Delivery != "steer" {
+		t.Fatalf("inbox admission = %+v", admission)
+	}
+}
+
+// TestRecordedReceiptSessionFramesSatisfyTheValidator replays every durable frame of one
+// recorded session, in arrival order, through the identity and cursor validator.
+func TestRecordedReceiptSessionFramesSatisfyTheValidator(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sessionID string
+		terminal  string
+	}{
+		{name: "windows-2026-11-25-r2.json", sessionID: "ses_ded027fb8ffeXP18hMb482YQFe", terminal: "session.execution.succeeded"},
+		{name: "linux-2026-11-25.json", sessionID: "ses_ded011402ffeQCpX7CdxcgoGbr", terminal: "session.execution.interrupted"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			validator, err := NewSessionEventValidator(test.sessionID, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			terminals := 0
+			for index, frame := range recordedReceiptFrames(t, test.name) {
+				decoded, err := DecodeSessionEvent(frame)
+				if err != nil {
+					t.Fatalf("frame %d decode error = %v", index, err)
+				}
+				// The recorded sequence opens at 0 (session.created); the watcher opens the
+				// stream after session creation, so its exclusive boundary starts at 1.
+				if decoded.Durable.Seq == 0 {
+					continue
+				}
+				owner, ok, err := GlobalFrameSessionID(frame)
+				if err != nil {
+					t.Fatalf("frame %d identity error = %v", index, err)
+				}
+				if !ok || owner != test.sessionID {
+					continue
+				}
+				decoded, err = validator.ObserveEvent(frame)
+				if err != nil {
+					t.Fatalf("frame %d ObserveEvent error = %v", index, err)
+				}
+				if _, terminal := executionOutcome(decoded.Type); terminal {
+					terminals++
+					if decoded.Type != test.terminal {
+						t.Fatalf("terminal %d = %q, want %q", terminals, decoded.Type, test.terminal)
+					}
+				}
+			}
+			if terminals != 1 || validator.LastCursor() == 0 {
+				t.Fatalf("observed %d terminals with last cursor %d, want exactly one terminal past a positive cursor", terminals, validator.LastCursor())
+			}
+		})
+	}
 }

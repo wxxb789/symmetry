@@ -5,7 +5,6 @@ package opencode
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -57,18 +56,7 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	}
 	environment := nativeOpenCodeSmokeEnvironment(t, root)
 
-	versionContext, versionCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
-	defer versionCancel()
-	versionCommand := exec.CommandContext(versionContext, executable, "--version")
-	versionCommand.Dir = workspace
-	versionCommand.Env = environment
-	versionOutput, err := versionCommand.Output()
-	if err != nil {
-		t.Fatal("run native OpenCode version check failed")
-	}
-	if strings.TrimSpace(string(versionOutput)) != historicalNativeTestVersion {
-		t.Fatal("native OpenCode version did not equal the historical version")
-	}
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, nativeSmokeTimeout)
 	t.Logf("historical native OpenCode transport smoke: platform=%s version=%s", runtime.GOOS, historicalNativeTestVersion)
 
 	var eventMutex sync.Mutex
@@ -86,20 +74,16 @@ func TestNativeTransportOpenAndClose(t *testing.T) {
 	persistedIdentity := ""
 	startContext, startCancel := context.WithTimeout(context.Background(), nativeSmokeTimeout)
 	defer startCancel()
-	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
-		Workspace:  workspace,
-		Invocation: execution.Invocation{Env: environment},
-		PersistProcess: func(pid int, identity string) error {
-			if pid <= 0 || strings.TrimSpace(identity) == "" {
-				return os.ErrInvalid
-			}
-			persistMutex.Lock()
-			persistCount++
-			persistedPID = pid
-			persistedIdentity = identity
-			persistMutex.Unlock()
-			return nil
-		},
+	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, func(pid int, identity string) error {
+		if pid <= 0 || strings.TrimSpace(identity) == "" {
+			return os.ErrInvalid
+		}
+		persistMutex.Lock()
+		persistCount++
+		persistedPID = pid
+		persistedIdentity = identity
+		persistMutex.Unlock()
+		return nil
 	}, sink)
 	if err != nil {
 		if session == nil {
@@ -223,4 +207,38 @@ func nativeOpenCodeSmokeEnvironment(t *testing.T, root string) []string {
 		environment = append(environment, name+"="+value)
 	}
 	return environment
+}
+
+// startNativeOpenCodeTestSession is the shared production Start preamble for the
+// opt-in native tests; the persist callback stays with its site.
+func startNativeOpenCodeTestSession(ctx context.Context, executable, workspace string, environment []string, persist func(pid int, identity string) error, sink harness.EventSink) (harness.Session, error) {
+	return NewAdapter(executable).Start(ctx, harness.StartRequest{
+		Workspace:      workspace,
+		Invocation:     execution.Invocation{Env: environment},
+		PersistProcess: persist,
+	}, sink)
+}
+
+func acceptNativeOpenCodeProcess(pid int, identity string) error {
+	if pid <= 0 || strings.TrimSpace(identity) == "" {
+		return os.ErrInvalid
+	}
+	return nil
+}
+
+// nativeOpenCodeConfigEnvironment appends the isolated OpenCode config variables
+// every native test environment shares, then the caller's extra entries.
+func nativeOpenCodeConfigEnvironment(environment []string, configPath, configDir, managedDir string, extra ...string) []string {
+	environment = append(environment,
+		"OPENCODE_CONFIG="+configPath,
+		"OPENCODE_CONFIG_DIR="+configDir,
+		"OPENCODE_TEST_MANAGED_CONFIG_DIR="+managedDir,
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+		"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1",
+	)
+	return append(environment, extra...)
 }

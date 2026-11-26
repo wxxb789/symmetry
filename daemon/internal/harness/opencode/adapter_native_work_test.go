@@ -24,13 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 )
 
 const (
-	nativeAdmissionReplayEnabledEnv       = "SYMMETRY_OPENCODE_NATIVE_ADMISSION_REPLAY"
-	nativeAdmissionReplayExecutableEnv    = "SYMMETRY_OPENCODE_NATIVE_ADMISSION_REPLAY_EXECUTABLE"
+	nativePromptInboxEnabledEnv           = "SYMMETRY_OPENCODE_NATIVE_PROMPT_INBOX"
+	nativePromptInboxExecutableEnv        = "SYMMETRY_OPENCODE_NATIVE_PROMPT_INBOX_EXECUTABLE"
 	nativeSyntheticToolEnabledEnv         = "SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL"
 	nativeSyntheticToolExecutableEnv      = "SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL_EXECUTABLE"
 	nativeRealRepositoryTaskEnabledEnv    = "SYMMETRY_OPENCODE_NATIVE_REPOSITORY_TASK"
@@ -41,7 +40,7 @@ const (
 	nativeResumeCaptureBaseURLEnv         = "SYMMETRY_OPENCODE_NATIVE_RESUME_CAPTURE_BASE_URL"
 	nativeOpenCodeObserverMaxRequestBytes = 8 << 20
 	nativeOpenCodeEventCaptureMaximum     = 16
-	nativeAdmissionReplayTimeout          = 45 * time.Second
+	nativePromptInboxTimeout              = 45 * time.Second
 	nativeRepositoryTaskTimeout           = 2 * time.Minute
 	nativeRepositoryTaskCloseTimeout      = 30 * time.Second
 	nativeRepositoryTaskGitTimeout        = 10 * time.Second
@@ -104,24 +103,18 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 	sink := &nativeOpenCodeRepositoryTaskSink{}
 	startContext, startCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer startCancel()
-	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
-		Workspace: workspace,
-		Invocation: execution.Invocation{
-			Env: environment,
-		},
-		PersistProcess: func(pid int, identity string) error {
-			if pid <= 0 || strings.TrimSpace(identity) == "" {
-				return os.ErrInvalid
-			}
-			persistMutex.Lock()
-			persistedPID = pid
-			persistedIdentity = identity
-			persistMutex.Unlock()
-			return nativeOpenCodeRepositoryTaskWriteJSON(processRecord, map[string]any{
-				"pid":      pid,
-				"identity": identity,
-			})
-		},
+	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, func(pid int, identity string) error {
+		if pid <= 0 || strings.TrimSpace(identity) == "" {
+			return os.ErrInvalid
+		}
+		persistMutex.Lock()
+		persistedPID = pid
+		persistedIdentity = identity
+		persistMutex.Unlock()
+		return nativeOpenCodeRepositoryTaskWriteJSON(processRecord, map[string]any{
+			"pid":      pid,
+			"identity": identity,
+		})
 	}, sink)
 	if err != nil {
 		t.Fatalf("start native OpenCode repository task: %v", err)
@@ -240,20 +233,18 @@ func TestNativeSyntheticGatewayToolIntegration(t *testing.T) {
 	}
 }
 
-// TestNativePromptAdmissionReplaysAfterPost is deliberately opt-in. It uses
-// the production Start/Open path, posts one Resume:false prompt directly, and
-// proves that the native durable admission event can be read and replayed from
-// after=0. It never calls StartTurn, starts a model loop, or claims task evidence.
-func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
+// TestNativePromptAdmissionPublishesTheRecordedInboxEvent is deliberately opt-in: the global stream
+// carries the recorded 2.4.1 session.inbox.enqueued frame bound to the posted message id.
+func TestNativePromptAdmissionPublishesTheRecordedInboxEvent(t *testing.T) {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
-		t.Skip("native OpenCode admission replay supports Linux and Windows only")
+		t.Skip("native OpenCode admission inbox observation supports Linux and Windows only")
 	}
-	if os.Getenv(nativeAdmissionReplayEnabledEnv) != "1" {
-		t.Skip("set SYMMETRY_OPENCODE_NATIVE_ADMISSION_REPLAY=1 to run the native OpenCode admission replay")
+	if os.Getenv(nativePromptInboxEnabledEnv) != "1" {
+		t.Skip("set SYMMETRY_OPENCODE_NATIVE_PROMPT_INBOX=1 to run the native OpenCode admission inbox observation")
 	}
-	executable := strings.TrimSpace(os.Getenv(nativeAdmissionReplayExecutableEnv))
+	executable := strings.TrimSpace(os.Getenv(nativePromptInboxExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeAdmissionReplayExecutableEnv, historicalNativeTestVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativePromptInboxExecutableEnv, TestedVersion)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -265,36 +256,27 @@ func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatalf("create native OpenCode workspace: %v", err)
 	}
-	environment := nativeOpenCodeSmokeEnvironment(t, root)
-	nativeOpenCodeRepositoryTaskCheckVersion(t, executable, workspace, environment)
+	environment := nativeOpenCodeAdmissionInboxEnvironment(t, root)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, "opencode v"+TestedVersion, nativeRepositoryTaskTimeout)
 
-	startContext, startCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
+	startContext, startCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 	defer startCancel()
-	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
-		Workspace:  workspace,
-		Invocation: execution.Invocation{Env: environment},
-		PersistProcess: func(pid int, identity string) error {
-			if pid <= 0 || strings.TrimSpace(identity) == "" {
-				return os.ErrInvalid
-			}
-			return nil
-		},
-	}, harness.EventSinkFunc(func(context.Context, harness.Event) error { return nil }))
+	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, acceptNativeOpenCodeProcess, harness.EventSinkFunc(func(context.Context, harness.Event) error { return nil }))
 	if err != nil {
-		t.Fatalf("start native OpenCode admission replay: %v", err)
+		t.Fatalf("start native OpenCode prompt inbox observation: %v", err)
 	}
 	closed := false
 	t.Cleanup(func() {
 		if closed {
 			return
 		}
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
+		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 		defer cleanupCancel()
 		if err := session.Close(cleanupContext); err != nil {
-			t.Errorf("cleanup native OpenCode admission replay: %v", err)
+			t.Errorf("cleanup native OpenCode prompt inbox observation: %v", err)
 		}
 		if _, err := session.Wait(cleanupContext); err != nil {
-			t.Errorf("wait for native OpenCode admission replay cleanup: %v", err)
+			t.Errorf("wait for native OpenCode prompt inbox observation cleanup: %v", err)
 		}
 	})
 
@@ -302,14 +284,14 @@ func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
 	if !ok {
 		t.Fatal("native OpenCode adapter did not return a staged session")
 	}
-	openContext, openCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
+	openContext, openCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 	defer openCancel()
 	handle, err := staged.Open(openContext)
 	if err != nil {
-		t.Fatalf("open native OpenCode admission replay session: %v", err)
+		t.Fatalf("open native OpenCode prompt inbox observation session: %v", err)
 	}
 	if handle.ID == "" {
-		t.Fatal("native OpenCode admission replay session returned an empty identity")
+		t.Fatal("native OpenCode prompt inbox observation session returned an empty identity")
 	}
 
 	native, ok := session.(*nativeSession)
@@ -325,64 +307,52 @@ func TestNativePromptAdmissionReplaysAfterPost(t *testing.T) {
 
 	prompt := PromptRequest{
 		ID:       randomID("msg_"),
-		Text:     "Symmetry native admission replay probe " + randomID("probe_"),
+		Text:     "Symmetry native admission inbox probe " + randomID("probe_"),
 		Delivery: "steer",
 		Resume:   false,
 	}
-	promptContext, promptCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
+	// The global stream is opened before the prompt, so the admission frame cannot be
+	// missed by a read that starts after the POST already returned.
+	streamContext, streamCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
+	defer streamCancel()
+	stream, err := client.OpenGlobalEvents(streamContext)
+	if err != nil {
+		t.Fatalf("open native OpenCode global event stream: %v", err)
+	}
+	promptContext, promptCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 	defer promptCancel()
 	admission, err := client.Prompt(promptContext, handle.ID, prompt)
 	if err != nil {
+		_ = stream.Close()
 		t.Fatalf("post native OpenCode prompt admission: %v", err)
 	}
-	if admission.ID != prompt.ID || admission.SessionID != handle.ID || admission.Text != prompt.Text || admission.Delivery != prompt.Delivery || admission.AdmittedSeq == 0 {
-		t.Fatalf("prompt admission = %+v, want request identity and a positive admitted sequence", admission)
+	if admission.ID != prompt.ID || admission.SessionID != handle.ID || admission.Text != prompt.Text || admission.Delivery != prompt.Delivery || admission.TimeCreated <= 0 {
+		_ = stream.Close()
+		t.Fatalf("prompt admission = %+v, want the recorded 2.4.1 admission identity", admission)
+	}
+	inbox, err := nativeOpenCodeReadPromptInboxEvent(streamContext, stream, handle.ID, prompt)
+	_ = stream.Close()
+	if err != nil {
+		t.Fatalf("read native OpenCode prompt inbox event: %v", err)
+	}
+	if inbox.Type != "session.inbox.enqueued" || inbox.InboxID != prompt.ID || inbox.AggregateID != handle.ID || inbox.Seq == 0 || inbox.Text != prompt.Text {
+		t.Fatalf("prompt inbox event = %+v, want the recorded admission frame bound to the request", inbox)
 	}
 
-	firstContext, firstCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
-	defer firstCancel()
-	firstStream, err := client.OpenSessionEvents(firstContext, handle.ID, 0)
-	if err != nil {
-		t.Fatalf("open native OpenCode admission stream after prompt: %v", err)
-	}
-	first, err := nativeOpenCodeReadPromptAdmittedEvent(firstContext, firstStream, handle.ID, prompt)
-	_ = firstStream.Close()
-	if err != nil {
-		t.Fatalf("read native OpenCode prompt admission event: %v", err)
-	}
-	if first.Durable == nil || first.Durable.Seq != admission.AdmittedSeq {
-		t.Fatalf("prompt event durable cursor = %+v, want admission sequence %d", first.Durable, admission.AdmittedSeq)
-	}
-
-	replayContext, replayCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
-	defer replayCancel()
-	replayStream, err := client.OpenSessionEvents(replayContext, handle.ID, 0)
-	if err != nil {
-		t.Fatalf("reopen native OpenCode admission stream: %v", err)
-	}
-	replayed, err := nativeOpenCodeReadPromptAdmittedEvent(replayContext, replayStream, handle.ID, prompt)
-	_ = replayStream.Close()
-	if err != nil {
-		t.Fatalf("replay native OpenCode prompt admission event: %v", err)
-	}
-	if replayed.Durable == nil || first.Durable == nil || replayed.ID != first.ID || replayed.Durable.Seq != first.Durable.Seq || replayed.Durable.Version != first.Durable.Version || replayed.Text != first.Text || replayed.MessageID != first.MessageID {
-		t.Fatalf("replayed prompt event = %+v, want same durable identity and text as %+v", replayed, first)
-	}
-
-	closeContext, closeCancel := context.WithTimeout(context.Background(), nativeAdmissionReplayTimeout)
+	closeContext, closeCancel := context.WithTimeout(context.Background(), nativePromptInboxTimeout)
 	defer closeCancel()
 	if err := staged.Close(closeContext); err != nil {
-		t.Fatalf("close native OpenCode admission replay: %v", err)
+		t.Fatalf("close native OpenCode prompt inbox observation: %v", err)
 	}
 	result, err := staged.Wait(closeContext)
 	if err != nil {
-		t.Fatalf("wait native OpenCode admission replay: %v", err)
+		t.Fatalf("wait native OpenCode prompt inbox observation: %v", err)
 	}
 	closed = true
 	// Close intentionally terminates the server; a platform-specific non-zero
 	// WaitError is expected once Terminated is true and is not a cleanup fault.
 	if result.Kind != harness.ResultUnknown || result.Semantic != nil || !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
-		t.Fatalf("native OpenCode admission replay result = %+v; want unknown with clean bounded process stop", result)
+		t.Fatalf("native OpenCode prompt inbox observation result = %+v; want unknown with clean bounded process stop", result)
 	}
 }
 
@@ -424,16 +394,7 @@ func TestNativeResumeEventCapture(t *testing.T) {
 
 	startContext, startCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer startCancel()
-	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
-		Workspace:  workspace,
-		Invocation: execution.Invocation{Env: environment},
-		PersistProcess: func(pid int, identity string) error {
-			if pid <= 0 || strings.TrimSpace(identity) == "" {
-				return os.ErrInvalid
-			}
-			return nil
-		},
-	}, harness.EventSinkFunc(func(context.Context, harness.Event) error { return nil }))
+	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, acceptNativeOpenCodeProcess, harness.EventSinkFunc(func(context.Context, harness.Event) error { return nil }))
 	if err != nil {
 		t.Fatalf("start native OpenCode Resume:true event capture: %v", err)
 	}
@@ -482,20 +443,10 @@ func TestNativeResumeEventCapture(t *testing.T) {
 		Delivery: "steer",
 		Resume:   true,
 	}
-	promptContext, promptCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
-	defer promptCancel()
-	admission, err := client.Prompt(promptContext, handle.ID, prompt)
-	if err != nil {
-		t.Fatalf("post native OpenCode Resume:true prompt: %v", err)
-	}
-	if admission.ID != prompt.ID || admission.SessionID != handle.ID || admission.Text != prompt.Text || admission.Delivery != prompt.Delivery || admission.AdmittedSeq == 0 {
-		t.Fatalf("native OpenCode Resume:true prompt admission = %+v, want request identity and a positive admitted sequence", admission)
-	}
-
-	// Keep the capture order explicit: admit Resume:true first, then replay the
-	// retained session stream from the beginning through the private client.
+	// The global stream is opened before the prompt, so the capture cannot miss the
+	// session's first durable events; the admitted prompt is bound by message id.
 	eventsContext, eventsCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
-	eventStream, err := client.OpenSessionEvents(eventsContext, handle.ID, 0)
+	eventStream, err := client.OpenGlobalEvents(eventsContext)
 	if err != nil {
 		eventsCancel()
 		t.Fatalf("open native OpenCode Resume:true event stream: %v", err)
@@ -517,9 +468,17 @@ func TestNativeResumeEventCapture(t *testing.T) {
 		}
 	})
 	go func() {
-		capture := nativeOpenCodeCaptureResumeEventMetadata(eventsContext, eventStream, nativeOpenCodeEventCaptureMaximum, handle.ID, prompt.ID, admission.AdmittedSeq)
-		captured <- capture
+		captured <- nativeOpenCodeCaptureResumeEventMetadata(eventsContext, eventStream, nativeOpenCodeEventCaptureMaximum, handle.ID, prompt.ID)
 	}()
+	promptContext, promptCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	defer promptCancel()
+	admission, err := client.Prompt(promptContext, handle.ID, prompt)
+	if err != nil {
+		t.Fatalf("post native OpenCode Resume:true prompt: %v", err)
+	}
+	if admission.ID != prompt.ID || admission.SessionID != handle.ID || admission.Text != prompt.Text || admission.Delivery != prompt.Delivery || admission.TimeCreated <= 0 {
+		t.Fatalf("native OpenCode Resume:true prompt admission = %+v, want the recorded 2.4.1 admission identity", admission)
+	}
 	if err := observer.waitForRequest(promptContext); err != nil {
 		t.Fatal(err)
 	}
@@ -615,9 +574,9 @@ func nativeOpenCodeCaptureSessionEventMetadata(ctx context.Context, stream io.Re
 	})
 }
 
-func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int, sessionID, messageID string, cursor uint64) nativeOpenCodeEventCaptureResult {
+func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.ReadCloser, maximum int, sessionID, messageID string) nativeOpenCodeEventCaptureResult {
 	capture := nativeOpenCodeEventCaptureResult{}
-	if ctx == nil || stream == nil || maximum <= 0 || !isID(sessionID, "ses_") || !isID(messageID, "msg_") || cursor == 0 {
+	if ctx == nil || stream == nil || maximum <= 0 || !isID(sessionID, "ses_") || !isID(messageID, "msg_") {
 		capture.stopReason = nativeOpenCodeCaptureStopInvalidInput
 		capture.err = errors.New("native OpenCode resume event capture input is invalid")
 		return capture
@@ -655,6 +614,14 @@ func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.Rea
 	}
 	observe := func(frames []Frame) bool {
 		for _, frame := range frames {
+			owner, ok, frameErr := GlobalFrameSessionID(frame)
+			if frameErr != nil {
+				stop(nativeOpenCodeCaptureStopDecodeError, frameErr)
+				return true
+			}
+			if !ok || owner != sessionID {
+				continue
+			}
 			if capture.observedEvents >= maximum {
 				stop(nativeOpenCodeCaptureStopMaximum, nil)
 				return true
@@ -668,8 +635,9 @@ func nativeOpenCodeCaptureResumeEventMetadata(ctx context.Context, stream io.Rea
 			capture.lastCursor = event.Durable.Seq
 			capture.lastType = nativeOpenCodeBoundedString(event.Type, nativeOpenCodeEventCaptureTypeMaximum)
 			if !capture.admissionObserved {
-				if event.Kind == SessionEventPromptAdmitted && event.PromptAdmitted != nil &&
-					event.Durable.Seq == cursor && event.PromptAdmitted.MessageID == messageID {
+				admitted := event.Kind == SessionEventPromptAdmitted && event.PromptAdmitted != nil && event.PromptAdmitted.MessageID == messageID
+				enqueued := event.Kind == SessionEventInboxEnqueued && event.InboxEnqueued != nil && event.InboxEnqueued.InboxID == messageID
+				if admitted || enqueued {
 					capture.admissionObserved = true
 					capture.events = append(capture.events, nativeOpenCodeResumeEventMetadata(event))
 					if len(capture.events) >= maximum {
@@ -1036,7 +1004,7 @@ func TestNativeOpenCodeResumeCaptureBindsPromptAndRecordsLifecycle(t *testing.T)
 		nativeOpenCodeCaptureFrame(`{"id":"evt_text_ended","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":7,"version":1},"data":{"timestamp":7,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"private text"}}`),
 		nativeOpenCodeCaptureFrame(`{"id":"evt_step_ended","type":"session.next.step.ended","durable":{"aggregateID":"ses_capture","seq":8,"version":2},"data":{"timestamp":8,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}`),
 	}, "")
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, sessionID, messageID, 2)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, sessionID, messageID)
 	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopTerminal || !capture.admissionObserved || !capture.terminalObserved {
 		t.Fatalf("capture = %s", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1063,7 +1031,7 @@ func TestNativeOpenCodeResumeCaptureBindsPromptAndRecordsLifecycle(t *testing.T)
 func TestNativeOpenCodeResumeCaptureRecordsNoTerminalAtStreamEnd(t *testing.T) {
 	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`) +
 		nativeOpenCodeCaptureFrame(`{"id":"evt_text","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"not a semantic result"}}`)
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture")
 	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopStreamEnded || !capture.admissionObserved || capture.terminalObserved {
 		t.Fatalf("capture = %s", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1075,7 +1043,7 @@ func TestNativeOpenCodeResumeCaptureRecordsNoTerminalAtStreamEnd(t *testing.T) {
 func TestNativeOpenCodeResumeCaptureReportsTimeout(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
-	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(strings.NewReader("")), 16, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(strings.NewReader("")), 16, "ses_capture", "msg_capture")
 	if capture.stopReason != nativeOpenCodeCaptureStopTimeout || !errors.Is(capture.err, context.DeadlineExceeded) {
 		t.Fatalf("capture = %s, want timeout evidence", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1085,7 +1053,7 @@ func TestNativeOpenCodeResumeCapturePrefersDeadlineAfterRead(t *testing.T) {
 	ctx := newNativeOpenCodeResumeCaptureDeadlineContext()
 	terminal := nativeOpenCodeCaptureFrame(`{"id":"evt_terminal","type":"session.next.step.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":2},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","finish":"stop","cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}}}`)
 	reader := &nativeOpenCodeResumeCaptureCancellingReader{data: []byte(terminal), afterRead: ctx.expire}
-	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(reader), 16, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(ctx, io.NopCloser(reader), 16, "ses_capture", "msg_capture")
 	if capture.stopReason != nativeOpenCodeCaptureStopTimeout || !errors.Is(capture.err, context.DeadlineExceeded) || capture.terminalObserved {
 		t.Fatalf("capture = %s, want deadline to win after Read", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1094,22 +1062,22 @@ func TestNativeOpenCodeResumeCapturePrefersDeadlineAfterRead(t *testing.T) {
 func TestNativeOpenCodeResumeCaptureReportsDisconnect(t *testing.T) {
 	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`)
 	streamReader := io.MultiReader(strings.NewReader(stream), nativeOpenCodeResumeCaptureErrorReader{})
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(streamReader), 16, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(streamReader), 16, "ses_capture", "msg_capture")
 	if capture.stopReason != nativeOpenCodeCaptureStopDisconnected || !capture.admissionObserved || capture.err == nil || !strings.Contains(capture.err.Error(), "synthetic disconnect") {
 		t.Fatalf("capture = %s, want disconnect evidence", nativeOpenCodeEventCaptureSummary(capture))
 	}
 }
 
 func TestNativeOpenCodeResumeCaptureClassifiesTruncatedFrameAsDecodeError(t *testing.T) {
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader("data: {")), 16, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader("data: {")), 16, "ses_capture", "msg_capture")
 	if capture.stopReason != nativeOpenCodeCaptureStopDecodeError || capture.err == nil || !strings.Contains(capture.err.Error(), "incomplete") {
 		t.Fatalf("capture = %s, want decode-error evidence", nativeOpenCodeEventCaptureSummary(capture))
 	}
 }
 
 func TestNativeOpenCodeResumeCaptureRedactsIdentityInDecodeError(t *testing.T) {
-	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_other","messageID":"msg_other","prompt":{"text":"prompt"},"delivery":"steer"}}`)
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture", 1)
+	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.inbox.enqueued","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_capture","inboxID":"msg_capture"}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 16, "ses_capture", "msg_capture")
 	if capture.stopReason != nativeOpenCodeCaptureStopDecodeError || capture.err == nil {
 		t.Fatalf("capture = %s, want identity decode error", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1118,11 +1086,26 @@ func TestNativeOpenCodeResumeCaptureRedactsIdentityInDecodeError(t *testing.T) {
 	}
 }
 
+func TestNativeOpenCodeResumeCaptureBindsOnlyTheRecordedInboxAdmission(t *testing.T) {
+	const sessionID = "ses_capture"
+	const messageID = "msg_capture"
+	enqueued := nativeOpenCodeCaptureFrame(`{"id":"evt_enqueued","type":"session.inbox.enqueued","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"sessionID":"ses_capture","inboxID":"msg_capture","item":{"type":"user","payload":{"text":"prompt"},"delivery":"steer"}}}`)
+	delivered := nativeOpenCodeCaptureFrame(`{"id":"evt_delivered","type":"session.inbox.delivered","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"sessionID":"ses_capture","inboxID":"msg_capture"}}`)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(enqueued+delivered)), 16, sessionID, messageID)
+	if capture.err != nil || !capture.admissionObserved || capture.preAdmissionEvents != 0 || len(capture.events) == 0 || capture.events[0].Kind != SessionEventInboxEnqueued {
+		t.Fatalf("capture = %s, want the recorded inbox enqueue to bind admission", nativeOpenCodeEventCaptureSummary(capture))
+	}
+	deliveredOnly := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(delivered)), 16, sessionID, messageID)
+	if deliveredOnly.admissionObserved || deliveredOnly.stopReason != nativeOpenCodeCaptureStopAdmissionMissing {
+		t.Fatalf("capture = %s, want an inbox delivery alone to leave admission unbound", nativeOpenCodeEventCaptureSummary(deliveredOnly))
+	}
+}
+
 func TestNativeOpenCodeResumeCaptureStopsAtMaximumEvents(t *testing.T) {
 	stream := nativeOpenCodeCaptureFrame(`{"id":"evt_admission","type":"session.next.prompt.admitted","durable":{"aggregateID":"ses_capture","seq":1,"version":1},"data":{"timestamp":1,"sessionID":"ses_capture","messageID":"msg_capture","prompt":{"text":"prompt"},"delivery":"steer"}}`) +
 		nativeOpenCodeCaptureFrame(`{"id":"evt_text","type":"session.next.text.ended","durable":{"aggregateID":"ses_capture","seq":2,"version":1},"data":{"timestamp":2,"sessionID":"ses_capture","assistantMessageID":"msg_assistant","textID":"part_1","text":"bounded"}}`) +
 		nativeOpenCodeCaptureFrame(`{"id":"evt_retry","type":"session.next.retried","durable":{"aggregateID":"ses_capture","seq":3,"version":1},"data":{"timestamp":3,"sessionID":"ses_capture","attempt":1,"error":{"message":"retry","isRetryable":true}}}`)
-	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 2, "ses_capture", "msg_capture", 1)
+	capture := nativeOpenCodeCaptureResumeEventMetadata(context.Background(), io.NopCloser(strings.NewReader(stream)), 2, "ses_capture", "msg_capture")
 	if capture.err != nil || capture.stopReason != nativeOpenCodeCaptureStopMaximum || len(capture.events) != 2 || !capture.admissionObserved || capture.terminalObserved {
 		t.Fatalf("capture = %s, want bounded maximum-event evidence", nativeOpenCodeEventCaptureSummary(capture))
 	}
@@ -1385,76 +1368,95 @@ func nativeOpenCodeResumeCaptureCheckIsolation(t *testing.T, root string, enviro
 	}
 }
 
-func nativeOpenCodeReadPromptAdmittedEvent(ctx context.Context, stream io.ReadCloser, sessionID string, prompt PromptRequest) (PromptAdmittedEvent, error) {
+type nativePromptInboxEvent struct {
+	Type        string
+	InboxID     string
+	AggregateID string
+	Seq         uint64
+	Text        string
+}
+
+func nativeOpenCodeReadPromptInboxEvent(ctx context.Context, stream io.ReadCloser, sessionID string, prompt PromptRequest) (nativePromptInboxEvent, error) {
 	if ctx == nil {
-		return PromptAdmittedEvent{}, errors.New("native OpenCode admission stream context is nil")
+		return nativePromptInboxEvent{}, errors.New("native OpenCode inbox stream context is nil")
 	}
 	if stream == nil {
-		return PromptAdmittedEvent{}, errors.New("native OpenCode admission stream is nil")
+		return nativePromptInboxEvent{}, errors.New("native OpenCode inbox stream is nil")
 	}
-	validator, err := NewSessionEventValidator(sessionID, 0)
-	if err != nil {
-		return PromptAdmittedEvent{}, err
+	if err := ctx.Err(); err != nil {
+		_ = stream.Close()
+		return nativePromptInboxEvent{}, err
 	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	defer stopOnCancel()
 	decoder := NewDecoder(defaultMaxFrameBytes)
 	bufferSize := streamReadChunkSize
 	if bufferSize <= 0 {
 		bufferSize = 32 * 1024
 	}
-	if err := ctx.Err(); err != nil {
-		_ = stream.Close()
-		return PromptAdmittedEvent{}, err
-	}
-	stopOnCancel := context.AfterFunc(ctx, func() { _ = stream.Close() })
-	defer stopOnCancel()
 	for {
 		buffer := make([]byte, bufferSize)
 		count, readErr := stream.Read(buffer)
-
 		if count > 0 {
 			frames, feedErr := decoder.Feed(buffer[:count])
 			if feedErr != nil {
-				return PromptAdmittedEvent{}, feedErr
+				return nativePromptInboxEvent{}, feedErr
 			}
-			if len(frames) > 0 {
-				if len(frames) != 1 {
-					return PromptAdmittedEvent{}, fmt.Errorf("native OpenCode admission stream returned %d frames in one read", len(frames))
+			for _, frame := range frames {
+				var event struct {
+					Type string `json:"type"`
+					Data struct {
+						InboxID   string `json:"inboxID"`
+						SessionID string `json:"sessionID"`
+						Item      struct {
+							Payload struct {
+								Text string `json:"text"`
+							} `json:"payload"`
+						} `json:"item"`
+					} `json:"data"`
+					Durable struct {
+						AggregateID string `json:"aggregateID"`
+						Seq         uint64 `json:"seq"`
+					} `json:"durable"`
 				}
-				event, observeErr := validator.Observe(frames[0])
-				if observeErr != nil {
-					return PromptAdmittedEvent{}, observeErr
+				if json.Unmarshal(frame.Data, &event) != nil {
+					continue
 				}
-				if event.MessageID != prompt.ID || event.Text != prompt.Text || event.Delivery != prompt.Delivery {
-					return PromptAdmittedEvent{}, fmt.Errorf("native OpenCode prompt event does not match request: %+v", event)
+				if event.Type != "session.inbox.enqueued" || event.Data.SessionID != sessionID || event.Data.InboxID != prompt.ID {
+					continue
 				}
-				return event, nil
+				return nativePromptInboxEvent{
+					Type:        event.Type,
+					InboxID:     event.Data.InboxID,
+					AggregateID: event.Durable.AggregateID,
+					Seq:         event.Durable.Seq,
+					Text:        event.Data.Item.Payload.Text,
+				}, nil
 			}
 		}
 		if readErr == nil {
 			continue
 		}
 		if ctx.Err() != nil {
-			return PromptAdmittedEvent{}, ctx.Err()
+			return nativePromptInboxEvent{}, ctx.Err()
 		}
-		if !errors.Is(readErr, io.EOF) {
-			return PromptAdmittedEvent{}, readErr
-		}
-		frames, closeErr := decoder.Close()
-		if closeErr != nil {
-			return PromptAdmittedEvent{}, closeErr
-		}
-		if len(frames) == 1 {
-			event, observeErr := validator.Observe(frames[0])
-			if observeErr != nil {
-				return PromptAdmittedEvent{}, observeErr
-			}
-			if event.MessageID != prompt.ID || event.Text != prompt.Text || event.Delivery != prompt.Delivery {
-				return PromptAdmittedEvent{}, fmt.Errorf("native OpenCode prompt event does not match request: %+v", event)
-			}
-			return event, nil
-		}
-		return PromptAdmittedEvent{}, errStreamEndedUnknown
+		return nativePromptInboxEvent{}, readErr
 	}
+}
+
+func nativeOpenCodeAdmissionInboxEnvironment(t *testing.T, root string) []string {
+	t.Helper()
+	environment := nativeOpenCodeSmokeEnvironment(t, root)
+	managed := filepath.Join(root, "managed")
+	if err := os.MkdirAll(managed, 0o700); err != nil {
+		t.Fatal("create native OpenCode admission inbox managed directory failed")
+	}
+	configPath := filepath.Join(root, "config", "opencode.json")
+	config := `{"model":"symmetry-admission-probe/probe","small_model":"symmetry-admission-probe/probe","enabled_providers":["symmetry-admission-probe"],"provider":{"symmetry-admission-probe":{"options":{"baseURL":"http://127.0.0.1:1","apiKey":"admission-only"},"models":{"probe":{}}}}}`
+	if err := os.WriteFile(configPath, []byte(config), 0o600); err != nil {
+		t.Fatal("write native OpenCode admission inbox config failed")
+	}
+	return nativeOpenCodeConfigEnvironment(environment, configPath, filepath.Dir(configPath), managed)
 }
 
 // TestNativeRepositoryTask is deliberately opt-in, deferred, and requires an
@@ -1512,18 +1514,14 @@ func TestNativeRepositoryTask(t *testing.T) {
 	sink := &nativeOpenCodeRepositoryTaskSink{}
 	startContext, startCancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
 	defer startCancel()
-	session, err := NewAdapter(executable).Start(startContext, harness.StartRequest{
-		Workspace:  workspace,
-		Invocation: execution.Invocation{Env: environment},
-		PersistProcess: func(pid int, identity string) error {
-			if pid <= 0 || strings.TrimSpace(identity) == "" {
-				return os.ErrInvalid
-			}
-			persistMutex.Lock()
-			persistedPID, persistedIdentity = pid, identity
-			persistMutex.Unlock()
-			return nativeOpenCodeRepositoryTaskWriteJSON(processRecord, map[string]any{"pid": pid, "identity": identity})
-		},
+	session, err := startNativeOpenCodeTestSession(startContext, executable, workspace, environment, func(pid int, identity string) error {
+		if pid <= 0 || strings.TrimSpace(identity) == "" {
+			return os.ErrInvalid
+		}
+		persistMutex.Lock()
+		persistedPID, persistedIdentity = pid, identity
+		persistMutex.Unlock()
+		return nativeOpenCodeRepositoryTaskWriteJSON(processRecord, map[string]any{"pid": pid, "identity": identity})
 	}, sink)
 	if err != nil {
 		t.Fatalf("start real native OpenCode repository task: %v", err)
@@ -1675,19 +1673,7 @@ func nativeOpenCodeRepositoryTaskEnvironmentWithConfig(t *testing.T, root, confi
 		t.Fatalf("create test-managed OpenCode config directory: %v", err)
 	}
 	environment := nativeOpenCodeSmokeEnvironment(t, root)
-	environment = append(environment,
-		"OPENCODE_CONFIG="+configPath,
-		"OPENCODE_CONFIG_DIR="+configDir,
-		"OPENCODE_CONFIG_CONTENT="+configJSON,
-		"OPENCODE_TEST_MANAGED_CONFIG_DIR="+managedConfigDir,
-		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
-		"OPENCODE_DISABLE_MODELS_FETCH=1",
-		"OPENCODE_DISABLE_AUTOUPDATE=1",
-		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
-		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
-		"OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1",
-		"OPENCODE_PURE=1",
-	)
+	environment = nativeOpenCodeConfigEnvironment(environment, configPath, configDir, managedConfigDir, "OPENCODE_CONFIG_CONTENT="+configJSON, "OPENCODE_PURE=1")
 	environment = append(environment, extra...)
 	return environment
 }
@@ -1870,7 +1856,7 @@ func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Cont
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	providerBody, err := client.do(ctx, http.MethodGet, "/api/provider", nil, http.StatusOK)
+	providerBody, err := client.do(ctx, http.MethodGet, "/api/provider", "", nil, http.StatusOK)
 	if err != nil {
 		t.Fatalf("read native OpenCode provider catalog: %v", err)
 	}
@@ -1895,7 +1881,7 @@ func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Cont
 			ProviderID string `json:"providerID"`
 		} `json:"data"`
 	}
-	modelBody, err := client.do(ctx, http.MethodGet, "/api/model", nil, http.StatusOK)
+	modelBody, err := client.do(ctx, http.MethodGet, "/api/model", "", nil, http.StatusOK)
 	if err != nil {
 		t.Fatalf("read native OpenCode model catalog: %v", err)
 	}
@@ -1913,7 +1899,12 @@ func nativeOpenCodeAssertSyntheticProviderCatalog(t *testing.T, ctx context.Cont
 
 func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspace string, environment []string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), nativeRepositoryTaskTimeout)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, nativeRepositoryTaskTimeout)
+}
+
+func nativeOpenCodeRepositoryTaskCheckVersionLine(t *testing.T, executable, workspace string, environment []string, want string, timeout time.Duration) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "--version")
 	command.Dir = workspace
@@ -1922,9 +1913,11 @@ func nativeOpenCodeRepositoryTaskCheckVersion(t *testing.T, executable, workspac
 	if err != nil {
 		t.Fatalf("run native OpenCode version check: %v", err)
 	}
-	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
-		t.Fatalf("historical native OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
+	line := strings.TrimSpace(string(output))
+	if line != want {
+		t.Fatalf("native OpenCode version = %q, want %s", line, want)
 	}
+	return line
 }
 
 func nativeOpenCodeRepositoryTaskWaitForArtifact(ctx context.Context, path string, expected []byte) error {

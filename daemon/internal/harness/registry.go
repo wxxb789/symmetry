@@ -22,7 +22,6 @@ type Registry struct {
 func NewRegistry() *Registry {
 	registry := &Registry{adapters: make(map[Kind]Adapter)}
 	_ = registry.Register(KindGeneric, NewGenericAdapter())
-	_ = registry.Register(KindOpenCode, NewOpenCodeAdapter())
 	return registry
 }
 
@@ -96,10 +95,10 @@ func newUnavailableAdapter(kind Kind, reason string) *UnavailableAdapter {
 	return &UnavailableAdapter{kind: kind, capabilities: capabilities}
 }
 
-// NewOpenCodeAdapter returns the explicit unsupported OpenCode V2 adapter.
-// Version/help observations do not make the private transport production-ready.
+// NewOpenCodeAdapter returns the explicit fail-closed OpenCode V2 projection. The
+// composition root registers the native adapter; this seam keeps the compose rows' refusal.
 func NewOpenCodeAdapter() *UnavailableAdapter {
-	return newUnavailableAdapter(KindOpenCode, "OpenCode V2 2.3.0 is unsupported: require exact-binary Windows and native Linux terminal and retained-session recovery evidence before enabling native sessions; V1 is not supported")
+	return newUnavailableAdapter(KindOpenCode, "OpenCode V2 2.4.1 is promoted on Windows only: Linux admission stays fail-closed until the dispatched linux-native-v2-acceptance opencode_native_health row is green under the Linux v2 owner; V1 is not supported")
 }
 
 // Probe returns an unsupported projection rather than silently omitting the

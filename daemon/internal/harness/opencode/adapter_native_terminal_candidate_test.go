@@ -13,8 +13,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,7 +24,6 @@ import (
 
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
-	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 const (
@@ -177,7 +176,7 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	config := nativeOpenCodeTerminalCandidateConfig(gateway.baseURL, nativeOpenCodeTerminalCandidateModel)
 	environment := nativeOpenCodeRepositoryTaskEnvironmentWithConfig(t, root, config)
 	nativeOpenCodeTerminalCandidateAssertEnvironment(t, environment, root, gateway.baseURL)
-	nativeOpenCodeTerminalCandidateCheckVersion(t, executable, workspace, environment)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, historicalNativeTestVersion, 10*time.Second)
 
 	sink := &nativeOpenCodeTerminalCandidateSink{timeline: timeline}
 	adapter := NewAdapter(executable)
@@ -363,13 +362,10 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	}
 	waitTurnCancel()
 	if waitTurnErr == nil {
-		t.Fatal("OpenCode terminal candidate WaitTurn returned nil; terminal evidence must remain unverified")
+		t.Fatal("OpenCode terminal candidate WaitTurn returned nil; the 1.18.32 vocabulary carries no session.execution terminal")
 	}
-	if errors.Is(waitTurnErr, context.Canceled) || errors.Is(waitTurnErr, context.DeadlineExceeded) {
-		t.Fatalf("OpenCode terminal candidate WaitTurn was context-bounded instead of fail-closed: %v", waitTurnErr)
-	}
-	if scenario.name == nativeOpenCodeTruncatedProvider && !errors.Is(waitTurnErr, errTurnUnverified) {
-		t.Fatalf("OpenCode truncated provider EOF WaitTurn error = %v, want exact conservative errTurnUnverified", waitTurnErr)
+	if !errors.Is(waitTurnErr, context.DeadlineExceeded) && !errors.Is(waitTurnErr, errTurnUnverified) {
+		t.Fatalf("OpenCode terminal candidate WaitTurn error = %v, want its own bound or the unverified class", waitTurnErr)
 	}
 
 	if scenario.name == nativeOpenCodeTruncatedProvider {
@@ -419,15 +415,11 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	if result.Usage.State != harness.UsageUnknown {
 		t.Fatalf("OpenCode terminal candidate usage = %+v, want unknown", result.Usage)
 	}
-	if scenario.expectCancelled {
-		if result.Kind != harness.ResultCancelled {
-			t.Fatalf("OpenCode interrupt candidate result = %+v, want exactly ResultCancelled without semantic result", result)
-		}
-		if result.Reason == nil || *result.Reason != protocol.TaskResultReasonCancelled {
-			t.Fatalf("OpenCode interrupt candidate reason = %v, want TaskResultReasonCancelled", result.Reason)
-		}
-	} else if result.Kind != harness.ResultUnknown {
-		t.Fatalf("OpenCode non-interrupt candidate result = %+v, want exactly ResultUnknown", result)
+	if result.Kind != harness.ResultUnknown || result.Reason != nil {
+		t.Fatalf("OpenCode terminal candidate result = %+v, want exactly ResultUnknown: the 1.18.32 vocabulary carries no verified terminal", result)
+	}
+	if settledErr := staged.WaitTurn(context.Background()); !errors.Is(settledErr, errTurnUnverified) {
+		t.Fatalf("OpenCode terminal candidate settled WaitTurn error = %v, want the unverified class after shutdown", settledErr)
 	}
 	if !result.Process.Terminated || result.Process.SinkError != nil || result.Process.OutputError != nil || result.Process.OutputTruncated || result.Process.TerminationError != nil || result.Process.ContainmentError != nil {
 		t.Fatalf("OpenCode terminal candidate process result = %+v, want bounded clean termination", result.Process)
@@ -460,11 +452,8 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 	if state.sequenceError != nil {
 		t.Fatalf("OpenCode terminal candidate session sequence regression: %v", state.sequenceError)
 	}
-	if state.admissionSeq == 0 || state.admissionSeq != witnessAPI.PromptObservation().AdmittedSeq {
-		t.Fatalf("OpenCode terminal candidate prompt durable cursor = %d, want intercepted admission sequence %d", state.admissionSeq, witnessAPI.PromptObservation().AdmittedSeq)
-	}
-	if witnessAPI.ReplayAfter() != 0 {
-		t.Fatalf("OpenCode terminal candidate replay cursor = %d, want an actual replay from cursor 0", witnessAPI.ReplayAfter())
+	if state.admissionMessageID == "" || state.admissionMessageID != witnessAPI.PromptObservation().ID {
+		t.Fatalf("OpenCode terminal candidate prompt admission message = %q, want intercepted message %q", state.admissionMessageID, witnessAPI.PromptObservation().ID)
 	}
 	if scenario.requireStepEnd && state.stepEnded == 0 {
 		t.Fatalf("OpenCode terminal candidate did not capture Step.Ended after provider exchange: %+v", state)
@@ -499,22 +488,6 @@ func nativeOpenCodeRunTerminalCandidateScenario(t *testing.T, executable string,
 		t.Fatalf("OpenCode terminal candidate normalized event sequence regressed: %+v", events)
 	}
 	t.Logf("OpenCode terminal candidate scenario=%s session=%s prompt=%s events=%d step_ended=%d global_events=%d result=%s wait_turn=%v", scenario.name, nativeOpenCodeTerminalCandidateRedactIdentity(handle.ID), nativeOpenCodeTerminalCandidateRedactIdentity(witnessAPI.PromptObservation().ID), state.events, state.stepEnded, nativeOpenCodeTerminalCandidateGlobalEventCount(globalCapture), result.Kind, waitTurnErr)
-}
-
-func nativeOpenCodeTerminalCandidateCheckVersion(t *testing.T, executable, workspace string, environment []string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, executable, "--version")
-	command.Dir = workspace
-	command.Env = environment
-	output, err := command.Output()
-	if err != nil {
-		t.Fatalf("run pinned OpenCode --version: %v", err)
-	}
-	if strings.TrimSpace(string(output)) != historicalNativeTestVersion {
-		t.Fatalf("historical OpenCode version = %q, want %s", strings.TrimSpace(string(output)), historicalNativeTestVersion)
-	}
 }
 
 func nativeOpenCodeTerminalCandidateAssertEnvironment(t *testing.T, environment []string, root, baseURL string) {
@@ -556,11 +529,10 @@ func nativeOpenCodeTerminalCandidateAssertEnvironment(t *testing.T, environment 
 }
 
 type nativeOpenCodeTerminalCandidatePrompt struct {
-	SessionID   string
-	ID          string
-	Text        string
-	Delivery    string
-	AdmittedSeq uint64
+	SessionID string
+	ID        string
+	Text      string
+	Delivery  string
 }
 
 type nativeOpenCodeTerminalCandidateTimelineEvent struct {
@@ -655,6 +627,15 @@ func nativeOpenCodeTerminalCandidateTimelineFirstByDurableSeq(events []nativeOpe
 	return nativeOpenCodeTerminalCandidateTimelineEvent{}, false
 }
 
+func nativeOpenCodeTerminalCandidateTimelineFirstDetail(events []nativeOpenCodeTerminalCandidateTimelineEvent, kind, detail string) (nativeOpenCodeTerminalCandidateTimelineEvent, bool) {
+	for _, event := range events {
+		if event.Kind == kind && event.Detail == detail {
+			return event, true
+		}
+	}
+	return nativeOpenCodeTerminalCandidateTimelineEvent{}, false
+}
+
 func nativeOpenCodeTerminalCandidateTimelineCount(events []nativeOpenCodeTerminalCandidateTimelineEvent, kind string) int {
 	count := 0
 	for _, event := range events {
@@ -736,11 +717,10 @@ type nativeOpenCodeTerminalCandidateAPI struct {
 	promptObserved chan struct{}
 	timeline       *nativeOpenCodeTerminalCandidateTimeline
 
-	mu          sync.Mutex
-	prompt      nativeOpenCodeTerminalCandidatePrompt
-	replayAfter uint64
-	replayOpen  bool
-	stream      *nativeOpenCodeTerminalCandidateTeeReadCloser
+	mu         sync.Mutex
+	prompt     nativeOpenCodeTerminalCandidatePrompt
+	replayOpen bool
+	stream     *nativeOpenCodeTerminalCandidateTeeReadCloser
 }
 
 func (api *nativeOpenCodeTerminalCandidateAPI) Prompt(ctx context.Context, sessionID string, request PromptRequest) (PromptAdmission, error) {
@@ -757,11 +737,11 @@ func (api *nativeOpenCodeTerminalCandidateAPI) Prompt(ctx context.Context, sessi
 	}
 	admission, err := api.Client.Prompt(ctx, sessionID, request)
 	if err == nil {
-		api.mu.Lock()
-		api.prompt.AdmittedSeq = admission.AdmittedSeq
-		api.mu.Unlock()
 		if api.timeline != nil {
-			api.timeline.Record(nativeOpenCodeTerminalCandidateTimelineEvent{Kind: "prompt.admitted.response", SessionID: admission.SessionID, MessageID: admission.ID, Delivery: admission.Delivery, DurableSeq: admission.AdmittedSeq})
+			api.timeline.Record(nativeOpenCodeTerminalCandidateTimelineEvent{Kind: "prompt.admitted.response", SessionID: admission.SessionID, MessageID: admission.ID, Delivery: admission.Delivery})
+		}
+		if replayErr := api.openSessionReplay(ctx, sessionID); replayErr != nil {
+			return PromptAdmission{}, replayErr
 		}
 	} else if api.timeline != nil {
 		api.timeline.Record(nativeOpenCodeTerminalCandidateTimelineEvent{Kind: "prompt.admission.error", SessionID: sessionID, MessageID: request.ID, Delivery: request.Delivery, Detail: err.Error()})
@@ -769,21 +749,22 @@ func (api *nativeOpenCodeTerminalCandidateAPI) Prompt(ctx context.Context, sessi
 	return admission, err
 }
 
-func (api *nativeOpenCodeTerminalCandidateAPI) OpenSessionEvents(ctx context.Context, sessionID string, after uint64) (io.ReadCloser, error) {
+// openSessionReplay keeps the witness on the pre-2.4 per-session replay route the promoted
+// client no longer speaks; only this pinned candidate witness opens it, exactly once.
+func (api *nativeOpenCodeTerminalCandidateAPI) openSessionReplay(ctx context.Context, sessionID string) error {
 	api.mu.Lock()
 	if api.replayOpen {
 		api.mu.Unlock()
-		return nil, errors.New("OpenCode terminal candidate opened the session replay stream more than once")
+		return errors.New("OpenCode terminal candidate opened the session replay stream more than once")
 	}
 	api.replayOpen = true
-	api.replayAfter = after
 	api.mu.Unlock()
 	if api.timeline != nil {
-		api.timeline.Record(nativeOpenCodeTerminalCandidateTimelineEvent{Kind: "session.replay.open", SessionID: sessionID, Cursor: after})
+		api.timeline.Record(nativeOpenCodeTerminalCandidateTimelineEvent{Kind: "session.replay.open", SessionID: sessionID})
 	}
-	body, err := api.Client.OpenSessionEvents(ctx, sessionID, after)
+	body, err := api.Client.openSSE(ctx, "/api/session/"+url.PathEscape(sessionID)+"/event", "after=0")
 	if err != nil {
-		return nil, err
+		return err
 	}
 	reader := &nativeOpenCodeTerminalCandidateTeeReadCloser{
 		ReadCloser:  body,
@@ -794,25 +775,22 @@ func (api *nativeOpenCodeTerminalCandidateAPI) OpenSessionEvents(ctx context.Con
 	api.mu.Lock()
 	api.stream = reader
 	api.mu.Unlock()
-	return reader, nil
-}
-
-func (api *nativeOpenCodeTerminalCandidateAPI) PromptObservation() nativeOpenCodeTerminalCandidatePrompt {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return api.prompt
-}
-
-func (api *nativeOpenCodeTerminalCandidateAPI) ReplayAfter() uint64 {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return api.replayAfter
+	go func() {
+		_, _ = io.Copy(io.Discard, reader)
+	}()
+	return nil
 }
 
 func (api *nativeOpenCodeTerminalCandidateAPI) SessionStream() *nativeOpenCodeTerminalCandidateTeeReadCloser {
 	api.mu.Lock()
 	defer api.mu.Unlock()
 	return api.stream
+}
+
+func (api *nativeOpenCodeTerminalCandidateAPI) PromptObservation() nativeOpenCodeTerminalCandidatePrompt {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	return api.prompt
 }
 
 func nativeOpenCodeTerminalCandidateWaitAPI(t *testing.T, ready <-chan *nativeOpenCodeTerminalCandidateAPI) *nativeOpenCodeTerminalCandidateAPI {
@@ -1478,20 +1456,20 @@ func nativeOpenCodeTerminalCandidateString(object map[string]json.RawMessage, na
 }
 
 type nativeOpenCodeTerminalCandidateSessionState struct {
-	events            int
-	stepStarted       int
-	stepEnded         int
-	stepFailed        int
-	toolCalled        int
-	toolSucceeded     int
-	unknown           int
-	admissionObserved bool
-	admissionCount    int
-	admissionSeq      uint64
-	identityError     error
-	sequenceError     error
-	captureOverflow   bool
-	evidence          []nativeOpenCodeTerminalCandidateSessionEvidence
+	events             int
+	stepStarted        int
+	stepEnded          int
+	stepFailed         int
+	toolCalled         int
+	toolSucceeded      int
+	unknown            int
+	admissionObserved  bool
+	admissionCount     int
+	admissionMessageID string
+	identityError      error
+	sequenceError      error
+	captureOverflow    bool
+	evidence           []nativeOpenCodeTerminalCandidateSessionEvidence
 }
 
 type nativeOpenCodeTerminalCandidateSessionEvidence struct {
@@ -1564,7 +1542,7 @@ func nativeOpenCodeTerminalCandidateParseSessionCapture(t *testing.T, capture *n
 			}
 			if event.PromptAdmitted != nil && event.PromptAdmitted.MessageID == prompt.ID && event.PromptAdmitted.Text == prompt.Text && event.PromptAdmitted.Delivery == prompt.Delivery {
 				state.admissionObserved = true
-				state.admissionSeq = event.Durable.Seq
+				state.admissionMessageID = event.PromptAdmitted.MessageID
 				evidence.MessageID = event.PromptAdmitted.MessageID
 			} else {
 				state.identityError = errors.New("prompt admission event did not match intercepted prompt identity")
@@ -1711,8 +1689,8 @@ func nativeOpenCodeTerminalCandidateAssertProviderBindings(t *testing.T, gateway
 	if len(requests) != scenario.expectedProviderRequests {
 		t.Fatalf("OpenCode terminal candidate provider request count = %d, want exactly %d", len(requests), scenario.expectedProviderRequests)
 	}
-	if prompt.AdmittedSeq == 0 || state.admissionSeq != prompt.AdmittedSeq {
-		t.Fatalf("OpenCode terminal candidate admission binding = prompt_seq:%d session_seq:%d, want one positive equal cursor", prompt.AdmittedSeq, state.admissionSeq)
+	if state.admissionMessageID == "" || state.admissionMessageID != prompt.ID {
+		t.Fatalf("OpenCode terminal candidate admission binding = prompt_message:%q session_message:%q, want one exact message identity", prompt.ID, state.admissionMessageID)
 	}
 	if prompt.SessionID != sessionID || prompt.ID == "" || prompt.Delivery == "" || prompt.Text == "" {
 		t.Fatalf("OpenCode terminal candidate intercepted prompt = %+v, want exact session/id/body/delivery", prompt)
@@ -1765,12 +1743,12 @@ func nativeOpenCodeTerminalCandidateAssertProviderBindings(t *testing.T, gateway
 		t.Fatalf("OpenCode terminal candidate response barrier count does not match requests: requests=%d timeline=%v", len(requests), events)
 	}
 	admissionResponse, ok := nativeOpenCodeTerminalCandidateTimelineFirst(events, "prompt.admitted.response", 0)
-	if !ok || admissionResponse.SessionID != sessionID || admissionResponse.MessageID != prompt.ID || admissionResponse.DurableSeq != prompt.AdmittedSeq {
-		t.Fatalf("OpenCode terminal candidate admission response timeline = %+v, want exact prompt/session/cursor binding", admissionResponse)
+	if !ok || admissionResponse.SessionID != sessionID || admissionResponse.MessageID != prompt.ID {
+		t.Fatalf("OpenCode terminal candidate admission response timeline = %+v, want exact prompt/session binding", admissionResponse)
 	}
-	admissionFrame, ok := nativeOpenCodeTerminalCandidateTimelineFirstByDurableSeq(events, "session.frame", prompt.AdmittedSeq)
-	if !ok || admissionFrame.SessionID != sessionID || admissionFrame.Detail != "session.next.prompt.admitted" {
-		t.Fatalf("OpenCode terminal candidate durable admission frame = %+v, want exact session/cursor frame", admissionFrame)
+	admissionFrame, ok := nativeOpenCodeTerminalCandidateTimelineFirstDetail(events, "session.frame", "session.next.prompt.admitted")
+	if !ok || admissionFrame.SessionID != sessionID {
+		t.Fatalf("OpenCode terminal candidate durable admission frame = %+v, want the session admission frame", admissionFrame)
 	}
 	if requests[0].TimelineIndex <= admissionFrame.Index {
 		t.Fatalf("OpenCode terminal candidate provider request[1] index=%d did not follow admitted durable frame index=%d", requests[0].TimelineIndex, admissionFrame.Index)

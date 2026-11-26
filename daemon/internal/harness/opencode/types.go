@@ -1,7 +1,5 @@
-// Package opencode contains private protocol helpers for the current OpenCode
-// serve API. It exposes a harness.Adapter, but the adapter remains fail-closed
-// and promotes no native lifecycle capability until the V2 pin and terminal
-// semantics have independent evidence.
+// Package opencode contains private protocol helpers for the pinned OpenCode serve API.
+// Its adapter promotes start/events/cancel only for the exact tested Windows 2.4.1 blob.
 package opencode
 
 import (
@@ -22,11 +20,13 @@ const (
 var (
 	ErrInvalidConfig        = errors.New("opencode client configuration is invalid")
 	ErrUnexpectedStatus     = errors.New("opencode API returned an unexpected HTTP status")
+	ErrNotReady             = errors.New("opencode API is listening but not ready")
 	ErrResponseTooLarge     = errors.New("opencode API response exceeds limit")
 	ErrMalformedResponse    = errors.New("opencode API response is malformed")
-	ErrInvalidHealth        = errors.New("opencode health response is invalid")
+	ErrInvalidIdentity      = errors.New("opencode readiness identity response is invalid")
 	ErrInvalidSession       = errors.New("opencode session response is invalid")
 	ErrInvalidPrompt        = errors.New("opencode prompt response is invalid")
+	ErrInterruptUnapplied   = errors.New("opencode interrupt did not apply to a live turn")
 	ErrIdentityMismatch     = errors.New("opencode response identity conflicts with request")
 	ErrFrameTooLarge        = errors.New("opencode SSE frame exceeds limit")
 	ErrIncompleteFrame      = errors.New("opencode SSE stream ended with an incomplete frame")
@@ -78,15 +78,14 @@ type PromptRequest struct {
 	Resume   bool
 }
 
-// PromptAdmission is OpenCode's SessionInput.Admitted identity boundary.
+// PromptAdmission is OpenCode's Session.Message admission identity boundary as
+// the pinned 2.4.1 bytes answer it on POST /api/session/{id}/prompt.
 type PromptAdmission struct {
-	AdmittedSeq uint64
 	ID          string
 	SessionID   string
 	Text        string
 	Delivery    string
 	TimeCreated int64
-	PromotedSeq *uint64
 }
 
 // Frame is one complete SSE data event. Comments and empty heartbeat frames
@@ -96,7 +95,7 @@ type Frame struct {
 	Data     json.RawMessage
 }
 
-// DurableCursor identifies one replayable OpenCode session event.
+// DurableCursor identifies one durable OpenCode session event.
 type DurableCursor struct {
 	AggregateID string
 	Seq         uint64
@@ -121,10 +120,8 @@ type PromptAdmittedEvent struct {
 	Timestamp int64
 }
 
-// SessionEventKind identifies the locally decoded durable event shape. Unknown
-// native event types are intentionally represented, rather than treated as a
-// terminal transport error; callers may journal a bounded diagnostic and
-// continue replaying later events.
+// SessionEventKind identifies the locally decoded durable event shape. Unknown native
+// event types stay represented so a watcher can journal and continue to later events.
 type SessionEventKind string
 
 const (
@@ -138,6 +135,24 @@ const (
 	SessionEventToolFailed     SessionEventKind = "tool_failed"
 	SessionEventRetried        SessionEventKind = "retried"
 	SessionEventUnknown        SessionEventKind = "unknown"
+)
+
+// Recorded kinds mirror the 2.4.1 receipts' vocabulary; the frames they decode are
+// the ones the promoted transport receives.
+const (
+	SessionEventExecutionStarted     SessionEventKind = "execution_started"
+	SessionEventExecutionSucceeded   SessionEventKind = "execution_succeeded"
+	SessionEventExecutionFailed      SessionEventKind = "execution_failed"
+	SessionEventExecutionInterrupted SessionEventKind = "execution_interrupted"
+	SessionEventInboxEnqueued        SessionEventKind = "inbox_enqueued"
+	SessionEventRecordedStepStarted  SessionEventKind = "recorded_step_started"
+	SessionEventRecordedStepEnded    SessionEventKind = "recorded_step_ended"
+	SessionEventRecordedStepFailed   SessionEventKind = "recorded_step_failed"
+	SessionEventRecordedToolCalled   SessionEventKind = "recorded_tool_called"
+	SessionEventRecordedToolSuccess  SessionEventKind = "recorded_tool_success"
+	// SessionEventRecordedUninterpreted marks a recorded 2.4.1 type this build knows the
+	// pinned bytes emit but deliberately does not interpret; it is never an unknown diagnostic.
+	SessionEventRecordedUninterpreted SessionEventKind = "recorded_uninterpreted"
 )
 
 // NativeModelRef is the source-derived subset of OpenCode's Model.Ref.
@@ -263,10 +278,73 @@ type NativeRetriedEvent struct {
 	Timestamp int64
 }
 
-// DecodedSessionEvent is the strict, identity-bound result of decoding one
-// durable /api/session/{id}/event frame. Exactly one known payload pointer is
-// set for a known event; unknown native types retain only the bounded envelope
-// and raw data in Event and have Kind == SessionEventUnknown.
+// RecordedExecutionEvent is one recorded session.execution.* frame; only the failed
+// class records an error object and only the interrupted class a reason.
+type RecordedExecutionEvent struct {
+	Event
+	SessionID string
+	Error     *RecordedExecutionError
+	Reason    *string
+}
+
+// RecordedExecutionError interprets only the recorded type/message pair; the upstream
+// error object is open-ended, so its other keys are never read.
+type RecordedExecutionError struct {
+	Type    string
+	Message string
+}
+
+// RecordedInboxEnqueuedEvent is the recorded prompt-admission frame.
+type RecordedInboxEnqueuedEvent struct {
+	Event
+	SessionID string
+	InboxID   string
+	Delivery  string
+}
+
+// RecordedStepStartedEvent is the recorded session.step.started frame.
+type RecordedStepStartedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+}
+
+// RecordedStepEndedEvent is the recorded session.step.ended frame.
+type RecordedStepEndedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Finish             string
+}
+
+// RecordedStepFailedEvent is the recorded session.step.failed frame.
+type RecordedStepFailedEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	Error              RecordedExecutionError
+}
+
+// RecordedToolCalledEvent is the recorded session.tool.called frame; executed is a
+// live payload field, never an approval marker.
+type RecordedToolCalledEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+	Executed           bool
+}
+
+// RecordedToolSuccessEvent is the recorded session.tool.success frame.
+type RecordedToolSuccessEvent struct {
+	Event
+	SessionID          string
+	AssistantMessageID string
+	CallID             string
+}
+
+// DecodedSessionEvent is the strict, identity-bound result of decoding one durable
+// session frame; unknown native types retain only the bounded envelope and raw data.
 type DecodedSessionEvent struct {
 	Event
 	Kind      SessionEventKind
@@ -281,6 +359,14 @@ type DecodedSessionEvent struct {
 	ToolSuccess    *NativeToolSuccessEvent
 	ToolFailed     *NativeToolFailedEvent
 	Retried        *NativeRetriedEvent
+
+	Execution           *RecordedExecutionEvent
+	InboxEnqueued       *RecordedInboxEnqueuedEvent
+	RecordedStepStarted *RecordedStepStartedEvent
+	RecordedStepEnded   *RecordedStepEndedEvent
+	RecordedStepFailed  *RecordedStepFailedEvent
+	RecordedToolCalled  *RecordedToolCalledEvent
+	RecordedToolSuccess *RecordedToolSuccessEvent
 }
 
 // SessionEvent is a concise public name for callers that do not need to
@@ -327,14 +413,11 @@ func validateSession(info SessionInfo, request CreateSessionRequest) error {
 }
 
 func validateAdmission(admission PromptAdmission, sessionID string, request PromptRequest) error {
-	if admission.AdmittedSeq == 0 || !isID(admission.ID, "msg_") || !isID(admission.SessionID, "ses_") || strings.TrimSpace(admission.Text) == "" || admission.TimeCreated <= 0 {
+	if !isID(admission.ID, "msg_") || !isID(admission.SessionID, "ses_") || strings.TrimSpace(admission.Text) == "" || admission.TimeCreated <= 0 {
 		return ErrInvalidPrompt
 	}
 	if admission.ID != request.ID || admission.SessionID != sessionID || admission.Text != request.Text || admission.Delivery != request.Delivery {
 		return fmt.Errorf("%w: prompt admission does not match request", ErrIdentityMismatch)
-	}
-	if admission.PromotedSeq != nil && *admission.PromotedSeq <= admission.AdmittedSeq {
-		return ErrInvalidPrompt
 	}
 	return nil
 }
