@@ -98,18 +98,18 @@ witness, and immediately before the frozen `opencode_native_health` leg
 
 | leg | line |
 | --- | --- |
-| pi provider action | `:3166` |
-| helper sigkill detached child | `:3170` |
-| daemon sigkill helper survives | `:3171` |
-| stage-replay cases | `:3172` |
-| ack-loss replay cases | `:3175` |
-| helper exit after release before register | `:3178` |
-| helper response loss | `:3179` |
-| receipt persist failure | `:3181` |
-| literal pid reuse | `:3182` |
-| legacy v1 replay | `:3183` |
-| **alternate-mount refusal** | **`:3186`** |
-| frozen opencode native health | `:3190` |
+| pi provider action | `:3167` |
+| helper sigkill detached child | `:3171` |
+| daemon sigkill helper survives | `:3172` |
+| stage-replay cases | `:3173` |
+| ack-loss replay cases | `:3176` |
+| helper exit after release before register | `:3179` |
+| helper response loss | `:3180` |
+| receipt persist failure | `:3182` |
+| literal pid reuse | `:3183` |
+| legacy v1 replay | `:3184` |
+| **alternate-mount refusal** | **`:3187`** |
+| frozen opencode native health | `:3191` |
 
 No journal is deleted, no Store is reset, no `rm`/`truncate`/state reset enters the script diff,
 and the moved leg keeps every one of its refusal assertions. The old placement carried the
@@ -120,25 +120,27 @@ explicit pin: the leg reads its own captured App stderr
 that also carries the witness marker, while forbidding the foreign-ownership phrase
 (`linuxV2RequireMountRefusalCause`, `:2314`), and it requires its own retained row to stay
 claim-only (`linuxV2RequireClaimOnlyRetainedRow`, `:2396`; call site `:4875`). The leg also guards
-its order at runtime: it fails unless all ten prior event files are already non-empty, and the
-call site (`:3186-3189`) passes those ten files to the guard as its arguments
-(`for prior in "$@"`, `:3034-3038`), so a future reorder cannot silently reintroduce the wall.
+its order at runtime: it refuses an empty argument list and fails unless all ten prior event files
+are already non-empty, and the call site (`:3187-3190`) passes those ten files to the guard as its
+arguments (`for prior in "$@"`, `:3034-3039`), so a future reorder cannot silently reintroduce the
+wall.
 
 Local order and guard proof (scratch harnesses, not committed; base bytes snapshotted with
 `git show 7111828b:scripts/ci/linux-v2-native-acceptance.sh` to
 `<HOST-PATH>/scratch-shared-journal-apply/base-7111828b-acceptance.sh`; re-run at the apply-round
-bytes):
+bytes, and the guard rows re-run at the fix-round bytes):
 
 | check | input | result |
 | --- | --- | --- |
 | `order-check.sh` | base `7111828b` bytes | `ORDERING-RED status=1` — mount leg at `:3160`, before all ten prior legs (`:3161-:3178`), guard absent |
-| `order-check.sh` | apply-round bytes | `ORDERING-GREEN status=0` — ten legs (`:3166-:3183`) before the mount call at `:3186`, opencode after at `:3190`, and the call passes the ten prior event files |
+| order re-measure (`grep -n`/`sed -n`) | delivered bytes | ten legs (`:3167-:3184`) before the mount call at `:3187-3190`, opencode after at `:3191`, and the call passes the ten prior event files |
 | `guard-harness.sh` (a) | ten non-empty event files | `GUARD-OK`, exit 0 |
 | `guard-harness.sh` (b) | `pi` event file empty | `fail` names the path, exit 1 |
 | `guard-harness.sh` (c) | `v1-replay` event file missing | `fail` names the path, exit 1 |
+| `guard-harness.sh` (d) | zero prior event files (empty argument list) | `fail` names the missing legs, exit 1; the pre-fix bytes exited 0 silently (§14) |
 
 The guard block the harness executes is extracted verbatim from the delivered script
-(`sed -n '3034,3038p'`).
+(`sed -n '3034,3039p'`).
 
 **Coupling recorded as a residual** (`docs/TODO.md`): the mount leg stays before the opencode leg
 only because that leg aborts at its pinned-version config gate
@@ -184,7 +186,8 @@ inside its owning function, runs the named test, and restores the pristine bytes
 | foreign-phrase `strings.Contains` | refusal cause | 1 | `…/a_foreign_RunJournal_refusal_is_refused` (+ `…/a_capture_naming_both_causes_is_refused`) |
 | mount-check marker term `strings.Contains(line, …)` → `false` | refusal cause | 1 | `…/the_exact_mount_preflight_refusal_is_accepted` |
 | mount-phrase scoping reverted to window-wide (`line` → `window`) | refusal cause | 1 | `…/the_mount_phrase_without_the_witness_marker_on_its_line_is_refused`, alone; restored copy `ec=0` |
-| stderr read refusal (`return nil, nil`) | unreadable capture | 1 | top-level `TestLinuxV2AlternateMountRefusalCauseRefusesAnUnreadableCapture` |
+| stderr read refusal (`return nil, nil`) | unreadable capture | 1 | top-level `TestLinuxV2AlternateMountRefusalCaptureReadRefused` at `:2390` |
+| argument-count guard line deleted | order guard, zero prior legs | 0 (silent pass under mutation) | the zero-argument refusal row (harness (d)); oracle gap — the row lives in the scratch harness, so no CI job reds it (§14) |
 | `!snapshot.owner.isStoppedRetained()` in `linuxV2RequireSafelyReleasedPriorJournal` | claim-only prior record | 1 | `TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease` at `:2302` (`lacks an exact v2 StopReceipt-backed leaf release, want the released-and-safe refusal`) |
 
 Two review findings from the first mutant round were fixed rather than papered over: the initial
@@ -204,7 +207,7 @@ that reds only for that disjunct.
 | WSL full module, root | `go test ./... -count=1` from `<HOST-PATH>/mnt/q/repos/wt-acc-journal-release/symmetry/daemon` in `wsl -d Ubuntu-24.04` (go1.27.0 linux/amd64, uid 0) | 1 | `30 ok` incl. `daemon/e2e` (1.804s); `internal/platform` fails 13 wire-shape tests, each `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`; 422.7s wall |
 | WSL full module, unprivileged | same command in `wsl -d Ubuntu-24.04 -u accept` (uid 1000) with `GOMODCACHE=<HOST-PATH>/tmp/accept-gomod GOCACHE=<HOST-PATH>/tmp/accept-home/.cache/go-build GOPROXY=off GOFLAGS=-mod=mod` | 0 | `31 ok`, 0 `FAIL`, incl. `daemon/e2e` (1.678s) and `internal/platform`; 282.3s wall |
 | byte-identity attribution | `git diff --name-only 7111828b..HEAD` plus the apply-round worktree status | — | the range's files are exactly six (the e2e test file, the acceptance script, the plan, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`, this record); `daemon/internal/platform`, `internal/launchercore`, `internal/linuxpreflight` and `native/linux-gate/**` are untouched, so their bytes are identical at base and at the delivered bytes and the root-identity failures cannot come from this change (the implement round's base-vs-head runs showed the same sets: root 13 = 13, unprivileged names identical) |
-| new rows, verbose | `go test ./e2e/ -run '^TestLinuxV2(ClaimOnlyPriorJournalRequiresPhysicalRelease\|AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal\|AlternateMountRefusalCauseRefusesAnUnreadableCapture\|AlternateMountRefusalRetainsTheClaimOnlyRow)$' -count=1 -v` (WSL, root) | 0 | 26 `RUN`, 26 `PASS`, 0 `FAIL` (4 top-level rows and 22 subtests: 7 cause-predicate rows and 15 row-predicate rows) |
+| new rows, verbose | `go test ./e2e/ -run '^TestLinuxV2(ClaimOnlyPriorJournalRequiresPhysicalRelease\|AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal\|AlternateMountRefusalCaptureReadRefused\|AlternateMountRefusalRetainsTheClaimOnlyRow)$' -count=1 -v` (WSL, root) | 0 | 26 `RUN`, 26 `PASS`, 0 `FAIL` (4 top-level rows and 22 subtests: 7 cause-predicate rows and 15 row-predicate rows) |
 
 On the apply-round bytes the unprivileged identity is fully green (`31 ok`, 0 `FAIL`), and the
 root identity fails only the 13 `internal/platform` wire-shape tests, which refuse uid 0 by
@@ -223,6 +226,12 @@ none new; notices: the e2e test file is above the gate's line ceiling and
 `docs/archive/CLOSED-TODO.md` lies outside the configured scope, so clones inside them are not
 checked). `python scripts/ci/check-record-cleanliness.py --base 7111828b --head HEAD` → exit 0
 (this record passes the root-only sanitize check).
+
+The fix round re-ran all three gates on the same scratch-clone shape at the fix-round bytes
+(`<scratch>/clone`, §14): comment-cap exit 0; jscpd exit 0; check-record-cleanliness exit 0. The
+whole-document sanitize check is green on `docs/TODO.md`, the plan and this record, and on
+`docs/archive/CLOSED-TODO.md` over the branch's added lines only: that file's whole-file flags are
+pre-existing entries, identical at `7111828b` (§14).
 
 ## 8. Where the refused claim row lives, and how the product retires it
 
@@ -260,15 +269,16 @@ retirement for a claim that provably never started native work is a separate, un
 
 ## 10. Anchor and digest re-measurement at the delivered bytes
 
-Delivered files and their sha256 at the delivered bytes (measured after the §7 comment-cap run;
-`docs/TODO.md`, `docs/archive/CLOSED-TODO.md` and this record are deliberately not hashed, and
+Delivered files and their sha256 at the fix-round delivered bytes (measured over the delivered
+bytes, the same bytes the §7 clone gates ran on; `docs/TODO.md`, `docs/archive/CLOSED-TODO.md`
+and this record are deliberately not hashed, and
 `daemon/e2e/production_linux_v2_native_witness_test.go` is unchanged by design):
 
 | file | sha256 |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `71c73877f6ab557214cf7f613e504274b02bd9e719c2db540fb2d0aa1e646b7c` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `2e088b8b4ff88f16dc999564a911aace86e622823e2cfd8664b5681c03a8e8e2` |
-| `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md` | `805bef47785a1515f4609b94d9c4ae3b291b0739bfde4b11181b26c598128850` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `abdb383be31d70cd5b591cc8f927c2c2ec0e4fab196041b0a31ab91bd5e37012` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `3254deef0bfdc16c741542623c293012aa1e1c265e6f881d74792121280f7bcb` |
+| `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md` | `5dadbcbaaacab9e09254a44bbfb9392d5cca08f2f1b956cf63067d5769295237` |
 
 Every anchor cited above and in the plan, measured with `grep -n`/`sed -n` on the delivered
 bytes (the Bind log's retained copy still hashes to `bf00da4f…` at
@@ -293,8 +303,8 @@ is `native/run-45384436642.log:1227`):
 | `state/linux_cgroup_journal.go:382,432-475` | foreign-ownership refusal, `linuxV2ForeignJournalIsSafelyRetired` |
 | `state/linux_cgroup_v2_test.go:973,1095` | `TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease`, "unreleased row" |
 | `e2e/production_linux_v2_native_witness_test.go:1901,1968,1972,1973,1974,2183,2216` | pinned-CLI gate, precondition snapshot/loop/check/fatal, stderr path and tail helpers |
-| `e2e/production_linux_v2_owner_cli_test.go:54,1614,1640,2265,2288,2295,2308,2312,2314,2358,2396,2421,4857,4861,4862,4875` | App stderr FD, the stderr-tail logger, the pre-existing report's call, the precondition helper, the shared claim-only literal, the new rows and predicates, the zero-value row, the leg's read/cause/log and row call |
-| `scripts/ci/linux-v2-native-acceptance.sh:3034-3038,3166-3183,3186-3189,3190` | guard block over its arguments, ten prior legs, the mount leg with its ten arguments, opencode leg |
+| `e2e/production_linux_v2_owner_cli_test.go:54,1614,1640,2265,2288,2295,2308,2312,2314,2358,2387,2396,2421,4857,4861,4862,4875` | App stderr FD, the stderr-tail logger, the pre-existing report's call, the precondition helper, the shared claim-only literal, the new rows and predicates, the renamed capture-read row, the zero-value row, the leg's read/cause/log and row call |
+| `scripts/ci/linux-v2-native-acceptance.sh:3034-3039,3167-3184,3187-3190,3191` | guard block over its arguments plus the empty-argument refusal, ten prior legs, the mount leg with its ten arguments, opencode leg |
 | `docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82` | "intentionally first … cannot mask the proof" |
 | `run-45737002125.log:3146,3156,3226,3229` | journal insert, prior leg green, the stop, the retained-row projection |
 
@@ -337,7 +347,7 @@ moved.
 | --- | --- | --- |
 | F1 | `production_linux_v2_owner_cli_test.go` | the claim-only journal literal is now `linuxV2ClaimOnlyRefusalJournal` (`:2288`), used by both rows |
 | F2 | same | the misnamed table row `the row is gone` renamed to `a zero-value row is refused` (`:2421`); the mutation is unchanged |
-| F3 | `linux-v2-native-acceptance.sh` | the order guard takes the ten prior event files as arguments (`shift`, `for prior in "$@"`, `:3034-3038`) instead of reading ten globals; the call site passes them (`:3186-3189`) |
+| F3 | `linux-v2-native-acceptance.sh` | the order guard takes the ten prior event files as arguments (`shift`, `for prior in "$@"`, `:3034-3039`) instead of reading ten globals; the call site passes them (`:3187-3190`); the fix round adds the empty-argument refusal (§14) |
 | F4 | `production_linux_v2_owner_cli_test.go` | the bounded stderr tail logging is `linuxV2LogOwnerWitnessStderr` (`:1614`), used by the pre-existing refusal report and the mount leg |
 | F5 | `linux-v2-native-acceptance.sh` | the call-site comment again carries the frozen-opencode ordering fact (still two lines) |
 | F6+F7 | `production_linux_v2_owner_cli_test.go` | the mount phrase must sit on a line that also carries the witness marker (`:2322-2326`), and the masking capture gets its own table row (`:2358`) |
@@ -353,3 +363,53 @@ witness refusal`). The mutant table (§5) was re-run at these bytes.
 
 The re-measure also caught one stale plan anchor: the probe-log line carrying the cited phrase is
 `gdd/native/run-45384436642.log:1227`, not `:1231` (the plan now cites `:1227`).
+
+## 14. Fix round (2026-11-26, review findings)
+
+The review round (stage answer under the GDD state root) reported three P3 findings against
+`7111828b..3fc9526b`; all three are inside this contract's owned set and are fixed at the
+delivered bytes. No assertion, predicate, refusal condition or acceptance row moved.
+
+| id | file | before → after | proof at the delivered bytes |
+| --- | --- | --- | --- |
+| 1 | `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md` | "claim id and unexpired claim grant present" → "claim id and a claim grant carrying a recorded (non-zero) expiry" | source read: `linuxV2RequireClaimOnlyRetainedRow` (`production_linux_v2_owner_cli_test.go:2396`) requires only a non-zero `LeaseExpiresAt` (`:2401`), while its accepted fixture `linuxV2ClaimOnlyRefusalJournal` (`:2288`) carries the expired `time.Unix(1, 0)` lease (`:2291`) and passes — the predicate never required an unexpired grant |
+| 2 | `daemon/e2e/production_linux_v2_owner_cli_test.go` | `TestLinuxV2AlternateMountRefusalCauseRefusesAnUnreadableCapture` → `TestLinuxV2AlternateMountRefusalCaptureReadRefused` (`:2387`); its fatal text no longer claims a "cause check" | characterization: with `linuxV2RequireMountRefusalCause` forced to fail unconditionally in a scratch copy, the old name still passed (`PASS`, exit 0) while `TestLinuxV2AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal` reds; the renamed row passes at the delivered bytes (exit 0) and reds when the capture-read refusal is removed (`return nil, nil` mutant: `FAIL` at `:2390`, exit 1) |
+| 3 | `scripts/ci/linux-v2-native-acceptance.sh` | the order guard now refuses an empty argument list: `(( $# > 0 )) || fail "alternate-mount refusal order guard received no prior legs"` (`:3035`) | pre-fix bytes, zero prior event files: `GUARD-baseline-zero status=0` (silent pass, the reviewed defect); delivered bytes: zero prior legs → `status=1` with the new text, ten non-empty files → `status=0`, one empty file → `status=1` |
+
+Guard mutant (one red row per new branch; scratch harness only, so an oracle gap for CI):
+
+| mutant | run | result |
+| --- | --- | --- |
+| the `(( $# > 0 ))` line deleted | order guard, zero prior legs | `GUARD-mutant-zero status=0` — the zero-argument refusal row reds under the mutation; the restored delivered bytes are `status=1` on the same row |
+
+Fix-round gates at the delivered bytes: `gofmt -l e2e/` exit 0; `go vet ./...` (Windows) exit 0;
+`GOOS=linux go vet ./...` exit 0; `bash -n scripts/ci/linux-v2-native-acceptance.sh` exit 0; WSL
+root `go test ./e2e/ -count=1` ok and the §6 four-row set again 26 `RUN` / 26 `PASS` / 0 `FAIL`;
+the §3 guard rows (a)-(d) and the §5 guard-mutant row above; the §7 clone gates re-ran at these
+bytes (exit 0 each). The §6 full `go test ./...` suites were not re-run: the fix round changes a
+test name, one shell guard line and the records, so their apply-round rows stay the conductor's.
+
+Record sanitation at these bytes: `model-routing-record-sanitize.py --check --root-only` exits 0
+over `docs/TODO.md`, the plan and this record. On `docs/archive/CLOSED-TODO.md` it exits 1 over
+the whole file: the branch appends to that file only (`git diff --numstat`: 24 added, 0 deleted)
+and the whole-file check exits 1 identically at `7111828b`, so every flagged entry is pre-existing
+text the brief forbids rewriting. The same check over each changed doc's added lines exits 0 for
+all four docs, and no added line of the six changed files carries a host absolute path: the only
+added lines naming a host-shaped prefix are the four `<HOST-PATH>`-tokenized ones.
+
+Appendix — scratch pins and mutants verbatim with their full sha256; the harness commands were
+`bash <scratch>/guard-harness.sh <script> 3034 3039 <label> [event-file…]` for the delivered block
+and `3034 3038` for the pre-fix and mutant blocks:
+
+- guard-mutant script = the delivered script minus exactly the line
+  `  (( $# > 0 )) || fail "alternate-mount refusal order guard received no prior legs"`; it is
+  byte-identical to the pre-fix script, sha256
+  `2e088b8b4ff88f16dc999564a911aace86e622823e2cfd8664b5681c03a8e8e2`.
+- cause-predicate inversion overlay, inserted as the first statement of
+  `linuxV2RequireMountRefusalCause`:
+  	return errors.New("mutant: alternate-mount cause check disabled")
+  file sha256 `830f34dbaf853cd2f1e9d6997abc11de7dfab6689b29139acf57b4284401b62c`.
+- capture-read refusal overlay: the
+  `return nil, fmt.Errorf("read captured owner-witness stderr: %w", err)` arm of
+  `linuxV2OwnerWitnessStderrTail` replaced by `return nil, nil`; file sha256
+  `5ed0042071d294b429af0a9f718088ca63d351e95d7dd3749c115ac73dd1f4cf`.

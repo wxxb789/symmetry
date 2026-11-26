@@ -2384,10 +2384,10 @@ func TestLinuxV2AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal(t 
 	}
 }
 
-func TestLinuxV2AlternateMountRefusalCauseRefusesAnUnreadableCapture(t *testing.T) {
+func TestLinuxV2AlternateMountRefusalCaptureReadRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), linuxV2OwnerWitnessStderrName)
 	if _, err := linuxV2OwnerWitnessStderrTail(path, linuxV2OwnerWitnessRequest{}); err == nil {
-		t.Fatal("an unreadable alternate-mount App capture passed the cause check")
+		t.Fatal("an unreadable alternate-mount App capture was read")
 	}
 }
 

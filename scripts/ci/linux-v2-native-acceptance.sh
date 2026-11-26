@@ -3032,6 +3032,7 @@ run_alternate_mount_refusal_witness() {
   # This refusal leaves a claim-only RunJournal the product never retires here; running it
   # before a fresh or released Store reader would fail that leg for the wrong cause.
   local prior
+  (( $# > 0 )) || fail "alternate-mount refusal order guard received no prior legs"
   for prior in "$@"; do
     [[ -s "$prior" ]] ||
       fail "alternate-mount refusal must follow every fresh or released Store-reading leg: $prior"

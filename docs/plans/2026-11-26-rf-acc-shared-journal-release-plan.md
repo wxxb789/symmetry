@@ -62,10 +62,10 @@ Discrimination against the contract's three candidates:
 The refusal leg's roster row is retained by design, so the shared set must not let it precede a
 leg that requires a fresh or physically released Store. The delivered order runs
 `run_alternate_mount_refusal_witness "$v2_alternate_mount_events"` at
-`scripts/ci/linux-v2-native-acceptance.sh:3186`, after every leg that starts a fresh native-owner
-witness (pi `:3166`, crash `:3170`, daemon-crash `:3171`, stage-replay `:3172`, ack-loss `:3175`,
-helper-exit `:3178`, response-loss `:3179`, receipt-persist `:3181`, pid-reuse `:3182`, v1-replay
-`:3183`) and immediately before the frozen `opencode_native_health` leg (`:3190`). No journal is
+`scripts/ci/linux-v2-native-acceptance.sh:3187`, after every leg that starts a fresh native-owner
+witness (pi `:3167`, crash `:3171`, daemon-crash `:3172`, stage-replay `:3173`, ack-loss `:3176`,
+helper-exit `:3179`, response-loss `:3180`, receipt-persist `:3182`, pid-reuse `:3183`, v1-replay
+`:3184`) and immediately before the frozen `opencode_native_health` leg (`:3191`). No journal is
 deleted, no Store is reset, and no leg's assertions are weakened.
 
 The old placement carried the fixture-inventory rule "intentionally first so another row cannot
@@ -78,22 +78,22 @@ The pinned text is grounded in the App's own print path, not in prose: `main.go:
 `-linux-v2-native-owner-witness: <err>`; `linux_owner_witness_linux.go:3258` wraps the preflight
 as `preflight installed Linux v2 owner before clone/native work: %w`; `native_run.go:199` wraps it
 as `Linux v2 native owner preflight: %w`; `cgroup_linux.go:93` is the bare cause phrase. The leg
-also guards its order at runtime: it refuses to start unless all ten prior legs' event files are
-already non-empty.
+also guards its order at runtime: it refuses a call that names no prior legs and fails unless all
+ten prior legs' event files are already non-empty.
 
 ## 3. Public/API shape
 
 1. `scripts/ci/linux-v2-native-acceptance.sh` — the leg move plus a 2-line comment naming the
    retained-claim-only row as the reason for the order, and a runtime guard inside
-   `run_alternate_mount_refusal_witness` that fails unless the ten prior legs' event files are
-   non-empty; no other helper changes.
+   `run_alternate_mount_refusal_witness` that refuses an empty argument list and fails unless the
+   ten prior legs' event files are non-empty; no other helper changes.
 2. `daemon/e2e/production_linux_v2_owner_cli_test.go`
    - `runProductionLinuxV2AlternateMountRefusal`: require the exact refusal cause from
      `linuxV2OwnerWitnessStderrTail` (`daemon/e2e/production_linux_v2_native_witness_test.go:2216`)
-     and require the leg's own retained row to be the claim-only shape: found, `claimed`, claim id
-     and unexpired claim grant present, no clone intent, no process details, no pending
-     containment (authority, handoff, scan ledger or abort-less reservation), no unproven stop, no
-     cgroup reservation even when aborted, and no release tombstone.
+     and require the leg's own retained row to be the claim-only shape: found, `claimed`, claim
+     id and a claim grant carrying a recorded (non-zero) expiry, no clone intent, no process
+     details, no pending containment (authority, handoff, scan ledger or abort-less reservation),
+     no unproven stop, no cgroup reservation even when aborted, and no release tombstone.
    - New pure predicates `linuxV2RequireMountRefusalCause(lines)` and
      `linuxV2RequireClaimOnlyRetainedRow(journal, found)`, each with a unit table row per branch:
      7 rows for the cause predicate (an unmarked capture is refused, the foreign-ownership phrase
@@ -102,7 +102,7 @@ already non-empty.
      the row predicate (zero-value row plus 14 field mutations, with the `found=false` refusal
      pinned by a direct call).
    - One row pinning the capture read refusal
-     (`TestLinuxV2AlternateMountRefusalCauseRefusesAnUnreadableCapture`).
+     (`TestLinuxV2AlternateMountRefusalCaptureReadRefused`).
    - One unit row pinning the unchanged precondition's treatment of a claim-only prior record
      (`linuxV2RequireSafelyReleasedPriorJournal` refuses it) as the ordering rationale.
 3. `daemon/e2e/production_linux_v2_native_witness_test.go` — no change.
