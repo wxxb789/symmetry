@@ -3401,8 +3401,8 @@ func linuxV2RequireLivePIDFD(pidfd int) error {
 	return nil
 }
 
-// linuxV2CaptureReadbackTarget observes B through the fixture's root reader:
-// the A-credentialed witness never opens a ptrace-gated /proc/<pid> entry.
+// linuxV2CaptureReadbackTarget observes B through the fixture's root reader
+// alone; the witness's deferred fdinfo/leaf audits still read /proc directly.
 func linuxV2CaptureReadbackTarget(target authority.LinuxCgroupProcessIdentity, leafPath string, namespaces []string) (linuxreadback.Capture, error) {
 	channel, err := linuxreadback.ChannelFromEnv()
 	if err != nil {

@@ -2161,7 +2161,6 @@ start_readback_reader() {
   machine_run /usr/bin/systemd-run --no-block --quiet \
     --unit="$READBACK_READER_UNIT" --service-type=exec \
     --property=Restart=no --property=KillMode=control-group --property=TimeoutStopSec=30s \
-    --property=RuntimeMaxSec=3600 \
     -- "$READBACK_READER" serve \
     --channel "$READBACK_CHANNEL" --leaf-root "$READBACK_LEAF_ROOT" \
     --a-uid "$A_UID" --a-gid "$A_GID" --b-uid "$B_UID" --b-gid "$B_GID"
@@ -2203,7 +2202,9 @@ start_readback_reader() {
 stop_readback_reader() {
   local reader_log="$fixture_root/readback-reader-stop.log"
   local reader_status=0
-  machine_run /usr/bin/touch "$READBACK_CHANNEL/stop"
+  # systemctl stop is the only terminator: SIGTERM is the reader's clean stop,
+  # so no root write (and no A-planted name) ever enters the channel.
+  machine_run /usr/bin/systemctl stop "$READBACK_READER_UNIT"
   machine_run /bin/bash -c '
     set -Eeuo pipefail
     unit=$1
@@ -2220,7 +2221,6 @@ stop_readback_reader() {
     [[ ! -e "$channel/ready" ]]
     /usr/bin/journalctl --no-pager --output=cat --grep="readback-reader:" -n 40 -u "$unit" || true
   ' bash "$READBACK_READER_UNIT" "$READBACK_CHANNEL" >"$reader_log" 2>&1 || reader_status=$?
-  machine_run /usr/bin/rm -f -- "$READBACK_CHANNEL/stop"
   print_filtered_output_lines <"$reader_log"
   (( reader_status == 0 )) || fail 'the root readback reader did not stop cleanly'
 }

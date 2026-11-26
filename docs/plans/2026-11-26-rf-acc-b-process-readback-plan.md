@@ -120,7 +120,9 @@ arbitrary-target oracle. The reader never logs file contents (only stage/pid/siz
 | 8 | `production_linux_v2_native_witness_test.go:3046,3136` `platform.ProcessIdentity(B)` (`/proc/<B>/ns/pid` readlink) | ptrace | **converted** (reader identity; the request carries the journal's exact identity) |
 | 9 | `production_linux_v2_native_witness_test.go:3179-3258` (`/proc/<B>/fdinfo/*` + identity rechecks) and `:3260-3324` (`linuxV2RequireNoWritableCgroupFDsInLeaf`; the leaf-descendant `platform.ProcessIdentity` at `:3277` reads `/proc/<B>/ns/pid`) | ptrace | **exempt, deferred**: the descendant identity is the same ns/pid class as converted rows 7-8, outside plan §7.2 option (i)'s conversion surface; reached only after the capture path that has never run green; converting the leaf-wide audit needs the reader's per-FD `flags`/`mnt_id` return plus a leaf-wide capture loop and preserves its race tolerances; residual named in `docs/TODO.md` with the reader step's A-capability row as the discriminator |
 | 10 | `production_linux_v2_native_witness_test.go:2724,2771` (detached B child), `production_linux_v2_owner_cli_test.go:3474-3488` (`linuxV2OpenExactPIDFD` + `linuxV2ReadPIDNamespaceIdentity`; the ns/pid read is `:3603`), `production_linux_v2_helper_exit_witness_test.go:427` (`platform.ProcessIdentity(gate.PID)`, ns/pid), `:431` (`platform.CaptureLinuxUserNamespaceIdentity`, ns/user), `:466` (post-release gate leaf audit) and `:489` (released-B exe readlink) | ptrace | **exempt, deferred**: same ptrace-gated class, outside plan §7.2 option (i)'s named conversion surface; no green run reaches them, and at `CapEff 0` the helper-exit witness's first stop is its `:427` ns/pid read, before the `:466` leaf audit; same residual entry |
-| 11 | `platform.ProcessIdentity`/`fd` reads whose targets are A-credentialed (`anchor/helper/mirror/launcher/daemon`, parked gate, owner-death helpers), `linuxV2Cgroup2MountIDs` (`mountinfo`), `linuxV2ReadProcessCredentials`/`Groups` (`status`/`stat`), `cmdline` | none / measured A-legal | **exempt: not the same class or measured A-legal** (§2.2) |
+| 11 | `production_linux_v2_owner_cli_test.go` root PID-reuse watcher/replacement targets: `runProductionLinuxV2LiteralPIDReuse`'s `platform.ProcessIdentity`/`linuxV2OpenExactPIDFD`/`linuxV2ReadPIDNamespaceIdentity` reads (`:2843`, `:2855`, `:2863`, `:2894`, `:2941`) and `linuxV2OpenPIDReuseExchange`'s exe stat + identity + pidfd binding (`:3008`, `:3023`/`:3026`, `:3028`/`:3029`, `:3039`) | ptrace | **exempt, deferred**: ptrace-gated class, but the target is the root-run clone3 replacement/watcher (`:3018-3021` requires real/effective uid 0), not the B class the reader serves (`reader_linux.go:484-490` refuses any non-B credential vector), so converting needs a second root-target reader contract; the leg is reached only by `run_literal_pid_reuse_witness` in `shared` (`linux-v2-native-acceptance.sh:3177`, after that set's recorded stop); same residual entry |
+| 12 | `production_linux_v2_owner_cli_test.go:4229` `platform.ProcessIdentity(live.PID)` (B target, `runProductionLinuxV2MigrationDenial`) | ptrace | **exempt, deferred**: same B class as converted rows 7-8, but outside plan §7.2 option (i)'s named capture-path surface and unreached by any recorded run (the `migration` set's `native_release` hold is still unreached, `docs/TODO.md`); conversion must carry the channel into that leg and preserve its live-pidfd race tolerance; same residual entry |
+| 13 | `platform.ProcessIdentity`/`fd` reads whose targets are A-credentialed (`anchor/helper/mirror/launcher/daemon`, parked gate, owner-death helpers), `linuxV2Cgroup2MountIDs` (`mountinfo`), `linuxV2ReadProcessCredentials`/`Groups` (`status`/`stat`), `cmdline` | none / measured A-legal | **exempt: not the same class or measured A-legal** (§2.2) |
 
 ### 3.3 Fixture reader step (`scripts/ci/linux-v2-native-acceptance.sh`, reader step only)
 
@@ -130,12 +132,15 @@ arbitrary-target oracle. The reader never logs file contents (only stage/pid/siz
 - runtime channel `/run/symmetry-readback` (root:A 0770, created inside the guest because `/run` is
   a boot-time tmpfs);
 - `start_readback_reader()`: `systemd-run --no-block` transient unit
-  (`Restart=no`, `KillMode=control-group`, `TimeoutStopSec=30s`, `RuntimeMaxSec` bound), then the
+  (`Restart=no`, `KillMode=control-group`, `TimeoutStopSec=30s`; no `RuntimeMaxSec` — the workflow's
+  `timeout-minutes: 180` is the only bound around the case sets, so a 3600 s runtime cap would fire
+  on a slow-but-valid `shared` and turn the stop proof into `Result=timeout`, plan §8.5), then the
   ready proof: unit active, `MainPID` real and its `/proc/<MainPID>/exe` identical to the staged
   helper, `ready` file root:A 0440 equal to `ready\n`, and the printed A capability readback row;
-- `stop_readback_reader()`: write the root-owned `stop` file, wait for the unit to leave `active`
-  with `Result=success`, assert the ready file is gone (the reader removes it), print the bounded
-  reader journal tail;
+- `stop_readback_reader()`: `systemctl stop` the unit (SIGTERM; R4 makes a cancelled context the
+  reader's clean exit), wait for the unit to leave `active` with `Result=success` and
+  `ExecMainStatus=0`, assert the ready file is gone (the reader removes it), print the bounded
+  reader journal tail; no root write ever enters the channel;
 - `run_go_test` gets one `--setenv=SYMMETRY_LINUX_OWNER_READBACK_CHANNEL=$READBACK_CHANNEL` in the
   common environment block (every mode; unused by modes that never request a capture);
 - both calls sit around the `case "$fixture_case_set"` dispatch, so every case set that reaches any
@@ -180,7 +185,7 @@ arbitrary-target oracle. The reader never logs file contents (only stage/pid/siz
 
 - Production code, `gate.c`, the launcher, AppArmor, sysctls: no production byte changes
   (contract invariants; root cause §5).
-- The deferred e2e sites of §3.2 #9/#10 and their residual: out of the contract's named
+- The deferred e2e sites of §3.2 #9-#12 and their residual: out of the contract's named
   `ns/*` conversion surface, unreachable in any recorded run, and their conversion needs a second
   reader return channel plus preserved race tolerances; named in `docs/TODO.md` so the increment
   that first reaches them converts them with attacked evidence.
@@ -226,14 +231,16 @@ membership. Bounds and refusals are otherwise unchanged.
   `findings/probe-gate-sequence.py` and the visibility matrix, which both run in the same kernel.
 - The fixture's reader step is validated against real systemd off-guest (unit start, ready-file
   mode/owner/helper-identity proof, root-owned stop file, `Result=success` + `ExecMainStatus=0` +
-  ready-file removal) because the CI guest itself only exists on the runner.
+  ready-file removal) because the CI guest itself only exists on the runner; the stop file is
+  replaced by the SIGTERM stop in §8.5.
 
 ### 8.3 Apply-stage amendments (simplification findings)
 
 - §3.1's flag list shrinks to the six flags every invocation passes: `--ready-file`, `--stop-file`
   and `--max-requests` were never passed and are deleted. The ready/stop markers stay at
-  `<channel>/ready` / `<channel>/stop`, the reader logs to stderr, and the request budget is the
-  single compile-time `maxRequests` (4096) bound in the package.
+  `<channel>/ready` / `<channel>/stop` (the stop marker is later deleted in §8.5), the reader logs
+  to stderr, and the request budget is the single compile-time `maxRequests` (4096) bound in the
+  package.
 - §3.1's A-side client sketch `Capture(channel string, want Want, timeout time.Duration)` is
   implemented as `Read(channel string, want Want, timeout time.Duration) (Capture, error)`:
   `Capture` is the capture type, so the sketched name cannot exist in Go; callers use `Read`.
@@ -254,3 +261,33 @@ membership. Bounds and refusals are otherwise unchanged.
   membership `leaf`, `executable`), a wide-descriptor target whose long-target census pushes the
   encoded capture past the response bound (R2, R5), and an in-process stop that requires a nil
   return (R4 pin).
+
+### 8.5 Fix-stage amendments, PR #296 round 1 (S1-S4)
+
+- The reader resolves every channel name through one root-opened dir fd: openat with
+  `O_CREAT|O_EXCL|O_NOFOLLOW` for the ready file and response temps, `O_NOFOLLOW|O_NONBLOCK` for
+  requests, `fstat` on the created/opened fd (REG, nlink 1, expected owner), fd-only
+  fchmod/fchown, `Renameat`/`Unlinkat` on the dir fd (S1); the reproduction adds the adversarial
+  rows (`SYMLINK_RESP_TEMP`, `SYMLINK_REQUEST`, `FIFO_REQUEST`, `HARDLINK_REQUEST`,
+  `FIFO_RESP_TEMP`) with the old-bytes red run and the five removal mutants recorded in the
+  evidence record §3.1/§6.
+- The stop file is gone: `stop_readback_reader` uses `systemctl stop` (SIGTERM, R4 nil-on-cancel),
+  so no root-side write ever enters the A-writable channel; `RuntimeMaxSec` is also gone because
+  the workflow's `timeout-minutes: 180` is the only bound around the case sets and a 3600 s cap
+  would fire on a slow-but-valid `shared` (S4; §3.3).
+- The new `production_import_guard_linux_test.go` runs `go list -deps ./cmd/...` and fails if any
+  production cmd reaches `linuxreadback` (S2), with the red mutant recorded in evidence §6.
+- `readback_helpers_linux_test.go` drops the `capture.Executable` string equality and keeps the
+  dev/ino binding, because the reader's gate is dev/ino and the returned path is the kernel's
+  canonical readlink (S4; evidence §3).
+
+### 8.6 S5/S6 (round 2/3; protocol test files)
+
+The diagnostic Bind's new stop was root-caused to the gate's fd exec: `execveat(..., AT_EMPTY_PATH)`
+makes `AT_EXECFN` `/dev/fd/<n>`, and Ubuntu 26.04's uutils multicall exits 1 with
+`coreutils: unknown program '4'` before reading anything, so the boundary leg's `/usr/bin/cat`
+subject died and the reader correctly refused `stage=leaf`. The fix releases a staged
+single-purpose ELF (the test binary) for that leg and adds its stdin-blocking helper; S6 flips two
+`MSG_EOR` expectations to the repo's never-set convention. The evidence record's §7 S5/S6 sections
+carry the root cause, the exact red→green strings and the replica run rows (`findings/296-s5.md`);
+no fixture change was needed and the reader's leaf check is unchanged.

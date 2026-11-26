@@ -40,7 +40,9 @@ func captureNativeBProcess(identity ProcessIdentity, executable, leaf string) (l
 	if err != nil {
 		return linuxreadback.Capture{}, err
 	}
-	if capture.Executable != executable || capture.ExeDevice != want.ExeDevice || capture.ExeInode != want.ExeInode {
+	// The reader's gate binds the approved file by dev/ino; the returned path is
+	// the kernel's canonical /proc/<pid>/exe readlink, which usrmerge may rewrite.
+	if capture.ExeDevice != want.ExeDevice || capture.ExeInode != want.ExeInode {
 		return linuxreadback.Capture{}, errors.New("root readback did not bind the approved same-PID image")
 	}
 	return capture, nil

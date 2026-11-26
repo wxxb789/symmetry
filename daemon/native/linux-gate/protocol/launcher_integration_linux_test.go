@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -422,17 +423,29 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 		t.Fatalf("A-gate creation did not populate the scratch leaf: populated=%t err=%v", populated, err)
 	}
 
-	catPath, err := trustedCatPath()
+	imageRoot := os.Getenv("SYMMETRY_LINUX_CLONE_TEST_ACK_ROOT")
+	if err := validateScratchPath(imageRoot, cloneScratchRootPrefix); err != nil {
+		t.Fatalf("boundary native image root: %v", err)
+	}
+	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The gate's fd exec gives B an AT_EXECFN of /dev/fd/<n>, so a distro
+	// multi-call applet dies at dispatch; B is this single-purpose test binary.
+	nativeImage, err := copyScratchNativeImageForB(executable, imageRoot, fmt.Sprintf("boundary-%d", os.Getpid()))
+	if err != nil {
+		t.Fatalf("stage exact boundary native image for fixed B: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(nativeImage) })
 	releaseContext, cancelRelease := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelRelease()
 	pipes := newScratchNativePipes(t)
 	missingPath := fmt.Sprintf("/symmetry-owner-missing-input-%d", os.Getpid())
 	command := NativeCommand{
-		Path: catPath, Args: []string{catPath, missingPath, "-"},
-		Env: []string{}, Dir: "/",
+		Path: nativeImage,
+		Args: []string{nativeImage, "-test.run=^TestInstalledLinuxOwnerBoundaryNativeImageHelper$", missingPath, "-"},
+		Env:  []string{}, Dir: "/",
 		Stdin: pipes.stdinRead, Stdout: pipes.stdoutWrite, Stderr: pipes.stderrWrite,
 	}
 	releaseGuard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -448,7 +461,7 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 	if err := gate.Release(context.Background(), leafFD, command, releaseGuard, nil); !errors.Is(err, ErrReleaseUsed) {
 		t.Fatalf("second RELEASE = %v, want single-use rejection", err)
 	}
-	if err := assertNativeBProcess(identity, config, catPath, command.Env); err != nil {
+	if err := assertNativeBProcess(identity, config, nativeImage, command.Env); err != nil {
 		t.Fatalf("native process did not retain the exact B-only boundary: %v", err)
 	}
 	if err := gate.VerifyLeafMembership(leafFD); err != nil {
@@ -561,7 +574,7 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 	wrongToken[0] ^= 0xff
 	stalePipes := newScratchNativePipes(t)
 	staleCommand := NativeCommand{
-		Path: catPath, Args: []string{catPath, "-"}, Env: []string{}, Dir: "/",
+		Path: nativeImage, Args: []string{nativeImage, "-"}, Env: []string{}, Dir: "/",
 		Stdin: stalePipes.stdinRead, Stdout: stalePipes.stdoutWrite, Stderr: stalePipes.stderrWrite,
 	}
 	staleGuard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -656,7 +669,7 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 		closeFiles(ownerParent, ownerChild)
 		t.Fatal("wrap owner-death test channel")
 	}
-	executable, err := os.Executable()
+	executable, err = os.Executable()
 	if err != nil {
 		closeFiles(ownerParent, ownerChild)
 		t.Fatal(err)
@@ -747,6 +760,33 @@ func TestInstalledLinuxOwnerBoundaryScratch(t *testing.T) {
 	}
 }
 
+// TestInstalledLinuxOwnerBoundaryNativeImageHelper is the boundary leg's fixed B image:
+// this test binary itself, echoing on the test-held pipes instead of a distro applet.
+func TestInstalledLinuxOwnerBoundaryNativeImageHelper(t *testing.T) {
+	args := flag.Args()
+	if len(args) != 2 || args[1] != "-" || !strings.HasPrefix(args[0], "/") {
+		t.Skip("internal boundary native B image; invoked as <missing-path> -")
+	}
+	if _, err := fmt.Fprintf(os.Stderr, "%s: No such file or directory\n", args[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(os.Stdout, os.Stdin); err != nil {
+		t.Fatal(err)
+	}
+	os.Exit(0)
+}
+
+// TestInstalledLinuxOwnerNativeImageIdleHelper is the owner-loss leg's fixed B image:
+// this test binary itself, idle until the kernel parent-death fence stops it.
+func TestInstalledLinuxOwnerNativeImageIdleHelper(t *testing.T) {
+	args := flag.Args()
+	if len(args) != 1 || args[0] != "-" {
+		t.Skip("internal owner-loss native B image; invoked with a trailing - sentinel")
+	}
+	time.Sleep(time.Hour)
+	os.Exit(0)
+}
+
 func TestLinuxOwnerGateOwnerDeathHelper(t *testing.T) {
 	if os.Getenv("SYMMETRY_LINUX_OWNER_HELPER") != "1" {
 		t.Skip("internal subprocess witness")
@@ -791,7 +831,8 @@ func TestLinuxOwnerGateOwnerDeathHelper(t *testing.T) {
 	}
 	var exitRequest [8]byte
 	n, _, flags, _, err := unix.Recvmsg(channel, exitRequest[:], nil, 0)
-	if err != nil || n != 1 || flags&unix.MSG_EOR == 0 || exitRequest[0] != 'X' {
+	// Linux AF_UNIX recvmsg never sets MSG_EOR (wire_linux_test.go), so its presence is a framing failure.
+	if err != nil || n != 1 || flags&unix.MSG_EOR != 0 || exitRequest[0] != 'X' {
 		t.Fatalf("receive owner-death instruction: n=%d flags=%#x err=%v", n, flags, err)
 	}
 	// Do not close gate.release: the parent test retains its transferred writer,
@@ -1177,13 +1218,26 @@ func TestLinuxOwnerNativeOwnerDeathHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sleepPath, err := trustedSleepPath()
+	imageRoot := os.Getenv("SYMMETRY_LINUX_CLONE_TEST_ACK_ROOT")
+	if err := validateScratchPath(imageRoot, cloneScratchRootPrefix); err != nil {
+		t.Fatalf("owner-loss native image root: %v", err)
+	}
+	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The gate's fd exec gives B an AT_EXECFN of /dev/fd/<n>, so a distro
+	// multi-call applet dies at dispatch; B is this single-purpose test binary.
+	nativeImage, err := copyScratchNativeImageForB(executable, imageRoot, fmt.Sprintf("owner-loss-%d", os.Getpid()))
+	if err != nil {
+		t.Fatalf("stage exact owner-loss native image for fixed B: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(nativeImage) })
 	pipes := newScratchNativePipes(t)
 	command := NativeCommand{
-		Path: sleepPath, Args: []string{sleepPath, "3600"}, Env: []string{}, Dir: "/",
+		Path: nativeImage,
+		Args: []string{nativeImage, "-test.run=^TestInstalledLinuxOwnerNativeImageIdleHelper$", "-"},
+		Env:  []string{}, Dir: "/",
 		Stdin: pipes.stdinRead, Stdout: pipes.stdoutWrite, Stderr: pipes.stderrWrite,
 	}
 	guard, _ := newScratchReleaseGuard(t, time.Minute)
@@ -1206,7 +1260,8 @@ func TestLinuxOwnerNativeOwnerDeathHelper(t *testing.T) {
 	}
 	var instruction [1]byte
 	n, _, flags, _, err := unix.Recvmsg(3, instruction[:], nil, 0)
-	if err != nil || n != 1 || instruction[0] != 'X' || flags&unix.MSG_EOR == 0 {
+	// Linux AF_UNIX recvmsg never sets MSG_EOR (wire_linux_test.go), so its presence is a framing failure.
+	if err != nil || n != 1 || instruction[0] != 'X' || flags&unix.MSG_EOR != 0 {
 		t.Fatalf("receive post-release owner-exit instruction: n=%d flags=%#x err=%v", n, flags, err)
 	}
 	// Return without signaling or reaping native B. The kernel parent-death
@@ -1396,18 +1451,6 @@ func trustedSleepPath() (string, error) {
 		}
 	}
 	return "", errors.New("scratch owner test requires an installed native sleep executable")
-}
-
-func trustedCatPath() (string, error) {
-	for _, candidate := range []string{"/bin/cat", "/usr/bin/cat"} {
-		resolved, err := filepath.EvalSymlinks(candidate)
-		if err == nil && filepath.IsAbs(resolved) {
-			if stat, statErr := os.Stat(resolved); statErr == nil && stat.Mode().IsRegular() && stat.Mode()&0111 != 0 {
-				return resolved, nil
-			}
-		}
-	}
-	return "", errors.New("scratch owner test requires an installed native cat ELF")
 }
 
 type scratchNativePipes struct {

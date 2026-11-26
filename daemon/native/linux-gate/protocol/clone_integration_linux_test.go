@@ -83,7 +83,7 @@ func TestInstalledLinuxOwnerCloneCheckoutScratch(t *testing.T) {
 	if err != nil || !binaryInfo.Mode().IsRegular() || binaryInfo.Mode()&0111 == 0 {
 		t.Fatalf("native clone test image is not a directly executable file: mode=%v err=%v", binaryInfo.Mode(), err)
 	}
-	nativeImage, err := copyCloneNativeImageForB(executable, inputs.ackRoot, intent.RunID)
+	nativeImage, err := copyScratchNativeImageForB(executable, inputs.ackRoot, intent.RunID)
 	if err != nil {
 		t.Fatalf("stage exact native test image for fixed B: %v", err)
 	}
@@ -600,7 +600,7 @@ func hashCloneTestFile(path string) (string, error) {
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-func copyCloneNativeImageForB(source, directory, runID string) (string, error) {
+func copyScratchNativeImageForB(source, directory, runID string) (string, error) {
 	destination := filepath.Join(directory, "native-test-"+runID)
 	input, err := os.Open(source)
 	if err != nil {

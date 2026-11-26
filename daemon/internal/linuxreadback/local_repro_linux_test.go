@@ -36,6 +36,9 @@ const (
 	localTimeout = 30 * time.Second
 )
 
+// The planted-symlink row's root-owned target: the reader must never touch it.
+const localVictimContent = "READBACK_LOCAL_VICTIM=exact\n"
+
 // The exact target vector both sides compare: the parent's expectation and the
 // child's exec environment are this one list.
 var localReproTargetEnv = []string{
@@ -55,6 +58,7 @@ type localReproState struct {
 	ExeDevice  uint64           `json:"exe_device"`
 	ExeInode   uint64           `json:"exe_inode"`
 	Leaf       string           `json:"leaf"`
+	Victim     string           `json:"victim"`
 	Expected   []string         `json:"expected"`
 	Wide       *localReproState `json:"wide,omitempty"`
 }
@@ -104,10 +108,19 @@ func TestReadbackLocalReproduction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The root-owned symlink target the planted-response-temp row protects.
+	victimPath := filepath.Join(root, "readback-victim")
+	if err := os.WriteFile(victimPath, []byte(localVictimContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(victimPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	state, err := localReproStateFor(t, child, image, leaf, channel)
 	if err != nil {
 		t.Fatal(err)
 	}
+	state.Victim = victimPath
 	wideState, err := localReproStateFor(t, wideChild, image, wideLeaf, channel)
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +267,9 @@ func TestReadbackLocalClient(t *testing.T) {
 	if err := CheckEnvironment(capture, state.Expected); err != nil {
 		fail("root reader captured the wrong environment: %v", err)
 	}
+	if capture.ExeDevice != state.ExeDevice || capture.ExeInode != state.ExeInode {
+		fail("root reader did not bind the approved image dev/ino: device=%d inode=%d", capture.ExeDevice, capture.ExeInode)
+	}
 	userNamespace, networkNamespace := capture.Namespaces["user"], capture.Namespaces["net"]
 	if userNamespace.Inode == 0 || networkNamespace.Inode == 0 {
 		fail("root reader returned incomplete namespace identities: %+v", capture.Namespaces)
@@ -328,8 +344,181 @@ func TestReadbackLocalClient(t *testing.T) {
 		fail("an oversized descriptor census is not the typed limit refusal: %v", err)
 	}
 	fmt.Printf("RESPONSE_LIMIT=refused stage=%s\n", RefusalLimit)
+	localReproAdversarialRows(fail, state, want)
 	fmt.Println("READBACK_LOCAL_CLIENT=ok")
 	os.Exit(0)
+}
+
+// localReproAdversarialRows plants the A-side names the reader must refuse:
+// response-temp symlink/FIFO plants and request symlink/FIFO/hard-link plants.
+func localReproAdversarialRows(fail func(string, ...any), state localReproState, want Want) {
+	channel := state.Channel
+	// A planted response temp must be refused, never followed to the victim.
+	nonce, err := newNonce()
+	if err != nil {
+		fail("client cannot mint the response-temp nonce: %v", err)
+	}
+	request := filepath.Join(channel, requestName(nonce))
+	if err := writeLocalReproFile(request, []byte("not json")); err != nil {
+		fail("client cannot plant the response-temp request: %v", err)
+	}
+	temp := filepath.Join(channel, responseName(nonce)+".tmp")
+	if err := os.Symlink(state.Victim, temp); err != nil {
+		fail("client cannot plant the response temp symlink: %v", err)
+	}
+	deadline := time.Now().Add(localTimeout)
+	for {
+		if _, err := os.Lstat(filepath.Join(channel, responseName(nonce))); err == nil {
+			fail("the reader published through the planted response-temp symlink")
+		}
+		if _, err := os.Lstat(request); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			fail("the reader never processed the planted response-temp request")
+		}
+		time.Sleep(pollInterval)
+	}
+	if target, err := os.Readlink(temp); err != nil || target != state.Victim {
+		fail("the planted response temp was not left a symlink to the victim: target=%q err=%v", target, err)
+	}
+	victim, err := os.ReadFile(state.Victim)
+	if err != nil || string(victim) != localVictimContent {
+		fail("the planted response temp target changed: bytes=%q err=%v", victim, err)
+	}
+	var victimStat syscall.Stat_t
+	if err := syscall.Stat(state.Victim, &victimStat); err != nil ||
+		victimStat.Uid != 0 || victimStat.Gid != 0 || victimStat.Mode&0o777 != 0o644 {
+		fail("the planted response temp target changed owner or mode: %+v err=%v", victimStat, err)
+	}
+	fmt.Println("SYMLINK_RESP_TEMP=refused victim=intact")
+
+	encoded, err := json.Marshal(want)
+	if err != nil {
+		fail("client cannot encode the exact request payload: %v", err)
+	}
+	// A request-name symlink to an A-owned valid request must never be followed.
+	nonce, err = newNonce()
+	if err != nil {
+		fail("client cannot mint the request-symlink nonce: %v", err)
+	}
+	payload := filepath.Join(channel, nonce+".payload")
+	if err := writeLocalReproFile(payload, encoded); err != nil {
+		fail("client cannot write the request-symlink target: %v", err)
+	}
+	request = filepath.Join(channel, requestName(nonce))
+	if err := os.Symlink(payload, request); err != nil {
+		fail("client cannot plant the request symlink: %v", err)
+	}
+	if stage, err := localAwaitRefusal(channel, nonce, want); err != nil || stage != RefusalRequest {
+		fail("a symlinked request was not the typed request refusal: stage=%s err=%v", stage, err)
+	}
+	_ = os.Remove(payload)
+	fmt.Println("SYMLINK_REQUEST=refused stage=request")
+
+	// A FIFO at the request name must be refused without hanging the reader.
+	nonce, err = newNonce()
+	if err != nil {
+		fail("client cannot mint the FIFO nonce: %v", err)
+	}
+	fifo := filepath.Join(channel, requestName(nonce))
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		fail("client cannot plant the request FIFO: %v", err)
+	}
+	if stage, err := localAwaitRefusal(channel, nonce, want); err != nil || stage != RefusalRequest {
+		fail("a FIFO request was not the typed request refusal: stage=%s err=%v", stage, err)
+	}
+	_ = os.Remove(fifo)
+	fmt.Println("FIFO_REQUEST=refused stage=request")
+
+	// A hard link at the request name must fail the single-link request gate.
+	nonce, err = newNonce()
+	if err != nil {
+		fail("client cannot mint the hard-link nonce: %v", err)
+	}
+	payload = filepath.Join(channel, nonce+".payload")
+	if err := writeLocalReproFile(payload, encoded); err != nil {
+		fail("client cannot write the hard-link target: %v", err)
+	}
+	request = filepath.Join(channel, requestName(nonce))
+	if err := os.Link(payload, request); err != nil {
+		fail("client cannot plant the request hard link: %v", err)
+	}
+	if stage, err := localAwaitRefusal(channel, nonce, want); err != nil || stage != RefusalRequest {
+		fail("a hard-linked request was not the typed request refusal: stage=%s err=%v", stage, err)
+	}
+	_ = os.Remove(request)
+	_ = os.Remove(payload)
+	fmt.Println("HARDLINK_REQUEST=refused stage=request")
+
+	// A FIFO at the response temp must refuse fast: O_EXCL rejects the existing
+	// name before any blocking FIFO open (the old bytes hung here).
+	nonce, err = newNonce()
+	if err != nil {
+		fail("client cannot mint the response-FIFO nonce: %v", err)
+	}
+	request = filepath.Join(channel, requestName(nonce))
+	if err := writeLocalReproFile(request, []byte("not json")); err != nil {
+		fail("client cannot plant the response-FIFO request: %v", err)
+	}
+	fifo = filepath.Join(channel, responseName(nonce)+".tmp")
+	if err := unix.Mkfifo(fifo, 0o600); err != nil {
+		fail("client cannot plant the response temp FIFO: %v", err)
+	}
+	deadline = time.Now().Add(localTimeout)
+	for {
+		if _, err := os.Lstat(filepath.Join(channel, responseName(nonce))); err == nil {
+			fail("the reader published a response through the planted response-temp FIFO")
+		}
+		if _, err := os.Lstat(request); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			fail("the reader blocked on the planted response-temp FIFO")
+		}
+		time.Sleep(pollInterval)
+	}
+	var fifoStat syscall.Stat_t
+	if err := syscall.Lstat(fifo, &fifoStat); err != nil || fifoStat.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		fail("the planted response temp was not left a FIFO: %+v err=%v", fifoStat, err)
+	}
+	_ = os.Remove(fifo)
+	fmt.Println("FIFO_RESP_TEMP=refused not-blocked")
+}
+
+// writeLocalReproFile writes exactly one A-owned 0600 file for a planted row.
+func writeLocalReproFile(path string, contents []byte) error {
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+// localAwaitRefusal polls for one nonce's typed refusal; a capture instead of
+// a refusal is the mutant signature every planted row must redden.
+func localAwaitRefusal(channel, nonce string, want Want) (RefusalStage, error) {
+	path := filepath.Join(channel, responseName(nonce))
+	deadline := time.Now().Add(localTimeout)
+	for {
+		body, err := readResponse(path)
+		if err == nil {
+			_ = os.Remove(path)
+			if _, refusalErr := decodeCapture(nonce, want, body); refusalErr != nil {
+				if stage, ok := RefusalStageOf(refusalErr); ok {
+					return stage, nil
+				}
+				return "", refusalErr
+			}
+			return "", errors.New("reader answered the planted name with a capture")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		if !time.Now().Before(deadline) {
+			return "", errors.New("reader did not answer the planted name within the local timeout")
+		}
+		time.Sleep(pollInterval)
+	}
 }
 
 func copyLocalReproImage(root string) (string, error) {
@@ -475,7 +664,6 @@ func localReproLeafRoot() string {
 
 func startLocalReproReader(t *testing.T, channel, leafRoot string) (func(), error) {
 	ready := filepath.Join(channel, "ready")
-	stop := filepath.Join(channel, "stop")
 	if binary := os.Getenv(localReaderEnv); binary != "" {
 		reader := exec.Command(binary, "serve",
 			"--channel", channel, "--leaf-root", leafRoot,
@@ -496,8 +684,9 @@ func startLocalReproReader(t *testing.T, channel, leafRoot string) (func(), erro
 			return nil, fmt.Errorf("reader binary never published its ready file: %w", err)
 		}
 		return func() {
-			if err := os.WriteFile(stop, []byte("stop\n"), 0o644); err != nil {
-				t.Errorf("write reader stop file: %v", err)
+			// SIGTERM is the fixture's stop: the reader treats it as a clean exit.
+			if err := reader.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Errorf("signal reader binary SIGTERM: %v", err)
 			}
 			if err := reader.Wait(); err != nil {
 				t.Errorf("reader binary did not stop cleanly: %v", err)

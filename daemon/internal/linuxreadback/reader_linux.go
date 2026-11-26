@@ -21,19 +21,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// Serve runs the bounded root reader until the context is cancelled or a
-// root-owned stop file appears. The ready file exists only while it serves.
+// Serve runs the bounded root reader until the context is cancelled. The
+// ready file exists only while it serves.
 func Serve(ctx context.Context, options ServeOptions) error {
 	if err := validateServeOptions(options); err != nil {
 		return err
 	}
+	dir, err := openChannelDir(options.Channel)
+	if err != nil {
+		return err
+	}
+	defer dir.close()
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "readback-reader: "+format+"\n", args...)
 	}
-	if err := publishReadyFile(options); err != nil {
+	if err := publishReadyFile(dir, options); err != nil {
 		return err
 	}
-	defer func() { _ = os.Remove(filepath.Join(options.Channel, "ready")) }()
+	defer dir.unlink("ready")
 	logf("ready channel=%s leaf_root=%s", options.Channel, options.LeafRoot)
 	served := 0
 	for {
@@ -42,11 +47,7 @@ func Serve(ctx context.Context, options ServeOptions) error {
 			logf("stop signal requests=%d", served)
 			return nil
 		}
-		if rootStopRequested(filepath.Join(options.Channel, "stop")) {
-			logf("stop requests=%d", served)
-			return nil
-		}
-		names, err := pendingRequests(options.Channel)
+		names, err := dir.requestNames()
 		if err != nil {
 			return err
 		}
@@ -55,13 +56,98 @@ func Serve(ctx context.Context, options ServeOptions) error {
 				return fmt.Errorf("readback request budget %d exhausted", maxRequests)
 			}
 			served++
-			serveRequest(options, name, logf)
+			serveRequest(dir, options, name, logf)
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// channelDir is the root-opened channel directory. Every child name resolves
+// through this fd, so an A-planted entry is never followed by path.
+type channelDir struct {
+	file *os.File
+}
+
+func openChannelDir(path string) (*channelDir, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, fmt.Errorf("open readback channel directory: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("wrap readback channel directory handle")
+	}
+	return &channelDir{file: file}, nil
+}
+
+func (dir *channelDir) close() { _ = dir.file.Close() }
+
+// unlink removes one name through the held fd; it never follows it.
+func (dir *channelDir) unlink(name string) {
+	_ = unix.Unlinkat(int(dir.file.Fd()), name, 0)
+}
+
+// requestNames lists the directory through the held fd and opens no child.
+func (dir *channelDir) requestNames() ([]string, error) {
+	if _, err := dir.file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("rewind readback channel: %w", err)
+	}
+	entries, err := dir.file.ReadDir(-1)
+	if err != nil {
+		return nil, fmt.Errorf("list readback channel: %w", err)
+	}
+	var names []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, requestSuffix) || entry.IsDir() {
+			continue
+		}
+		if !validNonce(strings.TrimSuffix(name, requestSuffix)) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// openRequest opens one exact name with O_NOFOLLOW|O_NONBLOCK: a swapped
+// symlink is ELOOP and a FIFO is refused by the fstat gate, never by hanging.
+func (dir *channelDir) openRequest(name string) (*os.File, unix.Stat_t, error) {
+	fd, err := unix.Openat(int(dir.file.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, unix.Stat_t{}, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, unix.Stat_t{}, errors.New("wrap readback request handle")
+	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = file.Close()
+		return nil, unix.Stat_t{}, err
+	}
+	return file, stat, nil
+}
+
+// createExclusive creates one fresh name: O_EXCL|O_NOFOLLOW make any
+// pre-existing entry a refusal, never a write through to A's target.
+func (dir *channelDir) createExclusive(name string, mode uint32) (*os.File, error) {
+	fd, err := unix.Openat(int(dir.file.Fd()), name, unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_WRONLY|unix.O_CLOEXEC, mode)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("wrap readback channel write handle")
+	}
+	return file, nil
 }
 
 func validateServeOptions(options ServeOptions) error {
@@ -84,76 +170,64 @@ func validateServeOptions(options ServeOptions) error {
 	return nil
 }
 
-func publishReadyFile(options ServeOptions) error {
-	path := filepath.Join(options.Channel, "ready")
-	_ = os.Remove(path)
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o440)
+func publishReadyFile(dir *channelDir, options ServeOptions) error {
+	// Unlinking never follows; O_EXCL then guarantees a fresh root-owned file.
+	dir.unlink("ready")
+	file, err := dir.createExclusive("ready", 0o440)
 	if err != nil {
 		return fmt.Errorf("create readback ready file: %w", err)
 	}
-	_, writeErr := file.WriteString("ready\n")
-	chmodErr := file.Chmod(0o440)
-	chownErr := file.Chown(0, int(options.AGID))
-	closeErr := file.Close()
-	if writeErr != nil || chmodErr != nil || chownErr != nil || closeErr != nil {
-		_ = os.Remove(path)
-		return errors.Join(writeErr, chmodErr, chownErr, closeErr)
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+		_ = file.Close()
+		dir.unlink("ready")
+		return fmt.Errorf("stat readback ready file: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Uid != 0 {
+		_ = file.Close()
+		dir.unlink("ready")
+		return errors.New("readback ready file is not a fresh root-owned regular file")
+	}
+	writeErr := func() error {
+		if _, err := file.WriteString("ready\n"); err != nil {
+			return err
+		}
+		if err := file.Chmod(0o440); err != nil {
+			return err
+		}
+		if err := file.Chown(0, int(options.AGID)); err != nil {
+			return err
+		}
+		return file.Close()
+	}()
+	if writeErr != nil {
+		dir.unlink("ready")
+		return writeErr
 	}
 	return nil
 }
 
-func rootStopRequested(path string) bool {
-	var stat unix.Stat_t
-	if err := unix.Lstat(path, &stat); err != nil {
-		return false
-	}
-	// Only the fixture's root-owned stop file stops the reader: A can write the
-	// channel directory, so a group-writable stop would let A end its own run.
-	return stat.Mode&unix.S_IFMT == unix.S_IFREG && stat.Uid == 0 && stat.Nlink == 1
-}
-
-func pendingRequests(channel string) ([]string, error) {
-	entries, err := os.ReadDir(channel)
-	if err != nil {
-		return nil, fmt.Errorf("list readback channel: %w", err)
-	}
-	var names []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasSuffix(name, requestSuffix) || entry.IsDir() {
-			continue
-		}
-		if !validNonce(strings.TrimSuffix(name, requestSuffix)) {
-			continue
-		}
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
-func serveRequest(options ServeOptions, name string, logf func(string, ...any)) {
+func serveRequest(dir *channelDir, options ServeOptions, name string, logf func(string, ...any)) {
 	nonce := strings.TrimSuffix(name, requestSuffix)
-	requestPath := filepath.Join(options.Channel, name)
-	body, err := readRequestFile(requestPath, options)
+	body, err := readRequestFile(dir, name, options)
 	if err != nil {
-		refuse(options, nonce, RefusalRequest, "request file is not the exact A-owned single-linked bounded JSON file", logf)
+		refuse(dir, options, nonce, RefusalRequest, "request file is not the exact A-owned single-linked bounded JSON file", logf)
 		return
 	}
 	var want Want
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&want); err != nil {
-		refuse(options, nonce, RefusalRequest, "request JSON is malformed", logf)
+		refuse(dir, options, nonce, RefusalRequest, "request JSON is malformed", logf)
 		return
 	}
 	if err := validateWant(options, want); err != nil {
-		refuse(options, nonce, RefusalRequest, err.Error(), logf)
+		refuse(dir, options, nonce, RefusalRequest, err.Error(), logf)
 		return
 	}
 	capture, refusal := readTarget(options, want)
 	if refusal != nil {
-		refuse(options, nonce, refusal.Stage, refusal.Reason, logf)
+		refuse(dir, options, nonce, refusal.Stage, refusal.Reason, logf)
 		return
 	}
 	response := responseBody{
@@ -162,40 +236,36 @@ func serveRequest(options ServeOptions, name string, logf func(string, ...any)) 
 		Executable: capture.Executable, ExeDevice: capture.ExeDevice, ExeInode: capture.ExeInode,
 		Environ: capture.Environ, Descriptors: capture.Descriptors, Namespaces: capture.Namespaces,
 	}
-	if err := publishResponse(options, nonce, &response); err != nil {
+	if err := publishResponse(dir, options, nonce, &response); err != nil {
 		var refusal *CaptureError
 		if errors.As(err, &refusal) {
-			refuse(options, nonce, refusal.Stage, refusal.Reason, logf)
+			refuse(dir, options, nonce, refusal.Stage, refusal.Reason, logf)
 			return
 		}
 		logf("response write failed nonce=%s pid=%d error=%v", nonce, want.PID, err)
-		_ = os.Remove(requestPath)
+		dir.unlink(name)
 		return
 	}
-	_ = os.Remove(requestPath)
+	dir.unlink(name)
 	logf("capture nonce=%s pid=%d environ_bytes=%d descriptors=%d namespaces=%d",
 		nonce, capture.PID, len(capture.Environ), len(capture.Descriptors), len(capture.Namespaces))
 }
 
-func readRequestFile(path string, options ServeOptions) ([]byte, error) {
-	var stat unix.Stat_t
-	if err := unix.Lstat(path, &stat); err != nil {
+func readRequestFile(dir *channelDir, name string, options ServeOptions) ([]byte, error) {
+	file, stat, err := dir.openRequest(name)
+	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = file.Close() }()
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 ||
 		stat.Uid != options.AUID || stat.Gid != options.AGID || stat.Mode&0o777 != 0o600 ||
 		stat.Size <= 0 || stat.Size > maxRequestBytes {
 		return nil, errors.New("request file identity differs from the exact A-owned 0600 file")
 	}
 	body := make([]byte, stat.Size)
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
 	total, readErr := io.ReadFull(file, body)
-	closeErr := file.Close()
-	if readErr != nil || closeErr != nil || total != len(body) {
-		return nil, errors.Join(readErr, closeErr)
+	if readErr != nil || total != len(body) {
+		return nil, readErr
 	}
 	return body, nil
 }
@@ -244,16 +314,16 @@ func validateLeafBelow(root, leaf string) error {
 	return nil
 }
 
-func refuse(options ServeOptions, nonce string, stage RefusalStage, reason string, logf func(string, ...any)) {
+func refuse(dir *channelDir, options ServeOptions, nonce string, stage RefusalStage, reason string, logf func(string, ...any)) {
 	response := responseBody{Version: 1, Nonce: nonce, Stage: stage, Reason: reason}
-	if err := publishResponse(options, nonce, &response); err != nil {
+	if err := publishResponse(dir, options, nonce, &response); err != nil {
 		logf("refusal write failed nonce=%s stage=%s error=%v", nonce, stage, err)
 	}
-	_ = os.Remove(filepath.Join(options.Channel, requestName(nonce)))
+	dir.unlink(requestName(nonce))
 	logf("refusal nonce=%s stage=%s reason=%s", nonce, stage, reason)
 }
 
-func publishResponse(options ServeOptions, nonce string, response *responseBody) error {
+func publishResponse(dir *channelDir, options ServeOptions, nonce string, response *responseBody) error {
 	encoded, err := json.Marshal(response)
 	if err != nil {
 		return fmt.Errorf("encode readback response: %w", err)
@@ -262,11 +332,23 @@ func publishResponse(options ServeOptions, nonce string, response *responseBody)
 		// The client must receive the typed refusal, not wait out its timeout.
 		return &CaptureError{Stage: RefusalLimit, Reason: "capture response exceeds the readback bound"}
 	}
-	tempPath := filepath.Join(options.Channel, responseName(nonce)+".tmp")
-	finalPath := filepath.Join(options.Channel, responseName(nonce))
-	file, err := os.OpenFile(tempPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	tempName := responseName(nonce) + ".tmp"
+	finalName := responseName(nonce)
+	file, err := dir.createExclusive(tempName, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("create readback response: %w", err)
+	}
+	// The exclusive create proves provenance, so fstat the fd, never the path.
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(file.Fd()), &stat); err != nil {
+		_ = file.Close()
+		dir.unlink(tempName)
+		return fmt.Errorf("stat readback response: %w", err)
+	}
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || stat.Nlink != 1 || stat.Uid != 0 {
+		_ = file.Close()
+		dir.unlink(tempName)
+		return errors.New("readback response temp is not a fresh root-owned regular file")
 	}
 	writeErr := func() error {
 		if _, err := file.Write(encoded); err != nil {
@@ -281,11 +363,12 @@ func publishResponse(options ServeOptions, nonce string, response *responseBody)
 		return file.Close()
 	}()
 	if writeErr != nil {
-		_ = os.Remove(tempPath)
+		_ = file.Close()
+		dir.unlink(tempName)
 		return writeErr
 	}
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		_ = os.Remove(tempPath)
+	if err := unix.Renameat(int(dir.file.Fd()), tempName, int(dir.file.Fd()), finalName); err != nil {
+		dir.unlink(tempName)
 		return err
 	}
 	return nil

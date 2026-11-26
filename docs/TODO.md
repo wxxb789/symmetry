@@ -1863,7 +1863,7 @@ the conversion's residual is in `## rf-acc-b-process-readback: residual same-cla
 
 - [ ] Convert the same-class ptrace-gated A→B `/proc` reads this goal's census deferred (plan
       §7.2 option (i), outside the converted capture-path surface;
-      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-10, branch
+      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-12, branch
       `refactor/rf-acc-b-process-readback`, base `8453da12`): the e2e
       `linuxV2RequireNoWritableCgroupFDs*` fdinfo audit with its in-leaf descendant identity read
       (`/proc/<B>/ns/pid`, `daemon/e2e/production_linux_v2_native_witness_test.go:3277`),
@@ -1873,10 +1873,21 @@ the conversion's residual is in `## rf-acc-b-process-readback: residual same-cla
       `platform.ProcessIdentity` / `platform.CaptureLinuxUserNamespaceIdentity` / exe readlink plus
       leaf audit (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:427,431,489,466`).
       Each is ptrace-gated (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none
-      is reached by any recorded run (the ten witness sets stop before the live capture). Trigger:
+      is reached by any recorded run: the latest recorded `shared` run (`45717008719`) stops at
+      `launcher_integration_linux_test.go:452` (`stage=leaf`, the goal's S5) before the
+      `run_literal_pid_reuse_witness` leg (`linux-v2-native-acceptance.sh:3177`), and the ten
+      witness sets stop before the live capture. Trigger:
       the first run that reaches one, plus the fixture's reader-step A capability readback row in
       that run — if it prints `CapEff 0`, the first stop in the helper-exit witness is its `:427`
       released-B identity read (before the `:466` leaf audit).
+      Two further `production_linux_v2_owner_cli_test.go` sites join this census: the root
+      PID-reuse replacement/watcher targets (`runProductionLinuxV2LiteralPIDReuse` reads
+      `:2843,2855,2863,2894,2941`; `linuxV2OpenPIDReuseExchange` reads `:3008,3023/3026,3028/3029,3039`)
+      are ptrace-gated but root-credentialed (`:3018-3021` requires real/effective uid 0), so
+      converting them needs a second root-target reader contract rather than the B-only reader
+      (`reader_linux.go:484-490` refuses any non-B credential vector); the migration witness
+      `platform.ProcessIdentity(live.PID)` (`:4229`, a B target) is the reader's class but its
+      leg's `native_release` hold is still unreached. Both are plan §3.2 rows 11-12.
       Conversion consumes the same `daemon/internal/linuxreadback` reader with an added per-FD
       `flags`/`mnt_id` return and a leaf-wide per-PID capture loop, preserving each audit's race
       tolerances. Owner: the next `rf-acc` acceptance increment that reaches the live e2e capture.
@@ -1901,6 +1912,17 @@ the conversion's residual is in `## rf-acc-b-process-readback: residual same-cla
       no refusal. Declared fragment/drop-in `Before=` edges to the daemon stay refused
       (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
       residual explicitly.
+
+- [ ] Product constraint (2026-11-26, goal `rf-acc-b-process-readback`; plan §3.2 rows 1-6, the
+      evidence record's §7 S5 section, `findings/296-s5.md` §1/§6): a native image that dispatches
+      on `AT_EXECFN` (uutils multicall and similar) is unsupported under the gate's fd exec
+      (`execveat(..., AT_EMPTY_PATH)`): `AT_EXECFN` becomes `/dev/fd/<n>`, and Ubuntu 26.04's
+      uutils multicall exits 1 with `coreutils: unknown program '4'` before reading anything. Both
+      released legs now release a staged single-purpose ELF (the test binary): the boundary leg
+      (`launcher_integration_linux_test.go:436`, helper `:765`) and the owner-loss pair (`:1231`,
+      helper `:781`); `trustedSleepPath()` remains only for the two legs that never execute their
+      image (`:225`, `:522`). The constraint stays for any future leg whose subject is a distro
+      multicall applet. Owner: conductor.
 
 ## rf-acc-containment-goal-admission: residuals (2026-11-26)
 
