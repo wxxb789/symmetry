@@ -5538,6 +5538,56 @@ section, whose pointer sentence names this one.
       `TestProductionLinuxV2AlternateCgroupMountRefusal`, exported `alternate-mount-refusal.json`
       and exited 0 — acceptance met.
 
+## rf-acc-claude-stage-replay: the claude stage-replay owner-loss stop (2026-11-26)
+
+- [x] The `claude_containment` set's next stop beyond the L1 fold — verbatim
+      `production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after
+      the stage-replay kill: exact process pidfd remained live beyond the bounded wait` (moved from
+      `docs/TODO.md`; residual of the entries closed under goals `rf-acc-migration-pi-hold`
+      (2026-11-26) and `rf-claude-schema-argv` (2026-11-26)): root-named as the helper's owner-loss
+      stop *succeeding* at the released-gate hold, with the product leaving that helper resident
+      for the same-RunKey recovery client that retires it (record §2, plan §2), and delivered by
+      goal `rf-acc-claude-stage-replay` (2026-11-26, branch `refactor/rf-acc-claude-stage-replay`,
+      base `78166f2e`; plan `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md`, record
+      `docs/evidence/rf-acc-claude-stage-replay-2026-11-26.md`): fix round r3 delivers the
+      contract's Z1-Z5 — the crash-replay runner keeps its 90 s post-kill wait and its
+      unconditional fatal for every stage whose durable boundary does not carry the held helper,
+      and at exactly the two stages (`native_release` with the held marker's `released` state,
+      `stop_receipt_durable` with the durable receipt, through
+      `linuxV2StageReplayOwnerLossSnapshotRequired`) requires the *recovery client's* own
+      pre-stop snapshot (`owner_loss`, read in the owned witness seam before
+      `recoverContainmentOnlyJournals`): the held helper's owner-loss latch plus its own
+      helper-issued stop proof (`Kind == helper`, `Issuer == Reaper == held helper`,
+      `HelperExit == nil`, released-gate authorization at `native_release`) equal to the durable
+      receipt proof, with the already-open target pidfd kept only as a containment check; then
+      requires the helper's exit within 30 s after the same-RunKey recovery retires it. The same
+      assertion set covers the codex leg `native_release_codex` (the class's second observed
+      instance: main measurement run `45775969711`), because both kind legs present
+      `barrierStage == "native_release"` to the shared runner, the matrix now passes the leg's own
+      `testCase.barrierStage`, and the kind-leg row pins the leg case's stage field. The r2
+      fixture-side helper dials and the pre-existing pre-kill `AnchorStop` capture are deleted
+      (they were refused or stole the helper's single post-loss recovery slot — DS audit P1-2);
+      round 3's only production byte is the owned witness seam, which adds the `owner_loss`
+      summary field and its shape check in `validateFinalSummary` — no existing validator check
+      was weakened, and no bound or `platform/**`/`authority/**`/`execution/**` byte changed.
+      Round 4 (contract Q1-Q5) gives the snapshot poll its own bounded deadline so the recovery's
+      `CleanupTimeout` starts with the recovery (red-first row
+      `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout`), fixes the two fail-open
+      spots in the r3 test code (Q5), and cuts the added comments to why-only (Q4) — record §10.
+      Pinned by `TestLinuxV2StageReplayOwnerLossSnapshotRequired` (13 rows, all seven non-proven
+      helper stages), `TestLinuxV2OwnerLossSnapshotBeforeRecovery` plus the witness-seam rows
+      (`TestLinuxV2NativeWitnessOwnerLossStage`/`…SnapshotShape`/`…SnapshotPrecedesRecovery`) and
+      its byte mutants red (record §4/§8/§10), plus fix round r1's provenance pin
+      (`linuxV2RequireHelperIssuedReleaseStopProof`, its own 8-row mutant-red row) and the WSL
+      owner-loss-latch probes (record §5).
+      The `checkout_ready` census residual is tracked in the
+      `## rf-acc-claude-stage-replay: residuals (2026-11-26)` section of `docs/TODO.md`.
+      Delivered and bound by the conductor's Bind 4: run `45802625407` on `1f893969` is the
+      BINDING acceptance for `claude_containment` and `codex_containment` — both green, no next
+      stop, `owner_loss` captured (`owner_lost=true`, `error` absent, helper-issued `stop_proof`;
+      both manifests passed). The optional `shared` `stop_receipt_durable` leg was not in the
+      run's two case sets. Evidence record `## Bind 4`.
+
 ## rf-acc-pi-provider-admission: the pi provider legs move to a provider-scoped Goal admission (2026-11-26)
 
 - [x] `pi_provider_action` and the two crash legs still need a provider-scoped admission
