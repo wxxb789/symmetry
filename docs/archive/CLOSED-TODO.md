@@ -5330,6 +5330,76 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       `2d423748`, the round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds
       the delivered revisions (the record's §1 digest table is the delivered set).
 
+## rf-claude-schema-argv: the Claude fixed-argv bound stops the containment leg (2026-11-26)
+
+- [x] The `claude_containment` stop of the rf-acc-containment-goal-admission residual — verbatim
+      `start native owner witness transport: start "/usr/local/bin/claude": validate native
+      command and three Runner pipes before cgroup reservation: Linux owner native argv
+      contains an empty, oversized, or NUL value` (run `45671784251`) at
+      `daemon/internal/execution/linux_owner_v2_linux.go:182` for the Claude adapter's fixed
+      23 881-byte `--json-schema` element — is closed (goal `rf-claude-schema-argv`, branch
+      `refactor/rf-claude-schema-argv`, base `8453da12`; plan
+      `docs/plans/2026-11-26-rf-claude-schema-argv-plan.md`, record
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md`): the one per-element cap is raised
+      from 16 KiB to 64 KiB in both languages in one change
+      (`daemon/native/linux-gate/protocol/wire.go:53` `maxCommandString = 64 << 10`;
+      `daemon/native/linux-gate/c-gate/gate.c:91` `MAX_COMMAND_STRING = 64 * 1024`), the Linux
+      twin of `adapter_cmdline_windows_test.go` proves the real fixed argv passes
+      `linuxgate.NativeCommand.Validate()` and `EncodeRelease` (schema 23 881 bytes, guarded
+      RELEASE packet ≈24 392 bytes — the fixture's temporary workspace path moves it by a byte
+      or two), the boundary pair (exactly-cap accepted, cap+1 refused)
+      holds on Go validate, Go decode and the gate's real `read_release`, and the census probe
+      carries the literal 64 KiB assert plus a compile-time tie to Go's `maxCommandString`; both
+      single-sided mutants were observed red and then restored byte-identically (record §6). No
+      `maxReleaseSize`/`maxCommandVector`/frame/version change, no schema or adapter change, and
+      the 16 KiB-vintage gate refuses the new frame fail-closed with `EPROTO` at `read_span`.
+      The conductor's Bind scratch run of the `claude_containment` case set ran as `45710455914`
+      on `72f8d01e` plus the two scratch-only files: zero `oversized` refusals, the transport's
+      first native stage reached (`native_open_reached`, live B process verified), exit 1 at the
+      owner witness's durable-stage summary check — whose verbatim stop and `initial_lease_acked`
+      inference are recorded in the goal's residual entry in `docs/TODO.md`; the base red it
+      removes is run `45671784251`.
+
+## rf-ci-owner-request-key-check: the writer/fixture Goal-admission key agreement has a permanent check (2026-11-26)
+
+Moved 2026-11-26 from `docs/TODO.md`'s `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
+section, whose pointer sentence names this one.
+
+- [ ] The writer/fixture key agreement has no permanent check (2026-11-26, simplify S3, recorded
+      by the apply stage; conductor ruling 2026-11-26): the writer's `GOAL_ADMISSION_CASES`
+      (`scripts/ci/write-linux-v2-owner-request.py`) and the fixture's goal-routing rows
+      (`scripts/ci/provision-linux-v2-control-claims.exs`) must agree exactly, but the only guards
+      were the deleted P1 probe and M1's local half, so a drift would surface only in a hosted
+      run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
+      needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
+      **Closed (2026-11-26, goal `rf-ci-owner-request-key-check`, branch
+      `refactor/rf-ci-owner-request-key-check`, base `8453da12`, round-1 fix applied to the same
+      branch; plan `docs/plans/2026-11-26-rf-ci-owner-request-key-check-plan.md`, evidence
+      record `docs/evidence/rf-ci-owner-request-key-check-2026-11-26.md`):** the new suite
+      `scripts/ci/test-linux-v2-owner-request-keys.py` parses both sides statically from the
+      committed bytes — the writer's `GOAL_ADMISSION_CASES` through `ast` over its module-level
+      assignment, and the fixture's `@cases` rows, `Enum.split_with(@cases, …)` goal-route
+      predicate (whose five-tuple head must bind `repository_role` as the 4th element, the column
+      the census reads) and `request_case` cond through bounded regexes over a line census that
+      refuses any unparseable line — maps each goal-routed row to the writer case its run metadata
+      carries, and asserts the two sets equal (48 rows total, 43 goal-routed, mapping to the five
+      writer cases) while refusing a legacy row that maps into the goal set. The mutation
+      witnesses (a dropped writer case, a fixture-only goal row, a legacy row losing its
+      fixed-list exemption, and a table of eleven refused shapes — a moved or shortened predicate
+      binding head, an interpolated element in a parsed list attribute and in the cond's fixed
+      list, a duplicated attribute declaration, and the atom, variable, starred, second-opener
+      and rewritten-arm spellings) turn it red, each asserting the refusal's reason, and both
+      sets are printed on a disagreement; the check already reddens on the pre-#294 writer
+      (`550f96a3^`), which carried no `GOAL_ADMISSION_CASES` at all. One `.github/workflows/ci.yml`
+      line joins the daemon job's existing `Check Linux v2 fixture contracts` step, with no
+      structure pin changed and the job's timeout derivation untouched; the writer and the fixture
+      keep comment bytes only, each ≤2 lines pointing at the suite. Local gates at the fix head:
+      the new suite `Ran 5 tests … OK`, `test-ci-changed-path-classifier.py` `Ran 37 tests … OK`,
+      `test-ci-structure-extraction.py` `Ran 70 tests … OK`, actionlint 0 findings,
+      `jscpd-changed` exit 0, and ruff clean for the new file. Delivered; acceptance is this PR's
+      CI log on its final head showing the step and its 5+ tests (conductor confirms at final
+      acceptance).
+
 ## rf-acc-native-burndown: the installed-owner legs' product-test stops (2026-11-26)
 
 - [x] Root-cause the remaining two product-test stops the installed-owner leg reaches (2026-11-24,
