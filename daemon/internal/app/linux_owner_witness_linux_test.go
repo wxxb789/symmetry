@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
+	"golang.org/x/sys/unix"
 )
 
 func TestLinuxV2NativeOwnerWitnessRequiresOptInBeforeFixtureAccess(t *testing.T) {
@@ -98,6 +100,18 @@ func TestLinuxV2NativeOwnerWitnessRejectsMismatchedClaimFenceAndSubject(t *testi
 				t.Fatal("mismatched request claim/fence/Subject was accepted")
 			}
 		})
+	}
+}
+
+func TestLinuxV2NativeWitnessRequestHarnessMustMatchTheConfiguredKind(t *testing.T) {
+	value, owner, request := validLinuxV2NativeWitnessFixture()
+	request = stageReplayWitnessRequest(t, request)
+	if err := validateLinuxV2NativeWitnessRequest(request, value, owner); err != nil {
+		t.Fatalf("valid stage-replay fixture rejected: %v", err)
+	}
+	request.Harness = config.RuntimeHarnessCodex
+	if err := validateLinuxV2NativeWitnessRequest(request, value, owner); err == nil {
+		t.Fatal("a stage-replay request whose harness differs from the configured launch kind was accepted")
 	}
 }
 
@@ -1785,5 +1799,517 @@ func TestLinuxV2NativeWitnessCloneRetentionSummaryVocabulary(t *testing.T) {
 				t.Fatal("an inconsistent clone retention outcome was accepted")
 			}
 		})
+	}
+}
+
+// Only the adapters that consume harness.StartRequest.StartProcess hand the
+// witness the exact Process, so only they stage the release from daemon.start.
+func TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam(t *testing.T) {
+	for _, test := range []struct {
+		kind harness.Kind
+		want bool
+	}{
+		{kind: harness.KindCodex, want: true},
+		{kind: harness.KindClaude, want: true},
+		{kind: harness.KindPi, want: false},
+		{kind: harness.KindOpenCode, want: false},
+	} {
+		if got := linuxV2NativeWitnessStagesReleaseFromStartProcess(test.kind); got != test.want {
+			t.Errorf("witness stages the release from daemon.start for %q = %t, want %t", test.kind, got, test.want)
+		}
+	}
+}
+
+// linuxV2WitnessReleaseJournalStore serves one synthetic RunJournal; the release
+// seam under test reaches LoadJournal only.
+type linuxV2WitnessReleaseJournalStore struct {
+	journalStore
+	journal *state.RunJournal
+}
+
+func (store linuxV2WitnessReleaseJournalStore) LoadJournal(state.RunKey) (state.RunJournal, error) {
+	return *store.journal, nil
+}
+
+type linuxV2WitnessReleaseFixture struct {
+	witness   *linuxV2NativeWitnessRun
+	target    authority.LinuxCgroupProcessIdentity
+	callbacks *execution.LinuxV2JournalCallbacks
+	store     linuxV2WitnessReleaseJournalStore
+	journal   *state.RunJournal
+	marker    string
+	release   string
+}
+
+func newLinuxV2WitnessReleaseFixture(t *testing.T, hold string) linuxV2WitnessReleaseFixture {
+	return newLinuxV2WitnessReleaseFixtureWithJournal(t, hold, nil)
+}
+
+func newLinuxV2WitnessReleaseFixtureWithJournal(t *testing.T, hold string, mutate func(*state.RunJournal)) linuxV2WitnessReleaseFixture {
+	t.Helper()
+	identity, err := platform.ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("read the exact live release target identity: %v", err)
+	}
+	target := authority.LinuxCgroupProcessIdentity{PID: os.Getpid(), Identity: identity}
+	fence := protocol.Fence{
+		RuntimeID: "witness-release-runtime", RuntimeEpoch: 4, Generation: 1,
+		ClaimID: "witness-release-claim", LeaseToken: "witness-release-lease",
+	}
+	key := state.RunKey{RunID: "witness-release-run", Generation: fence.Generation}
+	request := linuxV2NativeWitnessRequest{
+		Case: "stage_replay", Harness: config.RuntimeHarnessPi,
+		RunKey: linuxV2NativeWitnessRunKey{RunID: key.RunID, Generation: key.Generation},
+		Fence:  fence,
+		Barrier: linuxV2NativeWitnessBarrier{
+			Directory: t.TempDir(), TimeoutSeconds: 30, HoldAfter: hold,
+		},
+	}
+	request.Barrier.ReleaseFile = filepath.Join(request.Barrier.Directory, "release")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	t.Cleanup(cancel)
+	// The barriers are built directly: the production constructor requires the
+	// root-installed fixture root that only the guest has.
+	witness := &linuxV2NativeWitnessRun{
+		ctx: ctx, request: request,
+		ownerConfig: linuxgate.OwnerConfig{AUID: uint32(os.Geteuid()), BUID: uint32(os.Geteuid())},
+		barrier: &linuxV2NativeWitnessBarriers{
+			request: request.Barrier, caseName: request.Case, runKey: request.RunKey, aUID: uint32(os.Geteuid()),
+		},
+	}
+	journal := state.RunJournal{
+		RunID: key.RunID, Generation: key.Generation, RuntimeID: fence.RuntimeID,
+		ClaimedRuntimeEpoch: fence.RuntimeEpoch, ClaimID: fence.ClaimID, LeaseToken: fence.LeaseToken,
+		RunContainmentState: state.RunContainmentState{
+			PID: target.PID, ProcessIdentity: target.Identity,
+			ContainmentCgroup:    &state.LinuxCgroupReservation{Gate: &authority.LinuxCgroupGateIdentity{Process: target}},
+			ContainmentAuthority: &authority.Supervisor{TargetPID: target.PID, TargetIdentity: target.Identity},
+		},
+	}
+	if mutate != nil {
+		mutate(&journal)
+	}
+	store := linuxV2WitnessReleaseJournalStore{journal: &journal}
+	callbacks := execution.LinuxV2JournalCallbacks{}
+	if err := witness.wrapLinuxV2Callbacks(nil, store, &callbacks); err != nil {
+		t.Fatalf("wrap the owner witness release callbacks: %v", err)
+	}
+	t.Cleanup(func() { _ = witness.closeCapturedFDs() })
+	return linuxV2WitnessReleaseFixture{
+		witness: witness, target: target, callbacks: &callbacks, store: store, journal: &journal,
+		marker:  filepath.Join(request.Barrier.Directory, linuxV2NativeWitnessReleaseStage+".json"),
+		release: request.Barrier.ReleaseFile,
+	}
+}
+
+func (fixture linuxV2WitnessReleaseFixture) readMarker(t *testing.T) linuxV2NativeWitnessStageMarker {
+	t.Helper()
+	return fixture.readStageMarker(t, linuxV2NativeWitnessReleaseStage)
+}
+
+func (fixture linuxV2WitnessReleaseFixture) readStageMarker(t *testing.T, stage string) linuxV2NativeWitnessStageMarker {
+	t.Helper()
+	contents, err := os.ReadFile(filepath.Join(filepath.Dir(fixture.marker), stage+".json"))
+	if err != nil {
+		t.Fatalf("read the %s stage marker: %v", stage, err)
+	}
+	var marker linuxV2NativeWitnessStageMarker
+	if err := json.Unmarshal(contents, &marker); err != nil {
+		t.Fatalf("decode the %s stage marker: %v", stage, err)
+	}
+	return marker
+}
+
+func (fixture linuxV2WitnessReleaseFixture) writeRelease(t *testing.T) {
+	t.Helper()
+	staged := fixture.release + ".staged"
+	if err := os.WriteFile(staged, []byte("release\n"), 0o600); err != nil {
+		t.Fatalf("write the witness release marker: %v", err)
+	}
+	if err := os.Rename(staged, fixture.release); err != nil {
+		t.Fatalf("publish the witness release marker: %v", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	done := make(chan error, 1)
+	go func() { done <- fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Lstat(fixture.marker); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("inspect the release stage marker: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the runner release path never staged its requested durable stage")
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("release callback returned before its held stage: %v", err)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	fixture.writeRelease(t)
+	if err := <-done; err != nil {
+		t.Fatalf("release callback after its held stage: %v", err)
+	}
+
+	var userNamespace, networkNamespace unix.Stat_t
+	if err := unix.Stat("/proc/self/ns/user", &userNamespace); err != nil {
+		t.Fatalf("stat the live user namespace: %v", err)
+	}
+	if err := unix.Stat("/proc/self/ns/net", &networkNamespace); err != nil {
+		t.Fatalf("stat the live network namespace: %v", err)
+	}
+	marker := fixture.readMarker(t)
+	if marker.Stage != linuxV2NativeWitnessReleaseStage || marker.Case != "stage_replay" ||
+		marker.HoldAfter != linuxV2NativeWitnessReleaseStage ||
+		marker.NativeReleaseState != linuxV2NativeWitnessNativeReleaseReleased {
+		t.Fatalf("release stage marker = %#v, want the exact held released stage", marker)
+	}
+	if marker.Target.PID != fixture.target.PID || marker.Target.Identity != fixture.target.Identity ||
+		!marker.Target.PIDFDVerified || marker.Target.HostUID != fixture.witness.ownerConfig.BUID || !marker.Target.SamePIDExec ||
+		marker.Target.UserNamespace.Device != uint64(userNamespace.Dev) ||
+		marker.Target.UserNamespace.Inode != userNamespace.Ino ||
+		marker.Target.NetworkNamespace.Device != uint64(networkNamespace.Dev) ||
+		marker.Target.NetworkNamespace.Inode != networkNamespace.Ino ||
+		marker.Owners.Gate.PID != marker.Target.PID || marker.Owners.Gate.Identity != marker.Target.Identity {
+		t.Fatalf("release stage marker target = %#v, want the exact live same-PID peer evidence", marker.Target)
+	}
+	fixture.witness.mu.Lock()
+	peer, target := fixture.witness.peer, fixture.witness.summary.Target
+	fixture.witness.mu.Unlock()
+	if peer == nil || peer.PIDFD == nil || peer.PID != fixture.target.PID || peer.Identity != fixture.target.Identity ||
+		target != marker.Target {
+		t.Fatalf("release witness evidence = %#v/%#v, want the durable marker target and its pidfd", peer, target)
+	}
+}
+
+func TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	fixture.witness.request.Harness = config.RuntimeHarnessCodex
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err != nil {
+		t.Fatalf("daemon.start release path callback: %v", err)
+	}
+	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("daemon.start release path staged the runner release marker: %v", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	fixture.witness.request.Harness = config.RuntimeHarnessCodex
+	fixture.witness.request.DropAckAfter = linuxV2NativeWitnessReleaseStage
+	peerFD, err := unix.PidfdOpen(os.Getpid(), 0)
+	if err != nil {
+		t.Fatalf("open the launch-transferred closure peer pidfd: %v", err)
+	}
+	closurePeer := &execution.LinuxV2Peer{
+		PID: fixture.target.PID, Identity: fixture.target.Identity,
+		PIDFD: os.NewFile(uintptr(peerFD), "witness-closure-peer-pidfd"),
+	}
+	t.Cleanup(func() { _ = closurePeer.Close() })
+	fixture.witness.mu.Lock()
+	fixture.witness.peer = closurePeer
+	fixture.witness.summary.Target = linuxV2NativeWitnessTarget{
+		PID: fixture.target.PID, Identity: fixture.target.Identity, PIDFDVerified: true,
+	}
+	fixture.witness.mu.Unlock()
+	if err := fixture.witness.stage(linuxV2NativeWitnessReleaseStage, nil, fixture.store, false); err != nil {
+		t.Fatalf("stage the daemon.start release hold: %v", err)
+	}
+	before, err := os.ReadFile(fixture.marker)
+	if err != nil {
+		t.Fatalf("read the daemon.start release marker: %v", err)
+	}
+	// The helper accepted the RELEASE before this ACK: the journal has moved on.
+	fixture.journal.ContainmentAuthority.LauncherPID++
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); !errors.Is(err, execution.ErrLinuxV2MutationAckLost) {
+		t.Fatalf("ACK-loss release callback error = %v, want the lost-ACK category", err)
+	}
+	after, err := os.ReadFile(fixture.marker)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("ACK-loss release callback rewrote the daemon.start marker: %v", err)
+	}
+	if closurePeer.PIDFD != nil {
+		t.Fatal("ACK-loss release callback leaked the replaced launch-transferred peer pidfd")
+	}
+	fixture.witness.mu.Lock()
+	peer := fixture.witness.peer
+	fixture.witness.mu.Unlock()
+	if peer == nil || peer == closurePeer || peer.PIDFD == nil || peer.PID != fixture.target.PID {
+		t.Fatalf("ACK-loss release witness evidence = %#v, want the captured replacement peer", peer)
+	}
+	marker := fixture.readMarker(t)
+	if marker.DropAckAfter != linuxV2NativeWitnessReleaseStage || !marker.Target.PIDFDVerified ||
+		marker.Target.PID != fixture.target.PID || marker.Owners.Gate.Identity != fixture.target.Identity {
+		t.Fatalf("ACK-loss release marker = %#v, want the exact lost-ACK boundary with peer evidence", marker)
+	}
+}
+
+func TestLinuxV2NativeWitnessRunnerReleaseRejectionsStayFailClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.RunJournal)
+	}{
+		{name: "gate PID mismatch", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup.Gate.Process.PID = os.Getpid() + 1
+		}},
+		{name: "authority target mismatch", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentAuthority.TargetPID = os.Getpid() + 1
+		}},
+		{name: "zero PID", mutate: func(journal *state.RunJournal) {
+			journal.PID = 0
+		}},
+		{name: "missing gate", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup.Gate = nil
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLinuxV2WitnessReleaseFixtureWithJournal(t, linuxV2NativeWitnessReleaseStage, test.mutate)
+			if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err == nil {
+				t.Fatal("release callback accepted a journal outside the exact committed target")
+			}
+			fixture.witness.mu.Lock()
+			peer := fixture.witness.peer
+			fixture.witness.mu.Unlock()
+			if peer != nil {
+				t.Fatalf("rejected release witness evidence = %#v, want no peer publication", peer)
+			}
+			if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("rejected release staged its held marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessRunnerReleaseReplaySkipsWithoutStaging(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, true); err != nil {
+		t.Fatalf("replay release callback: %v", err)
+	}
+	fixture.witness.mu.Lock()
+	peer := fixture.witness.peer
+	fixture.witness.mu.Unlock()
+	if peer != nil {
+		t.Fatalf("replay release witness evidence = %#v, want no peer publication", peer)
+	}
+	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replay release staged its held marker: %v", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessReleaseSeamRequiresTheRequestHarness(t *testing.T) {
+	fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+	fixture.witness.request.Harness = ""
+	if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessReleaseStage, false); err == nil {
+		t.Fatal("release callback accepted a request without a configured harness")
+	}
+	if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unparsable request harness staged its held marker: %v", err)
+	}
+	fixture.witness.mu.Lock()
+	peer := fixture.witness.peer
+	fixture.witness.mu.Unlock()
+	if peer != nil {
+		t.Fatalf("unparsable request harness published witness evidence: %#v", peer)
+	}
+}
+
+func TestLinuxV2NativeWitnessLeaseAckStagesThePlainNativeReleaseHold(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		harness string
+	}{
+		{name: "migration_pi", harness: config.RuntimeHarnessPi},
+		{name: "claude_hold_after_native_release", harness: config.RuntimeHarnessClaudeCode},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+			fixture.witness.request.Harness = test.harness
+			if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessLeaseStage, false); err != nil {
+				t.Fatalf("initial lease ACK callback: %v", err)
+			}
+			marker := fixture.readStageMarker(t, linuxV2NativeWitnessLeaseStage)
+			if marker.Stage != linuxV2NativeWitnessLeaseStage || marker.HoldAfter != linuxV2NativeWitnessReleaseStage ||
+				marker.NativeReleaseState != linuxV2NativeWitnessNativeReleaseNotReleased || marker.DropAckAfter != "" {
+				t.Fatalf("initial lease marker = %#v, want the exact not-released pre-checkout boundary", marker)
+			}
+			if marker.Target.PIDFDVerified || marker.Target.HostUID != 0 || marker.Target.SamePIDExec {
+				t.Fatalf("initial lease marker target = %#v, want no fabricated B peer proof", marker.Target)
+			}
+			fixture.witness.mu.Lock()
+			acked := fixture.witness.summary.Stages.InitialLeaseAcked
+			fixture.witness.mu.Unlock()
+			if !acked {
+				t.Fatal("plain native_release hold did not record the initial lease ACK")
+			}
+			if _, err := os.Lstat(fixture.marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("initial lease ACK staged the release marker: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxV2NativeWitnessLeaseAckDoesNotTouchTheRunnerLeaseBoundary(t *testing.T) {
+	leaseMarker := func(fixture linuxV2WitnessReleaseFixture) string {
+		return filepath.Join(filepath.Dir(fixture.marker), linuxV2NativeWitnessLeaseStage+".json")
+	}
+	t.Run("watcher_not_yet_staged", func(t *testing.T) {
+		fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessLeaseStage)
+		done := make(chan error, 1)
+		go func() { done <- fixture.callbacks.DropAckAfter(linuxV2NativeWitnessLeaseStage, false) }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("runner lease ACK callback: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			if _, err := os.Lstat(leaseMarker(fixture)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the ACK staged over the runner-held lease boundary: %v", err)
+			}
+			t.Fatal("runner lease ACK callback did not return for the runner-held boundary")
+		}
+		if _, err := os.Lstat(leaseMarker(fixture)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the ACK staged over the runner-held lease boundary: %v", err)
+		}
+		fixture.witness.mu.Lock()
+		acked := fixture.witness.summary.Stages.InitialLeaseAcked
+		fixture.witness.mu.Unlock()
+		if acked {
+			t.Fatal("the ACK claimed the runner-held lease boundary without its watcher marker")
+		}
+	})
+	t.Run("watcher_staged", func(t *testing.T) {
+		fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessLeaseStage)
+		if err := fixture.witness.stage(linuxV2NativeWitnessLeaseStage, nil, fixture.store, false); err != nil {
+			t.Fatalf("stage the runner-held lease boundary: %v", err)
+		}
+		before, err := os.ReadFile(leaseMarker(fixture))
+		if err != nil {
+			t.Fatalf("read the runner-held lease marker: %v", err)
+		}
+		fixture.journal.ContainmentAuthority.LauncherPID++
+		if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessLeaseStage, false); err != nil {
+			t.Fatalf("runner lease ACK callback after its watcher: %v", err)
+		}
+		after, err := os.ReadFile(leaseMarker(fixture))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("the ACK rewrote the runner-held lease marker: %v", err)
+		}
+	})
+}
+
+func TestLinuxV2NativeWitnessLeaseAckReplayStagesNothing(t *testing.T) {
+	leaseMarker := func(fixture linuxV2WitnessReleaseFixture) string {
+		return filepath.Join(filepath.Dir(fixture.marker), linuxV2NativeWitnessLeaseStage+".json")
+	}
+	t.Run("restored_marker", func(t *testing.T) {
+		fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+		if err := fixture.witness.stage(linuxV2NativeWitnessLeaseStage, nil, fixture.store, false); err != nil {
+			t.Fatalf("stage the restored lease marker: %v", err)
+		}
+		before, err := os.ReadFile(leaseMarker(fixture))
+		if err != nil {
+			t.Fatalf("read the restored lease marker: %v", err)
+		}
+		fixture.journal.ContainmentAuthority.LauncherPID++
+		if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessLeaseStage, false); err != nil {
+			t.Fatalf("replayed lease ACK callback: %v", err)
+		}
+		after, err := os.ReadFile(leaseMarker(fixture))
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("the replayed lease ACK rewrote the restored marker: %v", err)
+		}
+	})
+	t.Run("acked_on_entry", func(t *testing.T) {
+		fixture := newLinuxV2WitnessReleaseFixture(t, linuxV2NativeWitnessReleaseStage)
+		if err := fixture.callbacks.DropAckAfter(linuxV2NativeWitnessLeaseStage, true); err != nil {
+			t.Fatalf("acked-on-entry lease callback: %v", err)
+		}
+		if _, err := os.Lstat(leaseMarker(fixture)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("acked-on-entry lease callback staged a marker: %v", err)
+		}
+	})
+}
+
+func TestLinuxV2NativeWitnessPIDFDIdentityArmRefusesAChangedTarget(t *testing.T) {
+	identity, err := platform.ProcessIdentity(os.Getpid())
+	if err != nil {
+		t.Fatalf("read the live target identity: %v", err)
+	}
+	pidfd, err := openExactLiveLinuxV2WitnessPIDFD(os.Getpid(), identity+"-stale", "arm target")
+	if err == nil {
+		_ = pidfd.Close()
+		t.Fatal("pidfd capture accepted an identity that changed after PidfdOpen")
+	}
+	if !strings.Contains(err.Error(), "identity changed after pidfd open") {
+		t.Fatalf("pidfd identity arm error = %v, want the post-open identity change", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessPIDFDLivenessArmRefusesAnExitedTarget(t *testing.T) {
+	cmd := exec.Command("/bin/sh", "-c", "exit 0")
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start the exited-target helper: %v", err)
+	}
+	pid := cmd.Process.Pid
+	t.Cleanup(func() { _ = cmd.Wait() })
+	fd, err := unix.PidfdOpen(pid, 0)
+	if err != nil {
+		t.Fatalf("open the exited-target pidfd: %v", err)
+	}
+	defer unix.Close(fd)
+	poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ready, pollErr := unix.Poll(poll, 0)
+		if pollErr != nil {
+			t.Fatalf("poll the exited-target pidfd: %v", pollErr)
+		}
+		if ready == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the helper target never exited")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	identity, err := platform.ProcessIdentity(pid)
+	if err != nil {
+		t.Fatalf("read the exited target identity: %v", err)
+	}
+	pidfd, err := openExactLiveLinuxV2WitnessPIDFD(pid, identity, "exited arm target")
+	if err == nil {
+		_ = pidfd.Close()
+		t.Fatal("pidfd capture accepted a target whose pidfd already signalled its exit")
+	}
+	if !strings.Contains(err.Error(), "pidfd is not live") {
+		t.Fatalf("pidfd liveness arm error = %v, want the exited target refusal", err)
+	}
+}
+
+func TestLinuxV2NativeWitnessUserNamespaceShapeArmRefusesNonNsfsInodes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		stat unix.Stat_t
+	}{
+		{name: "directory_mode", stat: unix.Stat_t{Mode: unix.S_IFDIR | 0o755, Dev: 4, Ino: 5}},
+		{name: "zero_device", stat: unix.Stat_t{Mode: unix.S_IFREG, Dev: 0, Ino: 5}},
+		{name: "zero_inode", stat: unix.Stat_t{Mode: unix.S_IFREG, Dev: 4, Ino: 0}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := linuxV2NativeWitnessUserNamespaceFromStat(test.stat); err == nil {
+				t.Fatal("user-namespace shape arm accepted a stat outside the exact nsfs inode")
+			}
+		})
+	}
+	value, err := linuxV2NativeWitnessUserNamespaceFromStat(unix.Stat_t{Mode: unix.S_IFREG, Dev: 4, Ino: 5})
+	if err != nil || value.Device != 4 || value.Inode != 5 {
+		t.Fatalf("exact nsfs stat = %#v/%v, want device 4 inode 5", value, err)
 	}
 }

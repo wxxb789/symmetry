@@ -5400,6 +5400,41 @@ section, whose pointer sentence names this one.
       CI log on its final head showing the step and its 5+ tests (conductor confirms at final
       acceptance).
 
+## rf-acc-migration-pi-hold: the `migration` release hold is wired on the pi runner path (2026-11-26)
+
+- [x] The `migration` release arm and its unreached `native_release` hold (moved from `docs/TODO.md`;
+      residual of the entries closed under goals `rf-acc-guest-native-exec` (2026-11-25) and
+      `rf-acc-apparmor-userns-profile` (2026-11-26)): the pre-clone guard and its unsatisfied
+      credential fact were root-named by runs `45593856716`, `45601287283` and `45602546196`, and
+      the AppArmor-userns exception delivered by `rf-acc-apparmor-userns-profile` resolved the
+      release stop. The remaining clause — "the `native_release` hold of the `migration` set is
+      still unreached" — is closed by goal `rf-acc-migration-pi-hold` (2026-11-26, branch
+      `refactor/rf-acc-migration-pi-hold`, base `8453da12`; plan
+      `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md`, record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md`): `native_release` is staged from the
+      witness's release-ACK callback (`execution/linux_owner_v2_linux.go:1073-1077`) for every
+      adapter that owns its `Runner` (pi, opencode) instead of only from `daemon.start`, with the
+      exact released same-PID target (journal/authority/gate agreement, verified live pidfd, nsfs
+      user and host network namespaces) as its marker evidence; the hold engaging and the evidence
+      shape are pinned locally by `TestLinuxV2NativeWitnessRunnerReleaseHoldStagesExactTarget`,
+      `TestLinuxV2NativeWitnessStartProcessReleaseKeepsItsOwnStage` (the plain daemon.start hold)
+      and `TestLinuxV2NativeWitnessReleaseStagingFollowsTheLaunchSeam`, with five mutant rows. The
+      round-1 fold (record §13) stages the initial `lease_armed` from the same callback
+      (`TestLinuxV2NativeWitnessLeaseAckStagesThePlainNativeReleaseHold`) and retires the latent
+      codex/claude ACK-loss double write and peer leak
+      (`TestLinuxV2NativeWitnessStartProcessReleaseAckLossKeepsTheClosureStage`). No e2e
+      validator, fixture byte or `pi/**` file changed. Delivered and measured by Bind 2 (run
+      `45735420588`, record §14): the `migration` set is green (the `native_release` hold is
+      reached and the denial and retention assertions pass) and the claude durable-stage stop
+      (`positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage`)
+      is gone; the `claude_containment` set's next stop is its stage-replay matrix leg, carried to
+      a new conductor goal. The pre-fold Bind `45720019801` reached the `native_release` hold and
+      recorded the migration case's next stop (the initial-lease ACK the round-1 fold stages).
+      The entry's intermittent aborted-release stop measurement
+      (`dial unixpacket: connect: connection refused` in runs `45555828634`/`45579163968`, absent in
+      `45557621798`/`45564071868`) is a measurement note on the arm the AppArmor fix superseded; a
+      recurrence would ride the rf-acc-release-recovery-diagnostics entry still in `docs/TODO.md`.
+
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
 - [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
