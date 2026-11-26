@@ -5566,5 +5566,10 @@ section, whose pointer sentence names this one.
       accepts the authentic Control claims for all three, the base adapter-free pi spec cannot be
       assigned at all, and the base-vs-head formatter rewrite bodies are identical. The contract's
       acceptance — the conductor's Bind `shared` run on the PR head, `TestProductionLinuxV2PiNativeProviderAction`
-      no longer stopping at the clone-intent/Subject refusal — is **pending the conductor's Bind**;
-      its row is left for the bind stage in the record §7.
+      no longer stopping at the clone-intent/Subject refusal — is met: Bind303 (run `45811007804` on
+      `22d6c411`, case set `shared`) counted 0 occurrences of the refusal in the whole log, read the
+      retained journal claimed with `has_claim_grant`/`has_clone_intent`/`has_seed_receipt` true and
+      kept all 21 verified rows green. The leg's next stop is the next stage's (the authentic Pi turn
+      `"error"`), verbatim in the record §13 and in the `## rf-acc-pi-provider-admission: residuals`
+      section of `docs/TODO.md`; `stop_readback_reader` stayed unmeasured and the redacted-evidence
+      export was refused (`ack-loss-replay-checkout_ready.json`).

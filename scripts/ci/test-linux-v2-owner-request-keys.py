@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Pin the writer/fixture agreement on the goal-route and provider-scope case sets, and the
-fixture's both-policies `allowed_actions` rule.
-
-Both sides are read from the committed bytes, statically; a shape the parser cannot read is
-refused, never guessed around. See docs/plans/2026-11-26-rf-ci-owner-request-key-check-plan.md §2.
-"""
+"""Pin the writer/fixture agreement on the goal-route and provider-scope case sets, and the fixture's both-policies `allowed_actions` rule."""
 
 from __future__ import annotations
 

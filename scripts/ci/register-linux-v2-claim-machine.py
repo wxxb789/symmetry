@@ -85,7 +85,6 @@ def goal_assigned_runtime_spec(
         },
     }
     if provider_access:
-        # The provider legs must satisfy the admission's own provider_access requirement.
         spec["capabilities"]["provider_access"] = True
     return spec
 

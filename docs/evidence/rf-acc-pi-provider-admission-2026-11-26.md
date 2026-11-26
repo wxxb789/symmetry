@@ -15,9 +15,9 @@ Bind row to the bind stage (§7).
 | --- | --- | --- |
 | `scripts/ci/write-linux-v2-owner-request.py` | `a6d007374c7c4d64a96b0cc9a7fefc73d4120d4dba31f6ce796a30f5730d677a` | the three pi legs join `GOAL_ADMISSION_CASES`; the goal branch pins the exact provider scope for `provider_case` rows and `provider_scope: null` for the provider-free ones |
 | `scripts/ci/provision-linux-v2-control-claims.exs` | `82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3` | `:pi_provider` is goal-routed; the goal specs carry `provider_sync`; `resource.sync` lands in BOTH policies for those cases; the pi arms of `runtime_adapter_binding?` demand adapter kind `pi`; the legacy branch binds `:opencode` in its fn pattern instead of re-asserting the destructured role |
-| `scripts/ci/test-linux-v2-owner-request-keys.py` | `09ea677b3b867a6ce5a91f753473d0e665282fad50259725e54d5d42d63c8398` | N-role goal-route predicate, provider-sync role parse, writer profile rule, the provider-pair comparison, four refusal mutants, the fixture's both-policies `allowed_actions` refusal table; the writer's shared `writer_cases` accessor replaces the duplicated `CASES` preamble |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `b4141da9face795573dc1d3d5619625197743575cf6f65e462fb372e8cd79d08` | the three pi `(harness, request_case)` rows require the admission; the admission branch's dispatch is the pure predicate `linuxV2AdmissionProviderScopeRefusal` (exact composed scope for provider rows, any non-nil scope refused for provider-free ones, both directions table-tested); three row/table tests pin the map, the scope check and the dispatch |
-| `scripts/ci/register-linux-v2-claim-machine.py` | `25b04fbcbe37cc9d678b7c07aa98690bd5cd276f4e08e1c89553eace166e3087` | the pi-native runtime spec becomes a goal-assigned native spec (`pi`/`1.5.2` + adapter block) with `provider_access: true` |
+| `scripts/ci/test-linux-v2-owner-request-keys.py` | `d04666d234215cfaef9d6056101733ba91af549062722881c5c2a29d83a42b24` | N-role goal-route predicate, provider-sync role parse, writer profile rule, the provider-pair comparison, four refusal mutants, the fixture's both-policies `allowed_actions` refusal table; the writer's shared `writer_cases` accessor replaces the duplicated `CASES` preamble; round 2 (U2) trims the module docstring to one purpose line (comment-only) |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `d988ca3bf8a0364f7d2f1c9aabe4cef14b53216e501a6002c49950e18d508abf` | the three pi `(harness, request_case)` rows require the admission; the admission branch's dispatch is the pure predicate `linuxV2AdmissionProviderScopeRefusal` (exact composed scope for provider rows, any non-nil scope refused for provider-free ones, both directions table-tested); three row/table tests pin the map, the scope check and the dispatch; merged head after `origin/main` `b0206393` (#301), round-2 pre-merge `2dd84c37512d898dd6c65b8b4e25d546d00107bbc6a4a193a8826e344e60e89d` (the U2/U7 comment deletion plus the gofmt field alignment it forced), fix-stage `b4141da9face795573dc1d3d5619625197743575cf6f65e462fb372e8cd79d08` |
+| `scripts/ci/register-linux-v2-claim-machine.py` | `f6029087c0acf8c42478018f0f9672fdf7a914a715d4e49d0eb3c3ee128ad773` | the pi-native runtime spec becomes a goal-assigned native spec (`pi`/`1.5.2` + adapter block) with `provider_access: true`; round 2 (U7) deletes the rationale comment (comment-only) |
 | `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md` | `5a671160bbf8072214b28bc0afca44872c2156ea12a475913a03a2f31f1071d4` | the accepted plan in the repo's plan location (helper renamed to `linuxV2AdmissionProviderScopeIsExact`; five provider-free goal rows; §2.4 amended at the fix stage to the delivered dispatch predicate and its table tests) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the closed residual moves out of `TODO`; this goal's bounded residual is appended |
 
@@ -29,18 +29,32 @@ re-runs and §6 its new mutants M9/M10. The fix stage (`rf-acc-pi-provider-admis
 extracted into the pure predicate `linuxV2AdmissionProviderScopeRefusal`, pinned both directions by
 the new table test `TestLinuxV2AdmissionProviderScopeRefusalRows` (REV-A02; the pre-fix gap is
 characterized in §6 M11); §4.1 and §6 name their measured revisions (REV-A03); §4.3 and §5 state
-the changed e2e file for the formatter gate (REV-A04). The writer and register rows are
-byte-identical to the implement stage; §5 quotes the fix-stage re-runs.
+the changed e2e file for the formatter gate (REV-A04). The writer row is byte-identical to the
+implement stage; §5 quotes the fix-stage re-runs. PR #303 round 2 (the
+conductor's round-1 ruling U1-U7, 2026-11-26) applied the U2/U7 comment-only code delta above and
+the one gofmt field alignment the Go comment deletion forced, and re-bound the record rows: U1
+re-ran the §4.1 probe on the delivered fixture `82668512…` (§4.1), U3 reworded §12.4, U5 extended
+the §6 mutants and the `docs/TODO.md` residual, U6 folded the Bind (§13), U7 deleted the register
+script's rationale comment. The register row therefore differs from the implement stage only by
+that comment deletion. The branch then merged `origin/main` `b0206393` (#301); the merge's only
+content conflict was `docs/archive/CLOSED-TODO.md` (both branches append at EOF), resolved by
+keeping both appended sections — `rf-acc-claude-stage-replay` first, this goal's section last —
+with no other hunk changed; §5.1 re-runs the gates on the merged tree. Bind303 (§13) remains the
+BINDING acceptance for the `22d6c411` bytes, whose delta to the round-2 bytes is comment-only plus
+whitespace, and the conductor re-Binds `shared` on the merged head.
 
-Byte-identical to the dispatch head (declared, not changed): `daemon/e2e/production_linux_v2_owner_cli_test.go`
-(`d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6`),
+Byte-identical to the dispatch head at `22d6c411` (declared, not changed by this goal):
+`daemon/e2e/production_linux_v2_owner_cli_test.go`
+(`d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` at `22d6c411`),
 `daemon/internal/app/linux_owner_witness_linux.go`, `scripts/ci/linux-v2-native-acceptance.sh`,
-`.github/workflows/linux-native-v2-acceptance.yml`, every `control/` byte. The contract's owned set
-lists the owner-cli test and the witness seam; both were verified to need no change: the witness
-request reader keys provider authority on the case name and the ClaimResponse
-(`linux_owner_witness_linux.go:2616-2652`), never on the admission shape, and the owner-cli test
-carries no legacy/goal admission assertion (the only admission branch in the e2e is
-`production_linux_v2_native_witness_test.go:1682-1690`).
+`.github/workflows/linux-native-v2-acceptance.yml`, every `control/` byte. After the `origin/main`
+`b0206393` (#301) merge, the owner-cli test and the witness seam carry #301's bytes (unchanged by
+this goal; the witness file is `3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd`).
+The contract's owned set lists the owner-cli test and the witness seam; both were verified to need
+no change from this goal: the witness request reader keys provider authority on the case name and
+the ClaimResponse (`linux_owner_witness_linux.go:2622-2658` on the merged bytes), never on the
+admission shape, and the owner-cli test carries no legacy/goal admission assertion (the only
+admission branch in the e2e is `production_linux_v2_native_witness_test.go:1695-1705`).
 
 ## 2. Clause census at the dispatch head
 
@@ -87,17 +101,23 @@ scope for those legs; and a goal-assignable pi-native runtime for Control's assi
 
 Probe `<scratch>/p1-probe.exs` (scratch only) ran `mix run` (prod) from the main checkout's
 `control/` project (its `control/` bytes are byte-identical to the dispatch head; the checkout's
-`deps/` and `_build/prod` were reused) against the ephemeral local database `symmetry_linux_v2_pi_probe` on
-`127.0.0.1:5432`, with `GITHUB_ACTIONS=true`/`GITHUB_RUN_ID=local` so the fixture's
-`require_ephemeral_ci!` gate was satisfied, and with the implement-stage fixture bytes required
-(sha256 `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`, the commit-`66e4bc00`
-fixture; revision binding below); the probe evaluates the
-module definition only, because the file's own `System.argv()` dispatch would otherwise consume the
-probe's arguments). The fixture's `prepare` ran its own `@expected_fixture_runs` check (48 cases:
-46 goal + 2 legacy) and created the three resources; the probe registered the five runtimes from
-the session payload the delivered register script emits (captured by the stub in §4.2, with the
-real resource ids substituted), enrolled a machine through `Orchestration.enroll_machine/3` and
-registered through `Orchestration.register_runtimes/3` — the same calls the daemon controller makes.
+`deps/` and `_build/prod` were reused) against an ephemeral local database on `127.0.0.1:5432`
+(`symmetry_linux_v2_pi_probe` at the implement stage; `symmetry_linux_v2_pi_probe_r2` at the
+round-2 re-run), with `GITHUB_ACTIONS=true`/`GITHUB_RUN_ID=local` so the fixture's
+`require_ephemeral_ci!` gate was satisfied, and with the DELIVERED fixture bytes required (sha256
+`82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3`, §1): the implement stage
+measured the commit-`66e4bc00` fixture `ac1cfea8…` (superseded for revision binding; below), and
+the round-2 re-run (U1) measured the delivered bytes themselves — its probe bytes are the
+implement-stage probe `4165772b…` with only the scratch-directory constant retargeted (`fa2f505b…`,
+`@fixture` unchanged, pointing at the delivered worktree file), its report is `32ae6c74…` and its
+log `60ba9d0d…`. The probe evaluates the module definition only, because the file's own
+`System.argv()` dispatch would otherwise consume the probe's arguments). The fixture's `prepare`
+ran its own `@expected_fixture_runs` check (48 cases: 46 goal + 2 legacy) and created the three
+resources; the probe registered the five runtimes from the session payload the delivered register
+script emits (captured by the stub in §4.2 — the round-2 payloads are byte-identical to the
+implement-stage pair, `2f99e82d…`/`341c043b…` — with the real resource ids substituted), enrolled
+a machine through `Orchestration.enroll_machine/3` and registered through
+`Orchestration.register_runtimes/3` — the same calls the daemon controller makes.
 
 Per-case rows (each `schedule` + in-process `Claims.claim_run/3` serialized by the real
 `SymmetryControlWeb.Protocol.claimed_run/4`):
@@ -122,17 +142,19 @@ pi_provider_action` raised verbatim `** (RuntimeError) Control did not assign th
 owner-witness Task` (`await_assigned_run!/2` after its 30 s wait) — the register-script change is
 load-bearing for goal assignment (`assignment.ex:322-341`, `:505-530`).
 
-Revision binding (review r1, REV-A03): P1 and its mutant half measured the implement-stage fixture
-bytes `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`, not the delivered
-`82668512…`. The delta to the delivered bytes is exactly one hunk: `git diff --stat
+Revision binding (review r1, REV-A03; closed by U1): the implement-stage run and its mutant half
+measured the implement-stage fixture bytes `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97`,
+not the delivered `82668512…`; the round-2 re-run above measures the delivered bytes themselves
+(all five per-case rows and the mutant refusal reproduced; report `32ae6c74…`), so the
+implement-stage row is superseded for revision binding only. The delta between the two fixture
+revisions is exactly one hunk: `git diff --stat
 66e4bc00..dadb474d -- scripts/ci/provision-linux-v2-control-claims.exs` reports `1 file changed, 1
 insertion(+), 2 deletions(-)` — the legacy branch's `Map.new(legacy_cases, …)` moves the
 `:opencode` role check from the fn body into the fn head pattern. Every P1 row is goal-routed
 (`:pi_provider`/`:pi_durability`/`:opencode_goal`); no goal-routed row, `goal_case_specs` entry or
-`provision_goal_admission!` byte is in the delta, so the per-case rows and the M6 mutant read the
-same fixture bytes at both revisions. The apply stage's F3 probe (§12.2) re-ran `prepare` on the
-delivered bytes (`work_items=2 goal_cases=46`); the runtimes came from the delivered register
-script, byte-identical to the implement stage.
+`provision_goal_admission!` byte is in the delta. The apply stage's F3 probe (§12.2) re-ran
+`prepare` on the delivered bytes (`work_items=2 goal_cases=46`); the runtimes came from the
+delivered register script, byte-identical to the implement stage.
 
 ### 4.2 P2 — writer and register-script probes against a stub Control endpoint
 
@@ -163,6 +185,12 @@ writer: all five cases exit 0 and the written request preserves the authentic cl
 `opencode_native_health` `e608e1f934fe8ea765569981a62b45e38815f565de17d98ec2f9c142a8dc77fb`), with the
 admission's provider scope identical to the one Control sent. Transcript `<scratch>/p2-transcript.txt`
 sha256 `8c6bc23246cc7879f02c3ff1c6b159712fd6546348a404f5f797bd0d490937b7`.
+
+The round-2 regeneration of the payloads for the U1 re-run (same probe bytes, the delivered post-U7
+register bytes) reproduced the writer rows and both session payloads byte-identically
+(`2f99e82d…`/`341c043b…`); its own transcript is
+`a466786b9603b6fac6d022690edbb2c2c846e847460514bb479ac763406b79b8` (per-run request hashes
+differ).
 
 Register-script payload delta: running the base script
 (`register-base.py` = `git show b27ea691:scripts/ci/register-linux-v2-claim-machine.py`, sha256
@@ -290,13 +318,36 @@ Apply-stage artifacts (scratch, deleted after the stage; the two probes are carr
 | F3 probe: `run!("prepare", …)` on the delivered fixture over the ephemeral DB (§12.2) | 0 | `work_items=2 goal_cases=46`, legacy profiles `["opencode-native", "opencode-native"]`, `P1-APPLY-PROBE OK` |
 | M9 pin: `go test ./e2e/ -overlay <scratch overlay adding daemon/e2e/zz_apply_probe_test.go> -run TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` (§12.1) | 0 | apply and fix re-runs: `--- PASS`; the provider-free control request returns `nil`, the mutant refused verbatim (`ok … 0.228s` at the fix stage) |
 
-Final-bytes binding: the delivered bytes of §1 are the revision every gate above measured —
-key test `09ea677b…`, fixture `82668512…`, e2e file `b4141da9…`, plan `5a671160…` — with one
-scope limit: the Windows `go vet`/`go test` pair cannot build the Linux/amd64-tagged e2e file, so
-it binds it only through the unchanged closure. Every fix-stage WSL gate, the M9 probe (§12.1) and
-the mutants (§6, §12.4) ran on the final e2e bytes; the apply-stage Elixir gates keep binding the
-unchanged fixture/key-test bytes; jscpd-changed, comment-cap and the record checks ran on the
-delivered bytes (the scratch-clone commit for the last four).
+### 5.1 Round 2 (U1-U7) and the merged head (`origin/main` `b0206393`)
+
+The round-2 code delta is comment-only in the three files above (U2/U7) plus the gofmt field
+alignment the Go comment deletion forced; every row below ran on the MERGED tree (the round-2
+scratch branch `22d6c411` + the round-2 commit, merged with `origin/main` `b0206393`;
+`production_linux_v2_native_witness_test.go` `d988ca3b…`, §1) in WSL `go1.27.0 linux/amd64`.
+
+| Command (working directory) | Exit | Note |
+| --- | --- | --- |
+| `gofmt -l daemon/e2e/production_linux_v2_native_witness_test.go` (`daemon/`, WSL) | 0 | 0 files listed — the round-2 comment deletion made the rows struct's fields contiguous, so the same change also aligns `name string` to `name  string` |
+| `GOOS=linux go vet ./e2e/` (`daemon/`, WSL) | 0 | linux/amd64 compile gate on the merged bytes |
+| `go test ./e2e/ -run 'TestLinuxV2WitnessRequiresGoalAdmissionRows\|TestLinuxV2AdmissionAllowsProviderSyncRows\|TestLinuxV2AdmissionProviderScopeRefusalRows' -count=1` (WSL) | 0 | all three PASS, `ok … 0.022s` |
+| `go test ./e2e/ -count=1` (WSL, merged baseline) | 0 | whole package `ok … 1.134s` |
+| X1 overlay (`!testCase.providerActionRequired`), whole package | 0 | SURVIVED by design: `ok … 1.177s` (§6 X1) |
+| X2 overlay (the 3-line call block deleted), whole package | 0 | SURVIVED by design: `ok … 1.152s` (§6 X2) |
+| `python3 -B scripts/ci/test-linux-v2-owner-request-keys.py` (WSL, merged tree) | 0 | `Ran 10 tests … OK` |
+| U1: §4.1 probe re-run on the delivered fixture `82668512…` | 0 | all five per-case rows all-checks-true, the mutant refused verbatim; report `32ae6c74…`, log `60ba9d0d…` (§4.1) |
+| §4.2 payload regeneration on the delivered register bytes | 0 | payloads byte-identical `2f99e82d…`/`341c043b…`; writer rows unchanged (§4.2) |
+| `python <scratch>/comment-cap.py <scratch clone>` (merged-head commit) | 0 | no comment block longer than 2 lines among the added lines of the merged-head commit |
+
+Final-bytes binding: the delivered bytes of §1 are the revision every gate above measured — the
+fix-stage rows on the `b4141da9…` e2e file, the round-2 rows of §5.1 on the merged head
+`d988ca3b…` (key test `d04666d2…`, fixture `82668512…`, register `f6029087…`, plan `5a671160…`) —
+with one scope limit: the Windows `go vet`/`go test` pair cannot build the Linux/amd64-tagged e2e
+file, so it binds it only through the unchanged closure. Every fix-stage WSL gate, the M9 probe
+(§12.1) and the mutants (§6, §12.4) ran on the fix-stage e2e bytes; the round-2 WSL gates, the
+X1/X2 overlays and the key test ran on the merged bytes (§5.1); the apply-stage Elixir gates keep
+binding the unchanged fixture/key-test bytes; jscpd-changed, comment-cap and the record checks ran
+on the delivered bytes (the scratch-clone commit for the last four) at the fix stage, and the
+round-2 comment-cap re-ran on the merged-head commit (§5.1).
 
 ## 6. Mutants
 
@@ -315,6 +366,16 @@ delivered bytes (the scratch-clone commit for the last four).
 | M12 | e2e: the refusal predicate's provider-free arm deleted (`_ = scope; return nil`, patch §12.4) | `TestLinuxV2AdmissionProviderScopeRefusalRows` exit 1: `provider_free_exact_scope: … = <nil>, want "provider-free owner-witness admission carries a provider scope"`; same CI job and non-root runner user as M11 |
 | M10 | fixture: the `allowed_actions` binding replaced by a constant, one policy's consumption dropped, or a third consumer added outside both policies | the delivered `test_allowed_actions_policy_drift_is_refused` subtests refuse verbatim: `bound exactly once to the provider_sync conditional, got 0 matches`; `consumed exactly once per policy, got execution_policy=0, authority_policy=1` (mirror: `execution_policy=1, authority_policy=0`); `consumed exactly twice, got 3` |
 
+X1/X2 are the call-site mutants the DS audit raised (its P3-1): they are *supposed* to stay green
+— the reader's dispatch call site has no committed local pin — so they are recorded as survived
+mutants feeding the `docs/TODO.md` residual, not as red rows. Both were re-run at round 2 on the
+merged `d988ca3b…` bytes (whole `daemon/e2e` package, WSL):
+
+| id | Mutation | Observed |
+| --- | --- | --- |
+| X1 | e2e reader: the dispatch call's first argument inverted (`!testCase.providerActionRequired`; overlay `x1.go`, sha256 `5ff17968bb2e94aef5b5113b62e1817c68f68fa507532f3f2cce7fa7e52fbd2b`) | SURVIVED: whole package green (`ok` 1.177s, exit 0) |
+| X2 | e2e reader: the 3-line `if refusal := linuxV2AdmissionProviderScopeRefusal(…) { return …, refusal }` block deleted (overlay `x2.go`, sha256 `aa280207e1359178b3a5b74f9b9c6981d721f41bf73dc93cbe70ac7f6b4807b1`) | SURVIVED: whole package green (`ok` 1.152s, exit 0) |
+
 ## 7. The conductor's Bind (acceptance clause)
 
 The acceptance clause — "The conductor's Bind runs `shared` once on the PR head.
@@ -322,7 +383,10 @@ The acceptance clause — "The conductor's Bind runs `shared` once on the PR hea
 Record the next stop verbatim, or green; if it is reached, record `stop_readback_reader`'s Result
 row" — is the bind stage's, on the delivered bytes: the witness's clone reserve now parses a
 Control-composed admission whose Subject is exactly the intent's Subject (§4.1), which is the
-precise refusal run `45771518805` hit. Its row is left for the bind stage.
+precise refusal run `45771518805` hit. Its row is Bind303 (§13): run `45811007804` on `22d6c411` is
+BINDING — whole-log refusal count 0, journal claimed with
+`has_claim_grant`/`has_clone_intent`/`has_seed_receipt` true, all 21 verified rows green. The
+conductor re-Binds `shared` on the merged head (§1, §5.1).
 
 ## 8. Scope amendment carried by this goal (one CI script)
 
@@ -347,12 +411,17 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 
 ## 10. Residuals and known limits
 
-1. The Bind acceptance row is unmeasured here (§7) — by design, per the contract.
+1. The Bind acceptance row was unmeasured at the fix stage (§7); Bind303 (§13) now carries it and
+   is BINDING, and the conductor re-Binds `shared` on the merged head.
 2. The e2e's per-case `providerActionRequired` flag — the dispatcher input the fix stage pins both
    directions through `TestLinuxV2AdmissionProviderScopeRefusalRows` — is not pinned against the
    writer's `PROVIDER_ACCESS_CASES` or the fixture's provider-sync role; a drift in the flag's
    per-case values is refused fail-closed by the witness request reader, but only on the
-   credentialed dispatch. Recorded in `docs/TODO.md` with the conductor as owner.
+   credentialed dispatch. The reader's dispatch call itself is pinned only up to the predicate:
+   deleting or arg-inverting it leaves the whole `daemon/e2e` package green (X1/X2, §6), so that
+   wiring is guarded only fail-closed at the same credentialed dispatch (an env-gated probe test
+   was ruled out — it would not run in CI either). Recorded in `docs/TODO.md` with the conductor
+   as owner.
 3. The Windows runs of `test-linux-v2-evidence.py` and `test-linux-v2-host-prerequisite-probe.py`
    fail on their Linux-only fixtures at base and head alike (§5); the WSL runs are the recorded
    gate. `test-linux-v2-control-receipt.py` refuses without root (the WSL run had root). The WSL
@@ -372,13 +441,13 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 
 | Contract clause | Executable row |
 | --- | --- |
-| `resource.sync` in BOTH `authority_policy.allowed_actions` and `execution_policy.allowed_actions` (Ruling) | key test `test_the_committed_pair_agrees` plus `test_allowed_actions_policy_drift_is_refused` (M10); the §4.1 per-case rows |
+| `resource.sync` in BOTH `authority_policy.allowed_actions` and `execution_policy.allowed_actions` (Ruling) | key test `test_the_committed_pair_agrees` plus `test_allowed_actions_policy_drift_is_refused` (M10); the §4.1 per-case rows (round-2 re-run on the delivered fixture `82668512…`) |
 | Provider-free goals stay provider-free (`provider_scope: null`, `allowed_actions: []`, no `provider_access`) | writer probe row `codex_containment` with a provider scope → exit 1 (§4.2); the key test's provider-pair equality; the e2e reader mutant M9; the refusal table's `provider_free_*` rows (`TestLinuxV2AdmissionProviderScopeRefusalRows`, §4.3) |
-| No weakened provider-access assertion, clone reserve, or Subject binding | e2e row tests `TestLinuxV2WitnessRequiresGoalAdmissionRows`, `TestLinuxV2AdmissionAllowsProviderSyncRows`, `TestLinuxV2AdmissionProviderScopeRefusalRows` and the dispatch mutants M11/M12 (§4.3, §6, §12.4); the clone reserve and the witness reader are declared byte-identical (§1) |
+| No weakened provider-access assertion, clone reserve, or Subject binding | e2e row tests `TestLinuxV2WitnessRequiresGoalAdmissionRows`, `TestLinuxV2AdmissionAllowsProviderSyncRows`, `TestLinuxV2AdmissionProviderScopeRefusalRows` and the dispatch mutants M11/M12 (§4.3, §6, §12.4); the clone reserve and the witness reader are declared unchanged by this goal (§1) |
 | No new credentials in CI | register-script payload delta (§4.2): exactly one runtime key changed, no credential field |
 | Key agreement stays green | §5, first row (exit 0) |
 | Comments at most 2 lines; Elixir changes run format, compile, Credo strict, relevant tests | comment-cap (§5); the §4.4 formatter probe; §5's Credo ratchet row; §12.2's compile-and-run probe |
-| Acceptance: no clone-intent/Subject stop; next stop verbatim or green | the conductor's Bind row (§7), unmeasured here |
+| Acceptance: no clone-intent/Subject stop; next stop verbatim or green | the conductor's Bind303 row (§7, §13) — BINDING: whole-log refusal count 0, next stop the authentic Pi turn; the conductor re-Binds on the merged head |
 
 ## 12. Appendix — scratch probes and mutants (verbatim, full sha256)
 
@@ -569,12 +638,16 @@ The four M10 refusals are produced by the delivered test's own
 
 ### 12.4 Fix-stage mutant patches (verbatim, full sha256)
 
-Each patch applies to the delivered `daemon/e2e/production_linux_v2_native_witness_test.go`
-(`b4141da9…`) as change-line-only hunks (no context) and was executed through a `go test -overlay`
-replacement mapping for that package path; the mutated bytes were left only in scratch. M11/M12
-redden the new refusal table (`TestLinuxV2AdmissionProviderScopeRefusalRows`); the baseline patch
-reproduces the pre-fix REV-A02 gap on the pre-fix bytes (whole `daemon/e2e` package green); M7/M8
-re-bind the earlier rows to the final bytes. The CI job/user that reddens them is in §6.
+Each post-fix patch applies to the delivered bytes (`b4141da9…`); the baseline row applies to the
+pre-fix bytes (`823681b3…`, the `dadb474d` blob). All five are change-line-only hunks (no context)
+executed through a `go test -overlay` replacement mapping for that package path; the mutated bytes
+were left only in scratch. The round-2 comment deletion and field alignment sit after every
+post-fix patch anchor, so the four post-fix patches' change lines and line numbers are unchanged in
+the round-2 bytes (the mutated-file hashes below are the fix-stage values); the X1/X2 overlays were
+re-run on the merged bytes (§6). M11/M12 redden the new refusal table
+(`TestLinuxV2AdmissionProviderScopeRefusalRows`); the baseline patch reproduces the pre-fix REV-A02
+gap on the pre-fix bytes (whole `daemon/e2e` package green); M7/M8 re-bind the earlier rows to the
+final bytes. The CI job/user that reddens them is in §6.
 
 | Mutant | Patch sha256 | Mutated file sha256 |
 | --- | --- | --- |
@@ -639,3 +712,113 @@ names: the delivered changed files by their §1 hashes; the byte-identical files
 | `daemon/internal/state/linux_clone_journal.go:864-878` | `5a8455b80ad1b2f53678fab1904056f6739357aa984fce8105340f98a2018ede` | `requireLinuxCloneJournalFence` and its admitted-Subject match |
 | `daemon/internal/app/linux_owner_witness_linux.go:2616-2652`, `:3340-3362`, `:4257-4290` | `1fd4c17f3f54d6b616097de1eb1832ee6d2b04ec67434e5e48fb607688ae0ce3` | the case-name provider keying; `prepareClone`; `seedAuthenticClaim` |
 | plan §1 dispatch-head anchors: e2e `:1682-1690`, `:1780-1793`, `:1796-1822`; writer `:29-38`, `:199-217`; fixture `:41-140`, `:152-154`, `:186-256`, `:447-570`, `:603-610`; register `:129-160`; key test `:27-30`, `:189-215` | re-read from `b27ea691` | each range starts at the named construct (registered as dispatch-head readings) |
+| round-2 merged head, e2e `:1695-1705` (the admission branch), `:1700-1702` (the dispatch call), `:1883`/`:1892` (the predicate pair), `:1952` (the refusal row test) | `d988ca3b…` | re-measured at round 2 on the merged bytes; the #301 merge shifted the fix-stage numbers by +13, and the fix-stage rows above keep their own revision |
+| round-2 merged head, `daemon/internal/app/linux_owner_witness_linux.go:2563` (`validateLinuxV2NativeWitnessRequest`), `:2622-2626` (the case-name provider keying), `:3482` (`prepareClone`), `:4399` (`seedAuthenticClaim`) | `3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd` | re-measured at round 2; the file carries #301's bytes |
+
+### 12.6 Round-2 probe artifacts (scratch, deleted after the round)
+
+The U1 re-run reconstructed the implement-stage probes byte-exact by replaying the implement run's
+recorded write/edit calls (no file copy survived; all three recovered files match their §4.5
+hashes), then retargeted only scratch constants:
+
+| Artifact | sha256 | Delta from the implement stage |
+| --- | --- | --- |
+| `p1-probe.exs` (recovered) | `4165772bf58d74e80a9c40c5a91057188d594b3ec9e80966bab2c69d8ad54a7f` | = §4.5's implement-stage probe |
+| `p1-probe.exs` (as run) | `fa2f505b31f664bc928c4fcf8edcd646b1a3a994fb1fa554f70241004b056184` | one line: the `@scratch` constant |
+| `run-p1.sh` (recovered) | `55833e436fa468c6c51862d32ac546ad9c7c74d1949b2cd3c737e5bf37036369` | = §4.5's run script |
+| `run-p1.sh` (as run) | `b0a25ed27323bed4ad93ac6e9b934fb57d6ab8846d23a2034de6ecaf6194c25b` | the `DATABASE_URL` database name and the scratch paths |
+| `p2-probe.py` (recovered, as run) | `e5a12121fbf542e9e5d13f93d24bcbe3c5846154448d961ed0c7b8a269e7e32d` | = §4.5's stub probe |
+| `p1-report.json` (the U1 run) | `32ae6c74441028975a10eee68679d85533f052b1a759d40660fa752587947516` | the U1 result surface |
+| `p1-run.log` (the U1 run) | `60ba9d0d0a32281be5b951d0001bfd19627f6a91620854d25c6bb90470f6f084` | the U1 console log |
+| `x1.go` / `x2.go` overlays of the merged bytes | `5ff17968bb2e94aef5b5113b62e1817c68f68fa507532f3f2cce7fa7e52fbd2b` / `aa280207e1359178b3a5b74f9b9c6981d721f41bf73dc93cbe70ac7f6b4807b1` | the X1/X2 mutants (§6) |
+
+## 13. Bind — scratch run `45811007804` on `22d6c411` (case set `shared`) — BINDING
+
+The §7 acceptance clause executed on the exact PR-head bytes
+(`22d6c41167ebfb76ce474ed038c6e753ba72b85e`) plus the two scratch-only files, pushed once as
+`19d8b81548ffa319c26dfaf97c80b8a3e48f1a02` (parent = the PR head; diff = the two files:
+`.github/workflows/scratch-rf-acc-containment-goal-admission.yml` sha256
+`bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b`, `scripts/ci/scratch-gh-shim`
+sha256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`; the only delta vs the
+`b0ba2694`-recovered copy is `case_sets=(codex_containment claude_containment)` →
+`case_sets=(shared)`). Run `45811007804` (workflow `Scratch containment goal-admission probe`,
+attempt 1, created 11:29:12Z, conclusion `failure`), `total_count=1` at every list read (creation
+11:29:12Z, pre-deletion 11:35:39Z, post-deletion 11:35:44Z, final 11:38:10Z; the settlement state
+read from the run object); branch deleted, scratch worktree removed, PR refs untouched.
+
+This row is the contract's BINDING acceptance (§7 and the conductor's PR #303 round-1 ruling): the
+whole log contains 0 occurrences of the recorded refusal. The round-2 delta since is comment-only
+in the three code files (§1) plus the `origin/main` `b0206393` merge; the conductor re-Binds
+`shared` on the merged head, whose gate rows are §5.1.
+
+- **The recorded stop is gone.** `Linux clone intent does not match the current admitted Subject`
+  and `clone intent` occur **0** times in the whole 3,552-line log, together with 0 of
+  `reserve owner witness clone before source Git effects`, `pre-existing RunJournal`,
+  `is not physically released`, `may still own or require recovery` and every earlier stop class.
+  The clone reserve now admits: the retained journal projects
+  `{"local_state":"claimed","has_claim_grant":true,"has_clone_intent":true,"has_seed_receipt":true,"recovery_required":true}`
+  (raw 3121; run 300 read `false/false/false` at the refusal), and the exported member records
+  `clone.checkout_ready: true`.
+- **First failing line** (gate raw 3111: `Go native acceptance event gate failed:
+  bad=TestProductionLinuxV2PiNativeProviderAction=run:1,pass:0,skip:0, skipped=[], fail_events=2`;
+  raw 3114): `production_linux_v2_native_witness_test.go:91: wait for isolated production
+  owner-witness command: hidden owner-witness command exited unsuccessfully: exit status 1`,
+  with the owner-witness stderr `-linux-v2-native-owner-witness: wait for authentic Pi owner
+  witness turn: pi rpc final assistant message did not stop normally: "error"` (raw 3119; the
+  daemon's `ErrUnexpectedAssistantStop`, `daemon/internal/harness/pi/rpc.go:53`) and
+  `--- FAIL: TestProductionLinuxV2PiNativeProviderAction (5.31s)`. The scratch workflow supplies
+  dummy credentials (`SYMMETRY_OPENAI_API_KEY: sk-scratch-dummy`) where the acceptance script
+  requires secret-backed ones (`:19` `: "${SYMMETRY_OPENAI_API_KEY:?…}"`, `:57` the `gho_*` check)
+  and writes that key into the B-only native credential file (`:393`) the pi turn authenticates
+  with.
+- **All 21 verified rows that ran are green** (`run=1 pass=1 skip=0`): the unprovisioned refusal,
+  the seven AppArmor rows, the legacy pi/OpenCode refusals, the B-caller / cross-mount /
+  cgroup-procs-fd rows, the four `InstalledLinuxOwner*Scratch` rows and the four hostile-marker
+  rows (raw 2495, 2505-2511, 2519-2531). The pi leg has no verified row.
+- **`stop_readback_reader` did not run** — the abort is inside the `case` block at the pi leg
+  (`:3160`), before its single call site (`:3226`): 0 `readback-reader:` rows, 0 `did not stop
+  cleanly`, only the start row `root readback reader ready:
+  unit=symmetry-ci-readback-reader.service MainPID=7245` (raw 2518). Its Result row is unmeasured,
+  not failed (had it run, the row it prints is the reader's own exit line
+  `readback-reader: stop signal requests=N`; the block asserts `ActiveState=inactive`,
+  `Result=success`, `ExecMainStatus=0` and the removed ready file).
+- **Export/manifest:** `redacted evidence export failed: pi durability witness is unavailable:
+  ack-loss-replay-checkout_ready.json` (raw 3401); **no manifest**; `Case set shared exited 1`
+  and `Failed case sets: shared` (raw 3404-3405).
+- **Artifacts:** `linux-v2-native-evidence-45811007804-1` (id `15114046167`, 2011 B, sha256
+  `cdc9a7e4dbd59c78aeb64207d8f045ed89150f68f1f9ed0608a81116f8d8c842`), members
+  `shared/pi-native-provider-action.json` (3224 B, `2cc6ec1482f29bc53d34bc810e266fa9099afb7465dafa8f59a6124473728ebb`;
+  `subject.commit` = the run head, `installed_owner_verified: true`, `clone.checkout_ready: true`,
+  `provider_action_succeeded: false`) and `shared/unprovisioned-owner-refusal.json` (691 B,
+  `c0bc11244999b3ba3337c3986128b7ba140a7b304856d678b5eae7c5ca221033`, `owner_witness_outcome:
+  unprovisioned_refused`); `linux-v2-host-prerequisite-45811007804-1` (id `15113830851`, 675 B,
+  sha256 `da9ef4a8f6537a5c1b6373a39c7c774fb39321ce3601e57f05705dd065a5ec81`, member
+  `a26fd7b8736738a81f9899d3533bc03d4beebe673c492f0c5f868a4f70c8db50`, `status: passed`,
+  `source_commit` = the run head).
+
+Run-input sha256 equality (run head `19d8b81548` vs PR head `22d6c411`, `git cat-file -p … |
+sha256sum` at both revisions; the pushed commit's parent is exactly the PR head and
+`git diff --name-status 22d6c411 19d8b81548` is exactly the two scratch-only additions, so every
+other tree file is byte-identical by construction):
+
+| File | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `b4141da9face795573dc1d3d5619625197743575cf6f65e462fb372e8cd79d08` | same | yes |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` | same | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | same | yes |
+| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | same | yes |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` | same | yes |
+| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | same | yes |
+| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | same | yes |
+| `scripts/ci/assert-go-test-json.py` | `bf4eac89a9d0fc89e380a8a579d9d4b7acb7e5c79bf49ca1369305baefe61582` | same | yes |
+| `scripts/ci/linux-v2-native-tools.sh` | `500ac7b47dd9a9b0f5aea2d67dafe4a0131dfd10726b0dc4b0215f4f1b410c69` | same | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The run executed the `22d6c411` PR-head bytes listed above (e2e file `b4141da9…`, key test
+`09ea677b…`, register `25b04fbc…`, fixture `82668512…`); the round-2 comment-only edits and the
+gofmt alignment change no executed byte's behaviour, and every round-2/merged re-run is in §5.1.
+
+Log: `gh run view 45811007804 --repo wxxb789/symmetry --log`, 3,552 lines, sha256
+`264d792732a4feeec20c34987822754f76fe8e16d58db00303d79bcae4201970`; watched once
+(`gh run watch 45811007804 --interval 60 --exit-status`, single invocation).

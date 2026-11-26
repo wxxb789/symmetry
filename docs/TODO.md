@@ -2209,14 +2209,29 @@ The `pi_provider_action`/crash-leg provider-scoped admission is delivered (2026-
 `rf-acc-pi-provider-admission`, branch `refactor/rf-acc-pi-provider-admission`, base `b27ea691`);
 its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
 `## rf-acc-pi-provider-admission: the pi provider legs move to a provider-scoped Goal admission (2026-11-26)`.
-The Bind acceptance row is pending the conductor's Bind (`shared`) run on the PR head.
+The conductor's Bind303 (`shared` on `22d6c411`, run `45811007804`) is the acceptance: the
+clone-intent/Subject refusal occurs 0 times in the whole log, the retained journal reads claimed
+with `has_claim_grant`/`has_clone_intent`/`has_seed_receipt` true, and all 21 verified rows are
+green. The leg's next stop, verbatim: `production_linux_v2_native_witness_test.go:91: wait for
+isolated production owner-witness command: hidden owner-witness command exited unsuccessfully:
+exit status 1`, with owner-witness stderr `wait for authentic Pi owner witness turn: pi rpc final
+assistant message did not stop normally: "error"` — routed to the new goal
+`rf-acc-pi-authentic-turn`, gated on #303; `stop_readback_reader` did not run (its Result row is
+unmeasured) and the redacted-evidence export was refused
+(`pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`).
 
 - [ ] The e2e provider-scope expectation keys on each case constructor's `providerActionRequired`
       flag, which no local check pins against the writer's `PROVIDER_ACCESS_CASES` or the fixture's
       provider-sync role (2026-11-26, same goal; plan §3.3, record §10.2): a drift — a
       provider-scoped leg whose witness-case constructor loses the flag, or a provider-free leg
       that keeps it — is refused fail-closed by the witness request reader
-      (`daemon/e2e/production_linux_v2_native_witness_test.go:1682-1696`), but only on the credentialed
-      dispatch. The writer/fixture pair is pinned statically by
+      (`daemon/e2e/production_linux_v2_native_witness_test.go:1695-1705`), but only on the
+      credentialed dispatch. The writer/fixture pair is pinned statically by
       `scripts/ci/test-linux-v2-owner-request-keys.py`; a generated row test over the Go case
-      constructors would close the third side. Owner: conductor.
+      constructors would close the third side. The reader's dispatch call is pinned only up to the
+      predicate: deleting the `if refusal := linuxV2AdmissionProviderScopeRefusal(...)` block at
+      `:1700-1702` or inverting its first argument leaves the whole `daemon/e2e` package green
+      (overlay mutants X1/X2, exit 0; record §6), so the call-site wiring is guarded only by the
+      env-gated production witness and the credentialed dispatch; a committed pin needs a seam
+      that runs in CI — an env-gated probe test was ruled out because it would not run in CI
+      either. Owner: conductor.

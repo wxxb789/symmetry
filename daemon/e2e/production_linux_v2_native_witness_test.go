@@ -1896,8 +1896,7 @@ func TestLinuxV2AdmissionAllowsProviderSyncRows(t *testing.T) {
 		OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationResourceSync}},
 	}
 	rows := []struct {
-		name string
-		// Every field difference from the exact Control composition must stay refused.
+		name  string
 		scope *protocol.ProviderScope
 		want  bool
 	}{
