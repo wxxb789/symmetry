@@ -5622,3 +5622,36 @@ section, whose pointer sentence names this one.
       stop, `owner_loss` captured (`owner_lost=true`, `error` absent, helper-issued `stop_proof`;
       both manifests passed). The optional `shared` `stop_receipt_durable` leg was not in the
       run's two case sets. Evidence record `## Bind 4`.
+
+## rf-acc-synthetic-cleanup-seed: the fixture serves the seed chain to B (2026-11-26)
+
+- [x] The labelled clone_checkout stop of the `synthetic_goal_cleanup` set (moved from
+      `docs/TODO.md`, section `## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)`): first
+      failing line, verbatim:
+      `production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the
+      real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2
+      RELEASE result is unresolved: Linux owner helper release outcome is unresolved
+      (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
+      guest_stage=seed errno=13)` (re-Bind run `45803728792` on `5f744370`; the set is not green:
+      `Case set synthetic_goal_cleanup exited 1`, the export refused `pi durability witness is
+      unavailable: synthetic-goal-cleanup.json`, so no manifest and no `linux-v2-native-evidence-*`
+      artifact exists). Root cause and fix (goal `rf-acc-synthetic-cleanup-seed`, 2026-11-26, branch
+      `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`; plan
+      `docs/plans/2026-11-26-rf-acc-synthetic-cleanup-seed-plan.md`, record
+      `docs/evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md`): the B clone bootstrap opens
+      every ancestor of the clone seed path `O_RDONLY` (`openReadOnlyAPathDirectory`,
+      `daemon/internal/clonebootstrap/filesystem_linux_amd64.go:95`, `:309-345`, per-component
+      `O_RDONLY|O_DIRECTORY|O_NOFOLLOW` at `:317`), and the fixture published the case root
+      `/opt/symmetry-owner-test/synthetic-goal-cleanup` as `root:A_GID 0751`
+      (`scripts/ci/linux-v2-native-acceptance.sh:589`), so B (`other`) held `--x` and the first
+      `openat` of the walk failed `EACCES`; `openCloneSeed` reported it as
+      `open A-owned seed parent without symlinks: permission denied`, the bootstrap returned
+      `fail(CloneFailureSeed, …)` (`clonebootstrap/main_linux_amd64.go:113`, `:117`), its command
+      main encoded the failure frame (`daemon/cmd/symmetry-linux-clone-bootstrap/main.go:27`), and
+      the helper rendered `guest_stage=seed errno=13` (`gate_lifecycle_linux.go:1108`, `:761-790`). The
+      arm now grants B read on the case root (`:592`) and asserts B's own read access to the case
+      root and the seed root (`:1459-1462`), so a re-tightening reddens the set before the witness
+      starts; no production byte, witness assertion or containment check changed, and the config
+      stays `root:A 0640` B-unreadable. Red/green measured in the resolute replica and every local
+      gate recorded in the evidence record (delivered, pending the conductor's Bind on the PR head:
+      the record's §7 states the observation that confirms closure).
