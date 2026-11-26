@@ -227,7 +227,8 @@ a converted leg has it running.
 | fix-round-2 full module suites | `go test ./...` from `daemon/`: Windows (go1.27.4 windows/amd64) and WSL Ubuntu-24.04 as unprivileged `symmetry-a` (umask 022, private `TMPDIR`) | Windows exit 0 (0 FAIL lines); WSL exit 0. The root-run WSL pass failed two packages on environment guards (`internal/platform`'s unprivileged-A requirement; `native/linux-gate/protocol`'s gate-census fd inheritance); both are identical at base `f30f3ef8` and pass in the CI-shaped unprivileged environment |
 | fix-round-2 race + static gates | `go test -race -count=1 ./internal/linuxreadback/...` (WSL, `ok … 12.107s`); `gofmt -l .`; `go vet ./...`; `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go vet ./...`; `bash -n scripts/ci/linux-v2-native-acceptance.sh` | all exit 0 |
 | fix-round-2 record/duplication gates (scratch commit `cfc32bdf`, parent `f30f3ef8`, base `8453da12`) | `scripts/ci/jscpd-changed.py --repo <scratch> --base 8453da12 --head HEAD`; `check-record-cleanliness.py`; `model-routing-record-sanitize.py --check --root-only` on the changed record; `python scratch/comment-cap.py <scratch> 8453da12` | jscpd exit 0 (15 changed files, 1766 scanned sources, 1261 corpus clones, none new); cleanliness exit 0 (1 changed record passes); sanitize exit 0; comment-cap exit 0 |
-| PR body refresh | `gh pr view 296 --repo wxxb789/symmetry --json body --jq .body` → `findings/296-body.md` | 83 lines, 0 HTML comments |
+| PR body refresh | `gh pr view 296 --repo wxxb789/symmetry --json body --jq .body` → `findings/296-body.md` | 139 lines, 0 HTML comments (full rewrite in the round-2 records pass) |
+| round-2 records pass (T1-T6; scratch clone commit of the records on `57c8c775`) | `check-record-cleanliness.py --base 8453da12 --head HEAD`; `model-routing-record-sanitize.py --check --root-only` on the changed records; `python scratch/comment-cap.py <worktree>` | cleanliness exit 0 (3 changed records pass); sanitize: evidence exit 0, `docs/TODO.md` exit 0, `docs/archive/CLOSED-TODO.md` exit 1 (identical at base `8453da12`; pre-existing quoted specimens, none on branch-added lines); comment-cap exit 0 |
 
 The reproduction's child is the gate-shaped userns child of plan §8.2 (the local row maps `0 0 1`
 beside `1 <B> 1` so the post-exec drop to the B extent is possible in Go; the exact single-extent
@@ -261,14 +262,16 @@ delivered bytes (§1 digests); the module and static gates were re-run at the de
 ## 7. Runs
 
 No run was dispatched from this stage: the contract's acceptance binds the conductor's single
-scratch/Bind `shared` run on the PR head, and the fixture's reader step, the unit proof and the
-conversion rows above are the local evidence that step consumes.
+scratch/Bind `shared` run on the PR head — delivered as the `Bind 2` subsection below — and the
+fixture's reader step, the unit proof and the conversion rows above are the local evidence that
+step consumes.
 
 ### Bind296 diagnostic run — one scratch run on the candidate head (`shared`)
 
-**Diagnostic only, superseded by the post-fix Bind**: the conductor ruled this run diagnostic (it
-ran on `f30f3ef8`, before the S1-S4 fix); the binding run is the conductor's Bind on the fixed
-head. The run's rows are recorded verbatim below, including the new stop it found. S5
+**Diagnostic only, superseded by the post-fix Bind — not binding**: the conductor ruled this run
+diagnostic (it ran on `f30f3ef8`, before the S1-S4 fix); the binding row is the `Bind 2`
+subsection below (`45737002125` on `57c8c775`). The run's rows are recorded verbatim below,
+including the new stop it found. S5
 (leaf-membership stop) — see the conductor's S5 section; the round 2/3 fix is the S5 subsection
 below.
 
@@ -282,10 +285,10 @@ sha256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`; both 
 byte-exact from `b0ba2694`, the workflow's `case_sets` array the only delta). Run head
 `1e206551e744bc58a127257085aacc34d374c327`, parent exactly `f30f3ef8`.
 
-Run-input sha256 equality (run head vs PR head; every changed code or script file of this
-branch):
+Run-input sha256 equality (run head vs candidate head `f30f3ef8`; every changed code or script
+file of this branch):
 
-| file | run-head sha256 | PR-head sha256 | equal? |
+| file | run-head sha256 | candidate-head sha256 (`f30f3ef8`; diagnostic, not binding) | equal? |
 | --- | --- | --- | --- |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `3c26bf3f729342b8e088ba9470236485f09cb6924bf05267df7cb44243e3e558` | `3c26bf3f729342b8e088ba9470236485f09cb6924bf05267df7cb44243e3e558` | yes |
 | `daemon/internal/linuxreadback/cmd/linux-v2-readback-reader/main.go` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` | yes |
@@ -333,7 +336,7 @@ The diagnostic Bind's new stop was root-caused in a `resolute` replica (Ubuntu 2
 uutils multicall `coreutils 0.8.0`) and fixed in the protocol test files (no fixture change: the
 `scratch` role already exports `SYMMETRY_LINUX_CLONE_TEST_ACK_ROOT`
 (`linux-v2-native-acceptance.sh:1950`), installs it A-owned 0700 with the B `r-x` ACL
-(`:754-755`, `:873-874`), and the helper's name is outside the shared `-test.run` regex
+(`:754-755`, `:872-873`), and the helper's name is outside the shared `-test.run` regex
 (`:3145`)).
 
 Root cause: the gate executes the pinned image with `execveat(image, "", argv, envp,
@@ -368,6 +371,10 @@ bytes in both replicas — `:1127: A helper exited unsuccessfully after RELEASE:
 — `--- PASS: TestLinuxOwnerNativeOwnerDeathScratch` in resolute and noble (`TEST_EXIT=0`, run30),
 and the leg is referenced by no fixture case set.
 
+Provenance: the legs now release an A-owned staged test ELF, pinned by the gate's `O_PATH` fd plus
+approved identity and bound by the reader's exe dev/ino after RELEASE. A swap after RELEASE fails
+closed; the legs no longer exercise a root-owned distro binary.
+
 Red→green (findings/296-s5.md §4, exact strings/exit codes): `resolute`, delivered test bytes, 4
 runs — `TEST_EXIT=1`, `launcher_integration_linux_test.go:452: native process did not retain the
 exact B-only boundary: linux readback refused at stage leaf: process is not a member of the named
@@ -387,6 +394,79 @@ the bit appears); the fix flips both to `!= 0` (fail when it appears), matching 
 `wire_linux_test.go:716` convention ("Linux AF_UNIX recvmsg never reports MSG_EOR") and the same
 polarity already used at `:281`/`:609`/`:647`/`:1007`. Red-first on noble (`:723`/`:795`) and on
 the delivered owner-loss leg (`:1127`), green after (PASS rows above).
+
+### Bind 2 — the binding run on the fixed head `57c8c775` (`shared`)
+
+The conductor's Bind (round 2) ran the `shared` set once on the exact PR-head bytes plus the two
+scratch-only files: run **`45737002125`** (workflow "Scratch containment goal-admission probe",
+event `push`, attempt 1, created 01:37:28Z, conclusion `failure`; `total_count=1` right after
+creation, after settlement, and after the branch deletion). Run head
+`523af22ab175d941818ae921b599c71799aab44c`, parent exactly `57c8c775`; the scratch-only files are
+`.github/workflows/scratch-rf-acc-containment-goal-admission.yml` (sha256
+`bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b`) and `scripts/ci/scratch-gh-shim`
+(sha256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`), recovered byte-exact
+from `b0ba2694` with the workflow's `case_sets` array (`→ shared`) the only delta.
+
+Run-input sha256 equality (run head vs PR head; every changed code or script file of this branch):
+
+| file | run-head sha256 | PR-head sha256 | equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `2403b2f4aa3584d2cfa0b83dfe12e3210a967c0fbf16e1172ba14f005329516b` | `2403b2f4aa3584d2cfa0b83dfe12e3210a967c0fbf16e1172ba14f005329516b` | yes |
+| `daemon/internal/linuxreadback/cmd/linux-v2-readback-reader/main.go` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` | `9d5e905930edf91a72bde5717c84617464d89f1f5d306cf4164d0dd82848f1f5` | yes |
+| `daemon/internal/linuxreadback/local_repro_linux_test.go` | `5d3590beda1e97b4e18bd3ec2aab2fbc28cd953292d2ee34c20d97120e8bd290` | `5d3590beda1e97b4e18bd3ec2aab2fbc28cd953292d2ee34c20d97120e8bd290` | yes |
+| `daemon/internal/linuxreadback/production_import_guard_linux_test.go` | `4d6618e33400dc1bf89a203c0ab510f8ec7bcb80440ce9ca42b3bcab8b3f1dbe` | `4d6618e33400dc1bf89a203c0ab510f8ec7bcb80440ce9ca42b3bcab8b3f1dbe` | yes |
+| `daemon/internal/linuxreadback/readback.go` | `7653e0dcc3f476599f2f53eefb5c8ac4efb124100dc555531a908f3d591d0619` | `7653e0dcc3f476599f2f53eefb5c8ac4efb124100dc555531a908f3d591d0619` | yes |
+| `daemon/internal/linuxreadback/reader_linux.go` | `0cbdb6a3f723ba476e259f11fd11f15d35c652c99d560d0feea52d35a3d5f791` | `0cbdb6a3f723ba476e259f11fd11f15d35c652c99d560d0feea52d35a3d5f791` | yes |
+| `daemon/internal/linuxreadback/reader_unsupported.go` | `9cb3aea49d3d12d4414e93c6c52e069e91f34eb5666f44e3bf44e4a1d4fd93ba` | `9cb3aea49d3d12d4414e93c6c52e069e91f34eb5666f44e3bf44e4a1d4fd93ba` | yes |
+| `daemon/native/linux-gate/protocol/clone_integration_linux_test.go` | `dfba0761d5048b0b09408b9288fb302ace6a8bdf2e9f6db7e10679fba3b28744` | `dfba0761d5048b0b09408b9288fb302ace6a8bdf2e9f6db7e10679fba3b28744` | yes |
+| `daemon/native/linux-gate/protocol/launcher_integration_linux_test.go` | `8132b62576ce6d17c046e0fa7e918c172ab82e9586456c9e04c5fd43368bf259` | `8132b62576ce6d17c046e0fa7e918c172ab82e9586456c9e04c5fd43368bf259` | yes |
+| `daemon/native/linux-gate/protocol/readback_helpers_linux_test.go` | `6455746fb8da553fac005fce5e2f059d6fb8427cefe4888f38f731ffe4273b38` | `6455746fb8da553fac005fce5e2f059d6fb8427cefe4888f38f731ffe4273b38` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `04bb9e8f700bfd672dcf9c7f89cebf1ed2a7b8c5266d77ecf1c2a37c4c882aad` | `04bb9e8f700bfd672dcf9c7f89cebf1ed2a7b8c5266d77ecf1c2a37c4c882aad` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+The eleven code/script digests equal §1's delivered-byte rows; the PR's other four changed files
+are record-only docs. Every recorded stop of the two original classes is gone: the run log
+(3,655 lines, sha256 `bf00da4fc22b7ea862e017e473637bd6b3482c41dc5c22db951c4692c7db5d95`, retained
+at the GDD state root `scratch/bind296r2/run-45737002125.log`) carries 0 occurrences of
+`clone_integration_linux_test.go:252`, `launcher_integration_linux_test.go:451`/`:452`/`:455`/`:465`,
+`launcher_integration_linux_test.go:723`/`:736`, `open /proc/`, `/proc/`, `permission denied`,
+`stage leaf`, or `not a member of the named leaf` (the log's only `environ` matches are two
+unrelated `contracts`-job lines). All four converted owner legs verified green
+(`verified TestInstalledLinuxOwnerBoundaryScratch: run=1 pass=1 skip=0` and its three siblings),
+and the reader's start proof passed after A's capability row (`CapEff`/`CapPrm` 0):
+`root readback reader ready: unit=symmetry-ci-readback-reader.service MainPID=7149`
+(01:40:54.8336087Z). The stop proof was **not reached** — the set aborts at the next gate before
+`stop_readback_reader`'s single call site (`scripts/ci/linux-v2-native-acceptance.sh:3224`; the
+stop block at `:2202-2226` uses `systemctl stop` and requires `ActiveState=inactive`,
+`Result=success`, `ExecMainStatus=0` and the removed ready file) — so the stop row remains
+unmeasured, not failed. First failing line (01:41:05.4424414Z), quoted whole:
+
+```
+witness output:     production_linux_v2_native_witness_test.go:91: pre-existing RunJournal c869cf0f-884e-4160-b99a-aedd1dd6d659/1 is not physically released and safe for a fresh run: prior RunJournal may still own or require recovery of a process or leaf
+```
+
+The refused journal was inserted by the immediately preceding
+`TestProductionLinuxV2AlternateCgroupMountRefusal` leg (goal `f900d3b4…` "Linux v2
+stage_replay_alternate_mount owner witness", run insert 01:41:01.8457627Z), which itself verified
+green; the pi leg's fresh-run precondition
+(`daemon/e2e/production_linux_v2_native_witness_test.go:1968-1976`) then refused the shared A
+StateDir, before any readback capture of that leg. The check text (`:1973`) and the leg ordering
+(`run_alternate_mount_refusal_witness` → `run_native_owner_witness pi_provider_action`) are
+identical in `2f7a38c6` (origin/main) — a pre-existing wall this run is the first `shared` run to
+reach (the diagnostic run aborted at the boundary leg; the last real-workflow `shared` dispatch,
+`45573253632` on main, failed earlier in the three protocol legs). Case-set row: `Case set shared
+exited 1` / `Failed case sets: shared`.
+
+Evidence artifact `linux-v2-native-evidence-45737002125-1` (1767 B, id `15080110623`, sha256
+`2406f9ab51388d3672b3ad7dd9e310552b8b100a67176873f916049ce6603758`; members
+`shared/alternate-mount-refusal.json` 2117 B `881783c7…` and
+`shared/unprovisioned-owner-refusal.json` 693 B `2a3213a3…`); host-prerequisite artifact
+`linux-v2-host-prerequisite-45737002125-1` (676 B, id `15078907824`, sha256
+`7933e2e80a2cc8a17948943b187fba5534ccacb64fe39e1eeb5e6163d3413985`, member `dc9c90a2…`, 822 B).
+The scratch branch was deleted once (`git ls-remote` prints nothing, exit 0); `refs/pull/296/head`
+and the origin PR branch stayed `57c8c775` throughout (01:27:01Z, 01:37:06Z, 01:37:26Z,
+01:44:59Z).
 
 ## 8. Limits and residuals
 

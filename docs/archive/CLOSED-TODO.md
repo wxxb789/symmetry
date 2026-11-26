@@ -5415,20 +5415,22 @@ section, whose pointer sentence names this one.
       both root-named to the pre-clone guard consumer run `45593856716` names
       (`read_class=gate_v1_frame errno=1`) with its unsatisfied credential fact
       (`guest_stage=gate_drop_bounding_set errno=1`, runs `45601287283`/`45602546196`) — are
-      addressed by two goals, one bound on its head and one delivered pending the conductor's
-      Bind. **Closed (2026-11-26, goal `rf-acc-apparmor-userns-profile`, branch
+      addressed by two goals, each bound on its head. **Closed (2026-11-26, goal
+      `rf-acc-apparmor-userns-profile`, branch
       `refactor/rf-acc-apparmor-userns-profile`, base `61399984`; plan
       `docs/plans/2026-11-25-rf-acc-apparmor-userns-profile-plan.md`, record
       `docs/evidence/rf-acc-apparmor-userns-profile-2026-11-25.md`):** the per-program AppArmor
       userns exception cleared both rows (run 3 `45659523339` clears `:240`/`:439`; runs 3-5 then
-      stop at the test-only `environ` row). **Delivered, pending the conductor's Bind (2026-11-26,
+      stop at the test-only `environ` row). **Delivered and bound (2026-11-26,
       goal `rf-acc-b-process-readback`, branch `refactor/rf-acc-b-process-readback`, base
       `8453da12`; plan `docs/plans/2026-11-26-rf-acc-b-process-readback-plan.md`, record
       `docs/evidence/rf-acc-b-process-readback-2026-11-26.md`):** the fixture-level root reader
       replaces the A-credentialed `/proc/<B>/environ`, `/proc/<B>/fd` and `/proc/<B>/exe` reads in
       `assertCloneNativeBProcess` and `assertNativeBProcess` (and the e2e capture's `ns/*` and
-      identity reads) with a root-run, PID/start-time/identity/leaf-bound capture, so the two
+      identity reads) with a root-run, PID/start-time/identity/leaf-bound capture; the conductor's
+      Bind run `45737002125` on `57c8c775` (record §7 "Bind 2") carries 0 occurrences of the two
       failing rows (`clone_integration_linux_test.go:252`, `launcher_integration_linux_test.go:451`,
-      positions recorded at the dispatch head) are expected to be no longer the stop once the Bind
-      run on the PR head binds that clearing and records any next stop verbatim; the e2e
-      same-class reads this census deferred are the goal's residual entry in `docs/TODO.md`.
+      positions recorded at the dispatch head) and passes all four converted owner legs, so they
+      are no longer the stop; the next stop is recorded verbatim as a new conductor goal
+      (`rf-acc-shared-journal-release`) in `docs/TODO.md`, where the e2e same-class reads this
+      census deferred are the goal's residual entry.

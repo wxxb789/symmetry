@@ -1857,44 +1857,12 @@ The two remaining product-test stops of this section's first item are addressed 
 the AppArmor-userns fix (`rf-acc-apparmor-userns-profile`, run 3 `45659523339`) cleared
 `clone_integration_linux_test.go:240` / `launcher_integration_linux_test.go:439` on its head, and
 the root readback conversion (`rf-acc-b-process-readback`, this tree) replaces the `environ` rows
-those runs then reached — delivered pending the conductor's Bind run on the PR head, which binds
-the cleared rows. The moved text and the closure statement are in `docs/archive/CLOSED-TODO.md`
-under `## rf-acc-native-burndown: the installed-owner legs' product-test stops (2026-11-26)`, and
-the conversion's residual is in `## rf-acc-b-process-readback: residual same-class e2e reads
-(2026-11-26)` below.
-
-## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)
-
-- [ ] Convert the same-class ptrace-gated A→B `/proc` reads this goal's census deferred (plan
-      §7.2 option (i), outside the converted capture-path surface;
-      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-12, branch
-      `refactor/rf-acc-b-process-readback`, base `8453da12`): the e2e
-      `linuxV2RequireNoWritableCgroupFDs*` fdinfo audit with its in-leaf descendant identity read
-      (`/proc/<B>/ns/pid`, `daemon/e2e/production_linux_v2_native_witness_test.go:3277`),
-      `linuxV2CaptureDetachedChild`'s child identity, `linuxV2OpenExactPIDFD` +
-      `linuxV2ReadPIDNamespaceIdentity` on a released B (`daemon/e2e/production_linux_v2_owner_cli_test.go`,
-      literal-PID-reuse leg; the ns/pid read is `:3603`), and the post-release helper-exit
-      `platform.ProcessIdentity` / `platform.CaptureLinuxUserNamespaceIdentity` / exe readlink plus
-      leaf audit (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:427,431,489,466`).
-      Each is ptrace-gated (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none
-      is reached by any recorded run: the latest recorded `shared` run (`45717008719`) stops at
-      `launcher_integration_linux_test.go:452` (`stage=leaf`, the goal's S5) before the
-      `run_literal_pid_reuse_witness` leg (`linux-v2-native-acceptance.sh:3177`), and the ten
-      witness sets stop before the live capture. Trigger:
-      the first run that reaches one, plus the fixture's reader-step A capability readback row in
-      that run — if it prints `CapEff 0`, the first stop in the helper-exit witness is its `:427`
-      released-B identity read (before the `:466` leaf audit).
-      Two further `production_linux_v2_owner_cli_test.go` sites join this census: the root
-      PID-reuse replacement/watcher targets (`runProductionLinuxV2LiteralPIDReuse` reads
-      `:2843,2855,2863,2894,2941`; `linuxV2OpenPIDReuseExchange` reads `:3008,3023/3026,3028/3029,3039`)
-      are ptrace-gated but root-credentialed (`:3018-3021` requires real/effective uid 0), so
-      converting them needs a second root-target reader contract rather than the B-only reader
-      (`reader_linux.go:484-490` refuses any non-B credential vector); the migration witness
-      `platform.ProcessIdentity(live.PID)` (`:4229`, a B target) is the reader's class but its
-      leg's `native_release` hold is still unreached. Both are plan §3.2 rows 11-12.
-      Conversion consumes the same `daemon/internal/linuxreadback` reader with an added per-FD
-      `flags`/`mnt_id` return and a leaf-wide per-PID capture loop, preserving each audit's race
-      tolerances. Owner: the next `rf-acc` acceptance increment that reaches the live e2e capture.
+those runs then reached — bound by the conductor's Bind run `45737002125` on `57c8c775` (record
+`docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §7 "Bind 2"), which clears both rows and
+records the next stop verbatim. The moved text and the closure statement are in
+`docs/archive/CLOSED-TODO.md` under `## rf-acc-native-burndown: the installed-owner legs'
+product-test stops (2026-11-26)`, and the conversion's residual is in
+`## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)` below.
 
 - [ ] `migration`'s release now fails with a named cause inside the guest policy, not with an
       unnamed read (residual of the entry closed in `docs/archive/CLOSED-TODO.md` under goal
@@ -1917,6 +1885,41 @@ the conversion's residual is in `## rf-acc-b-process-readback: residual same-cla
       (`daemon/internal/linuxpreflight/systemd_linux.go`); the D3 amendment should state the
       residual explicitly.
 
+## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)
+
+- [ ] Convert the same-class ptrace-gated A→B `/proc` reads this goal's census deferred (plan
+      §7.2 option (i), outside the converted capture-path surface;
+      `docs/evidence/rf-acc-b-process-readback-2026-11-26.md` §3, plan §3.2 rows 9-12, branch
+      `refactor/rf-acc-b-process-readback`, base `8453da12`): the e2e
+      `linuxV2RequireNoWritableCgroupFDs*` fdinfo audit with its in-leaf descendant identity read
+      (`/proc/<B>/ns/pid`, `daemon/e2e/production_linux_v2_native_witness_test.go:3277`),
+      `linuxV2CaptureDetachedChild`'s child identity, `linuxV2OpenExactPIDFD` +
+      `linuxV2ReadPIDNamespaceIdentity` on a released B (`daemon/e2e/production_linux_v2_owner_cli_test.go`,
+      literal-PID-reuse leg; the ns/pid read is `:3603`), and the post-release helper-exit
+      `platform.ProcessIdentity` / `platform.CaptureLinuxUserNamespaceIdentity` / exe readlink plus
+      leaf audit (`daemon/e2e/production_linux_v2_helper_exit_witness_test.go:427,431,489,466`).
+      Each is ptrace-gated (`fdinfo` measured plain-A denied, A+`CAP_SYS_PTRACE` allowed) and none
+      is reached by any recorded run: the diagnostic `shared` run (`45717008719`) stops at
+      `launcher_integration_linux_test.go:452` (`stage=leaf`, the goal's S5), and the binding
+      Bind 2 run (`45737002125`) stops at the pi leg's fresh-run precondition
+      (`daemon/e2e/production_linux_v2_native_witness_test.go:91`), both before the
+      `run_literal_pid_reuse_witness` leg (`linux-v2-native-acceptance.sh:3177`); the ten
+      witness sets stop before the live capture. Trigger:
+      the first run that reaches one, plus the fixture's reader-step A capability readback row in
+      that run — if it prints `CapEff 0`, the first stop in the helper-exit witness is its `:427`
+      released-B identity read (before the `:466` leaf audit).
+      Two further `production_linux_v2_owner_cli_test.go` sites join this census: the root
+      PID-reuse replacement/watcher targets (`runProductionLinuxV2LiteralPIDReuse` reads
+      `:2843,2855,2863,2894,2941`; `linuxV2OpenPIDReuseExchange` reads `:3008,3023/3026,3028/3029,3039`)
+      are ptrace-gated but root-credentialed (`:3018-3021` requires real/effective uid 0), so
+      converting them needs a second root-target reader contract rather than the B-only reader
+      (`reader_linux.go:484-490` refuses any non-B credential vector); the migration witness
+      `platform.ProcessIdentity(live.PID)` (`:4229`, a B target) is the reader's class but its
+      leg's `native_release` hold is still unreached. Both are plan §3.2 rows 11-12.
+      Conversion consumes the same `daemon/internal/linuxreadback` reader with an added per-FD
+      `flags`/`mnt_id` return and a leaf-wide per-PID capture loop, preserving each audit's race
+      tolerances. Owner: the next `rf-acc` acceptance increment that reaches the live e2e capture.
+
 - [ ] Product constraint (2026-11-26, goal `rf-acc-b-process-readback`; plan §3.2 rows 1-6, the
       evidence record's §7 S5 section, `findings/296-s5.md` §1/§6): a native image that dispatches
       on `AT_EXECFN` (uutils multicall and similar) is unsupported under the gate's fd exec
@@ -1927,6 +1930,33 @@ the conversion's residual is in `## rf-acc-b-process-readback: residual same-cla
       helper `:781`); `trustedSleepPath()` remains only for the two legs that never execute their
       image (`:225`, `:522`). The constraint stays for any future leg whose subject is a distro
       multicall applet. Owner: conductor.
+
+- [ ] The reader's ready-file publish is non-atomic while the fixture's readiness poll hard-asserts
+      its stat (2026-11-26, goal `rf-acc-b-process-readback`; record §5, round-2 review):
+      `publishReadyFile` runs `unlink ready` → `createExclusive("ready")` → write → `Chmod` →
+      `Chown`; `start_readback_reader`'s loop (`scripts/ci/linux-v2-native-acceptance.sh:2181-2184`)
+      checks `! -L`/`-f` in the `if` but hard-asserts `0:$A_GID:440:1` and the exact bytes inside
+      the body under `set -Eeuo pipefail`, so a poll sampling the create→chown window reddens a
+      valid run instead of retrying. The window is speculative (~2e-4 per case set) and fails
+      closed; fix later with `ready.tmp` + `renameat` (the response path's pattern). Owner:
+      conductor.
+
+- [ ] The next stop after the readback conversion is a pre-existing fresh-run wall (2026-11-26,
+      goal `rf-acc-b-process-readback`; Bind 2 run `45737002125` on `57c8c775`, record §7): verbatim
+      `production_linux_v2_native_witness_test.go:91: pre-existing RunJournal
+      c869cf0f-884e-4160-b99a-aedd1dd6d659/1 is not physically released and safe for a fresh run:
+      prior RunJournal may still own or require recovery of a process or leaf` — the e2e pi leg
+      refuses the RunJournal left by the preceding green
+      `TestProductionLinuxV2AlternateCgroupMountRefusal` leg; the check text and leg ordering are
+      identical in `2f7a38c6` (origin/main). Owner: conductor, new goal
+      `rf-acc-shared-journal-release`.
+
+- [ ] The reader stop proof stays unmeasured until a `shared` run reaches `stop_readback_reader`
+      (2026-11-26, goal `rf-acc-b-process-readback`; Bind 2 run `45737002125`, record §7): the run's
+      start proof passed (`MainPID=7149` after A's `CapEff` 0 row) but the set aborts before
+      `stop_readback_reader`'s single call site (`scripts/ci/linux-v2-native-acceptance.sh:3224`),
+      so the stop row (`Result=success`, `ExecMainStatus=0`, ready file removed) is unmeasured, not
+      failed. Owner: conductor (the first run that reaches the stop).
 
 ## rf-acc-containment-goal-admission: residuals (2026-11-26)
 
