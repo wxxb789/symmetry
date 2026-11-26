@@ -1672,6 +1672,11 @@ is fixed here; each bullet names what a follow-up has to re-derive.
       rows to `ce3c30b9` alone; the conductor's Bind run `45688173130` bound `2d423748`, the
       round-1 installer edits (R3/R4) postdate it, and the next Bind re-binds the delivered
       revisions (record §1 digests, §8 delta tables).
+      The migration turn-wait row is owned by goal `rf-acc-migration-pi-hold` (2026-11-26; plan
+      `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md`, record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md`; closed part in
+      `docs/archive/CLOSED-TODO.md`): the pi runner path now stages its `native_release` hold, which
+      is the interlock that kept the migration case out of the turn it cannot serve.
 
 ## Contracts: A6 tightening — owner sign-off required (rf-a6-contracts-strictness-corpus, 2026-11-22)
 
@@ -1864,17 +1869,6 @@ records the next stop verbatim. The moved text and the closure statement are in
 product-test stops (2026-11-26)`, and the conversion's residual is in
 `## rf-acc-b-process-readback: residual same-class e2e reads (2026-11-26)` below.
 
-- [ ] `migration`'s release now fails with a named cause inside the guest policy, not with an
-      unnamed read (residual of the entry closed in `docs/archive/CLOSED-TODO.md` under goal
-      `rf-acc-guest-native-exec`, 2026-11-25): runs `45593856716` (`read_class=gate_v1_frame`),
-      `45601287283` and the final `45602546196` (both `guest_stage=gate_drop_bounding_set errno=1`)
-      name the pre-clone guard and the credential fact; the remaining fix is the AppArmor-userns
-      exception below, in `scripts/install-linux-owner.sh` and the acceptance fixture, owned by
-      follow-up goal `rf-acc-apparmor-userns-profile`.
-      The `native_release` hold of the `migration` set is still unreached, and the aborted-release
-      stop measurement stays intermittent (`dial unixpacket: connect: connection refused` in runs
-      `45555828634`/`45579163968`, absent in `45557621798`/`45564071868`).
-
 - [ ] State the owner `Before` residual in the D3 `harness.md` amendment (2026-11-24, PR #277
       round-1 security hardening; evidence §8 and §10.7): the daemon preflight now accepts an
       effective owner `Before` (systemd's reverse of the daemon's own required
@@ -2011,12 +2005,16 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
 
 - [ ] The `claude_containment` set's next stop beyond the argv wall (2026-11-26, Bind run
       `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
-      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): verbatim `positive owner witness
-      lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` [INFERENCE:
-      `initial_lease_acked` is never set for this `hold_after=native_release` request]. Owner:
-      TBD, a new conductor goal; the stop is the owner witness's durable-stage summary check
-      (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
-      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`).
+      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): the durable-stage stop — verbatim
+      `positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` —
+      is fixed by L1 (Bind 2, run `45735420588`; record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md` §13/§14): the round-1 fold (PR #297)
+      stages `lease_armed` from the execution layer's initial lease ACK
+      (`daemon/internal/execution/linux_owner_v2_linux.go:837-838`) for every adapter, so the
+      tripped `initial_lease_acked` bit is set before the owner witness's durable-stage summary
+      check (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
+      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`). Next stop, verbatim
+      (Bind 2, record §14.2), owner: conductor (new goal): `production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after the stage-replay kill: exact process pidfd remained live beyond the bounded wait`.
 
 - [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
       `daemon/internal/platform/linux_supervisor_protocol_linux.go:19`) carries the command's
@@ -2114,6 +2112,12 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       `rf-acc-owner-loss-semantics` entries this goal carried (the F4 design question and the
       owner-identity polish) are closed in `docs/archive/CLOSED-TODO.md`; the clone-row disposition
       entry below stays open as designed.
+      The hold-wiring half of this row is delivered by goal `rf-acc-migration-pi-hold` (2026-11-26;
+      plan `docs/plans/2026-11-26-rf-acc-migration-pi-hold-plan.md`, record
+      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md`): the pi runner path now stages its
+      `native_release` hold from the release ACK, so the next Bind reads this arm's own inner
+      sub-step instead of a missing marker. The arm's inner sub-step measurement above stays open
+      here.
 
 - [ ] rf-acc-owner-loss-semantics residual: no product disposition deletes a retained
       pre-checkout clone row (2026-11-25, this goal's d1b ruling; evidence
