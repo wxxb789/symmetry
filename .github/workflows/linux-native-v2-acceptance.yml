@@ -127,6 +127,7 @@ jobs:
             ack_loss_launcher_bound
             stale_leaf
             migration
+            alternate_mount_refusal
             stale_journal_run_key
             stale_journal_run_key_legacy
             stale_journal_fence

@@ -5508,3 +5508,32 @@ section, whose pointer sentence names this one.
       `daemon/internal/harness/opencode/inprocess_containment_test.go` installs
       `execution.UseInProcessContainmentSupervisorForTesting` for the package on the `pi` shape and
       restores it after `m.Run`.
+
+## rf-acc-shared-journal-release: the shared pi leg refuses the prior refusal leg's RunJournal (2026-11-26)
+
+- [x] The next stop after the readback conversion is a pre-existing fresh-run wall (2026-11-26,
+      goal `rf-acc-b-process-readback`; Bind 2 run `45737002125` on `57c8c775`, record §7): verbatim
+      `production_linux_v2_native_witness_test.go:91: pre-existing RunJournal
+      c869cf0f-884e-4160-b99a-aedd1dd6d659/1 is not physically released and safe for a fresh run:
+      prior RunJournal may still own or require recovery of a process or leaf` — the e2e pi leg
+      refuses the RunJournal left by the preceding green
+      `TestProductionLinuxV2AlternateCgroupMountRefusal` leg; the check text and leg ordering are
+      identical in `2f7a38c6` (origin/main). Owner: conductor, new goal
+      `rf-acc-shared-journal-release`. **Delivered and bound (2026-11-26, goal
+      `rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`, base
+      `7111828b`; plan `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md`, record
+      `docs/evidence/rf-acc-shared-journal-release-2026-11-26.md`):** the row is a claim-only
+      RunJournal by design (the witness seeds the claim before the native-owner preflight; the
+      alternate cgroup bind mount is refused at the configured-vs-anchor parent identity) and no
+      product path retires it, so the refusal leg runs in its own case set
+      (`alternate_mount_refusal`, a fresh guest and Store per set) and its retained row is
+      invisible to the `shared` arm, which keeps base leg order. The leg pins its refusal cause
+      from the captured App stderr and requires its own retained row to stay claim-only; the pi
+      leg's `physically released and safe` precondition and every refusal assertion are
+      unchanged, and the option-(a) product-side retirement stays a residual in `docs/TODO.md`
+      under this goal's section. The conductor's Bind 2 (run `45778210044` on `66b27e63`, case
+      sets `shared` + `alternate_mount_refusal`) removed the `:91` stop: `shared` keeps it gone
+      with 21 verified rows (its next stop is the pre-existing pi provider-scoped-admission
+      residual, verbatim in the record's Bind 2 section), and the new set passed
+      `TestProductionLinuxV2AlternateCgroupMountRefusal`, exported `alternate-mount-refusal.json`
+      and exited 0 — acceptance met.

@@ -432,17 +432,17 @@ def pi_cleanup_witness(runtime_kind: str = "pi") -> dict:
     }
 
 
-def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
-    lines = text[text.index(f"{function}() {{") :].splitlines()
-    index = next(i for i, line in enumerate(lines) if line.strip() == header)
+def parse_case_arms(lines: list[str]) -> dict[str, str]:
     arms: dict[str, str] = {}
     pattern = None
     current: list[str] = []
-    for line in lines[index + 1 :]:
+    for line in lines:
         stripped = line.strip()
         if pattern is None:
             if stripped == "esac":
                 break
+            if not re.fullmatch(r"[A-Za-z0-9_|*]+\)", stripped):
+                continue
             pattern, _, tail = stripped.partition(")")
             pattern, current = pattern.strip(), [tail.strip()]
         else:
@@ -451,6 +451,43 @@ def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
             arms[pattern] = "\n".join(current)
             pattern = None
     return arms
+
+
+def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
+    lines = text[text.index(f"{function}() {{") :].splitlines()
+    index = next(i for i, line in enumerate(lines) if line.strip() == header)
+    return parse_case_arms(lines[index + 1 :])
+
+
+def acceptance_dispatch_arms(text: str) -> dict[str, str]:
+    lines = text.splitlines()
+    index = max(i for i, line in enumerate(lines) if line.strip() == 'case "$fixture_case_set" in')
+    return parse_case_arms(lines[index + 1 :])
+
+
+def acceptance_case_set_failures(text: str, exporter) -> list[str]:
+    listed = [line.strip() for line in text.splitlines() if line.strip().startswith("shared|codex_containment|")]
+    if len(listed) != 1:
+        return ["the acceptance script must carry exactly one case-set allowlist line"]
+    case_sets = set(listed[0].removesuffix(") ;;").split("|"))
+    failures = []
+    if case_sets != set(exporter.PI_DURABILITY_CASE_SETS) | {"codex_containment", "claude_containment"}:
+        failures.append("the script allowlist and the exporter pi-durability sets diverged")
+    if case_sets != set(exporter.MANUAL_CASE_SET_FILES):
+        failures.append("the script allowlist and the exporter case sets diverged")
+    targets = [target for allowlist in exporter.MANUAL_CASE_SET_FILES.values() for target in allowlist]
+    if len(targets) != len(set(targets)):
+        failures.append("case-set witness allowlists are not disjoint")
+    arms = acceptance_dispatch_arms(text)
+    if {name for pattern in arms for name in pattern.split("|")} != case_sets:
+        failures.append("the dispatch arms and the case-set allowlist diverged")
+    # The mount refusal retains a claim-only RunJournal no product path retires; its leg must
+    # stay in its own case set (own guest and Store), never in shared.
+    if [
+        pattern for pattern, body in arms.items() if "run_alternate_mount_refusal_witness" in body
+    ] != ["alternate_mount_refusal"]:
+        failures.append("the mount-refusal leg must run only in its own case set")
+    return failures
 
 
 class ExporterTest(unittest.TestCase):
@@ -1974,17 +2011,30 @@ class ExporterTest(unittest.TestCase):
             if case_set != "shared":
                 self.assertEqual(checked, exporter.MANUAL_CASE_SET_FILES[case_set], case_set)
 
-    def test_acceptance_case_set_lists_match_the_exporter_pi_durability_sets(self) -> None:
-        text = SCRIPT.with_name("linux-v2-native-acceptance.sh").read_text(encoding="utf-8")
-        listed = [line.strip() for line in text.splitlines() if line.strip().startswith("shared|codex_containment|")]
-        self.assertEqual(len(listed), 1)
+    def test_acceptance_case_set_lists_match_the_exporter_case_sets_and_dispatch(self) -> None:
         self.assertEqual(
-            set(listed[0].removesuffix(") ;;").split("|")),
-            set(load_exporter().PI_DURABILITY_CASE_SETS) | {"codex_containment", "claude_containment"},
+            acceptance_case_set_failures(ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), load_exporter()),
+            [],
         )
-        arms = bash_case_arms(text, "export_native_evidence", 'case "$fixture_case_set" in')
+        arms = bash_case_arms(
+            ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), "export_native_evidence", 'case "$fixture_case_set" in'
+        )
         self.assertEqual(set(arms), {"codex_containment", "claude_containment", "*"})
         self.assertIn("native_kind=pi", arms["*"])
+
+    def test_mutations_dropping_the_mount_case_set_or_rejoining_shared_redden_the_case_set_pins(self) -> None:
+        exporter = load_exporter()
+        text = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        dropped = text.replace("migration|alternate_mount_refusal|", "migration|", 1)
+        self.assertNotEqual(dropped, text, "the mutation must drop the mount set from the allowlist")
+        self.assertTrue(acceptance_case_set_failures(dropped, exporter))
+        rejoined = text.replace(
+            "  shared)\n",
+            '  shared)\n    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"\n',
+            1,
+        )
+        self.assertNotEqual(rejoined, text, "the mutation must return the mount leg to the shared arm")
+        self.assertTrue(acceptance_case_set_failures(rejoined, exporter))
 
     def test_manual_native_arguments_require_all_five_and_matching_case_set(self) -> None:
         pin = CONTAINMENT_PINS["codex"]
