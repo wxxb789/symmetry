@@ -22,13 +22,14 @@ import (
 
 // This launches the pinned native server without an installed-v2 grant. It
 // proves zero-effect legacy refusal/cleanup, not native owner acceptance.
-func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
+func TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest(t *testing.T) {
 	if os.Getenv(nativeSyntheticToolEnabledEnv) != "1" {
 		t.Skip("set SYMMETRY_OPENCODE_NATIVE_SYNTHETIC_TOOL=1 to run the native legacy refusal test")
 	}
+	expectedVersionLine := "opencode v" + TestedVersion
 	executable := strings.TrimSpace(os.Getenv(nativeSyntheticToolExecutableEnv))
 	if executable == "" || !filepath.IsAbs(executable) {
-		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, historicalNativeTestVersion)
+		t.Fatalf("%s must name the absolute OpenCode %s executable", nativeSyntheticToolExecutableEnv, expectedVersionLine)
 	}
 	info, err := os.Stat(executable)
 	if err != nil || !info.Mode().IsRegular() {
@@ -48,7 +49,7 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 	}
 	environment := nativeOpenCodeRepositoryTaskEnvironment(t, root, gateway.URL+"/v1")
 	nativeOpenCodeRepositoryTaskCheckEnvironment(t, environment, gateway.URL+"/v1")
-	nativeOpenCodeRepositoryTaskCheckVersion(t, executable, workspace, environment)
+	nativeOpenCodeRepositoryTaskCheckVersionLine(t, executable, workspace, environment, expectedVersionLine, nativeRepositoryTaskTimeout)
 
 	adapter := NewAdapter(executable)
 	productionAPI := adapter.newAPI
@@ -150,8 +151,8 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 	if calls, unsupported := verifierCalls.Load(), unsupportedPeers.Load(); calls != 1 || unsupported != 1 {
 		t.Fatalf("native OpenCode peer verification = calls:%d unsupported:%d, want one real unsupported peer", calls, unsupported)
 	}
-	if attempts, other, connections, headers := observer.attempts.Load(), observer.nonHealth.Load(), observer.connections.Load(), observer.headers.Load(); attempts != 1 || other != 0 || connections != 0 || headers != 0 {
-		t.Fatalf("native OpenCode HTTP = health attempts:%d other attempts:%d exposed connections:%d written headers:%d, want one rejected health attempt and zero HTTP effects", attempts, other, connections, headers)
+	if attempts, other, connections, headers := observer.attempts.Load(), observer.nonReadiness.Load(), observer.connections.Load(), observer.headers.Load(); attempts != 1 || other != 0 || connections != 0 || headers != 0 {
+		t.Fatalf("native OpenCode HTTP = readiness attempts:%d other attempts:%d exposed connections:%d written headers:%d, want one rejected readiness attempt and zero HTTP effects", attempts, other, connections, headers)
 	}
 	if requests := providerRequests.Load(); requests != 0 {
 		t.Fatalf("legacy OpenCode provider HTTP requests = %d, want zero", requests)
@@ -164,17 +165,17 @@ func TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest(t *testing.T) {
 // GotConn fires only when the production transport exposes a verified
 // connection to HTTP; no GotConn and no WroteHeaders prove refusal before HTTP.
 type nativeLegacyOpenCodeHTTPObserver struct {
-	transport   http.RoundTripper
-	attempts    atomic.Int32
-	nonHealth   atomic.Int32
-	connections atomic.Int32
-	headers     atomic.Int32
+	transport    http.RoundTripper
+	attempts     atomic.Int32
+	nonReadiness atomic.Int32
+	connections  atomic.Int32
+	headers      atomic.Int32
 }
 
 func (observer *nativeLegacyOpenCodeHTTPObserver) RoundTrip(request *http.Request) (*http.Response, error) {
 	observer.attempts.Add(1)
-	if request.Method != http.MethodGet || request.URL.Path != "/api/health" {
-		observer.nonHealth.Add(1)
+	if request.Method != http.MethodGet || request.URL.Path != "/api/info" {
+		observer.nonReadiness.Add(1)
 	}
 	trace := &httptrace.ClientTrace{
 		GotConn:      func(httptrace.GotConnInfo) { observer.connections.Add(1) },

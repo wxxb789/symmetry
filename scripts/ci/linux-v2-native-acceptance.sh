@@ -459,7 +459,7 @@ sudo chmod 0755 "$rootfs/usr/local/lib/symmetry-pi/pi"
   fail 'staged pi executable digest differs from the pinned 1.5.2 release archive'
 [[ "$(linux_v2_pi_tree_digest "$rootfs/usr/local/lib/symmetry-pi" sudo)" == "${pi_tree_sha:-}" ]] ||
   fail 'staged pi release tree differs from the pinned 1.5.2 archive'
-sudo install -o root -g root -m 0755 "$opencode_unpack/opencode" "$rootfs/usr/local/bin/opencode"
+stage_guest_binary "$opencode_unpack/opencode" /usr/local/bin/opencode ec93043f18f8a6b4d8e71ec9260e292ba6f91b66b142782135d40f0b58b0c152 'opencode executable' opencode
 if [[ "$fixture_case_set" == codex_containment ]]; then
   linux_v2_fetch_codex "$fixture_root"
   stage_guest_binary "$codex_executable" /usr/local/bin/codex "$codex_executable_sha" 'codex executable' codex
@@ -1142,7 +1142,7 @@ def config(kind, profile, model, resource_id, provider_access=None):
             "harness_kind": kind,
             "harness_version": {
                 "pi": "1.5.2",
-                "opencode": "1.18.32",
+                "opencode": "2.4.1",
                 "codex": "0.168.0",
                 "claude_code": "2.1.323",
             }[kind],
@@ -3132,8 +3132,8 @@ case "$fixture_case_set" in
     # Legacy Linux owners must fail before effects; installed-v2 positives run separately below.
     run_go_test "$pi_legacy_refusal_events" ./internal/harness/pi '^TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction$' \
       pi-baseline '' '' '' -- TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction
-    run_go_test "$opencode_legacy_refusal_events" ./internal/harness/opencode '^TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest$' \
-      opencode-baseline '' '' '' -- TestLinuxLegacyOpenCodeRefusesBeforeHealthRequest
+    run_go_test "$opencode_legacy_refusal_events" ./internal/harness/opencode '^TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest$' \
+      opencode-baseline '' '' '' -- TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest
     run_go_test "$v2_b_cleanup_denial_events" ./cmd/symmetry-linux-launcher \
       '^TestInstalledLinuxOwnerCleanupRejectsBCallerScratch$' cleanup-root \
       '' '' '' -- TestInstalledLinuxOwnerCleanupRejectsBCallerScratch

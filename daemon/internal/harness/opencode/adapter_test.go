@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/authority"
 	"github.com/wxxb789/symmetry/daemon/internal/execution"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 )
 
 // testHangGuard bounds how long a test waits for a scripted, in-process double
@@ -25,23 +27,109 @@ const testHangGuard = 30 * time.Second
 
 func TestProbeRecordsExactTransportButRemainsUnverified(t *testing.T) {
 	adapter := NewAdapterWithRunner("opencode", fixtureCommandRunner{responses: map[string][]byte{
-		"--version":    []byte("opencode v2.3.0\n"),
+		"--version":    []byte("opencode v" + TestedVersion + "\n"),
 		"serve --help": []byte("opencode serve\n--hostname  hostname to listen on\n--port  port to listen on\n"),
 	}})
 	capabilities, err := adapter.Probe(context.Background())
-	if !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
-	}
 	if err := capabilities.Validate(); err != nil {
 		t.Fatalf("capabilities invalid: %v", err)
 	}
-	if TestedVersion != "2.3.0" || !capabilities.VersionKnown || capabilities.NativeVersion != "2.3.0" || !capabilities.TransportVerified || capabilities.ImplementationVersion != "" || capabilities.Verified ||
+	if TestedVersion != "2.4.1" || !capabilities.VersionKnown || capabilities.NativeVersion != TestedVersion || !capabilities.TransportVerified || capabilities.ImplementationVersion != "" || capabilities.Verified ||
 		capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
 		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
 		t.Fatalf("capabilities = %+v, want known but completely unverified projection", capabilities)
 	}
-	if !strings.Contains(capabilities.Unsupported[string(harness.CapabilityStart)], "terminal") || !strings.Contains(capabilities.Unsupported[string(harness.CapabilityResume)], "recovery") {
-		t.Fatalf("unsupported reasons = %#v, want native terminal and recovery evidence requirements", capabilities.Unsupported)
+	// A runner without the hasher contract never promotes: off Windows the platform gate
+	// refuses first with the compose rows' sentinel, on Windows the blob binding refuses.
+	if runtime.GOOS != "windows" {
+		if !errors.Is(err, harness.ErrHarnessUnavailable) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodePlatformRefusalReason {
+			t.Fatalf("Probe() error = %v, start reason = %q, want the Linux platform refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+		}
+		return
+	}
+	if !errors.Is(err, harness.ErrNativeUnverified) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodeBlobRefusalReason {
+		t.Fatalf("Probe() error = %v, start reason = %q, want the exact-blob refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+	}
+}
+
+func TestProbePromotesOnlyTheExactTestedBlobOnWindows(t *testing.T) {
+	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
+		fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+		digest:               TestedExecutableHash,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if runtime.GOOS == "linux" {
+		if !errors.Is(err, harness.ErrHarnessUnavailable) || capabilities.Unsupported[string(harness.CapabilityStart)] != openCodePlatformRefusalReason {
+			t.Fatalf("Probe() error = %v, start reason = %q, want the Linux platform refusal", err, capabilities.Unsupported[string(harness.CapabilityStart)])
+		}
+		if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
+			t.Fatalf("capabilities = %+v, want no promoted operation on Linux", capabilities)
+		}
+		return
+	}
+	if runtime.GOOS != "windows" {
+		t.Skipf("promotion is deterministic only on windows; the fail-closed branch is asserted on linux")
+	}
+	if err != nil {
+		t.Fatalf("Probe() error = %v, want the promoted projection", err)
+	}
+	if capabilities.NativeVersion != TestedVersion || !capabilities.VersionKnown || !capabilities.TransportVerified ||
+		!capabilities.Verified || !capabilities.Start || !capabilities.Events || !capabilities.Cancel ||
+		capabilities.ImplementationVersion != openCodeImplementationVersion || capabilities.ProtocolVersion != 1 {
+		t.Fatalf("capabilities = %+v, want start/events/cancel bound to the exact blob", capabilities)
+	}
+	if capabilities.Resume || capabilities.Handoff || capabilities.ApprovalResponse || capabilities.ProviderAccess || capabilities.HardCostLimit ||
+		capabilities.Guidance != harness.GuidanceUnsupported || capabilities.Pause != harness.PauseUnsupported || capabilities.Usage != harness.UsageUnknown {
+		t.Fatalf("capabilities = %+v, want every fenced operation still unsupported", capabilities)
+	}
+	for _, capability := range []harness.Capability{harness.CapabilityStart, harness.CapabilityEvents, harness.CapabilityCancel} {
+		if reason := capabilities.Unsupported[string(capability)]; reason != "" {
+			t.Fatalf("promoted projection still lists %s unsupported: %q", capability, reason)
+		}
+	}
+}
+
+func TestProbeRejectsWrongBlobDigest(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the blob gate is only reachable where the platform gate admits")
+	}
+	adapter := NewAdapterWithRunner("opencode-fixture", digestCommandRunner{
+		fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+		digest:               testedLinuxExecutableHash,
+	})
+	capabilities, err := adapter.Probe(context.Background())
+	if !errors.Is(err, harness.ErrNativeUnverified) {
+		t.Fatalf("Probe() error = %v, want ErrNativeUnverified", err)
+	}
+	if capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel || capabilities.ImplementationVersion != "" {
+		t.Fatalf("capabilities = %+v, want a fail-closed projection for a foreign blob", capabilities)
+	}
+	if capabilities.Unsupported[string(harness.CapabilityStart)] != openCodeBlobRefusalReason {
+		t.Fatalf("start reason = %q, want the exact-blob binding reason", capabilities.Unsupported[string(harness.CapabilityStart)])
+	}
+}
+
+// The pinned 2.4.1 bytes print the bare readiness line; the prefixed spelling exists only in
+// the inline synthetic streams. Both forms must bind the loopback port.
+func TestReadinessAcceptsTheRecordedLineAndTheInlinePrefixedForm(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		line string
+		want int
+	}{
+		{name: "2.4.1 bare line", line: "server listening on http://127.0.0.1:46345\n", want: 46345},
+		{name: "prefixed inline line", line: "opencode server listening on http://127.0.0.1:43123\n", want: 43123},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			session := newNativeSession(context.Background(), func() {}, context.Background(), func() {}, &recordingSink{}, t.TempDir(), nil, "opencode", "secret", nil, time.Millisecond, time.Second)
+			session.observeReadiness([]byte(test.line))
+			session.mu.Lock()
+			port, readinessErr := session.listeningPort, session.readinessErr
+			session.mu.Unlock()
+			if readinessErr != nil || port != test.want {
+				t.Fatalf("readiness = port %d, err %v, want port %d", port, readinessErr, test.want)
+			}
+		})
 	}
 }
 
@@ -55,8 +143,8 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 		{name: "V1 version", version: "1.18.29", want: harness.ErrUnsupportedVersion},
 		{name: "historical V1 pin", version: "1.18.32", want: harness.ErrUnsupportedVersion},
 		{name: "superseded V2 pin", version: "opencode v2.2.7", want: harness.ErrUnsupportedVersion},
-		{name: "version in diagnostic", version: "failed to run opencode v2.3.0", want: harness.ErrUnsupportedVersion},
-		{name: "prerelease version", version: "opencode v2.3.0-preview", want: harness.ErrUnsupportedVersion},
+		{name: "version in diagnostic", version: "failed to run opencode v2.4.1", want: harness.ErrUnsupportedVersion},
+		{name: "prerelease version", version: "opencode v2.4.1-preview", want: harness.ErrUnsupportedVersion},
 		{name: "bad help", version: TestedVersion, help: "opencode serve --port", want: harness.ErrNativeUnverified},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -65,8 +153,13 @@ func TestProbeRejectsWrongVersionAndIncompleteHelp(t *testing.T) {
 				"serve --help": []byte(test.help),
 			}})
 			capabilities, err := adapter.Probe(context.Background())
-			if !errors.Is(err, test.want) {
-				t.Fatalf("Probe() error = %v, want %v", err, test.want)
+			want := test.want
+			if runtime.GOOS != "windows" && errors.Is(want, harness.ErrUnsupportedVersion) {
+				// Off Windows the platform refusal keeps today's tolerated ErrHarnessUnavailable class.
+				want = harness.ErrHarnessUnavailable
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("Probe() error = %v, want %v", err, want)
 			}
 			if err := capabilities.Validate(); err != nil {
 				t.Fatalf("capabilities invalid: %v", err)
@@ -119,6 +212,71 @@ func TestProbeMapsBoundedCommandErrorsToFailClosedResults(t *testing.T) {
 	}
 }
 
+// A cancelled or expired probe must keep the seeded projection and stay inside the
+// tolerated ErrHarnessUnavailable class, so a slow probe cannot abort daemon startup.
+func TestProbeKeepsSeededProjectionWhenTheProbeIsCancelledOrExpired(t *testing.T) {
+	for _, test := range []struct {
+		name                  string
+		newAdapter            func(cancel context.CancelFunc) *Adapter
+		wantMessage           string
+		wantContext           error
+		wantVersionKnown      bool
+		wantTransportVerified bool
+	}{
+		{
+			name: "version probe deadline",
+			newAdapter: func(context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", errorCommandRunner{errors: map[string]error{
+					"--version": fmt.Errorf("fixture probe: %w", context.DeadlineExceeded),
+				}})
+			},
+			wantMessage: "context deadline exceeded",
+			wantContext: context.DeadlineExceeded,
+		},
+		{
+			name: "help probe cancellation",
+			newAdapter: func(context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", errorCommandRunner{
+					responses: map[string][]byte{"--version": []byte("opencode v" + TestedVersion + "\n")},
+					errors:    map[string]error{"serve --help": fmt.Errorf("fixture probe: %w", context.Canceled)},
+				})
+			},
+			wantMessage:      "context canceled",
+			wantContext:      context.Canceled,
+			wantVersionKnown: true,
+		},
+		{
+			name: "digest observes cancellation",
+			newAdapter: func(cancel context.CancelFunc) *Adapter {
+				return NewAdapterWithRunner("opencode", cancellingDigestCommandRunner{
+					fixtureCommandRunner: fixtureCommandRunner{responses: exactBlobProbeResponses()},
+					cancel:               cancel,
+				})
+			},
+			wantMessage:           "context canceled",
+			wantContext:           context.Canceled,
+			wantVersionKnown:      true,
+			wantTransportVerified: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			capabilities, err := test.newAdapter(cancel).Probe(ctx)
+			if !errors.Is(err, harness.ErrHarnessUnavailable) || !errors.Is(err, test.wantContext) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("Probe() error = %v, want the tolerated unavailable class with %v and %q", err, test.wantContext, test.wantMessage)
+			}
+			if err := capabilities.Validate(); err != nil {
+				t.Fatalf("cancelled probe returned an invalid projection: %v", err)
+			}
+			if capabilities.Kind != harness.KindOpenCode || capabilities.Verified || capabilities.Start || capabilities.Events || capabilities.Cancel ||
+				capabilities.VersionKnown != test.wantVersionKnown || capabilities.TransportVerified != test.wantTransportVerified {
+				t.Fatalf("capabilities = %+v, want the seeded projection (version_known=%t transport_verified=%t)", capabilities, test.wantVersionKnown, test.wantTransportVerified)
+			}
+		})
+	}
+}
+
 func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t *testing.T) {
 	process := newFakeProcess()
 	api := &fakeAPI{}
@@ -156,7 +314,8 @@ func TestStartUsesOwnedServeInvocationPersistsBeforeOutputAndWithholdsSecrets(t 
 	if !persisted || pid != 123 || identity != "created:123" {
 		t.Fatalf("ProcessDetails() = %d, %q; persisted=%v", pid, identity, persisted)
 	}
-	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"}
+	// 2.4.1 rejects the retired --pure flag (live-checked against the pinned ELF).
+	wantArgs := []string{"serve", "--hostname", "127.0.0.1", "--port", "0"}
 	if strings.Join(invocation.Args, "|") != strings.Join(wantArgs, "|") || invocation.Program != "opencode-test" || invocation.Dir != request.Workspace {
 		t.Fatalf("invocation = %+v, want owned explicit serve", invocation)
 	}
@@ -272,8 +431,8 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	}
 	staged := session.(harness.StagedSession)
 	handle, err := staged.Open(context.Background())
-	if err != nil || !isID(handle.ID, "ses_") || api.healthCalls != 1 || api.createCalls != 1 {
-		t.Fatalf("Open() = %+v, %v; health=%d create=%d", handle, err, api.healthCalls, api.createCalls)
+	if err != nil || !isID(handle.ID, "ses_") || api.readinessCalls != 1 || api.createCalls != 1 {
+		t.Fatalf("Open() = %+v, %v; readiness=%d create=%d", handle, err, api.readinessCalls, api.createCalls)
 	}
 	turn := harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{"key":"value"}`)}
 	if err := staged.StartTurn(context.Background(), turn); err != nil {
@@ -289,10 +448,19 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	if api.lastPrompt.Text != wantPrompt {
 		t.Fatalf("prompt text = %q, want %q", api.lastPrompt.Text, wantPrompt)
 	}
-	if err := staged.WaitTurn(context.Background()); !errors.Is(err, harness.ErrNativeUnverified) {
-		t.Fatalf("WaitTurn() error = %v, want ErrNativeUnverified", err)
-	}
+	// WaitTurn now blocks for a recorded session.execution.* terminal; the process ending
+	// without one settles the barrier as unverified.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- staged.WaitTurn(context.Background()) }()
 	process.finish(execution.Result{PID: 123, ExitCode: 0})
+	select {
+	case waitErr := <-waitDone:
+		if !errors.Is(waitErr, harness.ErrNativeUnverified) {
+			t.Fatalf("WaitTurn() error = %v, want ErrNativeUnverified", waitErr)
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("WaitTurn did not settle after the process ended")
+	}
 	result, err := session.Wait(context.Background())
 	if err != nil || result.Kind != harness.ResultUnknown || result.Semantic != nil {
 		t.Fatalf("Wait() = %+v, %v; want unknown without semantic result", result, err)
@@ -302,56 +470,339 @@ func TestOpenStartTurnAndWaitStayFailClosed(t *testing.T) {
 	}
 }
 
-func TestStartTurnAdmitsPromptBeforeOpeningDurableReplay(t *testing.T) {
-	process := newFakeProcess()
+// TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback drives the promoted barrier
+// end to end: recorded admission and session.execution.* terminal, the readback, the result kind.
+func TestWaitTurnSettlesRecordedTerminalsAgainstTheOutcomeReadback(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		terminal   string
+		reason     string
+		outcome    string
+		wantErr    bool
+		wantKind   harness.ResultKind
+		wantReason *protocol.TaskResultReason
+		interrupts int
+	}{
+		{name: "succeeded", terminal: "session.execution.succeeded", outcome: "succeeded", wantKind: harness.ResultSucceeded},
+		{name: "provider failure", terminal: "session.execution.failed", outcome: "failed", wantKind: harness.ResultFailed, wantReason: new(protocol.TaskResultReasonUnknownOutcome)},
+		{name: "interrupted", terminal: "session.execution.interrupted", reason: "user", outcome: "interrupted", wantKind: harness.ResultCancelled, wantReason: new(protocol.TaskResultReasonCancelled)},
+		{name: "readback disagrees", terminal: "session.execution.interrupted", reason: "user", outcome: "succeeded", wantErr: true, wantKind: harness.ResultUnknown, interrupts: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// The pinned bytes refuse an interrupt for a finished turn; a verified settle
+			// must close without ever issuing it.
+			api := &fakeAPI{outcome: test.outcome}
+			if !test.wantErr {
+				api.interruptErr = ErrInterruptUnapplied
+			}
+			staged, process := startStagedTestSession(t, api, &recordingSink{})
+			api.mu.Lock()
+			api.streamFactory = func(context.Context) io.ReadCloser {
+				return &recordedTurnGlobalStream{api: api, terminal: test.terminal, reason: test.reason}
+			}
+			api.mu.Unlock()
+			if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+				t.Fatalf("StartTurn() error = %v", err)
+			}
+			waitContext, cancelWait := context.WithTimeout(context.Background(), testHangGuard)
+			waitErr := staged.WaitTurn(waitContext)
+			cancelWait()
+			if test.wantErr && waitErr == nil {
+				t.Fatal("WaitTurn() = nil, want the fail-closed refusal")
+			}
+			if !test.wantErr && waitErr != nil {
+				t.Fatalf("WaitTurn() error = %v", waitErr)
+			}
+			process.finish(execution.Result{PID: 123, ExitCode: 0})
+			result, err := staged.Wait(context.Background())
+			if err != nil {
+				t.Fatalf("Wait() error = %v", err)
+			}
+			if result.Kind != test.wantKind || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
+				t.Fatalf("Wait() = %+v, want kind %q, no semantic result and unknown usage", result, test.wantKind)
+			}
+			if test.wantReason == nil {
+				if result.Reason != nil {
+					t.Fatalf("Wait() reason = %v, want none", *result.Reason)
+				}
+			} else if result.Reason == nil || *result.Reason != *test.wantReason {
+				t.Fatalf("Wait() reason = %v, want %q", result.Reason, *test.wantReason)
+			}
+			if err := staged.Close(context.Background()); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+			api.mu.Lock()
+			interrupts := api.interruptCalls
+			api.mu.Unlock()
+			if interrupts != test.interrupts {
+				t.Fatalf("interrupt calls = %d, want %d", interrupts, test.interrupts)
+			}
+		})
+	}
+}
+
+// TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst pins that an unsettled readback
+// can never verify a terminal: an ended session context refuses instead of waiting.
+func TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst(t *testing.T) {
+	fake := &fakeAPI{}
+	sessionContext, cancel := context.WithCancel(context.Background())
+	session := newNativeSession(sessionContext, cancel, context.Background(), func() {}, &recordingSink{}, t.TempDir(),
+		func(Config) (api, error) { return fake, nil }, "opencode", "secret", nil, time.Millisecond, time.Second)
+	cancel()
+	if err := session.awaitRecordedOutcome(fake, "ses_recorded_1", "succeeded"); err == nil {
+		t.Fatal("awaitRecordedOutcome() = nil, want a refusal once the session ended")
+	}
+}
+
+func recordedSessionEventStream(t *testing.T, name, sessionID string) (string, int) {
+	t.Helper()
+	var body strings.Builder
+	own := 0
+	for _, item := range recordedReceiptEvents(t, name) {
+		var envelope struct {
+			Durable json.RawMessage `json:"durable"`
+			Data    struct {
+				SessionID string `json:"sessionID"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(item, &envelope) != nil || len(envelope.Durable) == 0 {
+			continue
+		}
+		var durable struct {
+			Seq uint64 `json:"seq"`
+		}
+		if err := json.Unmarshal(envelope.Durable, &durable); err != nil {
+			t.Fatalf("parse durable cursor of %s: %v", name, err)
+		}
+		// The watcher opens its stream after session creation, so it never receives the seq-0 creation frame.
+		if durable.Seq == 0 {
+			continue
+		}
+		if envelope.Data.SessionID == sessionID {
+			own++
+		}
+		body.WriteString("data: ")
+		body.Write(item)
+		body.WriteString("\n\n")
+	}
+	return body.String(), own
+}
+
+// recordedWatcherSession builds the bare session the recorded-frame watcher rows drive; the
+// client and handle are seeded so a recorded terminal settles against the fake readback.
+func recordedWatcherSession(t *testing.T, fake *fakeAPI, sink harness.EventSink, sessionID string) *nativeSession {
+	t.Helper()
+	sessionContext, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	session := newNativeSession(sessionContext, cancel, context.Background(), func() {}, sink, t.TempDir(),
+		func(Config) (api, error) { return fake, nil }, "opencode", "secret", func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
+			return func(context.Context, net.Conn) error { return nil }
+		}, time.Millisecond, time.Second)
+	session.mu.Lock()
+	session.client = fake
+	session.handle = harness.NativeSessionHandle{ID: sessionID}
+	session.mu.Unlock()
+	return session
+}
+
+func recordedWatcherCodes(sink *recordingSink) (native, unknown int) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	for _, event := range sink.events {
+		switch event.Code {
+		case "opencode_session_event":
+			native++
+		case "opencode_unknown_session_event":
+			unknown++
+		}
+	}
+	return native, unknown
+}
+
+func TestRecordedSuccessSessionProducesNoUnknownDiagnostics(t *testing.T) {
+	const sessionID = "ses_ded027fb8ffeXP18hMb482YQFe"
+	const inboxID = "msg_be5a0bc1cfe3a506c506dd0b"
+	body, expectedFrames := recordedSessionEventStream(t, "windows-2026-11-25-r2.json", sessionID)
+	fake := &fakeAPI{outcome: "succeeded"}
+	sink := &recordingSink{}
+	session := recordedWatcherSession(t, fake, sink, sessionID)
+	done := make(chan struct{})
+	go session.watchSessionEvents(&streamHandle{body: io.NopCloser(strings.NewReader(body))}, done, sessionID, inboxID)
+	select {
+	case <-done:
+	case <-time.After(testHangGuard):
+		t.Fatal("the recorded success session replay did not finish")
+	}
+	native, unknown := recordedWatcherCodes(sink)
+	if unknown != 0 || native != expectedFrames {
+		t.Fatalf("recorded success replay = %d native, %d unknown, want %d native and zero unknown", native, unknown, expectedFrames)
+	}
+	if err := session.turnTerminalError(); err != nil {
+		t.Fatalf("recorded succeeded terminal did not verify: %v", err)
+	}
+}
+
+func TestWaitTurnSettlesTheRecordedProviderFailureTerminal(t *testing.T) {
+	const sessionID = "ses_ded021257ffeokLGbODupUg0Wh"
+	const inboxID = "msg_bca9f1dac9ec4d4c9e6b83dd"
+	body, expectedFrames := recordedSessionEventStream(t, "windows-2026-11-25-provider-failure.json", sessionID)
+	fake := &fakeAPI{outcome: "failed"}
+	sink := &recordingSink{}
+	session := recordedWatcherSession(t, fake, sink, sessionID)
+	done := make(chan struct{})
+	go session.watchSessionEvents(&streamHandle{body: io.NopCloser(strings.NewReader(body))}, done, sessionID, inboxID)
+	select {
+	case <-done:
+	case <-time.After(testHangGuard):
+		t.Fatal("the recorded provider-failure replay did not finish")
+	}
+	native, unknown := recordedWatcherCodes(sink)
+	if unknown != 0 || native != expectedFrames {
+		t.Fatalf("recorded provider-failure replay = %d native, %d unknown, want %d native and zero unknown", native, unknown, expectedFrames)
+	}
+	if err := session.turnTerminalError(); err != nil {
+		t.Fatalf("recorded provider-failure terminal did not verify: %v", err)
+	}
+	result, err := session.currentResult()
+	if err != nil || result.Kind != harness.ResultFailed || result.Reason == nil || *result.Reason != protocol.TaskResultReasonUnknownOutcome || result.Semantic != nil || result.Usage.State != harness.UsageUnknown {
+		t.Fatalf("currentResult() = %+v, %v; want a failed result with unknown outcome and unknown usage", result, err)
+	}
+	fake.mu.Lock()
+	calls := append([]string(nil), fake.callSequence...)
+	fake.mu.Unlock()
+	sawOutcome := false
+	for _, call := range calls {
+		if call == "outcome" {
+			sawOutcome = true
+		}
+	}
+	if !sawOutcome {
+		t.Fatalf("recorded terminal settled without the readback; calls = %v", calls)
+	}
+}
+
+// TestStartTurnRefusesARecordedAdmissionForAForeignInbox pins the 2.4.1 admission identity
+// binding: an inbox frame whose id is not the admitted message fails the turn.
+func TestStartTurnRefusesARecordedAdmissionForAForeignInbox(t *testing.T) {
+	api := &fakeAPI{}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
+	api.mu.Lock()
+	api.streamFactory = func(context.Context) io.ReadCloser {
+		return &recordedTurnGlobalStream{api: api, terminal: "session.execution.succeeded", inbox: "msg_foreign"}
+	}
+	api.mu.Unlock()
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	session := staged.(*nativeSession)
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- staged.WaitTurn(context.Background()) }()
+	select {
+	case waitErr := <-waitDone:
+		if waitErr == nil {
+			t.Fatal("WaitTurn() = nil, want the foreign-inbox refusal")
+		}
+	case <-time.After(testHangGuard):
+		t.Fatal("WaitTurn did not settle after the foreign-inbox admission")
+	}
+	session.mu.Lock()
+	streamErr, turnErr := session.streamErr, session.turnErr
+	session.mu.Unlock()
+	if !errors.Is(streamErr, ErrIdentityMismatch) || !errors.Is(turnErr, ErrIdentityMismatch) {
+		t.Fatalf("foreign-inbox errors = stream %v, turn %v, want ErrIdentityMismatch", streamErr, turnErr)
+	}
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+// recordedTurnGlobalStream serves the recorded admission and terminal shapes for the
+// session's own prompt, bound to the identities the adapter generated.
+type recordedTurnGlobalStream struct {
+	api      *fakeAPI
+	terminal string
+	reason   string
+	inbox    string
+	once     sync.Once
+	stream   io.ReadCloser
+	buildErr error
+}
+
+// waitForPrompt blocks until the fake API has observed the prompt this stream describes;
+// the watcher starts reading the stream before the prompt POST executes.
+func (stream *recordedTurnGlobalStream) waitForPrompt() (string, PromptRequest, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stream.api.mu.Lock()
+		sessionID, prompt := stream.api.lastPromptSession, stream.api.lastPrompt
+		stream.api.mu.Unlock()
+		if sessionID != "" && prompt.ID != "" {
+			return sessionID, prompt, nil
+		}
+		if time.Now().After(deadline) {
+			return "", PromptRequest{}, errors.New("recorded stream never observed the admitted prompt")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func (stream *recordedTurnGlobalStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		sessionID, prompt, err := stream.waitForPrompt()
+		if err != nil {
+			stream.buildErr = err
+			return
+		}
+		reason := ""
+		if stream.reason != "" {
+			reason = fmt.Sprintf(`,"reason":%q`, stream.reason)
+		}
+		inbox := stream.inbox
+		if inbox == "" {
+			inbox = prompt.ID
+		}
+		admission := fmt.Sprintf(`{"id":"evt_recorded_admission","type":"session.inbox.enqueued","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q,"inboxID":%q,"item":{"type":"user","payload":{"text":"admit"},"delivery":"steer"}}}`, sessionID, sessionID, inbox)
+		terminal := fmt.Sprintf(`{"id":"evt_recorded_terminal","type":%q,"durable":{"aggregateID":%q,"seq":2,"version":1},"data":{"sessionID":%q%s}}`, stream.terminal, sessionID, sessionID, reason)
+		stream.stream = io.NopCloser(strings.NewReader("data: " + admission + "\n\ndata: " + terminal + "\n\n"))
+	})
+	if stream.buildErr != nil {
+		return 0, stream.buildErr
+	}
+	return stream.stream.Read(data)
+}
+
+func (stream *recordedTurnGlobalStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
+}
+
+func TestStartTurnOpensTheGlobalStreamBeforeAdmission(t *testing.T) {
 	stream := newBlockingReadCloser()
 	api := &fakeAPI{stream: stream}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	if prompt := api.lastPromptRequest(); !prompt.Resume {
 		t.Fatalf("StartTurn() prompt = %+v, want explicit Resume:true work request", prompt)
 	}
-	if got, want := api.callOrder(), []string{"prompt", "events"}; !reflect.DeepEqual(got, want) {
+	if got, want := api.callOrder(), []string{"events", "prompt"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("call order = %#v, want %#v", got, want)
 	}
-	if after := api.eventCursors(); len(after) != 1 || after[0] != 0 {
-		t.Fatalf("event cursors = %#v, want [0]", after)
-	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnKeepsDurableReplayOwnedBySession(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnKeepsTheGlobalStreamOwnedBySession(t *testing.T) {
 	var stream *contextBlockingReadCloser
-	api := &fakeAPI{streamFactory: func(ctx context.Context, _ string, _ uint64) io.ReadCloser {
+	api := &fakeAPI{streamFactory: func(ctx context.Context) io.ReadCloser {
 		stream = newContextBlockingReadCloser(ctx)
 		return stream
 	}}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	defer cancelCaller()
 	if err := staged.StartTurn(callerContext, harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
@@ -365,26 +816,15 @@ func TestStartTurnKeepsDurableReplayOwnedBySession(t *testing.T) {
 	if stream.contextCancelled() {
 		t.Fatal("caller turn context cancelled the session-owned durable replay stream")
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
 func TestStartTurnCancelsInFlightPromptWhenCallerCancels(t *testing.T) {
-	process := newFakeProcess()
 	promptStarted := make(chan struct{})
 	api := &fakeAPI{promptStarted: promptStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	turnDone := make(chan error, 1)
 	go func() {
@@ -395,28 +835,17 @@ func TestStartTurnCancelsInFlightPromptWhenCallerCancels(t *testing.T) {
 	if err := <-turnDone; !errors.Is(err, context.Canceled) {
 		t.Fatalf("StartTurn() error = %v, want caller cancellation", err)
 	}
-	if api.openEventCalls != 0 || process.terminateCalls != 1 {
-		t.Fatalf("events=%d terminate=%d, want no replay and one cleanup", api.openEventCalls, process.terminateCalls)
+	if api.openEventCalls != 1 || api.promptCalls != 1 || process.terminateCalls != 1 {
+		t.Fatalf("events=%d prompt=%d terminate=%d, want one stream open, one admission attempt and one cleanup", api.openEventCalls, api.promptCalls, process.terminateCalls)
 	}
 }
 
-func TestStartTurnKeepsReplayOpenWhenCallerCancelsAfterAdmission(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnKeepsTheGlobalStreamOpenWhenCallerCancels(t *testing.T) {
 	openStarted := make(chan struct{})
 	openRelease := make(chan struct{})
 	stream := newBlockingReadCloser()
 	api := &fakeAPI{stream: stream, openEventStarted: openStarted, openEventRelease: openRelease}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	defer cancelCaller()
 	turnDone := make(chan error, 1)
@@ -426,32 +855,21 @@ func TestStartTurnKeepsReplayOpenWhenCallerCancelsAfterAdmission(t *testing.T) {
 	<-openStarted
 	cancelCaller()
 	if api.openEventContextCancelled() {
-		t.Fatal("caller cancellation interrupted durable replay opening after admission")
+		t.Fatal("caller cancellation interrupted global stream opening")
 	}
 	close(openRelease)
-	if err := <-turnDone; err != nil {
-		t.Fatalf("StartTurn() error = %v", err)
+	if err := <-turnDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("StartTurn() error = %v, want caller cancellation after the stream opened", err)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnObservesPromptAdmissionFromDurableReplay(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnObservesPromptAdmissionFromTheGlobalStream(t *testing.T) {
 	api := &fakeAPI{replayPromptAdmission: true}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
 	sink := &recordingSink{expectedCode: "opencode_session_event", expectedCodeSeen: make(chan struct{})}
-	session, err := adapter.Start(context.Background(), startRequest(t), sink)
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, sink)
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
@@ -459,71 +877,74 @@ func TestStartTurnObservesPromptAdmissionFromDurableReplay(t *testing.T) {
 	if !sink.hasCode("opencode_session_event") {
 		t.Fatalf("events = %+v, want replayed prompt admission native frame", sink.events)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestStartTurnClosesCommittedPromptWhenReplayCannotOpen(t *testing.T) {
-	process := newFakeProcess()
-	openErr := errors.New("durable replay unavailable")
-	api := &fakeAPI{openEventErr: openErr}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
+// The shared global stream carries other sessions' events; the watcher must skip them and
+// keep observing this session's own durable frames instead of failing the turn.
+func TestStartTurnSkipsForeignSessionFramesOnTheGlobalStream(t *testing.T) {
+	api := &fakeAPI{}
+	sink := &recordingSink{expectedCode: "opencode_unknown_session_event", expectedCodeSeen: make(chan struct{})}
+	staged, _ := startStagedTestSession(t, api, sink)
+	api.mu.Lock()
+	api.streamFactory = func(context.Context) io.ReadCloser { return &foreignFirstGlobalStream{api: api} }
+	api.mu.Unlock()
+	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
 	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
+	select {
+	case <-sink.expectedCodeSeen:
+	case <-time.After(testHangGuard):
+		t.Fatalf("foreign frames suppressed this session's own event: %+v", sink.events)
 	}
-	first := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
-	if !errors.Is(first, openErr) {
-		t.Fatalf("StartTurn() error = %v, want durable replay failure", first)
+	if !sink.hasCode("opencode_unknown_session_event") {
+		t.Fatalf("events = %+v, want this session's unknown frame after the foreign frame", sink.events)
 	}
-	second := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "again", Context: json.RawMessage(`{}`)})
-	if !errors.Is(second, openErr) || api.promptCalls != 1 || process.terminateCalls != 1 {
-		t.Fatalf("second StartTurn() error = %v promptCalls=%d terminate=%d; want sticky replay failure and one cleanup", second, api.promptCalls, process.terminateCalls)
+	if err := staged.Close(context.Background()); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestCloseCancelsInFlightDurableReplayOpenAfterPromptAdmission(t *testing.T) {
-	process := newFakeProcess()
+func TestStartTurnFailsClosedWhenTheGlobalStreamCannotOpen(t *testing.T) {
+	openErr := errors.New("global event stream unavailable")
+	api := &fakeAPI{openEventErr: openErr}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
+	first := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
+	if !errors.Is(first, openErr) {
+		t.Fatalf("StartTurn() error = %v, want global stream failure", first)
+	}
+	second := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "again", Context: json.RawMessage(`{}`)})
+	if !errors.Is(second, openErr) || api.promptCalls != 0 || process.terminateCalls != 1 {
+		t.Fatalf("second StartTurn() error = %v promptCalls=%d terminate=%d; want sticky stream failure before admission and one cleanup", second, api.promptCalls, process.terminateCalls)
+	}
+}
+
+func TestCloseCancelsInFlightGlobalStreamOpen(t *testing.T) {
 	openStarted := make(chan struct{})
 	api := &fakeAPI{openEventStarted: openStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	turnDone := make(chan error, 1)
 	go func() {
 		turnDone <- staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
 	}()
 	<-openStarted
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if err := <-turnDone; err == nil || api.promptCalls != 1 || process.terminateCalls != 1 {
-		t.Fatalf("StartTurn() error = %v promptCalls=%d terminate=%d; want cancelled committed turn cleanup", err, api.promptCalls, process.terminateCalls)
+	if err := <-turnDone; err == nil || api.promptCalls != 0 || process.terminateCalls != 1 {
+		t.Fatalf("StartTurn() error = %v promptCalls=%d terminate=%d; want cancelled stream-open cleanup", err, api.promptCalls, process.terminateCalls)
 	}
 }
 
 func TestOpenFailureClosesAndBecomesSticky(t *testing.T) {
 	process := newFakeProcess()
-	api := &fakeAPI{healthErr: errors.New("not listening")}
+	api := &fakeAPI{readinessErr: errors.New("not listening")}
 	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
 		return process, nil
 	}, api)
-	adapter.healthRetryWait = time.Millisecond
+	adapter.readinessRetryWait = time.Millisecond
 	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -540,9 +961,9 @@ func TestOpenFailureClosesAndBecomesSticky(t *testing.T) {
 	}
 }
 
-func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
+func TestOpenPeerOwnershipFailureDoesNotRetryReadiness(t *testing.T) {
 	process := newFakeProcess()
-	api := &fakeAPI{healthErr: fmt.Errorf("verify socket: %w", ErrPeerOwnership)}
+	api := &fakeAPI{readinessErr: fmt.Errorf("verify socket: %w", ErrPeerOwnership)}
 	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
 		return process, nil
 	}, api)
@@ -554,42 +975,56 @@ func TestOpenPeerOwnershipFailureDoesNotRetryHealth(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testHangGuard)
 	defer cancel()
 	_, err = session.(harness.StagedSession).Open(ctx)
-	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.healthCalls != 1 || api.createCalls != 0 {
-		t.Fatalf("Open() = %v; context=%v health=%d create=%d", err, ctx.Err(), api.healthCalls, api.createCalls)
+	if !errors.Is(err, ErrPeerOwnership) || ctx.Err() != nil || api.readinessCalls != 1 || api.createCalls != 0 {
+		t.Fatalf("Open() = %v; context=%v readiness=%d create=%d", err, ctx.Err(), api.readinessCalls, api.createCalls)
 	}
 	if process.terminateCalls != 1 {
 		t.Fatalf("ownership rejection terminated process %d times, want 1", process.terminateCalls)
 	}
 }
 
-func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
+// A readiness identity that does not name the launched server process must fail the
+// session before any session-create request is issued.
+func TestOpenRejectsReadinessIdentityMismatchBeforeSessionCreate(t *testing.T) {
 	process := newFakeProcess()
+	api := &fakeAPI{readinessPID: 456}
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	adapter.readinessRetryWait = time.Millisecond
+	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close(context.Background())
+	openContext, cancel := context.WithTimeout(context.Background(), testHangGuard)
+	defer cancel()
+	_, err = session.(harness.StagedSession).Open(openContext)
+	if !errors.Is(err, ErrInvalidIdentity) || api.readinessCalls != 1 || api.createCalls != 0 {
+		t.Fatalf("Open() = %v; readiness=%d create=%d, want the identity refusal before session create", err, api.readinessCalls, api.createCalls)
+	}
+	if process.terminateCalls != 1 {
+		t.Fatalf("identity rejection terminated process %d times, want 1", process.terminateCalls)
+	}
+}
+
+func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
 	stream := newBlockingReadCloser()
 	started := make(chan struct{})
 	release := make(chan struct{})
 	api := &fakeAPI{stream: stream, interruptStarted: started, interruptRelease: release}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, process := startStagedTestSession(t, api, &recordingSink{})
 	if err := staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("StartTurn() error = %v", err)
 	}
 	controlDone := make(chan error, 1)
 	go func() {
-		_, err := session.Control(context.Background(), harness.ControlRequest{CommandID: "cmd_1", Kind: harness.ControlCancel})
+		_, err := staged.Control(context.Background(), harness.ControlRequest{CommandID: "cmd_1", Kind: harness.ControlCancel})
 		controlDone <- err
 	}()
 	<-started
 	closeDone := make(chan error, 1)
-	go func() { closeDone <- session.Close(context.Background()) }()
+	go func() { closeDone <- staged.Close(context.Background()) }()
 	close(release)
 	if err := <-controlDone; err != nil {
 		t.Fatalf("Control() error = %v", err)
@@ -603,27 +1038,16 @@ func TestCloseAndCancelShareOneInFlightInterruptAndTerminate(t *testing.T) {
 }
 
 func TestCloseCancelsInFlightPromptAndPreventsSecondAdmission(t *testing.T) {
-	process := newFakeProcess()
 	stream := newBlockingReadCloser()
 	promptStarted := make(chan struct{})
 	api := &fakeAPI{stream: stream, promptStarted: promptStarted}
-	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
-		return process, nil
-	}, api)
-	session, err := adapter.Start(context.Background(), startRequest(t), &recordingSink{})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	staged := session.(harness.StagedSession)
-	if _, err := staged.Open(context.Background()); err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
+	staged, _ := startStagedTestSession(t, api, &recordingSink{})
 	turnDone := make(chan error, 1)
 	go func() {
 		turnDone <- staged.StartTurn(context.Background(), harness.TurnRequest{Goal: "finish", Context: json.RawMessage(`{}`)})
 	}()
 	<-promptStarted
-	if err := session.Close(context.Background()); err != nil {
+	if err := staged.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if err := <-turnDone; err == nil {
@@ -769,14 +1193,20 @@ func TestStartRejectsUnsupportedOrUnsafeInputsBeforeLaunch(t *testing.T) {
 		t.Fatalf("cost Start() error = %v started=%v", err, processStarted)
 	}
 	request = startRequest(t)
-	request.ModelProfile = "  profile is not mapped  "
-	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
-		t.Fatalf("model profile Start() error = %v started=%v", err, processStarted)
-	}
-	request = startRequest(t)
 	request.Invocation.Args = []string{"--unsafe-unknown-flag"}
 	if _, err := adapter.Start(context.Background(), request, &recordingSink{}); err == nil || processStarted {
 		t.Fatalf("args Start() error = %v started=%v", err, processStarted)
+	}
+	// The daemon-validated admission profile alias is accepted and never mapped:
+	// this transport claims no native model identity (the claude adapter's shape).
+	request = startRequest(t)
+	request.ModelProfile = "implementation-default"
+	session, err := adapter.Start(context.Background(), request, &recordingSink{})
+	if err != nil || !processStarted {
+		t.Fatalf("admitted model profile Start() error = %v started=%v, want the alias accepted", err, processStarted)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("admitted model profile Close() error = %v", err)
 	}
 }
 
@@ -822,6 +1252,37 @@ func (runner fixtureCommandRunner) Run(_ context.Context, _ string, args ...stri
 	return runner.responses[strings.Join(args, " ")], nil
 }
 
+// exactBlobProbeResponses is the version/help fixture pair every exact-blob probe row shares.
+func exactBlobProbeResponses() map[string][]byte {
+	return map[string][]byte{
+		"--version":    []byte("opencode v" + TestedVersion + "\n"),
+		"serve --help": []byte("opencode serve\n  --hostname\n  --port\n"),
+	}
+}
+
+// digestCommandRunner adds the harness.ExecutableHasher seam so a promotion gate
+// stays deterministic without hashing whatever this host resolves.
+type digestCommandRunner struct {
+	fixtureCommandRunner
+	digest string
+}
+
+func (runner digestCommandRunner) ExecutableDigest(context.Context, string) (string, error) {
+	return runner.digest, nil
+}
+
+// cancellingDigestCommandRunner cancels the probe context when the digest gate is
+// reached, so a cancelled probe pins the seeded projection at that boundary.
+type cancellingDigestCommandRunner struct {
+	fixtureCommandRunner
+	cancel context.CancelFunc
+}
+
+func (runner cancellingDigestCommandRunner) ExecutableDigest(context.Context, string) (string, error) {
+	runner.cancel()
+	return TestedExecutableHash, nil
+}
+
 type errorCommandRunner struct {
 	responses map[string][]byte
 	errors    map[string]error
@@ -837,14 +1298,14 @@ func (runner errorCommandRunner) Run(_ context.Context, _ string, args ...string
 
 type fakeAPI struct {
 	mu                    sync.Mutex
-	healthCalls           int
+	readinessCalls        int
 	createCalls           int
 	promptCalls           int
 	openEventCalls        int
 	interruptCalls        int
 	callSequence          []string
-	eventAfter            []uint64
-	healthErr             error
+	readinessPID          int
+	readinessErr          error
 	createErr             error
 	promptErr             error
 	promptStarted         chan struct{}
@@ -856,18 +1317,23 @@ type fakeAPI struct {
 	openEventStarted      chan struct{}
 	openEventRelease      <-chan struct{}
 	openEventContext      context.Context
-	streamFactory         func(context.Context, string, uint64) io.ReadCloser
+	streamFactory         func(context.Context) io.ReadCloser
 	interruptErr          error
 	stream                io.ReadCloser
 	interruptStarted      chan struct{}
 	interruptRelease      <-chan struct{}
+	outcome               string
+	outcomeErr            error
 }
 
-func (api *fakeAPI) Health(context.Context) error {
+func (api *fakeAPI) Readiness(_ context.Context, serverPID int) error {
 	api.mu.Lock()
 	defer api.mu.Unlock()
-	api.healthCalls++
-	return api.healthErr
+	api.readinessCalls++
+	if api.readinessPID != 0 && api.readinessPID != serverPID {
+		return fmt.Errorf("%w: fixture pid %d, server pid %d", ErrInvalidIdentity, api.readinessPID, serverPID)
+	}
+	return api.readinessErr
 }
 
 func (api *fakeAPI) CreateSession(_ context.Context, request CreateSessionRequest) (SessionInfo, error) {
@@ -881,6 +1347,9 @@ func (api *fakeAPI) CreateSession(_ context.Context, request CreateSessionReques
 }
 
 func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request PromptRequest) (PromptAdmission, error) {
+	if err := ctx.Err(); err != nil {
+		return PromptAdmission{}, err
+	}
 	api.mu.Lock()
 	api.promptCalls++
 	api.callSequence = append(api.callSequence, "prompt")
@@ -906,7 +1375,7 @@ func (api *fakeAPI) Prompt(ctx context.Context, sessionID string, request Prompt
 	api.lastPrompt = request
 	api.lastPromptSession = sessionID
 	api.mu.Unlock()
-	return PromptAdmission{AdmittedSeq: 1, ID: request.ID, SessionID: sessionID, Text: request.Text, Delivery: request.Delivery, TimeCreated: 1}, nil
+	return PromptAdmission{ID: request.ID, SessionID: sessionID, Text: request.Text, Delivery: request.Delivery, TimeCreated: 1}, nil
 }
 
 func (api *fakeAPI) Interrupt(context.Context, string) error {
@@ -923,14 +1392,23 @@ func (api *fakeAPI) Interrupt(context.Context, string) error {
 	return err
 }
 
-func (api *fakeAPI) OpenSessionEvents(ctx context.Context, sessionID string, after uint64) (io.ReadCloser, error) {
+func (api *fakeAPI) SessionOutcome(_ context.Context, sessionID string) (SessionState, error) {
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	api.callSequence = append(api.callSequence, "outcome")
+	if api.outcomeErr != nil {
+		return SessionState{}, api.outcomeErr
+	}
+	return SessionState{ID: sessionID, Outcome: api.outcome}, nil
+}
+
+func (api *fakeAPI) OpenGlobalEvents(ctx context.Context) (io.ReadCloser, error) {
 	api.mu.Lock()
 	api.openEventCalls++
 	api.callSequence = append(api.callSequence, "events")
-	api.eventAfter = append(api.eventAfter, after)
 	started, release, err := api.openEventStarted, api.openEventRelease, api.openEventErr
 	stream, streamFactory := api.stream, api.streamFactory
-	replayPromptAdmission, prompt, promptSession := api.replayPromptAdmission, api.lastPrompt, api.lastPromptSession
+	replayPromptAdmission := api.replayPromptAdmission
 	api.openEventContext = ctx
 	api.mu.Unlock()
 	if started != nil {
@@ -950,13 +1428,10 @@ func (api *fakeAPI) OpenSessionEvents(ctx context.Context, sessionID string, aft
 		return nil, err
 	}
 	if streamFactory != nil {
-		return streamFactory(ctx, sessionID, after), nil
+		return streamFactory(ctx), nil
 	}
 	if replayPromptAdmission {
-		if promptSession != sessionID {
-			return nil, ErrIdentityMismatch
-		}
-		return promptAdmissionReplayStream(sessionID, prompt), nil
+		return &lazyPromptAdmissionReplayStream{api: api}, nil
 	}
 	if stream == nil {
 		return io.NopCloser(strings.NewReader("")), nil
@@ -982,10 +1457,56 @@ func (api *fakeAPI) callOrder() []string {
 	return append([]string(nil), api.callSequence...)
 }
 
-func (api *fakeAPI) eventCursors() []uint64 {
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	return append([]uint64(nil), api.eventAfter...)
+// The global stream opens before admission, so a fixture that must carry the admission
+// frame resolves the session and prompt when the watcher first reads, not when it opens.
+type lazyPromptAdmissionReplayStream struct {
+	api    *fakeAPI
+	once   sync.Once
+	stream io.ReadCloser
+}
+
+func (stream *lazyPromptAdmissionReplayStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		stream.api.mu.Lock()
+		sessionID, prompt := stream.api.lastPromptSession, stream.api.lastPrompt
+		stream.api.mu.Unlock()
+		stream.stream = promptAdmissionReplayStream(sessionID, prompt)
+	})
+	return stream.stream.Read(data)
+}
+
+func (stream *lazyPromptAdmissionReplayStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
+}
+
+// foreignFirstGlobalStream serves one other session's durable frame before this session's
+// own unknown frame, pinning that the watcher skips cross-session traffic on /api/event.
+type foreignFirstGlobalStream struct {
+	api    *fakeAPI
+	once   sync.Once
+	stream io.ReadCloser
+}
+
+func (stream *foreignFirstGlobalStream) Read(data []byte) (int, error) {
+	stream.once.Do(func() {
+		stream.api.mu.Lock()
+		sessionID := stream.api.lastPromptSession
+		stream.api.mu.Unlock()
+		foreign := `{"id":"evt_foreign_1","type":"session.step.started","durable":{"aggregateID":"ses_other","seq":1,"version":1},"data":{"sessionID":"ses_other"}}`
+		own := fmt.Sprintf(`{"id":"evt_own_1","type":"session.future.lifecycle","durable":{"aggregateID":%q,"seq":1,"version":1},"data":{"sessionID":%q}}`, sessionID, sessionID)
+		stream.stream = io.NopCloser(strings.NewReader("data: " + foreign + "\n\ndata: " + own + "\n\n"))
+	})
+	return stream.stream.Read(data)
+}
+
+func (stream *foreignFirstGlobalStream) Close() error {
+	if stream.stream == nil {
+		return nil
+	}
+	return stream.stream.Close()
 }
 
 func promptAdmissionReplayStream(sessionID string, prompt PromptRequest) *replayBlockingReadCloser {
@@ -1222,7 +1743,7 @@ func (sink *recordingSink) hasCode(code string) bool {
 func newTestAdapter(start processStarter, fake api) *Adapter {
 	readyStart := func(ctx context.Context, invocation execution.Invocation, sink execution.Sink) (nativeProcess, error) {
 		process, err := start(ctx, invocation, sink)
-		if isNilNativeProcess(process) {
+		if harness.IsNilInterface(process) {
 			return nil, err
 		}
 		if err != nil {
@@ -1236,9 +1757,28 @@ func newTestAdapter(start processStarter, fake api) *Adapter {
 	adapter := newAdapter("opencode-test", nil, readyStart, func(Config) (api, error) { return fake, nil }, func() (string, string, error) { return "opencode", "test-secret", nil }, func(int, string, *linuxV2PeerOwner) ConnectionVerifier {
 		return func(context.Context, net.Conn) error { return nil }
 	})
-	adapter.healthRetryWait = time.Millisecond
+	adapter.readinessRetryWait = time.Millisecond
 	adapter.terminationWait = time.Second
 	return adapter
+}
+
+// startStagedTestSession is the shared lifecycle preamble: one fake process, the
+// injected API, a successful Start and the first Open.
+func startStagedTestSession(t *testing.T, api *fakeAPI, sink harness.EventSink) (harness.StagedSession, *fakeProcess) {
+	t.Helper()
+	process := newFakeProcess()
+	adapter := newTestAdapter(func(context.Context, execution.Invocation, execution.Sink) (nativeProcess, error) {
+		return process, nil
+	}, api)
+	session, err := adapter.Start(context.Background(), startRequest(t), sink)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	staged := session.(harness.StagedSession)
+	if _, err := staged.Open(context.Background()); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	return staged, process
 }
 
 func startRequest(t *testing.T) harness.StartRequest {

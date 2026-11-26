@@ -46,6 +46,9 @@ func TestRegistryKeepsUnavailableCapabilitiesExplicit(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			registry := NewRegistry()
+			if err := registry.Register(test.kind, NewOpenCodeAdapter()); err != nil {
+				t.Fatal(err)
+			}
 			capabilities, err := registry.Probe(context.Background(), test.kind)
 			if err == nil {
 				t.Fatal("Probe() error = nil, want unavailable error")

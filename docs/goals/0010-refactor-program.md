@@ -133,7 +133,7 @@ detail.
 
 | # | Decision | Adopted default |
 | --- | --- | --- |
-| D1 | opencode adapter fate (11.7k LOC, half-wired) | **Keep and freeze**: retain `harness/opencode/**`, its six CI assertions and the release-acceptance case; invest nothing further (W6-04 parked). Any drop needs an owner-approved design amendment editing `docs/design/harness.md`, the opencode rows of `docs/goals/README.md`, the acceptance script/inputs and `linux_owner_witness_linux.go` together. |
+| D1 | opencode adapter fate (11.7k LOC, half-wired) | **Unfrozen (Q6=F2, 2026-11-25); Phase 1 is the promotion amendment.** Phase 0 re-anchored `2.4.1` (`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`). Phase 1 edits `docs/design/harness.md` (OpenCode V2 row and its 2.3.0 citation), the opencode rows of `docs/goals/README.md`, the six CI assertions, `daemon/internal/harness/opencode/adapter.go` (pin/version gate), `registry.go` (native wiring), the acceptance/witness legs, and fixes the V1 1.18.32 acceptance-pin drift; Linux admission stays fail-closed until the dispatched `opencode_native_health` row is green. The keep-and-freeze default and its drop-amendment clause are preserved in the amendment log. |
 | D2 | always-null `attention.unavailable` wire member | Remove `GoalAttentionFeed.unavailable` only, end to end (schema, fixtures, projection, DTOs, frontend) in W6-09; `ProjectBlockedFeed.unavailable` stays — it is live on workspace-read failure. The W6-09 PR carries the same-PR `docs/design/protocol.md` and `docs/design/frontend.md` amendment under the mandate. |
 | D3 | dual Linux containment generations (legacy supervisor + cgroup-v2 owner) | **Deferred / amendment-gated**: W5-02 and W6-05 are blocked until an owner-approved `harness.md` design amendment covers the OmO/OMP/generic/workspace policy and host prerequisites, and a dispatched `linux-native-v2-acceptance` run is green for each kind's exact binary on a qualifying host. |
 | D4 | test-only witness authority in production binaries; `isGoTestBinary` fork | **Consolidate in place** (W5-01): one witness-config struct parsed once behind the single `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` gate, privileged writes confined to a witness-owned directory; **no build tag** — witness evidence binds the shipped binary's SHA-256. Delete the self-inspection fork in W6-03 (independent of D3). |
@@ -307,7 +307,7 @@ re-verifies against the bound contract, and the tables below carry the bound sta
 | W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01 (#188), #137 and #180 merged; W2-17 (#186) in review; W3-01 after it; dependabot #168/#171 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12b |
 | W6-02 | Browser spec wiring per D7 | — | gated on W2-01 → W4-14 → {W5-03, W5-04} → W5-08 → W6-01; render gate green on `main` |
 | W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (arch-decision-2 BOUND: capability supplied by W4-12c's Recorder handoff-capability query — O5/V7; contract re-drafted after W4-12c merges, W4-12b precedes it); then #160 → W3-02 → W4-02; W5-09 → W5-01 (both) → W6-03 |
-| W6-04 | opencode promote-or-drop | — | parked (D1) |
+| W6-04 | opencode promote-or-drop | — | unfrozen (Q6=F2); Phase-1 promotion amendment: Windows surface + Linux containment gate |
 | W6-05 | Containment convergence phase 2: delete the legacy generation (DP S-11b, D3) | — | blocked (D3) |
 | W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | HOLD — owner re-scope (Q7/A0) + 06a/06b split; W6-05-dependency removal proposed by arch-decision-2, owner confirmation pending (owner question 2); W4-20 file layout bound (re-derive citations); launcher root-cause diagnosis first (R14) |
 | W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 (merged) → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy set by the W6 reconcile |
@@ -332,10 +332,10 @@ re-verifies against the bound contract, and the tables below carry the bound sta
   stays the deferred live path until a future convergence. W6-06 (cmd extraction) stays HOLD;
   the arch-decision-2 removal of its W6-05 dependency (no code dependency) is proposed and
   awaits owner confirmation (owner question 2).
-- **W6-04 — parked (D1).** Keep and freeze; invest nothing further. Unblock (only for a drop): an
-  owner-approved design amendment editing `docs/design/harness.md`, the opencode rows of
-  `docs/goals/README.md`, the acceptance script/inputs and `linux_owner_witness_linux.go`
-  together.
+- **W6-04 — unfrozen (Q6=F2).** Phase 0 landed the 2.4.1 re-anchor
+  (`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`); Phase 1 is the promotion amendment (D1
+  row). Linux admission stays fail-closed until the dispatched `opencode_native_health` row is
+  green; the frozen `shared` OpenCode legs' F2-exclusion is re-anchored with the D3 amendment.
 - **W5-07 — dropped (W5 reconcile, decision D).** The single terminal-predicate acceptance already
   holds at base (`endsMonitor()`), and the re-scope could not compile inside the owned set; no
   branch, no reservation; the existing monitor code stays the deferred live path.

@@ -1063,18 +1063,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       no message; `pi/provider_bridge.go:1102-1120` stamps v5 UUIDs, so the stricter check is
       safe for journaled action IDs.
 
-- [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
-      freeze lifts with opencode capability work (W6-04) (2026-11-21, same branch and plan, §8).
-      `opencode/**` stayed read-only (P2-3/D1: its six CI assertions and the release-acceptance
-      case stay green), so every surface this slice consolidated elsewhere still has an
-      `opencode` copy: process forwarding with its own guards
-      (`daemon/internal/harness/opencode/adapter.go:522` ProcessDetails, `:538`
-      LinuxV2LiveOwnerStatus, `:557` LeaseRenewalAvailable, `:568` RenewLease),
-      `isNilNativeProcess` (`:400`, `reflect.Pointer`-only), the Close/join state machine
-      (`:1042`), `emit` (`:1323`, stamps `At` and calls `sink.Handle` directly instead of
-      `harness.DeliverEvent`) and `Wait` (`:954`). Consolidating them is part of opencode
-      capability work, not this increment, and must keep those CI oracles green.
-
 ## pi provider-bridge close-retry timing flake under host load (PR #155 review)
 
 - [ ] Revalidate the pre-existing host-load flake in
@@ -1384,20 +1372,6 @@ version pinned` section of `docs/archive/CLOSED-TODO.md`.
       (`daemon/internal/platform/supervisor_linux_witness.go`) behind
       `SYMMETRY_PRODUCTION_LINUX_CONTAINMENT_WITNESS` plus marker-parent validation, so the two
       conventions coexist. Owner: unassigned.
-
-## Daemon harness: native OpenCode tests run without the in-process containment install (W6-04)
-
-- [ ] The env-gated native OpenCode tests — `internal/harness/opencode/adapter_native_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_SMOKE=1`), `adapter_native_work_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_{SYNTHETIC_TOOL,ADMISSION_REPLAY,RESUME_CAPTURE,REPOSITORY_TASK}=1`)
-      and `adapter_native_terminal_candidate_test.go`
-      (`SYMMETRY_OPENCODE_NATIVE_TERMINAL_CANDIDATE=1`) — launch real processes in-process, so with
-      their gates set they reach the shipped containment route a generated test main cannot
-      dispatch. rf-w6-03 (the Go-test-binary fork removal) installed
-      `execution.UseInProcessContainmentSupervisorForTesting` in every other launching test binary
-      but left `opencode/**` frozen (W6-04 owns it), so this package has no
-      `inprocess_containment_test.go`; add the per-package install with the next `opencode/**`
-      change. Owner: W6-04.
 
 ## Daemon platform: two daemon-side barrier markers lack witness parent validation (rf-w5-01 residual)
 
@@ -2038,12 +2012,47 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       complete). The scratch runs' dummy credentials stop exactly at the pi turn; ruling Q3(a)
       accepts those turns, one small turn per such leg.
 
-- [ ] The frozen `shared` OpenCode legs stay F2-excluded after the retarget (2026-11-24, same goal;
-      ruling Q1(a)): `opencode_native_health` keeps its bytes, its allowlist entry and its position
-      (now after every pi leg, so the pi witness files are published before it aborts the set), and
-      the OpenCode peer-negative leg after it is not reached. A non-zero `shared` exit caused only
-      by that row is expected; no report may read it as pi evidence. Its disposition belongs to the
-      D3 `harness.md` amendment (Q1(b)/Q1(c) readings are not implemented here).
+- [ ] The `shared` OpenCode legs' disposition after the Q6=F2 promotion (2026-11-25, goal
+      `rf-opencode-phase1`; 0010 W6-04 P4 row/bullet): the legs stay F2-excluded and non-evidence,
+      and their exclusion is re-anchored with the conductor's D3 amendment
+      (`refactor/d3-amendment-draft.md` §1 P7, whose "while frozen under D1/W6-04" clause the
+      promotion makes stale). `opencode_native_health` keeps its bytes, its allowlist entry and
+      its position; a non-zero `shared` exit caused only by that row is expected, and no report
+      may read it as V2 promotion evidence. Linux admission stays fail-closed until one dispatched
+      `linux-native-v2-acceptance` `opencode_native_health` run is green.
+
+## rf-opencode-phase1: promoted 2.4.1 cross-harness residuals (2026-11-26)
+
+- [ ] Launch-time exact-blob re-verification (gdd review 3 STD-A05, 2026-11-26, goal
+      `rf-opencode-phase1`): the digest binds the executable at probe time only. `Start` hands the
+      bare program name to the execution runner, which re-resolves it via its own `LookPath`, and
+      `execution.Invocation` exposes no expected-digest field, so bytes swapped between the probe
+      and a later assignment launch are executed with the session workspace as CWD and the session
+      credential in the environment while start/events/cancel stay advertised. The shape is
+      identical in pi, codex and opencode, so a one-harness fix would fork the convention: fix the
+      shared `harness/execution` seam and re-pin all three. Owner: conductor (new goal).
+
+- [ ] Pre-connect SSE replay assumption (gdd review 3 STD-A08, 2026-11-26, goal
+      `rf-opencode-phase1`): the per-turn validator opens at the exclusive boundary `after=0`, so a
+      watched frame carrying `durable.seq == 0` fails the turn closed (`ErrCursorRegression`). The
+      session is created in `Open` and the global stream is opened later in `StartTurn`; the
+      recorded `session.created` cursor is 0 and the watcher rows skip seq-0 frames because the
+      stream opens after session creation. If `/api/event` ever replays a pre-connect frame for the
+      watched session, a promoted turn fails closed. The live promotion proof shows no backlog and
+      the guard stays as-is (fail-closed is the accepted direction); the item closes on a live
+      replay observation. Owner: conductor (new goal).
+
+- [ ] Dead-code candidate: stale `--pure` probe stub (PR #298 round-2 DS supplement V4,
+      2026-11-26, goal `rf-opencode-phase1`; `298-ds-audit-2.md` P3-1):
+      `daemon/internal/harness/probeconformance/cancellation_test.go:71` sets the opencode row's
+      `otherOutput` to `"opencode serve --hostname --port --pure"` — a pre-2.4.1 CLI surface the
+      pinned 2.4.1 build rejects — and no contract reaches it: the field is wired only into
+      `cancellationSuccessRunner` (`:151`, returned only for a non-`--version` call, `:215`), both
+      cancellation contracts assert the injected runner's only call is `--version` (`:172`), and
+      the struct's own comment (`:46-48`) records that no contract here reaches it. Pre-existing
+      since `5a9eae9e` (2026-11-17; `git show 7111828b:…` carries the same line). Keep-or-delete
+      when the file is next touched; not removed in PR #298's records-only round (no code bytes
+      change after `a3722677`).
 
 - [ ] rf-acc-witness-unresolved-exit: the App exits 0 on the `unresolved` stage-replay recovery while
       its own e2e requires a deliberate non-zero exit (2026-11-25, goal `rf-acc-pi-durability-matrices`;
