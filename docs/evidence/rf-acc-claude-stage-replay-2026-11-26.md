@@ -15,8 +15,8 @@ final bytes.
 
 | file | sha256 at the delivered bytes |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `6d846549667b22bddde0f9ecb64e2d346459369443724380b0395735e832746b` |
-| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `b7602bd46b182438798db4e9518eb9bf6d513b0804101c23786597d26a47ed9e` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `11616074bc08516038d79cca2346a2b93967d7283287ef962344fd6d06ac4939` |
+| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `54ad76943ca377afcd680c36760b075c20bdce3c4b027559ba2d0f23de0483f7` |
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. No production,
 validator, fixture-script or `pi/**` byte changed (§4).
@@ -38,12 +38,12 @@ witness output: --- FAIL: TestProductionLinuxV2StageCrashReplayMatrix/native_rel
 ```
 
 Which row, which helper, which process: the held row is the claude kind leg
-`native_release_claude` (`production_linux_v2_native_witness_test.go:194-232`; the `claude_containment`
-case set runs exactly this subtest, `linux-v2-native-acceptance.sh:2441-2447,3103-3106`). The pidfd
+`native_release_claude` (`production_linux_v2_native_witness_test.go:195-233`; the `claude_containment`
+case set runs exactly this subtest, `linux-v2-native-acceptance.sh:2541-2547,3204-3207`). The pidfd
 is `marker.Owners.Helper` opened at `production_linux_v2_owner_cli_test.go:1933`
 (`linuxV2OpenStageOwnerPIDFD` re-verifies the exact creation identity across the open) — the
 `-linux-owner-helper-v2` process (pid 7168 in that run), **not** the released B target (pid 7182,
-captured live at `:1936-1958`; artifact `claude-stage-crash-replay-native-release.json` shows it as
+captured live at `:1939-1962`; artifact `claude-stage-crash-replay-native-release.json` shows it as
 `native_command_verified: true`, `pidfd_opened: true`, `exact_leaf_membership: true`,
 `provider_action_succeeded: false`). The same run's daemon StateDir inventory (raw rows 4517-4524;
 the `s owner-….sock 0` row is 4524) still lists the helper's recovery socket
@@ -143,11 +143,11 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
 
 ## 4. Red-first and mutant rows
 
-The new branch is pinned by the row `TestLinuxV2StageReplayHelperStopIsProven` (in the tree,
-uncommitted; the conductor commits the stage) — `:2352-2381`, 7 rows: `released native_release
+The new branch is pinned by the row `TestLinuxV2StageReplayHelperStopIsProven` — `:2352-2382`,
+8 rows: `released native_release
 hold` and `stop-receipt durable hold` positive; the not-released/unknown marker, the receipt-less
-authority, and both pre-release shapes negative — and reddens when the `native_release` term is
-inverted. Mutant (scratch overlay, never written into the
+authority, the authority-less durable hold, and both pre-release shapes negative — and reddens
+when the `native_release` term is inverted. Mutant (scratch overlay, never written into the
 tree; `go test -overlay=… -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/`, WSL):
 the scratch copy `mutant-owner-cli.go` (a copy of the tree file, so its line numbers match) with
 `:1167` changed from
@@ -157,18 +157,18 @@ the scratch copy `mutant-owner-cli.go` (a copy of the tree file, so its line num
 ```
 --- FAIL: TestLinuxV2StageReplayHelperStopIsProven (0.00s)
     --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/released_native_release_hold (0.00s)
-        production_linux_v2_owner_cli_test.go:2377: helper-stop-proven predicate = false, want true
+        production_linux_v2_owner_cli_test.go:2378: helper-stop-proven predicate = false, want true
     --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/not-released_native_release_hold (0.00s)
-        production_linux_v2_owner_cli_test.go:2377: helper-stop-proven predicate = true, want false
+        production_linux_v2_owner_cli_test.go:2378: helper-stop-proven predicate = true, want false
     --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/unknown_native_release_hold (0.00s)
-        production_linux_v2_owner_cli_test.go:2377: helper-stop-proven predicate = true, want false
+        production_linux_v2_owner_cli_test.go:2378: helper-stop-proven predicate = true, want false
 FAIL
-FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.020s
+FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.036s
 FAIL
 MUTANT-EXIT=1
 ```
 
-The delivered bytes pass the same row (`ok e2e`, 7/7 subtests, §6).
+The delivered bytes pass the same row (`ok e2e`, 8/8 subtests, §6).
 
 ## 5. Root-cause probes (scratch, WSL, never in the tree)
 
@@ -176,13 +176,13 @@ Two arms drive the real owner-loss latch on a bare helper built in the platform 
 the package by `go test -overlay` only (scratch `probe_helper_residency_test.go`, log `probe.log`,
 rebuilt after the host restart and re-run on the final bytes — `PROBE-EXIT=0`):
 
-- `TestScratchOwnerLossProvenStopKeepsHelperResident` (PASS, 0.01 s): a real pipe's EOF reaches
+- `TestScratchOwnerLossProvenStopKeepsHelperResident` (PASS, 0.03 s): a real pipe's EOF reaches
   `watchOwnerPipe`, `markOwnerLost` latches owner loss **without** the self-kill (a completed
   successful finalization returns nil from its finalizing branch), and a dial-and-write round trip
   to the helper's listener still succeeds (no `finalizeAfterClear`); the sensitivity arm then calls
   `finalizeAfterClear` and the same round trip fails fast instead of by timeout, so the probe can
   tell a resident helper from an ended one.
-- `TestScratchUnprovenOwnerLossStopSelfKillsTheHelper` (PASS, 0.02 s): on the same latch with no
+- `TestScratchUnprovenOwnerLossStopSelfKillsTheHelper` (PASS, 0.04 s): on the same latch with no
   provable stop state, the helper process dies by SIGKILL (`requestAnchorTakeover`), asserted from
   the child's wait status (`child wait status: 9`).
 
@@ -192,17 +192,17 @@ rebuilt after the host restart and re-run on the final bytes — `PROBE-EXIT=0`)
 | --- | --- | --- | --- |
 | formatting | `gofmt -l .` (Windows) | 0 | empty list |
 | vet | `go vet ./...` (Windows, go1.27.4) and (WSL Ubuntu-24.04, go1.27.0) | 0 / 0 | no findings on both surfaces |
-| predicate row | `go test -count=1 -v -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 0 | `ok e2e`, 7/7 subtests PASS |
+| predicate row | `go test -count=1 -v -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 0 | `ok e2e`, 8/8 subtests PASS |
 | mutant row | `go test -overlay=… -count=1 -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 1 | §4: 3 rows red, `MUTANT-EXIT=1` |
-| probes | `go test -overlay=… -count=1 -v -run '^TestScratch…$' ./internal/platform/` (WSL) | 0 | §5: both PASS (0.01 s / 0.02 s) |
-| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 1 `no test files`, 0 FAIL, 4m02.1s |
-| full suite (WSL, unprivileged `accept`, CI umask) | `umask 022; go test -count=1 ./...` | 0 | 30 `ok`, 2 `no test files`, 0 FAIL, 4m48.9s |
-| full suite (WSL, `accept`, as-is umask 0002) | `go test -count=1 ./...` | 1 | 27 `ok`; `internal/linuxpreflight` 2 + `internal/platform` 8 + `internal/workspace` 21 tests fail — the same 31 at the base revision (row below) |
-| full suite (WSL, root) | `go test -count=1 ./...` | 1 | 29 `ok`; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) |
+| probes | `go test -overlay=… -count=1 -v -run '^TestScratch…$' ./internal/platform/` (WSL) | 0 | §5: both PASS (0.03 s / 0.04 s) |
+| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 3 `no test files`, 0 FAIL, 4m04.5s |
+| full suite (WSL, unprivileged `accept`, CI umask) | `umask 022; go test -count=1 ./...` | 0 | 31 `ok`, 3 `no test files`, 0 FAIL, 5m11.8s |
+| full suite (WSL, `accept`, as-is umask 0002) | `go test -count=1 ./...` | 1 | 28 `ok`; `internal/linuxpreflight` 2 + `internal/platform` 8 + `internal/workspace` 21 tests fail — the same 31 at the base revision (row below) |
+| full suite (WSL, root) | `go test -count=1 ./...` | 1 | 30 `ok`; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) |
 | base attribution | `go test -count=1 ./internal/linuxpreflight/ ./internal/platform/ ./internal/workspace/` in a pristine `git archive 78166f2e` tree (WSL, `accept`, as-is umask) | 1 | the identical 31 failing test names (set difference empty both ways) |
 | comment cap | `python …/comment-cap.py <worktree>` (official) + the uncommitted-diff scan | 0 / 0 | no added comment block over 2 lines |
 | sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc | 0/0/0/1 | record/plan/TODO pass; `CLOSED-TODO` exit 1 identical at base (pre-existing quoted specimens; the added lines carry no host path) |
-| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 78166f2e --head HEAD` (scratch clone, pinned `node_modules/jscpd` 4.3.0) | 0 | 5 changed file(s), 1766 scanned source(s), 1255 clone(s) in the corpus, 0 tolerated, none new; notices: the changed 5,045-line Go test file and `CLOSED-TODO.md` exceed the audited `--max-lines 5000` ceiling, reported, never silently skipped |
+| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 7111828b --head HEAD` (scratch clone, pinned `node_modules/jscpd` 4.3.0) | 0 | 5 changed file(s), 1775 scanned source(s), 1254 clone(s) in the corpus, 0 tolerated, none new; notices: the changed 5,046-line Go test file and `CLOSED-TODO.md` exceed the audited `--max-lines 5000` ceiling, reported, never silently skipped |
 
 The full suites ran one at a time, never beside another harness. The `accept`/022 row is the
 CI-parity surface (the CI daemon job runs as the non-root runner user); the as-is `accept` and root
@@ -226,7 +226,7 @@ the documented root guard.
 - `stop_receipt_durable`'s pre-recovery wait now tolerates a resident helper under the same
   predicate; the stage-replay matrix and the `stale_leaf` witness both exercise that boundary with
   their own recovered-evidence assertions unchanged.
-- The changed `production_linux_v2_owner_cli_test.go` is 5,045 lines, above the duplication gate's
+- The changed `production_linux_v2_owner_cli_test.go` is 5,046 lines, above the duplication gate's
   audited `--max-lines 5000` ceiling, so `jscpd-changed.py` reports it unscanned (§6): clones
   inside its added lines are not checked by that gate, before or after this change. Raising the
   audited ceiling is a separate gate change, outside this goal's owned files.
@@ -237,6 +237,6 @@ Delivered, pending the conductor's Bind. The closure row moves to
 `docs/archive/CLOSED-TODO.md` with the plan/record paths; `docs/TODO.md` drops the entry that
 carried this stop as its next stop. The last step ran the comment cap *before* this final
 re-measure: `daemon/e2e/production_linux_v2_owner_cli_test.go` re-hashes to
-`6d846549667b22bddde0f9ecb64e2d346459369443724380b0395735e832746b` and the plan to
-`b7602bd46b182438798db4e9518eb9bf6d513b0804101c23786597d26a47ed9e`, both unchanged across every
+`11616074bc08516038d79cca2346a2b93967d7283287ef962344fd6d06ac4939` and the plan to
+`54ad76943ca377afcd680c36760b075c20bdce3c4b027559ba2d0f23de0483f7`, both unchanged across every
 gate row above; the §2/§3/§4/§5 anchors were re-read at these bytes.

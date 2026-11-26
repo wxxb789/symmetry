@@ -5487,7 +5487,7 @@ section, whose pointer sentence names this one.
       (`native_release` with the held marker's `released` state, `stop_receipt_durable` with the
       durable receipt) through `linuxV2StageReplayHelperStopIsProven`, and then requires the
       helper's exit within 30 s after the same-RunKey recovery retires it — no validator, bound or
-      production byte changed. Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (7 rows) with
+      production byte changed. Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (8 rows) with
       its inverted-predicate mutant red (record §4) and the WSL owner-loss-latch probes (record
       §5). Delivered, pending the conductor's Bind: the Bind runs `claude_containment` once and
       records the next stop verbatim, or green.

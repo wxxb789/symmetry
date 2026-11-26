@@ -17,7 +17,7 @@ The `claude_containment` case set runs `run_native_owner_witness claude_containm
 runs exactly one subtest: `TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude`
 (`production_linux_v2_native_witness_test.go:194-232`). It reds after 93.39 s at the fixture's own
 post-kill wait (`production_linux_v2_owner_cli_test.go:1972-1979` after this goal's fix; the
-planning-time anchor on the base bytes it reds at is `:1958-1964`, fatal at `:1963`):
+planning-time anchor on the base bytes it reds at is `:1958-1964`, fatal at `:1962`):
 
 ```
 witness output:     production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after the stage-replay kill: exact process pidfd remained live beyond the bounded wait
@@ -26,7 +26,7 @@ witness output:     production_linux_v2_native_witness_test.go:232: A helper did
 Which row/helper/process: the leg's held boundary is `native_release`; the pidfd is the exact
 `reservation.Helper` identity (`-linux-owner-helper-v2`, pid 7168 in that run), opened by
 `linuxV2OpenStageOwnerPIDFD` at `owner_cli_test.go:1933`, not the released B target (pid 7182 =
-`owners.gate_pid`, captured live at `owner_cli_test.go:1936-1958`). Retained-run facts:
+`owners.gate_pid`, captured live at `owner_cli_test.go:1939-1962`). Retained-run facts:
 `claude-stage-crash-replay-native-release.json` (target `native_command_verified: true`,
 `pidfd_opened: true`, `exact_leaf_membership: true`, `provider_action_succeeded: false`), and the
 daemon StateDir inventory in the same log (rows 4517-4520) still shows the helper's recovery
@@ -130,8 +130,8 @@ if the conductor reads the residency as a product defect, that is a new goal wit
 ## 4. Public/API shape
 
 No production, validator, harness or fixture-script change; no new exports. One new unexported
-predicate and one table row in `daemon/e2e/production_linux_v2_owner_cli_test.go` (in the tree,
-uncommitted — the conductor commits the stage), plus the runner sequencing above. Nothing else in
+predicate and one table row in `daemon/e2e/production_linux_v2_owner_cli_test.go`, plus the runner
+sequencing above. Nothing else in
 the module changes.
 
 ## 5. Per-clause baseline and proof plan

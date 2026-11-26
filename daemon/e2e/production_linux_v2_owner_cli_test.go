@@ -1159,7 +1159,7 @@ func linuxV2ExpectedStageReplayRecovery(stage string) string {
 	}[stage]
 }
 
-// linuxV2StageReplayHelperStopIsProven reports whether the held boundary durably proves the
+// linuxV2StageReplayHelperStopIsProven reports whether the already-validated held boundary proves the
 // helper's owner-loss stop, which the product leaves resident for the same-RunKey recovery client.
 func linuxV2StageReplayHelperStopIsProven(stage string, marker linuxV2OwnerWitnessStageMarker, journal state.RunJournal) bool {
 	switch stage {
@@ -2369,6 +2369,7 @@ func TestLinuxV2StageReplayHelperStopIsProven(t *testing.T) {
 		{name: "unknown native_release hold", stage: "native_release", marker: linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "unknown"}},
 		{name: "stop-receipt durable hold", stage: "stop_receipt_durable", journal: receiptAuthority, want: true},
 		{name: "stop-receipt durable hold without a receipt", stage: "stop_receipt_durable", journal: authorityWithoutReceipt},
+		{name: "stop-receipt durable hold without an authority", stage: "stop_receipt_durable"},
 		{name: "pre-release hold with a released marker", stage: "handoff_committed", marker: released},
 		{name: "pre-release hold with a durable receipt", stage: "checkout_ready", journal: receiptAuthority},
 	} {
