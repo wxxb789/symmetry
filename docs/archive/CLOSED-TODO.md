@@ -5641,17 +5641,19 @@ section, whose pointer sentence names this one.
       `docs/evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md`): the B clone bootstrap opens
       every ancestor of the clone seed path `O_RDONLY` (`openReadOnlyAPathDirectory`,
       `daemon/internal/clonebootstrap/filesystem_linux_amd64.go:95`, `:309-345`, per-component
-      `O_RDONLY|O_DIRECTORY|O_NOFOLLOW` at `:317`), and the fixture published the case root
+      `O_RDONLY|O_DIRECTORY|O_NOFOLLOW` at `:326`), and the fixture published the case root
       `/opt/symmetry-owner-test/synthetic-goal-cleanup` as `root:A_GID 0751`
       (`scripts/ci/linux-v2-native-acceptance.sh:589`), so B (`other`) held `--x` and the first
       `openat` of the walk failed `EACCES`; `openCloneSeed` reported it as
       `open A-owned seed parent without symlinks: permission denied`, the bootstrap returned
-      `fail(CloneFailureSeed, …)` (`clonebootstrap/main_linux_amd64.go:113`, `:117`), its command
-      main encoded the failure frame (`daemon/cmd/symmetry-linux-clone-bootstrap/main.go:27`), and
-      the helper rendered `guest_stage=seed errno=13` (`gate_lifecycle_linux.go:1108`, `:761-790`). The
+      `fail(CloneFailureSeed, …)` (`daemon/internal/clonebootstrap/main_linux_amd64.go:124`, `:126`),
+      its command main encoded the failure frame (`daemon/cmd/symmetry-linux-clone-bootstrap/main.go:27`),
+      and the helper rendered `guest_stage=seed errno=13`
+      (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:1108`, `:761-790`). The
       arm now grants B read on the case root (`:592`) and asserts B's own read access to the case
-      root and the seed root (`:1459-1462`), so a re-tightening reddens the set before the witness
-      starts; no production byte, witness assertion or containment check changed, and the config
+      root and the seed root and A's write denial on the case root (`:1459-1465`), so a re-tightening
+      or a class widening reddens the set before the witness starts; no production byte, witness
+      assertion or containment check changed, and the config
       stays `root:A 0640` B-unreadable. Red/green measured in the resolute replica and every local
       gate recorded in the evidence record (delivered, pending the conductor's Bind on the PR head:
       the record's §7 states the observation that confirms closure).

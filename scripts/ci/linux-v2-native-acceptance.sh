@@ -1460,6 +1460,9 @@ if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
     fail 'native B cannot read the synthetic cleanup case root the clone seed path sits under'
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_SEEDS" ||
     fail 'native B cannot read the synthetic cleanup seed root'
+  if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -w "$SYNTHETIC_GOAL_CLEANUP_ROOT"; then
+    fail 'native A unexpectedly gained write access to the root-controlled synthetic cleanup case root'
+  fi
 fi
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   stage_config="$fixture_root/stage-replay/$hold_after/config.json"

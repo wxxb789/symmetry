@@ -2292,8 +2292,9 @@ The first failing line of the `synthetic_goal_cleanup` set (the labelled
 `rf-acc-synthetic-cleanup-seed`, branch `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`):
 the case root was the only ancestor of the clone seed path that B could not open `O_RDONLY`, so the
 B clone bootstrap refused the seed stage with `EACCES`. The arm now grants B read on the case root
-and asserts B's own read access to the case root and the seed root (`fail`-rows in its fixture
-checks), and the stop's text moved to `docs/archive/CLOSED-TODO.md` under
+and asserts B's own read access to the case root and the seed root and A's write denial on the case
+root (`fail`-rows in its fixture checks), and the stop's text moved to `docs/archive/CLOSED-TODO.md`
+under
 `## rf-acc-synthetic-cleanup-seed: the fixture serves the seed chain to B (2026-11-26)`. Plan
 `docs/plans/2026-11-26-rf-acc-synthetic-cleanup-seed-plan.md`, record
 `docs/evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md`.
