@@ -554,9 +554,6 @@ func TestRecordedOutcomeReadbackRefusesWhenTheSessionEndedFirst(t *testing.T) {
 	}
 }
 
-// recordedSessionEventStream renders a committed 2.4.1 receipt's durable frames as one SSE
-// body, dropping the seq-0 creation frame the watcher opens its stream after; it returns the
-// watched session's own frame count.
 func recordedSessionEventStream(t *testing.T, name, sessionID string) (string, int) {
 	t.Helper()
 	var body strings.Builder
@@ -577,6 +574,7 @@ func recordedSessionEventStream(t *testing.T, name, sessionID string) (string, i
 		if err := json.Unmarshal(envelope.Durable, &durable); err != nil {
 			t.Fatalf("parse durable cursor of %s: %v", name, err)
 		}
+		// The watcher opens its stream after session creation, so it never receives the seq-0 creation frame.
 		if durable.Seq == 0 {
 			continue
 		}
@@ -621,9 +619,6 @@ func recordedWatcherCodes(sink *recordingSink) (native, unknown int) {
 	return native, unknown
 }
 
-// TestRecordedSuccessSessionProducesNoUnknownDiagnostics replays the committed success
-// receipt through the watcher: every recorded type is known, so no frame becomes an unknown
-// diagnostic and the recorded succeeded terminal verifies against the readback.
 func TestRecordedSuccessSessionProducesNoUnknownDiagnostics(t *testing.T) {
 	const sessionID = "ses_ded027fb8ffeXP18hMb482YQFe"
 	const inboxID = "msg_be5a0bc1cfe3a506c506dd0b"
@@ -647,9 +642,6 @@ func TestRecordedSuccessSessionProducesNoUnknownDiagnostics(t *testing.T) {
 	}
 }
 
-// TestWaitTurnSettlesTheRecordedProviderFailureTerminal drives the committed provider-failure
-// receipt through the watcher, so the recorded terminal payload settles the turn barrier and
-// the readback names the same failed outcome.
 func TestWaitTurnSettlesTheRecordedProviderFailureTerminal(t *testing.T) {
 	const sessionID = "ses_ded021257ffeokLGbODupUg0Wh"
 	const inboxID = "msg_bca9f1dac9ec4d4c9e6b83dd"
