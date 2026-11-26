@@ -5434,3 +5434,25 @@ section, whose pointer sentence names this one.
       (`dial unixpacket: connect: connection refused` in runs `45555828634`/`45579163968`, absent in
       `45557621798`/`45564071868`) is a measurement note on the arm the AppArmor fix superseded; a
       recurrence would ride the rf-acc-release-recovery-diagnostics entry still in `docs/TODO.md`.
+
+## rf-acc-claude-stage-replay: the claude stage-replay owner-loss stop (2026-11-26)
+
+- [x] The `claude_containment` set's next stop beyond the L1 fold — verbatim
+      `production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after
+      the stage-replay kill: exact process pidfd remained live beyond the bounded wait` (moved from
+      `docs/TODO.md`; residual of the entries closed under goals `rf-acc-migration-pi-hold`
+      (2026-11-26) and `rf-claude-schema-argv` (2026-11-26)): root-named as the helper's owner-loss
+      stop *succeeding* at the released-gate hold, with the product leaving that helper resident
+      for the same-RunKey recovery client that retires it (record §2, plan §2), and delivered by
+      goal `rf-acc-claude-stage-replay` (2026-11-26, branch `refactor/rf-acc-claude-stage-replay`,
+      base `78166f2e`; plan `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md`, record
+      `docs/evidence/rf-acc-claude-stage-replay-2026-11-26.md`): the crash-replay runner keeps its
+      90 s post-kill wait and its fatal for every stage whose durable boundary does not prove the
+      released-gate stop, tolerates a resident helper exactly at the two proven stages
+      (`native_release` with the held marker's `released` state, `stop_receipt_durable` with the
+      durable receipt) through `linuxV2StageReplayHelperStopIsProven`, and then requires the
+      helper's exit within 30 s after the same-RunKey recovery retires it — no validator, bound or
+      production byte changed. Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (7 rows) with
+      its inverted-predicate mutant red (record §4) and the WSL owner-loss-latch probes (record
+      §5). Delivered, pending the conductor's Bind: the Bind runs `claude_containment` once and
+      records the next stop verbatim, or green.

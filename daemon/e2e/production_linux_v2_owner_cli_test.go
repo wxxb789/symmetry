@@ -1159,6 +1159,19 @@ func linuxV2ExpectedStageReplayRecovery(stage string) string {
 	}[stage]
 }
 
+// linuxV2StageReplayHelperStopIsProven reports whether the held boundary durably proves the
+// helper's owner-loss stop, which the product leaves resident for the same-RunKey recovery client.
+func linuxV2StageReplayHelperStopIsProven(stage string, marker linuxV2OwnerWitnessStageMarker, journal state.RunJournal) bool {
+	switch stage {
+	case "native_release":
+		return marker.NativeReleaseState == "released"
+	case "stop_receipt_durable":
+		return journal.ContainmentAuthority != nil && journal.ContainmentAuthority.StopReceipt != nil
+	default:
+		return false
+	}
+}
+
 func linuxV2ValidateStageReplayResponseState(fixture linuxV2NativeFixture, stage string, response linuxV2OwnerWitnessResponse, expectedRecovery string) error {
 	request := fixture.request
 	if response.Version != 1 || response.Case != "stage_replay" || response.Harness != request.Harness ||
@@ -1947,6 +1960,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 		witness.GitHooks.PostCheckoutAbsentAtCheckoutCAS = live.postCheckoutAbsentAtCheckoutCAS
 		targetPIDFD = live.pidfd
 	}
+	helperStopProvenWithoutOwner := linuxV2StageReplayHelperStopIsProven(stage, marker, initial.Journal)
 	if err := linuxV2KillOwnerWitnessCommand(command); err != nil {
 		t.Fatalf("SIGKILL exact stage-replay App process: %v", err)
 	}
@@ -1958,8 +1972,9 @@ func runProductionLinuxV2StageCrashReplayCase(
 	if helperPIDFD != nil {
 		// The helper's owner-loss fail-safe is bounded at linuxOwnerHelperV2StopTimeout; the
 		// fixture must wait strictly past that product bound or it races the fail-safe.
-		if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 90*time.Second); err != nil {
-			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", err)
+		helperExitErr := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 90*time.Second)
+		if helperExitErr != nil && !helperStopProvenWithoutOwner {
+			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", helperExitErr)
 		}
 	}
 	if testCase.afterStageProcessKilled != nil {
@@ -2030,6 +2045,12 @@ func runProductionLinuxV2StageCrashReplayCase(
 			}
 		} else if err := linuxV2WaitPIDFDExited(int(targetPIDFD.Fd()), 30*time.Second); err != nil {
 			t.Fatalf("stage recovery did not stop its exact native target: %v", err)
+		}
+	}
+	if helperPIDFD != nil && helperStopProvenWithoutOwner {
+		// The same-RunKey recovery retires the resident helper; its exit is the hard end state.
+		if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), 30*time.Second); err != nil {
+			t.Fatalf("A helper that proved its owner-loss stop survived the same-RunKey recovery: %v", err)
 		}
 	}
 	if response.RecoveryState == "unresolved" {
@@ -2326,6 +2347,37 @@ func linuxV2RequireRetainedCloneOutcome(response linuxV2OwnerWitnessResponse) er
 
 func linuxV2RequireSameStoreJournalSnapshot(before, after map[state.RunKey]linuxV2StoreJournalSnapshot) error {
 	return linuxV2RequireStoreJournalHistoryPreserved(before, after)
+}
+
+func TestLinuxV2StageReplayHelperStopIsProven(t *testing.T) {
+	released := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
+	receiptAuthority := state.RunJournal{RunContainmentState: state.RunContainmentState{
+		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2, StopReceipt: &authority.StopReceipt{Version: authority.SupervisorVersionV2}},
+	}}
+	authorityWithoutReceipt := state.RunJournal{RunContainmentState: state.RunContainmentState{
+		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+	}}
+	for _, test := range []struct {
+		name    string
+		stage   string
+		marker  linuxV2OwnerWitnessStageMarker
+		journal state.RunJournal
+		want    bool
+	}{
+		{name: "released native_release hold", stage: "native_release", marker: released, want: true},
+		{name: "not-released native_release hold", stage: "native_release", marker: linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "not_released"}},
+		{name: "unknown native_release hold", stage: "native_release", marker: linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "unknown"}},
+		{name: "stop-receipt durable hold", stage: "stop_receipt_durable", journal: receiptAuthority, want: true},
+		{name: "stop-receipt durable hold without a receipt", stage: "stop_receipt_durable", journal: authorityWithoutReceipt},
+		{name: "pre-release hold with a released marker", stage: "handoff_committed", marker: released},
+		{name: "pre-release hold with a durable receipt", stage: "checkout_ready", journal: receiptAuthority},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := linuxV2StageReplayHelperStopIsProven(test.stage, test.marker, test.journal); got != test.want {
+				t.Fatalf("helper-stop-proven predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
 }
 
 func TestLinuxV2RetainedPreCheckoutClonePredicates(t *testing.T) {

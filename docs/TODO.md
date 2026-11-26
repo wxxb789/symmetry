@@ -1940,19 +1940,6 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
 
 ## rf-claude-schema-argv: residuals (2026-11-26)
 
-- [ ] The `claude_containment` set's next stop beyond the argv wall (2026-11-26, Bind run
-      `45710455914` on `72f8d01e` plus the two scratch-only workflow/shim files; evidence record
-      `docs/evidence/rf-claude-schema-argv-2026-11-26.md` §7): the durable-stage stop — verbatim
-      `positive owner witness lacks a durable reserve/bind/commit/lease/checkout/RELEASE stage` —
-      is fixed by L1 (Bind 2, run `45735420588`; record
-      `docs/evidence/rf-acc-migration-pi-hold-2026-11-26.md` §13/§14): the round-1 fold (PR #297)
-      stages `lease_armed` from the execution layer's initial lease ACK
-      (`daemon/internal/execution/linux_owner_v2_linux.go:837-838`) for every adapter, so the
-      tripped `initial_lease_acked` bit is set before the owner witness's durable-stage summary
-      check (`daemon/internal/app/linux_owner_witness_linux.go:969-973`,
-      `validatePhysicalStopSummary`, reached only via `validateFinalSummary`). Next stop, verbatim
-      (Bind 2, record §14.2), owner: conductor (new goal): `production_linux_v2_native_witness_test.go:232: A helper did not exit with owner loss after the stage-replay kill: exact process pidfd remained live beyond the bounded wait`.
-
 - [ ] The legacy Linux supervisor route (`linuxSupervisorMaxFrame = 16 << 10`,
       `daemon/internal/platform/linux_supervisor_protocol_linux.go:19`) carries the command's
       Args/Env as JSON and would refuse a 23 881-byte element (`errLinuxSupervisorFrameTooLarge`,
