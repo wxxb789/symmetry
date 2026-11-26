@@ -483,3 +483,89 @@ final bytes. The only PR file that changes after the run is the non-executed pin
 (run-input determination above), so every executed input of the final bytes is byte-identical to
 the run head and this Bind is the binding acceptance for the final bytes (W3). The full verbatim
 log rows and the deletion proof are in the conductor's Bind findings for this goal.
+
+## Bind 3
+
+Conductor's binding re-Bind on the merged head: PR #302 head is the merge `73d1dae1`
+(`73d1dae116b00d2aaa7ea33bf2404a07aaff95ac`) of `origin/main` `b0206393` (#301) into the round-2
+head `e4b76623`. #301 changed three executed inputs of this case set
+(`daemon/internal/app/linux_owner_witness_linux.go`,
+`daemon/e2e/production_linux_v2_owner_cli_test.go`,
+`daemon/e2e/production_linux_v2_native_witness_test.go`), so Bind 2's acceptance no longer bound
+the head bytes; **this Bind 3 is the BINDING run on `73d1dae1` and Bind 2 is superseded.** One
+scratch push on `scratch/rf-acc-containment-goal-admission` (absent at pre-flight; the plain
+`case_sets` delta over the ratified `b0ba2694` scratch bytes, so the workflow sha256 is again
+`8beeadf6d00d73dac74a10a49722c9b767dab20010875938c8af5725e8fb389f`, the Bind-1 edit; shim sha256
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`, byte-identical to `b0ba2694`)
+created exactly one run: run unit `45814620136`, workflow `Scratch containment goal-admission
+probe`, event push, attempt 1, conclusion `failure`, created 11:53:33Z, updated 11:57:33Z. Run
+head `50844f5767b2f3979a1f6dfcd72709be28d8fde0` = the PR head `73d1dae1` plus exactly the two
+scratch-only files. `total_count=1` for the run head at creation, immediately before the deletion
+and after it. The scratch branch was deleted on the first attempt and the temporary worktree
+removed; both PR refs stayed `73d1dae1`.
+
+**The `:499` stop is still gone; the next stop is the same labelled stop as Binds 1-2; the set is
+not green.**
+
+- The run log (2,929 lines, sha256
+  `a3435bc02b4228f0337517b031739042bc1c735ce6aaa5a1174336de462c60d0`) carries **0** occurrences
+  of `production_linux_v2_cleanup_witness_test.go:499` and **0** of `stage=none`; the worker is
+  released as `/usr/bin/dash`. The stop is byte-for-byte the Bind-1 stop (first failing line, raw
+  log 2504, 11:57:23.4540587Z):
+  ```
+  witness output:     production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2 RELEASE result is unresolved: Linux owner helper release outcome is unresolved (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other guest_stage=seed errno=13)
+  ```
+  Gate (2502) and consequence (2503): `Go native acceptance event gate failed:
+  bad=TestProductionLinuxV2CloneCleanupAuthenticatedScratch=run:1,pass:0,skip:0, skipped=[],
+  fail_events=2, invalid_json_lines=0`; `Required native Go witness did not produce exact
+  run/pass/skip=0 events (go test exit=1).` The RunJournal projection (2515) is
+  `journal-0751c57f817b712b598cbb4b17341ef453c890f9ee26042fc907c3442432e98c.json
+  {"local_state":"running","has_claim_grant":true,"has_clone_intent":true,"has_seed_receipt":true,"recovery_required":true}`.
+  The runner selected `refs/heads/scratch/rf-acc-containment-goal-admission at
+  50844f5767b2f3979a1f6dfcd72709be28d8fde0` (2323) and echoed `case_sets=( synthetic_goal_cleanup
+  )` (2276-2278).
+- Every verified line that ran is green — the seven AppArmor rows (raw 2488-2494, each
+  `run=1 pass=1 skip=0`): `TestLinuxAppArmorUsernsDecisionRows`,
+  `TestLinuxAppArmorProfileTextMatchesTheInstaller`, `TestLinuxAppArmorLoadedProfileScan`,
+  `TestLinuxAppArmorHostStateRows`, `TestLinuxAppArmorCompileRows`,
+  `TestLinuxAppArmorAttachmentSensitivePolicyHash`, `TestLinuxAppArmorDecisionResetsPerVerify`.
+  `TestProductionLinuxV2CloneCleanupAuthenticatedScratch` failed (`--- FAIL:
+  TestProductionLinuxV2CloneCleanupAuthenticatedScratch (1.72s)`, 2513), so the set produced no
+  cleanup verify row; the `:495` cleanup-fallout chain (2505-2512) and the `connection refused`
+  rows have the Bind-1 shape.
+- `synthetic-goal-cleanup.json` **did not export** and there is **no manifest**: `redacted
+  evidence export failed: pi durability witness is unavailable: synthetic-goal-cleanup.json`
+  (2789); the close path retained the private fixture (2790-2791) and the evidence upload warned
+  `No files were found with the provided path:
+  <runner-temp>/linux-v2-native-evidence-45814620136-1/*/*.json. No artifacts will be uploaded.`
+  (2846). The run carries no `linux-v2-native-evidence-*` artifact; `Case set synthetic_goal_cleanup
+  exited 1` (2792) and `Failed case sets: synthetic_goal_cleanup` (2793).
+- Acceptance-side artifact: `linux-v2-host-prerequisite-45814620136-1` (id `15114791557`, 676 B,
+  zip sha256 = API digest `230c0dec1893a6a341d727c49245c0c5bb68314a3fec72c533be8fb02635677d`);
+  member `linux-v2-host-prerequisite-45814620136-1.json` (822 B, sha256
+  `2d313feaa539478ff1b4349b68e2f16ed070c8694a699cda7e635cb2e054b909`, `status: "passed"`,
+  `source_commit` = the run head, `delegated_leaf_probe_passed: true`,
+  `cross_uid_peer_probe_passed: true`, `peer_transient_unit_stop_proven: true`,
+  `transient_unit_stop_proven: true`, `systemd_is_pid1: true`, `unified_cgroup_v2_mounted: true`,
+  `host_a_pidfd_getfd: "passed"`).
+
+### Run-input sha256 equality (run head `50844f57` vs PR head `73d1dae1`)
+
+`git diff --name-status 73d1dae1 50844f57` is exactly the two scratch-only additions, so every
+PR-head file executed by the run is byte-identical by construction. Versus the `## Bind 2` table,
+only these rows changed (each measured at `73d1dae1` with `git cat-file -p <rev>:<f> | sha256sum`);
+every other run-input row (the same 13 sha256 values) is byte-equal to the `## Bind 2` table.
+
+| File | sha256 (run head = PR head) |
+| --- | --- |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd` (executed; changed by #301) |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` (executed; changed by #301) |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `db47b73835b3e8bd4797caf0499aa8797e0a9e18220d5de01af3f8b8a7f1df7d` (executed; changed by #301) |
+| `daemon/native/linux-gate/protocol/native_image_pin_linux_test.go` | `2c46a46ec66de8a8a62f5dded2724826bd0a008822530dd31efcb20edabd52f0` (not an executed input; W1 guard, changed by bbe99ada) |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `8beeadf6d00d73dac74a10a49722c9b767dab20010875938c8af5725e8fb389f` (scratch-only; plain `case_sets` delta) |
+
+`daemon/e2e/production_linux_v2_cleanup_witness_test.go` stays `1e7a5d3a…` with its `:506` stop
+site unchanged and the seven AppArmor rows (`./internal/linuxpreflight`, untouched) verify green:
+the run reproduces the Binds 1-2 acceptance result byte-for-byte on the merged bytes, so this Bind
+is the binding acceptance for `73d1dae1`. The full verbatim log rows and the deletion proof are in
+the conductor's Bind 3 findings for this goal.
