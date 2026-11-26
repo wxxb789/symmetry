@@ -11,8 +11,8 @@ conductor.
 
 | File | Dispatch head `ff0975a7` | Delivered | Change |
 | --- | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` | `2bf242ec02fd6523b894d9676f26efc9bacb1d9ca3ab6ef7b8f2d1a16620d04c` | +29/−1 |
-| `daemon/e2e/production_linux_v2_cleanup_worker_shell_test.go` | absent | `4f3e484a8abba074c69b38d01b802134b9b68ab5b729e3040d5d361fbc48be54` | new, 98 lines |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `d120677d8718d0ad346d0fdfc9ef6136234d1b48071d77e3506aac4c844f01e6` | `97c472b02fd7317da5697d5881b0fd1d6a8be6a891d27712deae5850018dc6d5` | +29/−1 |
+| `daemon/e2e/production_linux_v2_cleanup_worker_shell_test.go` | absent | `4f3e484a8abba074c69b38d01b802134b9b68ab5b729e3040d5d361fbc48be54` | new, 96 lines |
 | `daemon/native/linux-gate/protocol/native_image_pin_linux_test.go` | absent | `1194b0fe23ba9f4510345aae7bd5885267067efccc6f74ff2bbcac1b815acf70` | new, 126 lines |
 | `daemon/native/linux-gate/protocol/proc_identity_linux.go` | `b210f968bb5d0e52095e46142b37c5fdba43dd39b13e0fe8c9ed66999a0f2ade` | identical | untouched (production) |
 | `daemon/internal/platform/helper_v2_protocol.go` | `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75` | identical | untouched (production) |
@@ -68,16 +68,16 @@ all installed root-owned regular files whose staging is digest- and mode-checked
 
 ### 2.3 Measured on the guest-identical userspace (red-first characterization)
 
-`/var/lib/machines/probe-resolute` (the Ubuntu 26.04 LTS resolute replica kept by
+`path-sha256:dba63390a9da5f52d3a7ffab205e03c8a75c3c703da0942ac059b6dad88a28ec` (the Ubuntu 26.04 LTS resolute replica kept by
 `rf-acc-b-process-readback`; `/bin -> usr/bin`, `/bin/sh -> dash`, `dash 0.5.12-12ubuntu3`,
 uutils `coreutils 9.5-1ubuntu2+0.0.0~ubuntu25`, `/usr/bin/dash` root:root 0755). The new protocol
 probe run there as the guest's A shape (`setpriv --reuid=52000 --regid=52000 --clear-groups`,
-`HOME=/home/probe-a`), verbatim:
+`HOME=path-sha256:ec3459ebf2a5788e2ff90499117aae5439a79dc15090561bb8b2a50bf9cc5c83`), verbatim:
 
 ```
-native image pin accepted the symlink-free image "/home/probe-a/symmetry-pin-2411831824/real/image"
-native image pin refusal for "/home/probe-a/symmetry-pin-2411831824/linked/image": open native-image parent component "linked" without following symlinks: not a directory
-native image pin refusal for "/home/probe-a/symmetry-pin-2411831824/linked-image": native image "/home/probe-a/symmetry-pin-2411831824/linked-image" is not A-approved: image must be a root/A-owned regular executable without set-ID bits or B write access
+native image pin accepted the symlink-free image "path-sha256:4ab254c50f0019261517517a4446293eb79a3a18558d619c132065854ddebdda"
+native image pin refusal for "path-sha256:f4c7b0b4eecb57e938c384b7ee7e217f424efb33638dc3701162fce054145ed2": open native-image parent component "linked" without following symlinks: not a directory
+native image pin refusal for "path-sha256:7bba070e2043001d161cb3d24f44853fb0dfcfac5f06b23d7083ce656d9bff1a": native image "path-sha256:7bba070e2043001d161cb3d24f44853fb0dfcfac5f06b23d7083ce656d9bff1a" is not A-approved: image must be a root/A-owned regular executable without set-ID bits or B write access
 native image pin accepted the resolved system shell "/usr/bin/dash"
 native image pin refusal for "/bin/sh": open native-image parent component "bin" without following symlinks: not a directory
 ```
@@ -134,7 +134,7 @@ userspace (§2.3), with (iii) the probe rows and mutants (§6) holding the rules
 | e2e probe (WSL root) | `go test -count=1 -run '^TestLinuxV2CleanupApprovedWorkerProgram$' ./e2e/` | 0 | resolves `/bin/sh` to `/usr/bin/dash` |
 | protocol probe (WSL `accept`) | same, as `sudo -u accept -i` | 0 | `ok … 0.024s` |
 | e2e probe (WSL `accept`) | same, as `sudo -u accept -i` | 0 | `ok … 0.026s` |
-| replica run, guest A shape | `chroot /var/lib/machines/probe-resolute setpriv --reuid=52000 … protocol-pin.test -test.run '^TestNativeImagePin'` | 0 | §2.3 rows |
+| replica run, guest A shape | `chroot path-sha256:dba63390a9da5f52d3a7ffab205e03c8a75c3c703da0942ac059b6dad88a28ec setpriv --reuid=52000 … protocol-pin.test -test.run '^TestNativeImagePin'` | 0 | §2.3 rows |
 | replica run, guest A shape | same replica, `e2e-probe.test -test.run '^TestLinuxV2CleanupApprovedWorkerProgram$'` | 0 | `controlled B worker shell /bin/sh resolves to the approved image /usr/bin/dash` |
 
 ### 5.1 Full-suite runs and environment attribution
@@ -142,7 +142,7 @@ userspace (§2.3), with (iii) the probe rows and mutants (§6) holding the rules
 | Run | Command | Exit | Attribution |
 | --- | --- | --- | --- |
 | WSL full suite, root | `(cd daemon && go test -count=1 ./...)` as root | 1 | 13 rows of `daemon/internal/platform` refuse with `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0` (`anchor_shape_table_test.go:251` etc.); every other package `ok`. The rows require a non-root A; environment, not code |
-| WSL full suite, `accept` (umask 002) | same as `sudo -u accept -i` | 1 | `daemon/internal/workspace` clone-seed rows refuse (`linux_clone_linux_test.go:1465: validate A-owned Git source: final directory must be A-owned and not group/world writable`). Measured cause: Go 1.27's `t.TempDir()` creates its numbered directory with `os.Mkdir(dir, 0o777)` (`/usr/local/lib/go1.27.0/src/testing/testing.go:1635`) and `accept`'s umask is `0002`, so the tree is `0775` and the production A-ownership rule (`mode&0o022 != 0`) refuses it; a scratch copy of the production validator prints `path=/tmp/TestLinuxCloneQuarantineRejectsForeignScratchPrefix3395183523/001 uid=1000 euid=1000 mode=040775`. All other packages `ok` |
+| WSL full suite, `accept` (umask 002) | same as `sudo -u accept -i` | 1 | `daemon/internal/workspace` clone-seed rows refuse (`linux_clone_linux_test.go:1465: validate A-owned Git source: final directory must be A-owned and not group/world writable`). Measured cause: Go 1.27's `t.TempDir()` creates its numbered directory with `os.Mkdir(dir, 0o777)` (`/usr/local/lib/go1.27.0/src/testing/testing.go:1635`) and `accept`'s umask is `0002`, so the tree is `0775` and the production A-ownership rule (`mode&0o022 != 0`) refuses it; a scratch copy of the production validator prints `path=path-sha256:7760009c20ff3b77cbf0e7cd071fd4bebe07e85f7491ec740d9c936ae97a8690 uid=1000 euid=1000 mode=040775`. All other packages `ok` |
 | base-vs-head, `internal/workspace` | the same single test at the base bytes (`git archive HEAD daemon` in `/tmp`, ext4) as `accept`, umask 002 | 1 | identical failure `validate A-owned Git source: final directory must be A-owned and not group/world writable` at base, so the row is pre-existing and unrelated to this change |
 | WSL full suite, `accept` umask 022 | `sudo -u accept -i bash -lc 'umask 022; cd daemon && go test -count=1 ./...'` | 0 | 32 package rows, every one `ok` (no skips attributed, no failures), including `e2e 1.417s`, `internal/platform 39.600s`, `internal/workspace 49.919s`, `native/linux-gate/protocol 5.661s` |
 | Windows full suite | `(cd daemon && go test -count=1 ./...)` on the Windows host, Go 1.27.4 | 0 | 30 package rows, every one `ok` (the linux-only probe files are not built on Windows), including `e2e 0.301s`, `internal/app 149.775s`, `internal/workspace 140.467s` |
@@ -153,7 +153,7 @@ Probe rows (delivered bytes): protocol — controlled positive pin, planted pare
 (refusal text `native-image parent component "linked"`), planted final symlink (`is not A-approved`),
 each asserting no `ReleaseSubStepError`; system-shell asymmetry row (skip-with-reason only when
 `/bin/sh` is not a symlink). e2e — the fixture shell resolves and logs `/usr/bin/dash`; three
-accepted shapes (real file, symlinked directory component, symlinked file); six refusals (missing,
+accepted shapes (real file, symlinked directory component, symlinked file); eight refusals (missing,
 broken symlink, non-canonical, `/`, non-executable, set-ID, group/world-writable, directory).
 
 The first probe run caught a defect in the new helper itself: `info.Mode().Perm()&0o7000` is always
@@ -167,11 +167,11 @@ byte-identical after each row):
 
 | id | Mutation | Red probe (verbatim) | Exit | Restored |
 | --- | --- | --- | --- | --- |
-| M-P1 | `proc_identity_linux.go:128`: drop `O_NOFOLLOW` from the parent-component open | `native_image_pin_linux_test.go:45: native image pin accepted "/root/symmetry-pin-2817150506/linked/image", want a refusal` | 1 | byte-identical |
-| M-P2 | `proc_identity_linux.go:79`: drop `O_NOFOLLOW` from the image open | `native_image_pin_linux_test.go:51: native image pin accepted "/root/symmetry-pin-3336694316/linked-image", want a refusal` | 1 | byte-identical |
-| M-P3 | witness helper: drop the `Perm()&0o022 != 0` clause | `production_linux_v2_cleanup_worker_shell_test.go:92: worker program for "…/world-writable-shell" = …, err=<nil>, want a refusal` | 1 | `2bf242ec…` |
-| M-P4 | witness helper: `os.ModeSetuid\|os.ModeSetgid\|os.ModeSticky` → `0` | same row for `"…/setid-shell"` | 1 | `2bf242ec…` |
-| M-P5 | witness helper: drop `!info.Mode().IsRegular()` | same row for `"…/directory-shell"` | 1 | `2bf242ec…` |
+| M-P1 | `proc_identity_linux.go:128`: drop `O_NOFOLLOW` from the parent-component open | `native_image_pin_linux_test.go:44: native image pin accepted "path-sha256:bf8148640fd69d8ab2d66ec30a052eeeff2160ebd5675f3b529f7881dbf70dc4", want a refusal` | 1 | byte-identical |
+| M-P2 | `proc_identity_linux.go:79`: drop `O_NOFOLLOW` from the image open | `native_image_pin_linux_test.go:50: native image pin accepted "path-sha256:c2d71f89a1ad1fd6d9f253ca14adb6c38d6f0c783aef49c17667dd30b19c0069", want a refusal` | 1 | byte-identical |
+| M-P3 | witness helper: drop the `Perm()&0o022 != 0` clause | `production_linux_v2_cleanup_worker_shell_test.go:90: worker program for "…/world-writable-shell" = …, err=<nil>, want a refusal` | 1 | `97c472b0…` |
+| M-P4 | witness helper: `os.ModeSetuid\|os.ModeSetgid\|os.ModeSticky` → `0` | same row for `"…/setid-shell"` | 1 | `97c472b0…` |
+| M-P5 | witness helper: drop `!info.Mode().IsRegular()` | same row for `"…/directory-shell"` | 1 | `97c472b0…` |
 | M-P6 | revert half of the fix: `Program: linuxV2CleanupWorkerShell` | not runnable on this host (guest-only clause): the red evidence is the recorded `:499` stop (§2.1) and the replica refusal (§2.3) | — | — |
 
 ## 7. Ruling-item checklist (contract clause → disposition + evidence)

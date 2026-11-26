@@ -1492,8 +1492,8 @@ func linuxV2CleanupCommitEnvironment() []string {
 	}
 }
 
-// linuxV2CleanupApprovedWorkerProgram resolves the controlled B worker shell to the exact
-// symlink-free executable A's native-image pin must approve before any one-use RELEASE.
+// linuxV2CleanupApprovedWorkerProgram resolves the controlled B worker shell to a canonical
+// plain-executable path; A's native-image pin remains the authority for the one-use RELEASE.
 func linuxV2CleanupApprovedWorkerProgram(shell string) (string, error) {
 	if !filepath.IsAbs(shell) || filepath.Clean(shell) != shell || shell == "/" {
 		return "", fmt.Errorf("controlled B worker shell %q is not a canonical absolute path", shell)
