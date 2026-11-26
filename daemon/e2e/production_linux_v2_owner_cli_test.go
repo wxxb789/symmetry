@@ -1611,6 +1611,14 @@ func linuxV2OwnerCommandExitCode(command *linuxV2OwnerWitnessCommand) int {
 	return exitErr.ExitCode()
 }
 
+// linuxV2LogOwnerWitnessStderr keeps a refusal's own cause in the log without echoing raw guest stderr.
+func linuxV2LogOwnerWitnessStderr(t *testing.T, prefix string, lines []string) {
+	t.Helper()
+	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
+		t.Logf("%s: %s", prefix, line)
+	}
+}
+
 // linuxV2ReportOwnerWitnessFailure reaps an already-refused command for its exit status and
 // prints the bounded, redacted tail of the App stderr the harness captured as its sink.
 func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture, command *linuxV2OwnerWitnessCommand) {
@@ -1629,9 +1637,7 @@ func linuxV2ReportOwnerWitnessFailure(t *testing.T, fixture linuxV2NativeFixture
 		t.Logf("owner-witness stderr capture refused: %v", err)
 		return
 	}
-	for _, line := range linuxV2OwnerWitnessStderrBoundedLines(lines) {
-		t.Logf("owner-witness stderr: %s", line)
-	}
+	linuxV2LogOwnerWitnessStderr(t, "owner-witness stderr", lines)
 }
 
 // linuxV2JournalBindsOwnerSlot projects one owner slot, PID and creation identity, the
@@ -2277,6 +2283,185 @@ func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linu
 		return errors.New("prior RunJournal's exact cgroup leaf still exists")
 	}
 	return nil
+}
+
+func linuxV2ClaimOnlyRefusalJournal() state.RunJournal {
+	return state.RunJournal{
+		RunID: "c869cf0f-884e-4160-b99a-aedd1dd6d659", Generation: 1, LocalState: "claimed",
+		ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Unix(1, 0),
+	}
+}
+
+func TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease(t *testing.T) {
+	claimOnly := linuxV2ClaimOnlyRefusalJournal()
+	snapshot := linuxV2StoreJournalSnapshot{
+		owner: linuxV2StoreJournalOwnerStateFromJournal(claimOnly), journal: claimOnly,
+	}
+	if err := linuxV2RequireSafelyReleasedPriorJournal(config.Config{}, snapshot); err == nil ||
+		!strings.Contains(err.Error(), "may still own or require recovery") {
+		t.Fatalf("claim-only prior RunJournal admission = %v, want the released-and-safe refusal", err)
+	}
+}
+
+// linuxV2MountRefusalCausePhrase is the guest-observed App refusal of an alternate cgroup
+// mount: the configured delegated parent's identity differs from the live anchor's subgroup.
+const linuxV2MountRefusalCausePhrase = "configured delegated parent identity differs from the live owner anchor's exact manager subgroup"
+
+// linuxV2ForeignOwnershipRefusalPhrase is the admission refusal that means a pre-existing
+// RunJournal, not the mount, caused the refusal; accepting it would mask the mount proof.
+const linuxV2ForeignOwnershipRefusalPhrase = "unresolved native ownership"
+
+func linuxV2RequireMountRefusalCause(lines []string) error {
+	window := strings.Join(lines, "\n")
+	if !strings.Contains(window, "-linux-v2-native-owner-witness:") {
+		return errors.New("captured alternate-mount stderr carries no App witness refusal")
+	}
+	if strings.Contains(window, linuxV2ForeignOwnershipRefusalPhrase) {
+		return errors.New("alternate-mount refusal names a prior RunJournal instead of the mount identity")
+	}
+	if !slices.ContainsFunc(lines, func(line string) bool {
+		return strings.Contains(line, "-linux-v2-native-owner-witness:") &&
+			strings.Contains(line, linuxV2MountRefusalCausePhrase)
+	}) {
+		return errors.New("alternate-mount refusal does not name the configured-vs-anchor parent identity")
+	}
+	return nil
+}
+
+func TestLinuxV2AlternateMountRefusalCauseRequiresThePreflightIdentityRefusal(t *testing.T) {
+	const refusal = "-linux-v2-native-owner-witness: preflight installed Linux v2 owner before clone/native work: " +
+		"Linux v2 native owner preflight: " + linuxV2MountRefusalCausePhrase
+	for _, test := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{name: "the exact mount preflight refusal is accepted", lines: []string{"witness noise", refusal}},
+		{name: "an empty capture is refused", lines: []string{""}, want: "no App witness refusal"},
+		{
+			name:  "the bare preflight probe without the witness is refused",
+			lines: []string{"-verify-linux-owner-install: " + linuxV2MountRefusalCausePhrase},
+			want:  "no App witness refusal",
+		},
+		{
+			name: "a foreign RunJournal refusal is refused",
+			lines: []string{"-linux-v2-native-owner-witness: refuse fresh owner witness while foreign " +
+				"native ownership is unresolved: foreign RunJournal a/1 has " + linuxV2ForeignOwnershipRefusalPhrase},
+			want: "prior RunJournal",
+		},
+		{
+			name:  "an unrelated witness refusal is refused",
+			lines: []string{"-linux-v2-native-owner-witness: owner witness config native harness version differs from the tested release"},
+			want:  "configured-vs-anchor parent identity",
+		},
+		{
+			name: "the mount phrase without the witness marker on its line is refused",
+			lines: []string{
+				"-linux-v2-native-owner-witness: owner witness config native harness version differs from the tested release",
+				"-verify-linux-owner-install: " + linuxV2MountRefusalCausePhrase,
+			},
+			want: "configured-vs-anchor parent identity",
+		},
+		{
+			name: "a capture naming both causes is refused",
+			lines: []string{refusal, "-linux-v2-native-owner-witness: foreign RunJournal a/1 has " +
+				linuxV2ForeignOwnershipRefusalPhrase},
+			want: "prior RunJournal",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := linuxV2RequireMountRefusalCause(test.lines)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("the exact mount refusal was refused: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("refusal cause = %v, want an error naming %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2AlternateMountRefusalCaptureReadRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), linuxV2OwnerWitnessStderrName)
+	if _, err := linuxV2OwnerWitnessStderrTail(path, linuxV2OwnerWitnessRequest{}); err == nil {
+		t.Fatal("an unreadable alternate-mount App capture was read")
+	}
+}
+
+// linuxV2RequireClaimOnlyRetainedRow pins the shape the shared set's ordering depends on: the
+// refusal retains its claim row (durable before any effect) and nothing beyond it.
+func linuxV2RequireClaimOnlyRetainedRow(journal state.RunJournal, found bool) error {
+	if !found {
+		return errors.New("alternate-mount refusal retained no RunJournal for its exact RunKey")
+	}
+	if journal.LocalState != "claimed" || journal.ClaimID == "" || journal.LeaseToken == "" ||
+		journal.LeaseExpiresAt.IsZero() || journal.LinuxCloneIntent != nil || journal.HasProcessDetails() ||
+		journal.HasPendingContainment() || journal.ContainmentUnproven || journal.ContainmentCgroup != nil ||
+		journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+		return errors.New("alternate-mount RunJournal is not the claim-only row this leg's ordering requires")
+	}
+	return nil
+}
+
+func TestLinuxV2AlternateMountRefusalRetainsTheClaimOnlyRow(t *testing.T) {
+	claimOnly := linuxV2ClaimOnlyRefusalJournal()
+	if err := linuxV2RequireClaimOnlyRetainedRow(claimOnly, true); err != nil {
+		t.Fatalf("the exact claim-only refusal row was refused: %v", err)
+	}
+	if err := linuxV2RequireClaimOnlyRetainedRow(claimOnly, false); err == nil {
+		t.Fatal("a missing refusal RunJournal passed the claim-only row predicate")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*state.RunJournal)
+	}{
+		{name: "a zero-value row is refused", mutate: func(journal *state.RunJournal) { *journal = state.RunJournal{} }},
+		{name: "local state is not claimed", mutate: func(journal *state.RunJournal) { journal.LocalState = "stale" }},
+		{name: "the claim id is missing", mutate: func(journal *state.RunJournal) { journal.ClaimID = "" }},
+		{name: "claim grant is incomplete", mutate: func(journal *state.RunJournal) { journal.LeaseToken = "" }},
+		{name: "the claim grant has no expiry", mutate: func(journal *state.RunJournal) { journal.LeaseExpiresAt = time.Time{} }},
+		{name: "a clone intent was reserved", mutate: func(journal *state.RunJournal) {
+			journal.LinuxCloneIntent = &authority.LinuxCloneIntent{}
+		}},
+		{name: "process details were recorded", mutate: func(journal *state.RunJournal) {
+			journal.PID, journal.ProcessIdentity, journal.StartedAt = 1234, "pid-start-1", time.Unix(1, 0)
+		}},
+		{name: "a scan ledger was recorded", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentScans = &state.ContainmentScanJournal{}
+		}},
+		{name: "an unproven stop was recorded", mutate: func(journal *state.RunJournal) { journal.ContainmentUnproven = true }},
+		{name: "a cgroup reservation was written", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup = &state.LinuxCgroupReservation{}
+		}},
+		{name: "an aborted cgroup reservation was written", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroup = &state.LinuxCgroupReservation{
+				AbortProof: &authority.LinuxCgroupReservationAbortProof{},
+			}
+		}},
+		{name: "process authority was recorded", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentAuthority = &authority.Supervisor{}
+		}},
+		{name: "a launch handoff fence was written", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentHandoff = &authority.SupervisorHandoff{}
+		}},
+		{name: "a release proof was written", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroupReleaseProof = &authority.SupervisorHandoffReleaseProof{}
+		}},
+		{name: "a pre-gate release proof was written", mutate: func(journal *state.RunJournal) {
+			journal.ContainmentCgroupPreGateReleaseProof = &authority.LinuxCgroupPreGateReleaseProof{}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			journal := claimOnly
+			test.mutate(&journal)
+			if err := linuxV2RequireClaimOnlyRetainedRow(journal, true); err == nil {
+				t.Fatal("a non-claim-only refusal row passed the ordering predicate")
+			}
+		})
+	}
 }
 
 // linuxV2RequireRetainedPreCheckoutClone requires the exact post-release retention the product
@@ -4667,6 +4852,16 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 	if entries, err := os.ReadDir(fixture.markerDir); err != nil || len(entries) != 0 {
 		t.Fatal("alternate mount refusal reached the B native hook marker boundary")
 	}
+	// The captured App stderr must name the mount identity itself: any other refusal (for
+	// example a foreign-journal admission) has to red the leg instead of masking the proof.
+	stderrLines, err := linuxV2OwnerWitnessStderrTail(linuxV2OwnerWitnessStderrPath(fixture), fixture.request)
+	if err != nil {
+		t.Fatalf("read captured alternate-mount App stderr: %v", err)
+	}
+	if err := linuxV2RequireMountRefusalCause(stderrLines); err != nil {
+		linuxV2LogOwnerWitnessStderr(t, "alternate-mount App stderr", stderrLines)
+		t.Fatalf("alternate-mount refusal is not attributable to the mount identity: %v", err)
+	}
 	journalSetAfter, err := linuxV2SnapshotStoreJournals(fixture.stateDir)
 	key := state.RunKey{RunID: fixture.request.RunKey.RunID, Generation: fixture.request.RunKey.Generation}
 	setErr := linuxV2RequireStoreJournalHistoryPreserved(journalSetBefore, journalSetAfter, key)
@@ -4677,15 +4872,10 @@ func runProductionLinuxV2AlternateMountRefusal(t *testing.T, caseRoot string) {
 	if err != nil {
 		t.Fatalf("read alternate-mount RunJournal for exact RunKey: %v", err)
 	}
-	if found {
-		journal := current.Journal
-		if journal.ContainmentCgroup != nil || journal.ContainmentCgroupReleaseProof != nil ||
-			journal.ContainmentCgroupPreGateReleaseProof != nil || journal.ContainmentAuthority != nil ||
-			journal.ContainmentHandoff != nil || journal.HasProcessDetails() {
-			t.Fatalf("alternate mount created v2 process authority: %#v", linuxWitnessJournalSnapshotFromFile(current))
-		}
-		witness.Journal = linuxV2StageReplayJournalSnapshot(current, true)
+	if err := linuxV2RequireClaimOnlyRetainedRow(current.Journal, found); err != nil {
+		t.Fatalf("alternate-mount refusal did not retain its claim-only RunJournal: %v (%#v)", err, linuxWitnessJournalSnapshotFromFile(current))
 	}
+	witness.Journal = linuxV2StageReplayJournalSnapshot(current, true)
 }
 
 func linuxV2MountIDForPath(path string) (uint64, error) {
