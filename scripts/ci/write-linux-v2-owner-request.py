@@ -27,8 +27,8 @@ STAGE_REPLAY_NATIVE_RELEASE_CASES = {
     "stage_replay_unprovisioned_refusal",
 }
 PROVIDER_ACCESS_CASES = {name for name, (_, profile, _) in CASES.items() if profile == "pi-native"}
-# Exactly the cases whose fixture route commissions a Control Goal (provision-linux-v2-control-claims.exs);
-# the profile name is not the routing fact, so the admission branch keys on the case set.
+# Exactly the cases whose fixture route commissions a Control Goal; the profile name is not the routing
+# fact, and test-linux-v2-owner-request-keys.py pins this set against the fixture's goal-routed rows.
 GOAL_ADMISSION_CASES = {
     "stage_replay",
     "codex_containment",

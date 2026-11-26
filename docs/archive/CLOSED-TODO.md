@@ -5359,3 +5359,43 @@ follow-ups (2026-11-24)`; the same goal's new residual entries stay open in `doc
       owner witness's durable-stage summary check — whose verbatim stop and `initial_lease_acked`
       inference are recorded in the goal's residual entry in `docs/TODO.md`; the base red it
       removes is run `45671784251`.
+
+## rf-ci-owner-request-key-check: the writer/fixture Goal-admission key agreement has a permanent check (2026-11-26)
+
+Moved 2026-11-26 from `docs/TODO.md`'s `## rf-acc-containment-goal-admission: residuals (2026-11-26)`
+section, whose pointer sentence names this one.
+
+- [ ] The writer/fixture key agreement has no permanent check (2026-11-26, simplify S3, recorded
+      by the apply stage; conductor ruling 2026-11-26): the writer's `GOAL_ADMISSION_CASES`
+      (`scripts/ci/write-linux-v2-owner-request.py`) and the fixture's goal-routing rows
+      (`scripts/ci/provision-linux-v2-control-claims.exs`) must agree exactly, but the only guards
+      were the deleted P1 probe and M1's local half, so a drift would surface only in a hosted
+      run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
+      needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
+      **Closed (2026-11-26, goal `rf-ci-owner-request-key-check`, branch
+      `refactor/rf-ci-owner-request-key-check`, base `8453da12`, round-1 fix applied to the same
+      branch; plan `docs/plans/2026-11-26-rf-ci-owner-request-key-check-plan.md`, evidence
+      record `docs/evidence/rf-ci-owner-request-key-check-2026-11-26.md`):** the new suite
+      `scripts/ci/test-linux-v2-owner-request-keys.py` parses both sides statically from the
+      committed bytes — the writer's `GOAL_ADMISSION_CASES` through `ast` over its module-level
+      assignment, and the fixture's `@cases` rows, `Enum.split_with(@cases, …)` goal-route
+      predicate (whose five-tuple head must bind `repository_role` as the 4th element, the column
+      the census reads) and `request_case` cond through bounded regexes over a line census that
+      refuses any unparseable line — maps each goal-routed row to the writer case its run metadata
+      carries, and asserts the two sets equal (48 rows total, 43 goal-routed, mapping to the five
+      writer cases) while refusing a legacy row that maps into the goal set. The mutation
+      witnesses (a dropped writer case, a fixture-only goal row, a legacy row losing its
+      fixed-list exemption, and a table of eleven refused shapes — a moved or shortened predicate
+      binding head, an interpolated element in a parsed list attribute and in the cond's fixed
+      list, a duplicated attribute declaration, and the atom, variable, starred, second-opener
+      and rewritten-arm spellings) turn it red, each asserting the refusal's reason, and both
+      sets are printed on a disagreement; the check already reddens on the pre-#294 writer
+      (`550f96a3^`), which carried no `GOAL_ADMISSION_CASES` at all. One `.github/workflows/ci.yml`
+      line joins the daemon job's existing `Check Linux v2 fixture contracts` step, with no
+      structure pin changed and the job's timeout derivation untouched; the writer and the fixture
+      keep comment bytes only, each ≤2 lines pointing at the suite. Local gates at the fix head:
+      the new suite `Ran 5 tests … OK`, `test-ci-changed-path-classifier.py` `Ran 37 tests … OK`,
+      `test-ci-structure-extraction.py` `Ran 70 tests … OK`, actionlint 0 findings,
+      `jscpd-changed` exit 0, and ruff clean for the new file. Delivered; acceptance is this PR's
+      CI log on its final head showing the step and its 5+ tests (conductor confirms at final
+      acceptance).
