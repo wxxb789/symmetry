@@ -5470,6 +5470,41 @@ section, whose pointer sentence names this one.
       (`rf-acc-shared-journal-release`) in `docs/TODO.md`, where the e2e same-class reads this
       census deferred are the goal's residual entry.
 
+## rf-acc-synthetic-cleanup-release: the controlled B worker's one-use RELEASE resolves again (2026-11-26)
+
+- [x] `synthetic_goal_cleanup` re-observed on 2026-11-25 (credentialed `main` run `45573253632`)
+      stopping in the same release class as `migration`'s arm (moved from `docs/TODO.md`, section
+      `## rf-opencode-phase1: promoted 2.4.1 cross-harness residuals (2026-11-26)`):
+      `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the
+      real Linux v2 launcher/anchor/helper: resume process "/bin/sh": one-use Linux v2 RELEASE
+      result is unresolved: Linux owner helper rejected operation (release_outcome_unknown)` (the
+      earlier `Linux v2 native release requires an App admission check` stop of run `45402706492`
+      no longer reproduces; the stage-less detail of `45573253632` gained `stage=none` with the
+      read-class vocabulary). The 2026-11-26 main measurement (`45775969711`, `ff0975a7`) records
+      the same stop with the detail. Closed by goal `rf-acc-synthetic-cleanup-release` (2026-11-26,
+      branch `refactor/rf-acc-synthetic-cleanup-release`, base `ff0975a7`; plan
+      `docs/plans/2026-11-26-rf-acc-synthetic-cleanup-release-plan.md`, record
+      `docs/evidence/rf-acc-synthetic-cleanup-release-2026-11-26.md`): the leg's `/bin/sh` worker
+      image (`production_linux_v2_cleanup_witness_test.go:470` at the base) cannot pass A's
+      native-image pin on the usrmerge resolute guest — `pinNativeImage`
+      (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) opens every path component
+      `O_NOFOLLOW` and refuses `/bin/sh` at the `/bin -> usr/bin` parent
+      (`open native-image parent component "bin" without following symlinks: not a directory`,
+      measured in the resolute replica as the guest's A shape) with an unlabelled error, so the
+      helper detail stays `stage=none` (`linux_owner_helper_v2_linux.go:308`,
+      `helper_v2_server.go:1200,:1211`, `linux_owner_v2_linux.go:1066`). The witness now releases
+      `linuxV2CleanupApprovedWorkerProgram("/bin/sh")` — the resolved, symlink-free
+      `/usr/bin/dash` (`dash 0.5.12-12ubuntu3`), with a named local refusal for any degenerate
+      shape — and no release, cleanup or containment assertion changed. Bound by the conductor's
+      Bind (run `45791682543` on `90157ff4`) and re-Bound on the final comment-stripped bytes
+      (Bind 2, run `45803728792` on `5f744370`), one `synthetic_goal_cleanup` run and
+      `total_count=1` each: the `:499 … stage=none` stop is gone — the worker is released as
+      `/usr/bin/dash` — and the next stop is the labelled `clone_checkout` leg
+      (`release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
+      guest_stage=seed errno=13`), the identical verbatim line in the re-Bind, recorded under the
+      new goal `rf-acc-synthetic-cleanup-seed` in `docs/TODO.md`
+      (`## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)`).
+
 ## Harness shared-scaffolding deferrals (rf-w2-13, PR #155)
 
 - [ ] Consolidate the frozen `opencode` duplicates onto the shared harness helpers when the D1
