@@ -1891,6 +1891,11 @@ section below.
 
 ## rf-acc-containment-goal-admission: residuals (2026-11-26)
 
+The writer/fixture key-agreement residual closed on 2026-11-26 (goal `rf-ci-owner-request-key-check`,
+branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is in
+`docs/archive/CLOSED-TODO.md` under
+`## rf-ci-owner-request-key-check: the writer/fixture Goal-admission key agreement has a permanent check (2026-11-26)`.
+
 - [ ] The containment sets' next stops after the W1 umask fix (2026-11-26, goal
       `rf-acc-containment-goal-admission`; evidence record
       `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §3, run `45671784251`):
@@ -1922,14 +1927,6 @@ section below.
       legacy claim shape and stay latent behind the `shared` set's owner-leg stops; widening the
       e2e admission branch to a provider-scoped admission needs its own ruling (the provider-access
       assertions and the clone reserve would then both bind the same claim).
-
-- [ ] The writer/fixture key agreement has no permanent check (2026-11-26, simplify S3, recorded
-      by the apply stage; conductor ruling 2026-11-26): the writer's `GOAL_ADMISSION_CASES`
-      (`scripts/ci/write-linux-v2-owner-request.py`) and the fixture's goal-routing rows
-      (`scripts/ci/provision-linux-v2-control-claims.exs`) must agree exactly, but the only guards
-      were the deleted P1 probe and M1's local half, so a drift would surface only in a hosted
-      run. Owner: a follow-up goal after PR #292 reshapes `.github/workflows/ci.yml` — the check
-      needs a new `scripts/ci/test-linux-v2-*.py` case plus one `ci.yml` line.
 
 - [ ] Bind-run observation: codex post-wall cleanup race (2026-11-26, goal
       `rf-acc-containment-goal-admission`; evidence record
