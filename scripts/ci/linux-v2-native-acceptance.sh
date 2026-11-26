@@ -30,7 +30,7 @@ source_tree_digest=$(jq --raw-output .tree_digest <<<"$source_subject_json")
 
 fixture_case_set=${SYMMETRY_LINUX_V2_NATIVE_CASE_SET:-}
 case "$fixture_case_set" in
-  shared|codex_containment|claude_containment|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
+  shared|codex_containment|claude_containment|stage_replay_create_started|stage_replay_leaf_bound|stage_replay_launcher_bound|ack_loss_launcher_bound|stale_leaf|migration|alternate_mount_refusal|stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject|synthetic_goal_cleanup) ;;
   *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET to one exact shared or unresolved witness case set' ;;
 esac
 fixture_identity_suffix=${fixture_case_set//_/-}
@@ -3028,6 +3028,8 @@ run_alternate_mount_refusal_witness() {
   local bundle="$OWNER_NEGATIVE_ROOT/$case_name"
   local output_directory="$A_HOME/ci-fixture/witness-output/alternate-mount"
   local status=0
+  # This refusal retains a claim-only RunJournal no product path retires; its own case set (own
+  # guest and Store) is the only isolation, so no other set can observe the row.
   prepare_owner_request \
     stage_replay_alternate_mount stage_replay \
     "$fixture_root/negative-root/$case_name/config.json" \
@@ -3155,9 +3157,6 @@ case "$fixture_case_set" in
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/fifo \
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/oversized
 
-    # This refusal is first so no unrelated Store row can mask the mount proof. Every pi leg
-    # runs above the frozen opencode health leg, which stops this set on its pinned-version gate.
-    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     run_native_owner_witness pi_provider_action "$v2_pi_events"
     run_go_test "$v2_peer_negative_pi_events" ./internal/harness/pi \
       '^TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction$' peer-negative \
@@ -3210,6 +3209,9 @@ case "$fixture_case_set" in
     ;;
   migration)
     run_migration_denial_witness "$v2_migration_events"
+    ;;
+  alternate_mount_refusal)
+    run_alternate_mount_refusal_witness "$v2_alternate_mount_events"
     ;;
   stale_journal_run_key|stale_journal_run_key_legacy|stale_journal_fence|stale_journal_subject)
     run_stale_owner_request_denial "$v2_negative_events" "$fixture_case_set"
