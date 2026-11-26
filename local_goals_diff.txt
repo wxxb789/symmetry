@@ -1,0 +1,25 @@
+diff --git a/docs/goals/README.md b/docs/goals/README.md
+index f771a95b..de500851 100644
+--- a/docs/goals/README.md
++++ b/docs/goals/README.md
+@@ -282,7 +282,10 @@ harness goal tracks the latest stable client rather than freezing an older
+ release. Harness goals cover Pi, Oh My Pi (OMP), Codex, Claude Code, OmO
+ (`oh-my-openagent`), and OpenCode V2. OpenCode V1.x is skipped; do not add or
+ maintain a V1 adapter. Evidence for an older binary remains historical and
+-cannot satisfy a newer pin.
++cannot satisfy a newer pin. OpenCode V2's promoted pin is 2.4.1 (Windows
++surface promoted under Q6=F2, 2026-11-25; Linux admission stays fail-closed
++until the dispatched linux-native-v2-acceptance opencode_native_health row is
++green and binds the exact Linux ELF).
+ 
+ Each active goal below is one independently meaningful outcome, sized for about
+ 12 hours of the receiving agent's own work including its evidence production,
+@@ -340,7 +343,7 @@ receipts reuse valid evidence, never repeat implementation or duplicate
+ authorized acceptance actions. Missing evidence or unresolved requirements keep
+ the receipt incomplete; owner verdicts are recorded separately when they arrive.
+ 
+-**0006g, 0006j and 0006k — administrative recording closure (2026-11-17).** These three goals are archived with the rest of the series. This is recording closure only and **does not satisfy the completion contract**: 0006g's delivered outcome is the unsupported decision recorded at `daemon/internal/harness/testdata/opencode/2.3.0/README.md:1-3`; 0006j's receipt states `Status: incomplete; no operational capability promoted on either platform` (`docs/evidence/goal-0006j-omp-native-capability-2026-11-14.md:3`) with a later addendum recording an authorized Windows acceptance and a Linux partial; 0006k's implementation reached the release Subject via PR #22, but no goal receipt or credentialed Control/daemon witness execution was recorded, and its closure paragraph was missing until this line. Their unmet requirements remain unmet.
++**0006g, 0006j and 0006k — administrative recording closure (2026-11-17).** These three goals are archived with the rest of the series. This is recording closure only and **does not satisfy the completion contract**: 0006g's delivered outcome is the unsupported decision recorded at `daemon/internal/harness/testdata/opencode/2.3.0/README.md:1-3`; 0006j's receipt states `Status: incomplete; no operational capability promoted on either platform` (`docs/evidence/goal-0006j-omp-native-capability-2026-11-14.md:3`) with a later addendum recording an authorized Windows acceptance and a Linux partial; 0006k's implementation reached the release Subject via PR #22, but no goal receipt or credentialed Control/daemon witness execution was recorded, and its closure paragraph was missing until this line. Their unmet requirements remain unmet. That unsupported outcome was superseded on 2026-11-25 by the owner-approved Q6=F2 promotion (docs/design/harness.md OpenCode V2 row; 0010 D1/W6-04); the 2.3.0 receipts remain historical evidence.
+ 
+ **0007a-0007i - archived at the owner's verdict (2026-11-18).** All nine goals are merged; `0007i` carries the series release receipt, whose rows name the revision their evidence came from and list their non-green attempts honestly. The limits that receipt records stand as recorded: the locally observed `pwsh` host limitation in the full Control run, the live work-detail matrix and the live scoped-conversation walk not re-run on the final revision, and native admission observed at the Control layer only. The goals' own documents moved into `archive/`; their content is unchanged.
+ 
