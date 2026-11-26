@@ -154,8 +154,7 @@ defmodule LinuxV2ControlClaimFixture do
       end)
 
     work_items =
-      Map.new(legacy_cases, fn {case_name, profile, _harness, repository_role, description} ->
-        :opencode = repository_role
+      Map.new(legacy_cases, fn {case_name, profile, _harness, :opencode, description} ->
         repository_id = opencode_repository.id
 
         {:ok, item} =

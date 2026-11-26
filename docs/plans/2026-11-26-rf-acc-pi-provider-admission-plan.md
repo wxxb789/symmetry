@@ -43,7 +43,7 @@ what is out of scope.
 4. **e2e predicate and scope check.** `linuxV2GoalAdmissionRequestCases` gains the three
    `{harness: "pi", requestCase: …}` rows; the admission branch requires the exact
    Control-composed scope for `providerActionRequired` rows and `provider_scope == nil` otherwise,
-   through a new pure helper `linuxV2AdmissionAllowsProviderSync(*protocol.ProviderScope,
+   through a new pure helper `linuxV2AdmissionProviderScopeIsExact(*protocol.ProviderScope,
    resourceID)`; the row test flips the three pi rows to `true` and a new table test
    `TestLinuxV2AdmissionAllowsProviderSyncRows` pins the helper (exact scope true; nil, wrong
    resource, extra/wrong operations, non-nil change target false).
@@ -82,7 +82,7 @@ what is out of scope.
 4. **Assertion relaxation accounting (brief-rules).** The single relaxation is the e2e branch's
    `admission.ProviderScope != nil` refusal, which applied uniformly to all five goal-routed rows.
    Guarantees it proved and their surviving/new checks: (a) a provider-free leg cannot hide a
-   provider scope → kept verbatim for the four provider-free goal rows (mutant: scope on a
+   provider scope → kept verbatim for the five provider-free goal rows (mutant: scope on a
    `stage_replay` row); (b) a goal row must carry the Control admission for the exact Subject →
    unchanged (`admission.Subject != request.Subject`); (c) the provider legs' authority must be the
    exact Control composition → new, stronger check (scope equality on resource ids, operations and

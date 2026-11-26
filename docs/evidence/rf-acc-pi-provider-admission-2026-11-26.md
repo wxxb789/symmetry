@@ -14,12 +14,17 @@ Bind row to the bind stage (§7).
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
 | `scripts/ci/write-linux-v2-owner-request.py` | `a6d007374c7c4d64a96b0cc9a7fefc73d4120d4dba31f6ce796a30f5730d677a` | the three pi legs join `GOAL_ADMISSION_CASES`; the goal branch pins the exact provider scope for `provider_case` rows and `provider_scope: null` for the provider-free ones |
-| `scripts/ci/provision-linux-v2-control-claims.exs` | `ac1cfea88aa78b515f2e4b19e33e9ae28a9717531377c0fdcd9d8c8b17b07f97` | `:pi_provider` is goal-routed; the goal specs carry `provider_sync`; `resource.sync` lands in BOTH policies for those cases; the pi arms of `runtime_adapter_binding?` demand adapter kind `pi` |
-| `scripts/ci/test-linux-v2-owner-request-keys.py` | `ecdb5e85edcf074c147868457e4cad466b85ea6728750c46973076857605a7cc` | N-role goal-route predicate, provider-sync role parse, writer profile rule, the provider-pair comparison, four new refusal mutants |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `df3b7ed32bcc2848a2b08e41b9f2ecfd5f67cdb601ead8438868c7bc88dccb46` | the three pi `(harness, request_case)` rows require the admission; the provider rows require the exact composed scope through the new pure helper; two row tests pin both |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3` | `:pi_provider` is goal-routed; the goal specs carry `provider_sync`; `resource.sync` lands in BOTH policies for those cases; the pi arms of `runtime_adapter_binding?` demand adapter kind `pi`; the legacy branch binds `:opencode` in its fn pattern instead of re-asserting the destructured role |
+| `scripts/ci/test-linux-v2-owner-request-keys.py` | `09ea677b3b867a6ce5a91f753473d0e665282fad50259725e54d5d42d63c8398` | N-role goal-route predicate, provider-sync role parse, writer profile rule, the provider-pair comparison, four refusal mutants, the fixture's both-policies `allowed_actions` refusal table; the writer's shared `writer_cases` accessor replaces the duplicated `CASES` preamble |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `823681b38cb07d92312a291e9e075f7f27367678ae0d65e6cf50fdf94844c911` | the three pi `(harness, request_case)` rows require the admission; the provider rows require the exact composed scope through the pure helper `linuxV2AdmissionProviderScopeIsExact`; two row tests pin both |
 | `scripts/ci/register-linux-v2-claim-machine.py` | `25b04fbcbe37cc9d678b7c07aa98690bd5cd276f4e08e1c89553eace166e3087` | the pi-native runtime spec becomes a goal-assigned native spec (`pi`/`1.5.2` + adapter block) with `provider_access: true` |
-| `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md` | `38a205ee8bbcb117ed14f99bdcde10a62f98417e175c4c93de9ee9fc5fb2c292` | the accepted plan in the repo's plan location |
+| `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md` | `5ba9f4a49b44218a906ff1a9dd50bbcbcbd4a2bf9de0909b68029bdef811a5fa` | the accepted plan in the repo's plan location (helper renamed to `linuxV2AdmissionProviderScopeIsExact`; five provider-free goal rows) |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the closed residual moves out of `TODO`; this goal's bounded residual is appended |
+
+The apply stage (`rf-acc-pi-provider-admission-apply`, 2026-11-26) delivered the four re-bound rows
+above from the accepted simplify findings F1-F4 (and the D1/D2 record corrections); §5 holds its
+re-runs and §6 its new mutants M9/M10. The writer and register rows are byte-identical to the
+implement stage.
 
 Byte-identical to the dispatch head (declared, not changed): `daemon/e2e/production_linux_v2_owner_cli_test.go`
 (`d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6`),
@@ -173,7 +178,8 @@ the same host `native/linux-gate/protocol` reddened on its first full-suite appe
 (`TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescriptors`, an environment-sensitive in-process
 FD-census probe) and is `ok` (8.520s, exit 0) on the isolated re-run. Deterministic per-package
 exits in WSL: `go test ./e2e/ -count=1` → 0, `go test ./internal/platform/... -count=1` → 1,
-`go test ./native/linux-gate/protocol/... -count=1` → 0. Attribution: the only changed Go file is
+`go test ./native/linux-gate/protocol/... -count=1` → 0 at the implement stage (the apply stage
+re-ran the suite after a host regression, below). Attribution: the only changed Go file is
 `daemon/e2e/production_linux_v2_native_witness_test.go` (package `e2e_test`); neither failing
 package references `daemon/e2e` (`grep -rn "daemon/e2e" internal/platform native/linux-gate/protocol`
 → 0 matches), so their build closure is byte-identical at base and head, and the failures are
@@ -181,6 +187,14 @@ root-only refusals (proved by the unprivileged re-run, where `native/linux-gate/
 and `internal/platform` fails only on the ad-hoc probe environment — a group/other-writable
 `GOTMPDIR` its witness-marker parent check refuses and `listen unixpacket … bind: invalid
 argument` in that directory — never on the changed bytes).
+
+The apply stage re-ran the WSL full suite on the delivered bytes: `daemon/e2e` `ok` (2.585s),
+`internal/platform` exit 1 on the same 13 root-only refusals, and `native/linux-gate/protocol`
+now fails three tests (`TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescriptors`,
+`TestGateCommandStringBound`, `TestGateReleaseFenceOrdering`) because the WSL host no longer
+carries `/usr/include/linux/capability.h` (`fatal error: linux/capability.h: No such file or
+directory` in each probe's C compile); a `b27ea691` checkout of the package fails identically
+(3 occurrences), so its bytes and build closure are unchanged and the failure is host-level.
 
 ### 4.4 Elixir formatter probe on the changed fixture
 
@@ -194,6 +208,10 @@ corrected and the probe re-run on the final bytes. `scripts/ci/*.exs` is outside
 CI runs `mix format --check-formatted` inside `control/` whose `inputs` are `["*.{ex,exs}",
 "{config,lib,test}/**/*.{ex,exs}", "priv/*/seeds.exs"]`, and `.credo.exs` includes only `lib/`
 and `test/`, so the Credo strict ratchet is unaffected (no `control/` byte changed).
+The apply stage re-ran the same probe on the changed fixture: the rewrite diffs are again
+body-identical (389 diff lines each; `diff` of the two diffs holds only the header and the hunk
+offsets from the removed line), and no rewrite hunk names the changed region
+(`grep -c "legacy_cases" ` on the delivered rewrite diff → 0).
 
 ### 4.5 Probe artifacts (scratch, deleted after the stage)
 
@@ -208,32 +226,46 @@ and `test/`, so the Credo strict ratchet is unaffected (no `control/` byte chang
 `check-styler-both.sh` `1af321cf90521d3393b200c5e1e3190e64e06362850ee2092539b4506fcd3c4e`,
 `do-format.exs` `8d0022035382fe382d02305203ab5f72a3288359fb110112e4eb8ee5b148ac27`.
 
+Apply-stage artifacts (scratch, deleted after the stage; the two probes are carried verbatim in
+§12): `p1-output.json` `f0b66e9ece5fcd9b19374abbbc433aa0e0f7161864aa6bcee911f0a79c7b3861`,
+`p1-run2.log` `6073ce6662f680548a37f1e9e41c38c113592b4efcba7c43a18e9dd34733d630`,
+`fmt-base.diff` `6d5ba1867a7a9da969f5ca35d8a4c10870f4621eb451bcf9e279f05d950aa2a2`,
+`fmt-delivered.diff` `1f5df522bdc491fd325b77e970c10cece9df2447b6ec9f9c0e71fa127f352bdc`,
+`jscpd-changed.log` `adef61e8a6b53610f7a7efde8e729a7b40f0afdac4926310a81a346f39183fd8`,
+`credo.log` `51ac94b53febd7bab1b22965e6f494bd753dee8cb498057bc92236c07d6295b1`.
+
 ## 5. Gates (command → exit code)
 
 | Command (working directory) | Exit | Note |
 | --- | --- | --- |
-| `python scripts/ci/test-linux-v2-owner-request-keys.py` (root, Windows) | 0 | 9 tests, including the four new refusal mutants |
-| `python3 scripts/ci/test-linux-v2-{control-receipt,evidence,go-events,host-prerequisite-probe,owner-request-keys,source-subject}.py` (root, WSL) | 0 each | all six suites `OK`; on Windows the evidence and host-prerequisite suites fail on Linux-only fixtures (systemd-unit path validation, `bash`-driven printer fixtures) with the same base bytes — my changed files are not inputs to the failing assertions, and the single head input the evidence suite reads (`linuxV2OwnerWitnessStderrLogLines`) is untouched |
-| `python -m py_compile` on the three changed Python scripts | 0 | syntax |
-| `gofmt -l` on both changed e2e files (WSL) | 0 | no files listed |
-| `GOOS=linux go vet ./...` (`daemon/`, WSL) | 0 | linux/amd64 compile gate |
-| `go vet ./...` (`daemon/`, Windows) | 0 | host compile gate |
-| `go test ./...` (`daemon/`, Windows) | 0 | 27 `ok` packages, 0 `FAIL` |
-| `go test ./...` (`daemon/`, WSL) | `e2e` 0 / `platform` 1 / `gate` 0 | linux/amd64: 29 `ok` packages including `daemon/e2e` (1.136s); `internal/platform` red only on the root-only privilege refusal, `native/linux-gate/protocol` red only on its first environment-sensitive census probe and `ok` on re-run (§4.3) |
-| `go test ./e2e/ -run 'TestLinuxV2WitnessRequiresGoalAdmissionRows\|TestLinuxV2AdmissionAllowsProviderSyncRows' -count=1` (WSL) | 0 | §4.3 |
-| Elixir: `mix format --dot-formatter` probe on base/delivered copies | 0 | body-identical rewrites, §4.4; `mix format --check-formatted` with the project config cannot run as a repo gate for `scripts/ci/*.exs` (not in the project's inputs) |
+| `python scripts/ci/test-linux-v2-owner-request-keys.py` (root, Windows) | 0 | 10 tests: the committed pair, four provider refusal mutants, the both-policies `allowed_actions` refusal table |
+| `python3 scripts/ci/test-linux-v2-{control-receipt,evidence,go-events,host-prerequisite-probe,owner-request-keys,source-subject}.py` (root, WSL) | 0 each | apply re-run on the delivered bytes: all six suites `OK`; on Windows the evidence and host-prerequisite suites fail on Linux-only fixtures (systemd-unit path validation, `bash`-driven printer fixtures) with the same base bytes — the changed files are not inputs to the failing assertions, and the single head input the evidence suite reads (`linuxV2OwnerWitnessStderrLogLines`) is untouched |
+| `python -m py_compile` on the changed Python script | 0 | syntax (apply re-run) |
+| `gofmt -l` on both e2e files (WSL) | 0 | no files listed; the witness file is the only changed one (apply re-run) |
+| `GOOS=linux go vet ./...` (`daemon/`, WSL) | 0 | linux/amd64 compile gate (apply re-run) |
+| `go vet ./...` (`daemon/`, Windows) | 0 | host compile gate (apply re-run) |
+| `go test ./...` (`daemon/`, Windows) | 0 | 27 `ok` packages, 0 `FAIL` (apply re-run; the Linux/amd64-tagged e2e file is absent from the Windows build closure) |
+| `go test ./...` (`daemon/`, WSL) | `e2e` 0 / `platform` 1 / `gate` 1 | apply re-run: 29 `ok` packages including `daemon/e2e` (2.585s); `internal/platform` exit 1 on the 13 root-only refusals; `native/linux-gate/protocol` exit 1 on its three C-probe tests because the host lacks `linux/capability.h` — the `b27ea691` checkout fails identically (§4.3) |
+| `go test ./e2e/ -run 'TestLinuxV2WitnessRequiresGoalAdmissionRows\|TestLinuxV2AdmissionAllowsProviderSyncRows' -count=1` (WSL) | 0 | apply re-run: both rows PASS, `ok … 0.037s` (§4.3) |
+| Elixir: `mix format --dot-formatter` probe on base/delivered copies | 0 | apply re-run: body-identical rewrites (389 diff lines each), no hunk touches the changed region (§4.4); `mix format --check-formatted` with the project config cannot run as a repo gate for `scripts/ci/*.exs` (not in the project's inputs) |
 | `MIX_ENV=test mix test` over `test/symmetry_control/goals/commands_test.exs`, `test/symmetry_control/orchestration_assignment_test.exs`, `test/symmetry_control/orchestration_claims_test.exs`, `test/symmetry_control_web/controllers/provider_action_controller_test.exs` (WSL, `symmetry_control_test` created and migrated) | 0 | 129 tests, 0 failures (39.3s) |
 | `MIX_ENV=prod mix compile --warnings-as-errors` (WSL) | 0 | the unchanged `control/` bytes compile clean |
-| `MIX_ENV=dev mix credo --strict` + `python3 scripts/ci/assert-credo-strict-baseline.py --log …` (WSL) | 30 / 0 | the ratchet passes: 564 issues (5 warnings, 326 refactoring, 160 readability, 73 design) over 225 files at the baseline recorded from `95d1df45`; inputs byte-identical to base |
-| `python3 scripts/ci/check-record-cleanliness.py --base b27ea691 --head <worktree snapshot of the final bytes>` | 0 | `1 changed record(s) pass the root-only check` |
-| `python3 scripts/ci/check-citation-existence.py --base b27ea691 --head <same snapshot>` | 0 | `1 changed document(s) pass the path and symbol check (686 path citation(s))`; the three notes name pre-existing gitignore-covered citations, not additions |
+| `MIX_ENV=dev mix credo --strict` + `python3 scripts/ci/assert-credo-strict-baseline.py --log …` (WSL) | 30 / 0 | apply re-run: the ratchet passes, 564 issues (5 warnings, 326 refactoring, 160 readability, 73 design) over 225 files at the baseline recorded from `95d1df45`; inputs byte-identical to base |
+| `python3 scripts/ci/check-record-cleanliness.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed record(s) pass the root-only check` (apply re-run) |
+| `python3 scripts/ci/check-citation-existence.py --base b27ea691 --head <scratch-clone commit>` | 0 | `1 changed document(s) pass the path and symbol check (686 path citation(s))`; the three notes name pre-existing gitignore-covered citations, not additions (apply re-run) |
+| `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only` on the plan and this record | 0 / 0 | no host absolute path in the changed docs (apply) |
+| `python3 scripts/ci/jscpd-changed.py --base b27ea691 --head <scratch-clone commit>` | 0 | `9 changed file(s), 1782 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new` (apply) |
+| `python <scratch>/comment-cap.py <scratch clone>` | 0 | no comment block longer than 2 lines among the added lines (apply) |
+| jscpd 4.3.0 census, `--min-tokens 25` over the five changed code files (the simplify stage's invocation) | 0 | 1 clone: the pre-existing `provision-linux-v2-control-claims.exs` self-clone (50 tokens, 8 lines), present at `b27ea691` too; the writer preamble duplication is gone (`grep -c writer_case_names` on the delivered file → 0; the shared `writer_cases` accessor replaced it) |
+| F3 probe: `run!("prepare", …)` on the delivered fixture over the ephemeral DB (§12.2) | 0 | `work_items=2 goal_cases=46`, legacy profiles `["opencode-native", "opencode-native"]`, `P1-APPLY-PROBE OK` |
+| M9 pin: `go test ./e2e/ -run TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` (§12.1) | 0 | `--- PASS`; the provider-free control request returns `nil`, the mutant refused verbatim |
 
-Final-bytes binding: the delivered e2e file is `df3b7ed32bcc2848a2b08e41b9f2ecfd5f67cdb601ead8438868c7bc88dccb46`
-at every gate above except the first Windows vet/test pair and the first WSL interaction, which
-preceded one comment-line clarification inside the new row test; the affected package was re-run on
-the final hash (row tests PASS, `go test ./e2e/ -count=1` exit 0, `GOOS=linux go vet ./e2e/` exit 0,
-`gofmt -l` 0 files), and the file is Linux/amd64-tagged, so it is absent from every Windows build
-the pre-clarification pair measured.
+Final-bytes binding: the delivered bytes of §1 are the revision every gate above measured —
+key test `09ea677b…`, fixture `82668512…`, e2e file `823681b3…`, plan `5ba9f4a4…` — with one
+scope limit: the Windows `go vet`/`go test` pair cannot build the Linux/amd64-tagged e2e file, so
+it binds it only through the unchanged closure. Every WSL gate, the two probes (§12.1/§12.2),
+jscpd-changed, comment-cap and the record checks ran on the delivered bytes (the scratch-clone
+commit for the last four).
 
 ## 6. Mutants
 
@@ -246,7 +278,9 @@ the pre-clarification pair measured.
 | M5 | writer: exact-scope ClaimResponse mutated (null scope, extra operation, wrong resource, non-nil change target) | writer exits 1, no request written, exact message (§4.2) |
 | M6 | register script: base adapter-free pi spec | Control refuses assignment: `Control did not assign the exact isolated owner-witness Task` (§4.1) |
 | M7 | e2e: one goal-admission map row dropped (`helper_sigkill_detached_child`) | `TestLinuxV2WitnessRequiresGoalAdmissionRows` exit 1: `helper_sigkill_detached_child: linuxV2WitnessRequiresGoalAdmission = false, want true`; restored file sha256 back to `df3b7ed3…` |
-| M8 | e2e: `linuxV2AdmissionAllowsProviderSync` relaxed to `return scope != nil` | `TestLinuxV2AdmissionAllowsProviderSyncRows` exit 1 on `two_resources`, `other_resource`, `extra_operation`, `wrong_operation` and `change_target` (`= true, want false`); restored file sha256 back to `df3b7ed3…` |
+| M8 | e2e: `linuxV2AdmissionProviderScopeIsExact` relaxed to `return scope != nil` | `TestLinuxV2AdmissionAllowsProviderSyncRows` exit 1 on `two_resources`, `other_resource`, `extra_operation`, `wrong_operation` and `change_target` (`= true, want false`); restored file sha256 back to `df3b7ed3…` |
+| M9 | e2e reader: a provider-free goal row (`pi`/`stage_replay`) request whose admission carries a fixture-side provider scope | `linuxV2ReadOwnerWitnessRequest` refuses verbatim `provider-free owner-witness admission carries a provider scope`; the same request with `provider_scope: null` passes the whole reader (probe §12.1, exit 0) |
+| M10 | fixture: the `allowed_actions` binding replaced by a constant, one policy's consumption dropped, or a third consumer added outside both policies | the delivered `test_allowed_actions_policy_drift_is_refused` subtests refuse verbatim: `bound exactly once to the provider_sync conditional, got 0 matches`; `consumed exactly once per policy, got execution_policy=0, authority_policy=1` (mirror: `execution_policy=1, authority_policy=0`); `consumed exactly twice, got 3` |
 
 ## 7. The conductor's Bind (acceptance clause)
 
@@ -288,13 +322,209 @@ clause does not apply; it is named here, in the plan §2.5 and in the report.
 3. The Windows runs of `test-linux-v2-evidence.py` and `test-linux-v2-host-prerequisite-probe.py`
    fail on their Linux-only fixtures at base and head alike (§5); the WSL runs are the recorded
    gate. `test-linux-v2-control-receipt.py` refuses without root (the WSL run had root). The WSL
-   full Go suite carries two environment refusals (§4.3): `internal/platform`'s root-only
-   privilege fixture (13 refusals, exit 1) and one environment-sensitive FD-census probe in
-   `native/linux-gate/protocol` (`ok` on re-run); both packages' bytes and build closures are
-   identical at base and head.
+   full Go suite carries known environment refusals (§4.3): `internal/platform`'s root-only
+   privilege fixture (13 refusals, exit 1) and, on the apply stage's re-run,
+   `native/linux-gate/protocol`'s three C-probe tests, which no longer compile because the WSL
+   host lacks `linux/capability.h` (the `b27ea691` checkout fails identically); both packages'
+   bytes and build closures are identical at base and head.
 4. `mix format --check-formatted` with the project's Styler config cannot be run as a gate for
    `scripts/ci/*.exs` (outside the project's `inputs`); the body-identical rewrite probe (§4.4) is
    the replacement proof.
 5. Full Control suite and the credentialed acceptance workflow are not run here: the contract
    routes the first to "never the full Control suite unserialized" (the four-file targeted run is
    recorded) and the second to the conductor's Bind.
+
+## 11. Contract invariants → executable rows (delivered bytes)
+
+| Contract clause | Executable row |
+| --- | --- |
+| `resource.sync` in BOTH `authority_policy.allowed_actions` and `execution_policy.allowed_actions` (Ruling) | key test `test_the_committed_pair_agrees` plus `test_allowed_actions_policy_drift_is_refused` (M10); the §4.1 per-case rows |
+| Provider-free goals stay provider-free (`provider_scope: null`, `allowed_actions: []`, no `provider_access`) | writer probe row `codex_containment` with a provider scope → exit 1 (§4.2); the key test's provider-pair equality; the e2e reader mutant M9 |
+| No weakened provider-access assertion, clone reserve, or Subject binding | e2e row tests `TestLinuxV2WitnessRequiresGoalAdmissionRows`, `TestLinuxV2AdmissionAllowsProviderSyncRows` (§4.3); the clone reserve and the witness reader are declared byte-identical (§1) |
+| No new credentials in CI | register-script payload delta (§4.2): exactly one runtime key changed, no credential field |
+| Key agreement stays green | §5, first row (exit 0) |
+| Comments at most 2 lines; Elixir changes run format, compile, Credo strict, relevant tests | comment-cap (§5); the §4.4 formatter probe; §5's Credo ratchet row; §12.2's compile-and-run probe |
+| Acceptance: no clone-intent/Subject stop; next stop verbatim or green | the conductor's Bind row (§7), unmeasured here |
+
+## 12. Appendix — scratch probes and mutants (verbatim, full sha256)
+
+The probes below ran only from the stage's scratch directory and were never committed; each
+exercised the delivered bytes of §1. Each sha256 binds its probe's exact file bytes (LF).
+
+### 12.1 M9 pin — `zz_apply_probe_test.go` (sha256 `f4e499d87c6071bdced3e5103233f02c98e5d72307790e542fa97b002dbf2ace`, 110 lines)
+
+Ran in a scratch clone of the delivered bytes as `daemon/e2e/zz_apply_probe_test.go`
+(`//go:build linux && amd64`): `GOTOOLCHAIN=auto go test ./e2e/ -run
+TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal -count=1 -v` → `--- PASS`, `ok
+github.com/wxxb789/symmetry/daemon/e2e 0.325s`, and the log line `mutant refused verbatim:
+provider-free owner-witness admission carries a provider scope`. The provider-free control request
+(`provider_scope: null`) returned `nil` from the whole reader.
+
+```go
+//go:build linux && amd64
+
+package e2e_test
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/wxxb789/symmetry/daemon/internal/config"
+	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
+)
+
+// Scratch probe (never committed): the D1 mutant. A provider-free goal row's request whose
+// admission carries a fixture-side provider scope must be refused by the reader's provider-free
+// branch; the same request with provider_scope null must pass the whole reader.
+func TestProbeProviderFreeAdmissionCarriesProviderScopeRefusal(t *testing.T) {
+	const (
+		resourceID = "22222222-2222-4222-8222-222222222222"
+		commit     = "0123456789abcdef0123456789abcdef01234567"
+		treeDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+	)
+	barrierDirectory := "/opt/symmetry-owner-test/apply-probe-barrier"
+	if err := os.MkdirAll(barrierDirectory, 0o700); err != nil {
+		t.Fatalf("create probe barrier directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(barrierDirectory) })
+	if err := os.Chmod(barrierDirectory, 0o700); err != nil {
+		t.Fatalf("chmod probe barrier directory: %v", err)
+	}
+	identity, err := os.Lstat(barrierDirectory)
+	if err != nil {
+		t.Fatalf("stat probe barrier directory: %v", err)
+	}
+	stat, ok := identity.Sys().(*syscall.Stat_t)
+	if !ok || stat.Uid != 0 {
+		t.Fatalf("probe barrier directory must be root-owned")
+	}
+
+	testCase := linuxV2NativeWitnessCase{harness: "pi", requestCase: "stage_replay", barrierStage: "helper_bound"}
+	value := config.Config{Runtime: config.Runtime{
+		RepositoryResourceID: resourceID,
+		AgentProfile:         "pi-native",
+		Workspace:            "native",
+	}}
+	owner := linuxgate.OwnerConfig{AUID: 0, AGID: 0}
+	deadline := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+
+	request := func(scope string) string {
+		admission := fmt.Sprintf(`{
+  "schema_version": "symmetry.admission.v1",
+  "admission_id": "55555555-5555-4555-8555-555555555555",
+  "goal_id": "11111111-1111-4111-8111-111111111111",
+  "goal_revision": 1,
+  "work_item_id": "33333333-3333-4333-8333-333333333333",
+  "purpose": "implement",
+  "context_snapshot_id": "44444444-4444-4444-8444-444444444444",
+  "context_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "model_profile": "implementation-default",
+  "session_mode": "fresh",
+  "requested_session_id": null,
+  "subject": {"resource_id": %q, "commit": %q, "tree_digest": %q},
+  "limits": {"max_turns": 1, "deadline_at": %q, "max_cost_microusd": "250000"},
+  "validation_of_task_id": null,
+  "provider_scope": %s
+}`, resourceID, commit, treeDigest, deadline, scope)
+		return fmt.Sprintf(`{
+  "version": 1,
+  "case": "stage_replay",
+  "harness": "pi",
+  "run_key": {"run_id": "apply-probe-run", "generation": 1},
+  "fence": {"runtime_id": "apply-probe-runtime", "runtime_epoch": 1, "generation": 1, "claim_id": "apply-probe-claim", "lease_token": "apply-probe-token"},
+  "claim": {"run_id": "apply-probe-run", "task_id": "apply-probe-task", "generation": 1,
+    "claim_id": "apply-probe-claim", "lease_token": "apply-probe-token",
+    "lease_expires_at": %q, "lease_remaining_ms": 3600000,
+    "work": {"goal": "apply probe", "agent_profile": "pi-native", "workspace": "native", "input": %s, "required_capabilities": {}}},
+  "subject": {"resource_id": %q, "commit": %q, "tree_digest": %q},
+  "barrier": {"directory": %q, "timeout_seconds": 30, "hold_after": "helper_bound", "release_file": %q}
+}`, deadline, admission, resourceID, commit, treeDigest, barrierDirectory, filepath.Join(barrierDirectory, "release"))
+	}
+
+	read := func(body string) error {
+		path := filepath.Join(t.TempDir(), "request.json")
+		if err := os.WriteFile(path, []byte(body), 0o640); err != nil {
+			t.Fatalf("write probe request: %v", err)
+		}
+		if err := os.Chmod(path, 0o640); err != nil {
+			t.Fatalf("chmod probe request: %v", err)
+		}
+		_, err := linuxV2ReadOwnerWitnessRequest(path, testCase, value, owner)
+		return err
+	}
+
+	scope := fmt.Sprintf(`{"resource_ids": [%q], "operations_by_resource": {%q: ["resource.sync"]}, "change_target": null}`, resourceID, resourceID)
+	if err := read(request("null")); err != nil {
+		t.Fatalf("provider-free control request must pass the reader, got: %v", err)
+	}
+	err = read(request(scope))
+	if err == nil {
+		t.Fatal("provider-free request with a fixture-side provider scope must be refused")
+	}
+	if !strings.Contains(err.Error(), "provider-free owner-witness admission carries a provider scope") {
+		t.Fatalf("refusal = %v, want the provider-free scope refusal", err)
+	}
+	t.Logf("mutant refused verbatim: %v", err)
+}
+```
+
+### 12.2 F3 probe — `p1-apply-probe.exs` (sha256 `fbe92aa50b22369b72b728662e8ed4276fb77cebc08424dd982b67893c77268f`, 36 lines)
+
+Ran from the main checkout's `control/` project (`MIX_ENV=prod`, `DATABASE_URL` naming the ephemeral
+`symmetry_linux_v2_pi_apply_probe` on 127.0.0.1:5432, `GITHUB_ACTIONS=true`/`GITHUB_RUN_ID=local`);
+it evaluates only the delivered fixture file's module definition (the file's own `System.argv`
+dispatch is cut) and runs `run!("prepare", …)` on the delivered bytes. Result: exit 0,
+`work_items=2 goal_cases=46`, legacy profiles `["opencode-native", "opencode-native"]`,
+`P1-APPLY-PROBE OK` — the changed fn pattern matched the `:opencode` legacy rows and the fixture's
+`@expected_fixture_runs` check (48) held; a violated role invariant would raise
+`FunctionClauseError` (previously `MatchError`) instead.
+
+```elixir
+# Scratch probe (never committed): run the delivered fixture's `prepare` on an ephemeral local
+# database, exercising the legacy (:opencode) branch with the delivered fn pattern, and assert
+# the written fixture holds the expected case counts.
+path = System.argv() |> Enum.at(0) || raise "fixture path required"
+output_path = System.argv() |> Enum.at(1) || raise "output path required"
+
+source = File.read!(path)
+parts = String.split(source, "\ncase System.argv() do", parts: 2)
+if length(parts) != 2, do: raise "fixture no longer ends in its System.argv dispatch"
+[head, _tail] = parts
+
+Code.eval_string(head, [], file: path)
+
+LinuxV2ControlClaimFixture.run!("prepare", [
+  output_path,
+  "wxxb789/symmetry",
+  "wxxb789",
+  "0123456789abcdef0123456789abcdef01234567",
+  "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+])
+
+fixture = File.read!(output_path) |> Jason.decode!()
+work_items = fixture["work_items"]
+goal_cases = fixture["goal_cases"]
+IO.puts("work_items=#{map_size(work_items)} goal_cases=#{map_size(goal_cases)}")
+unless map_size(work_items) == 2 and map_size(goal_cases) == 46 do
+  raise "unexpected fixture case counts"
+end
+
+legacy_profiles = work_items |> Map.values() |> Enum.map(& &1["agent_profile"]) |> Enum.sort()
+IO.puts("legacy_profiles=#{inspect(legacy_profiles)}")
+unless legacy_profiles == ["opencode-native", "opencode-native"] do
+  raise "legacy branch did not route the :opencode rows"
+end
+
+IO.puts("P1-APPLY-PROBE OK")
+```
+
+### 12.3 M10 reproduction
+
+The four M10 refusals are produced by the delivered test's own
+`test_allowed_actions_policy_drift_is_refused` subtests (`binding`, `execution`, `authority`,
+`outside`): the committed refusal table is the pin, so no scratch artifact is carried for M10.

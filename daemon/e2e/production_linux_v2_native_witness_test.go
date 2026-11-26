@@ -1685,7 +1685,7 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 			return linuxV2OwnerWitnessRequest{}, fmt.Errorf("%s owner-witness claim must carry the Control admission for the exact Subject", testCase.harness)
 		}
 		if testCase.providerActionRequired {
-			if !linuxV2AdmissionAllowsProviderSync(admission.ProviderScope, request.Subject.ResourceID) {
+			if !linuxV2AdmissionProviderScopeIsExact(admission.ProviderScope, request.Subject.ResourceID) {
 				return linuxV2OwnerWitnessRequest{}, errors.New("provider-action owner-witness admission must scope exactly resource.sync for the exact Subject")
 			}
 		} else if admission.ProviderScope != nil {
@@ -1873,7 +1873,7 @@ func linuxV2ClaimAllowsProviderSync(access protocol.ProviderAccess, resourceID s
 
 // The exact provider scope Control composes for an implement admission whose both allowed_actions
 // lists carry resource.sync (admission.ex:1218-1268); anything wider is not this claim's authority.
-func linuxV2AdmissionAllowsProviderSync(scope *protocol.ProviderScope, resourceID string) bool {
+func linuxV2AdmissionProviderScopeIsExact(scope *protocol.ProviderScope, resourceID string) bool {
 	if scope == nil || len(scope.ResourceIDs) != 1 || scope.ResourceIDs[0] != resourceID ||
 		len(scope.OperationsByResource) != 1 || scope.ChangeTarget != nil {
 		return false
@@ -1924,8 +1924,8 @@ func TestLinuxV2AdmissionAllowsProviderSyncRows(t *testing.T) {
 		}, want: false},
 	}
 	for _, row := range rows {
-		if got := linuxV2AdmissionAllowsProviderSync(row.scope, resourceID); got != row.want {
-			t.Errorf("%s: linuxV2AdmissionAllowsProviderSync = %t, want %t", row.name, got, row.want)
+		if got := linuxV2AdmissionProviderScopeIsExact(row.scope, resourceID); got != row.want {
+			t.Errorf("%s: linuxV2AdmissionProviderScopeIsExact = %t, want %t", row.name, got, row.want)
 		}
 	}
 }
