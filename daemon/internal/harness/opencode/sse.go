@@ -146,10 +146,8 @@ func DecodeGlobalEvent(frame Frame) (Event, error) {
 	return event, nil
 }
 
-// DecodePromptAdmittedEvent recognizes one durable session event captured from
-// v1.18.32. It intentionally rejects any other event type. Use
-// DecodeSessionEvent when replaying a stream that may contain later native
-// event types.
+// DecodePromptAdmittedEvent recognizes the frozen 1.18.32 prompt-admission shape and
+// rejects any other type; DecodeSessionEvent handles streams with later native events.
 func DecodePromptAdmittedEvent(frame Frame) (PromptAdmittedEvent, error) {
 	event, _, err := decodeEvent(frame)
 	if err != nil {
@@ -178,13 +176,23 @@ const (
 	toolSuccessEventType    = "session.next.tool.success"
 	toolFailedEventType     = "session.next.tool.failed"
 	retriedEventType        = "session.next.retried"
+
+	// Recorded 2.4.1 vocabulary; the 1.18.32 names above stay for the frozen 1.18.32
+	// fixtures, the inline decode rows and the 1.18.32-pinned candidate witness.
+	executionStartedEventType     = "session.execution.started"
+	executionSucceededEventType   = "session.execution.succeeded"
+	executionFailedEventType      = "session.execution.failed"
+	executionInterruptedEventType = "session.execution.interrupted"
+	inboxEnqueuedEventType        = "session.inbox.enqueued"
+	recordedStepStartedEventType  = "session.step.started"
+	recordedStepEndedEventType    = "session.step.ended"
+	recordedStepFailedEventType   = "session.step.failed"
+	recordedToolCalledEventType   = "session.tool.called"
+	recordedToolSuccessEventType  = "session.tool.success"
 )
 
-// DecodeSessionEvent strictly decodes the durable session-event subset pinned
-// to OpenCode 1.18.32. Unknown event types are returned as Kind
-// SessionEventUnknown after their envelope, durable cursor, and session
-// identity have been validated. This allows a watcher to emit a bounded
-// diagnostic and continue to a later terminal event.
+// DecodeSessionEvent decodes the durable vocabulary recorded for the pinned 2.4.1
+// bytes plus the frozen 1.18.32 shapes; unknown types return Kind SessionEventUnknown.
 func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 	event, object, err := decodeEvent(frame)
 	if err != nil {
@@ -200,12 +208,9 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 	if err != nil {
 		return DecodedSessionEvent{}, err
 	}
-	sessionID, ok := requiredString(data, "sessionID")
-	if !ok || !isID(sessionID, "ses_") {
-		return DecodedSessionEvent{}, fmt.Errorf("%w: event sessionID", ErrMalformedEvent)
-	}
-	if event.Durable.AggregateID != sessionID {
-		return DecodedSessionEvent{}, fmt.Errorf("%w: durable aggregate %q, data session %q", ErrIdentityMismatch, event.Durable.AggregateID, sessionID)
+	sessionID, err := durableSessionIdentity(event, data)
+	if err != nil {
+		return DecodedSessionEvent{}, err
 	}
 
 	decoded := DecodedSessionEvent{Event: event, Kind: SessionEventUnknown, SessionID: sessionID}
@@ -270,14 +275,93 @@ func DecodeSessionEvent(frame Frame) (DecodedSessionEvent, error) {
 			return DecodedSessionEvent{}, err
 		}
 		decoded.Kind, decoded.Retried = SessionEventRetried, &value
+	case executionStartedEventType, executionSucceededEventType, executionFailedEventType, executionInterruptedEventType:
+		value, err := decodeExecutionEvent(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.Execution = executionKind(event.Type), &value
+	case inboxEnqueuedEventType:
+		value, err := decodeRecordedInboxEnqueued(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.InboxEnqueued = SessionEventInboxEnqueued, &value
+	case recordedStepStartedEventType:
+		value, err := decodeRecordedStepStarted(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.RecordedStepStarted = SessionEventRecordedStepStarted, &value
+	case recordedStepEndedEventType:
+		value, err := decodeRecordedStepEnded(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.RecordedStepEnded = SessionEventRecordedStepEnded, &value
+	case recordedStepFailedEventType:
+		value, err := decodeRecordedStepFailed(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.RecordedStepFailed = SessionEventRecordedStepFailed, &value
+	case recordedToolCalledEventType:
+		value, err := decodeRecordedToolCalled(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.RecordedToolCalled = SessionEventRecordedToolCalled, &value
+	case recordedToolSuccessEventType:
+		value, err := decodeRecordedToolSuccess(event, data)
+		if err != nil {
+			return DecodedSessionEvent{}, err
+		}
+		decoded.Kind, decoded.RecordedToolSuccess = SessionEventRecordedToolSuccess, &value
 	default:
 		// Unknown future events must still be valid JSON with no duplicate keys.
 		// Their fields are intentionally not interpreted.
 		if err := validateJSONValue(event.Data); err != nil {
 			return DecodedSessionEvent{}, fmt.Errorf("%w: unknown event data: %v", ErrMalformedEvent, err)
 		}
+		if _, recorded := recordedUninterpretedEventTypes[event.Type]; recorded {
+			decoded.Kind = SessionEventRecordedUninterpreted
+		}
 	}
 	return decoded, nil
+}
+
+// durableSessionIdentity binds one durable session event to the session its own data and
+// cursor name; the strict decoder and global-stream filter refuse disagreeing identity fields.
+func durableSessionIdentity(event Event, data map[string]json.RawMessage) (string, error) {
+	sessionID, ok := requiredString(data, "sessionID")
+	if !ok || !isID(sessionID, "ses_") {
+		return "", fmt.Errorf("%w: event sessionID", ErrMalformedEvent)
+	}
+	if event.Durable.AggregateID != sessionID {
+		return "", fmt.Errorf("%w: durable aggregate %q, data session %q", ErrIdentityMismatch, event.Durable.AggregateID, sessionID)
+	}
+	return sessionID, nil
+}
+
+// GlobalFrameSessionID reports the durable session identity a global /api/event frame carries;
+// non-session frames report ok=false so a watcher on the shared stream can skip them.
+func GlobalFrameSessionID(frame Frame) (string, bool, error) {
+	event, object, err := decodeEvent(frame)
+	if err != nil {
+		return "", false, err
+	}
+	if event.Durable == nil || !strings.HasPrefix(event.Type, "session.") {
+		return "", false, nil
+	}
+	data, err := strictEventObject(object["data"])
+	if err != nil {
+		return "", false, err
+	}
+	sessionID, err := durableSessionIdentity(event, data)
+	if err != nil {
+		return "", false, err
+	}
+	return sessionID, true, nil
 }
 
 func decodeEvent(frame Frame) (Event, map[string]json.RawMessage, error) {
@@ -285,7 +369,7 @@ func decodeEvent(frame Frame) (Event, map[string]json.RawMessage, error) {
 	if err != nil {
 		return Event{}, nil, fmt.Errorf("%w: %v", ErrMalformedEvent, err)
 	}
-	if err := rejectUnknownFields(object, "id", "type", "data", "durable", "location", "metadata"); err != nil {
+	if err := rejectUnknownFields(object, "id", "type", "created", "data", "durable", "location", "metadata"); err != nil {
 		return Event{}, nil, err
 	}
 	event := Event{}
@@ -332,6 +416,12 @@ func decodeEvent(frame Frame) (Event, map[string]json.RawMessage, error) {
 		}
 		event.Durable = &durable
 	}
+	if raw, exists := object["created"]; exists {
+		var created int64
+		if json.Unmarshal(raw, &created) != nil || created <= 0 {
+			return Event{}, nil, fmt.Errorf("%w: created timestamp", ErrMalformedEvent)
+		}
+	}
 	event.Data = append(json.RawMessage(nil), object["data"]...)
 	return event, object, nil
 }
@@ -349,7 +439,9 @@ func decodeDurableCursor(raw json.RawMessage) (DurableCursor, error) {
 	if cursor.AggregateID, ok = requiredString(object, "aggregateID"); !ok || !isID(cursor.AggregateID, "ses_") {
 		return DurableCursor{}, ErrInvalidDurableCursor
 	}
-	if cursor.Seq, ok = requiredPositiveInt(object, "seq"); !ok {
+	// The recorded vocabulary opens a session's sequence at 0 (session.created), so the
+	// cursor is non-negative; the validator's boundary stays exclusive.
+	if cursor.Seq, ok = requiredNonNegativeInt(object, "seq"); !ok {
 		return DurableCursor{}, ErrInvalidDurableCursor
 	}
 	if cursor.Version, ok = requiredPositiveInt(object, "version"); !ok {
@@ -364,9 +456,32 @@ func knownDurableEventVersion(eventType string) (uint64, bool) {
 		return 1, true
 	case stepEndedEventType, stepFailedEventType:
 		return 2, true
+	case executionStartedEventType, executionSucceededEventType, executionFailedEventType, executionInterruptedEventType,
+		inboxEnqueuedEventType, recordedStepStartedEventType, recordedStepEndedEventType, recordedStepFailedEventType, recordedToolCalledEventType:
+		return 1, true
+	case recordedToolSuccessEventType:
+		return 2, true
 	default:
 		return 0, false
 	}
+}
+
+// recordedUninterpretedEventTypes are the durable 2.4.1 types this build knows the pinned
+// bytes emit but deliberately does not interpret; they stay known, never an unknown diagnostic.
+var recordedUninterpretedEventTypes = map[string]struct{}{
+	"session.created":              {},
+	"session.deleted":              {},
+	"session.inbox.delivered":      {},
+	"session.instructions.updated": {},
+	"session.reasoning.ended":      {},
+	"session.reasoning.started":    {},
+	"session.renamed":              {},
+	"session.step.first-token":     {},
+	"session.step.streamed":        {},
+	"session.text.ended":           {},
+	"session.text.started":         {},
+	"session.tool.input.ended":     {},
+	"session.tool.input.started":   {},
 }
 
 func strictEventObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
@@ -1163,14 +1278,212 @@ func decodeRetried(event Event, data map[string]json.RawMessage) (NativeRetriedE
 	return decoded, nil
 }
 
+// executionKind maps one recorded session.execution.* type to its decoded kind.
+func executionKind(eventType string) SessionEventKind {
+	switch eventType {
+	case executionStartedEventType:
+		return SessionEventExecutionStarted
+	case executionSucceededEventType:
+		return SessionEventExecutionSucceeded
+	case executionFailedEventType:
+		return SessionEventExecutionFailed
+	default:
+		return SessionEventExecutionInterrupted
+	}
+}
+
+// executionOutcome maps one recorded session.execution.* terminal to the server's own
+// outcome spelling; execution.started is not a terminal.
+func executionOutcome(eventType string) (string, bool) {
+	switch eventType {
+	case executionSucceededEventType:
+		return "succeeded", true
+	case executionFailedEventType:
+		return "failed", true
+	case executionInterruptedEventType:
+		return "interrupted", true
+	default:
+		return "", false
+	}
+}
+
+// decodeExecutionEvent reads one recorded session.execution.* frame; the failed class
+// records the upstream error object and the interrupted class a reason.
+func decodeExecutionEvent(event Event, data map[string]json.RawMessage) (RecordedExecutionEvent, error) {
+	decoded := RecordedExecutionEvent{Event: event}
+	sessionID, ok := requiredString(data, "sessionID")
+	if !ok || !isID(sessionID, "ses_") {
+		return RecordedExecutionEvent{}, fmt.Errorf("%w: sessionID", ErrMalformedEvent)
+	}
+	decoded.SessionID = sessionID
+	if raw, exists := data["error"]; exists {
+		executionError, err := decodeExecutionError(raw)
+		if err != nil {
+			return RecordedExecutionEvent{}, err
+		}
+		decoded.Error = &executionError
+	}
+	if _, exists := data["reason"]; exists {
+		reason, ok := requiredString(data, "reason")
+		if !ok {
+			return RecordedExecutionEvent{}, fmt.Errorf("%w: reason", ErrMalformedEvent)
+		}
+		decoded.Reason = &reason
+	}
+	return decoded, nil
+}
+
+// decodeExecutionError interprets only the recorded type/message pair; the upstream
+// error object is open-ended, so its other keys are never read.
+func decodeExecutionError(raw json.RawMessage) (RecordedExecutionError, error) {
+	object, err := strictEventObject(raw)
+	if err != nil {
+		return RecordedExecutionError{}, err
+	}
+	errorType, ok := requiredString(object, "type")
+	if !ok {
+		return RecordedExecutionError{}, fmt.Errorf("%w: error.type", ErrMalformedEvent)
+	}
+	message, ok := requiredString(object, "message")
+	if !ok {
+		return RecordedExecutionError{}, fmt.Errorf("%w: error.message", ErrMalformedEvent)
+	}
+	return RecordedExecutionError{Type: errorType, Message: message}, nil
+}
+
+// decodeRecordedInboxEnqueued reads the recorded prompt-admission frame; the item's
+// text is validated but never retained.
+func decodeRecordedInboxEnqueued(event Event, data map[string]json.RawMessage) (RecordedInboxEnqueuedEvent, error) {
+	decoded := RecordedInboxEnqueuedEvent{Event: event}
+	var ok bool
+	if decoded.SessionID, ok = requiredString(data, "sessionID"); !ok || !isID(decoded.SessionID, "ses_") {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: sessionID", ErrMalformedEvent)
+	}
+	if decoded.InboxID, ok = requiredString(data, "inboxID"); !ok || !isID(decoded.InboxID, "msg_") {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: inboxID", ErrMalformedEvent)
+	}
+	itemRaw, exists := data["item"]
+	if !exists {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: item", ErrMalformedEvent)
+	}
+	item, err := strictEventObject(itemRaw)
+	if err != nil {
+		return RecordedInboxEnqueuedEvent{}, err
+	}
+	if itemType, ok := requiredString(item, "type"); !ok || itemType != "user" {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: item.type", ErrMalformedEvent)
+	}
+	if decoded.Delivery, ok = requiredString(item, "delivery"); !ok || (decoded.Delivery != "steer" && decoded.Delivery != "queue") {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: item.delivery", ErrMalformedEvent)
+	}
+	payloadRaw, exists := item["payload"]
+	if !exists {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: item.payload", ErrMalformedEvent)
+	}
+	payload, err := strictEventObject(payloadRaw)
+	if err != nil {
+		return RecordedInboxEnqueuedEvent{}, err
+	}
+	if _, ok := requiredString(payload, "text"); !ok {
+		return RecordedInboxEnqueuedEvent{}, fmt.Errorf("%w: item.payload.text", ErrMalformedEvent)
+	}
+	return decoded, nil
+}
+
+// recordedStepIdentity reads the identity fields every recorded session.step.* frame
+// carries; unmodeled upstream keys are tolerated.
+func recordedStepIdentity(data map[string]json.RawMessage) (sessionID, assistantMessageID string, err error) {
+	var ok bool
+	if sessionID, ok = requiredString(data, "sessionID"); !ok || !isID(sessionID, "ses_") {
+		return "", "", fmt.Errorf("%w: sessionID", ErrMalformedEvent)
+	}
+	if assistantMessageID, ok = requiredString(data, "assistantMessageID"); !ok || !isID(assistantMessageID, "msg_") {
+		return "", "", fmt.Errorf("%w: assistantMessageID", ErrMalformedEvent)
+	}
+	return sessionID, assistantMessageID, nil
+}
+
+func decodeRecordedStepStarted(event Event, data map[string]json.RawMessage) (RecordedStepStartedEvent, error) {
+	decoded := RecordedStepStartedEvent{Event: event}
+	sessionID, assistantMessageID, err := recordedStepIdentity(data)
+	if err != nil {
+		return RecordedStepStartedEvent{}, err
+	}
+	decoded.SessionID, decoded.AssistantMessageID = sessionID, assistantMessageID
+	return decoded, nil
+}
+
+func decodeRecordedStepEnded(event Event, data map[string]json.RawMessage) (RecordedStepEndedEvent, error) {
+	decoded := RecordedStepEndedEvent{Event: event}
+	sessionID, assistantMessageID, err := recordedStepIdentity(data)
+	if err != nil {
+		return RecordedStepEndedEvent{}, err
+	}
+	decoded.SessionID, decoded.AssistantMessageID = sessionID, assistantMessageID
+	var ok bool
+	if decoded.Finish, ok = requiredString(data, "finish"); !ok {
+		return RecordedStepEndedEvent{}, fmt.Errorf("%w: finish", ErrMalformedEvent)
+	}
+	return decoded, nil
+}
+
+func decodeRecordedStepFailed(event Event, data map[string]json.RawMessage) (RecordedStepFailedEvent, error) {
+	decoded := RecordedStepFailedEvent{Event: event}
+	sessionID, assistantMessageID, err := recordedStepIdentity(data)
+	if err != nil {
+		return RecordedStepFailedEvent{}, err
+	}
+	decoded.SessionID, decoded.AssistantMessageID = sessionID, assistantMessageID
+	errorRaw, exists := data["error"]
+	if !exists {
+		return RecordedStepFailedEvent{}, fmt.Errorf("%w: error", ErrMalformedEvent)
+	}
+	stepError, err := decodeExecutionError(errorRaw)
+	if err != nil {
+		return RecordedStepFailedEvent{}, err
+	}
+	decoded.Error = stepError
+	return decoded, nil
+}
+
+func decodeRecordedToolCalled(event Event, data map[string]json.RawMessage) (RecordedToolCalledEvent, error) {
+	decoded := RecordedToolCalledEvent{Event: event}
+	sessionID, assistantMessageID, err := recordedStepIdentity(data)
+	if err != nil {
+		return RecordedToolCalledEvent{}, err
+	}
+	decoded.SessionID, decoded.AssistantMessageID = sessionID, assistantMessageID
+	var ok bool
+	if decoded.CallID, ok = requiredString(data, "id"); !ok {
+		return RecordedToolCalledEvent{}, fmt.Errorf("%w: id", ErrMalformedEvent)
+	}
+	if decoded.Executed, ok = requiredBool(data, "executed"); !ok {
+		return RecordedToolCalledEvent{}, fmt.Errorf("%w: executed", ErrMalformedEvent)
+	}
+	return decoded, nil
+}
+
+func decodeRecordedToolSuccess(event Event, data map[string]json.RawMessage) (RecordedToolSuccessEvent, error) {
+	decoded := RecordedToolSuccessEvent{Event: event}
+	sessionID, assistantMessageID, err := recordedStepIdentity(data)
+	if err != nil {
+		return RecordedToolSuccessEvent{}, err
+	}
+	decoded.SessionID, decoded.AssistantMessageID = sessionID, assistantMessageID
+	var ok bool
+	if decoded.CallID, ok = requiredString(data, "id"); !ok {
+		return RecordedToolSuccessEvent{}, fmt.Errorf("%w: id", ErrMalformedEvent)
+	}
+	return decoded, nil
+}
+
 func isJSONObject(raw json.RawMessage) bool {
 	_, err := strictObject(raw)
 	return err == nil
 }
 
-// SessionEventValidator binds replay events to one retained OpenCode session
-// and makes duplicate, stale, or cross-session events terminal transport
-// failures. It is deliberately not concurrent-safe.
+// SessionEventValidator binds durable session events to one retained OpenCode session;
+// duplicate, stale or cross-session events are terminal transport failures.
 type SessionEventValidator struct {
 	sessionID string
 	after     uint64
@@ -1235,8 +1548,4 @@ func (validator *SessionEventValidator) LastCursor() uint64 {
 		return 0
 	}
 	return validator.last
-}
-
-func (event Event) String() string {
-	return strings.TrimSpace(event.Type)
 }

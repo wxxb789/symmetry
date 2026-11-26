@@ -66,7 +66,7 @@ var probeCases = []probeCase{
 			_, err := opencode.NewAdapterWithRunner("opencode", runner).Probe(ctx)
 			return err
 		},
-		probeTimeout:  time.Second,
+		probeTimeout:  5 * time.Second,
 		versionOutput: []byte(opencode.TestedVersion + "\n"),
 		otherOutput:   []byte("opencode serve --hostname --port --pure"),
 	},

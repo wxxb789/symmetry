@@ -38,44 +38,78 @@ func TestClientRequiresExplicitNumericLoopbackBasicAuth(t *testing.T) {
 	}
 }
 
-func TestClientHealthUsesExactEndpointAndBasicAuth(t *testing.T) {
+const clientReadinessBody = `{"pid":1234,"version":"` + TestedVersion + `","status":200}`
+
+func TestClientReadinessUsesTheInfoEndpointAndBasicAuth(t *testing.T) {
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		assertAuth(t, request)
-		if request.Method != http.MethodGet || request.URL.Path != "/api/health" || request.Header.Get("Content-Type") != "" {
+		if request.Method != http.MethodGet || request.URL.Path != "/api/info" || request.URL.RawQuery != "" || request.Header.Get("Content-Type") != "" {
 			t.Fatalf("request = %s %s content-type=%q", request.Method, request.URL.Path, request.Header.Get("Content-Type"))
 		}
-		_, _ = io.WriteString(writer, `{"healthy":true}`)
+		_, _ = io.WriteString(writer, clientReadinessBody)
 	})
-	if err := newClient(t, server).Health(context.Background()); err != nil {
-		t.Fatalf("Health() error = %v", err)
+	if err := newClient(t, server).Readiness(context.Background(), 1234); err != nil {
+		t.Fatalf("Readiness() error = %v", err)
 	}
 }
 
-func TestClientHealthRejectsUnhealthyRedirectAndOversizedResponse(t *testing.T) {
-	t.Run("unhealthy", func(t *testing.T) {
+func TestClientReadinessRejectsIdentityRedirectAndOversizedResponse(t *testing.T) {
+	t.Run("wrong pid", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = io.WriteString(writer, `{"healthy":false}`)
+			_, _ = io.WriteString(writer, clientReadinessBody)
 		})
-		if err := newClient(t, server).Health(context.Background()); !errors.Is(err, ErrInvalidHealth) {
-			t.Fatalf("Health() error = %v, want ErrInvalidHealth", err)
+		if err := newClient(t, server).Readiness(context.Background(), 1235); !errors.Is(err, ErrInvalidIdentity) {
+			t.Fatalf("Readiness() error = %v, want ErrInvalidIdentity", err)
+		}
+	})
+	t.Run("wrong version", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"pid":1234,"version":"2.3.0","status":200}`)
+		})
+		if err := newClient(t, server).Readiness(context.Background(), 1234); !errors.Is(err, ErrInvalidIdentity) {
+			t.Fatalf("Readiness() error = %v, want ErrInvalidIdentity", err)
+		}
+	})
+	t.Run("missing pid", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"version":"`+TestedVersion+`","status":200}`)
+		})
+		if err := newClient(t, server).Readiness(context.Background(), 1234); !errors.Is(err, ErrInvalidIdentity) {
+			t.Fatalf("Readiness() error = %v, want ErrInvalidIdentity", err)
+		}
+	})
+	t.Run("not ready", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusServiceUnavailable)
+		})
+		if err := newClient(t, server).Readiness(context.Background(), 1234); !errors.Is(err, ErrNotReady) {
+			t.Fatalf("Readiness() error = %v, want ErrNotReady", err)
 		}
 	})
 	t.Run("redirect", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 			http.Redirect(writer, request, "http://127.0.0.1:1", http.StatusFound)
 		})
-		if err := newClient(t, server).Health(context.Background()); !errors.Is(err, ErrUnexpectedStatus) {
-			t.Fatalf("Health() error = %v, want ErrUnexpectedStatus", err)
+		if err := newClient(t, server).Readiness(context.Background(), 1234); !errors.Is(err, ErrUnexpectedStatus) {
+			t.Fatalf("Readiness() error = %v, want ErrUnexpectedStatus", err)
 		}
 	})
 	t.Run("oversized", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = io.WriteString(writer, `{"healthy":true}`)
+			_, _ = io.WriteString(writer, clientReadinessBody)
 		})
 		client := newClient(t, server)
 		client.maxBodyBytes = 2
-		if err := client.Health(context.Background()); !errors.Is(err, ErrResponseTooLarge) {
-			t.Fatalf("Health() error = %v, want ErrResponseTooLarge", err)
+		if err := client.Readiness(context.Background(), 1234); !errors.Is(err, ErrResponseTooLarge) {
+			t.Fatalf("Readiness() error = %v, want ErrResponseTooLarge", err)
+		}
+	})
+	t.Run("invalid server pid", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, clientReadinessBody)
+		})
+		if err := newClient(t, server).Readiness(context.Background(), 0); !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("Readiness() error = %v, want ErrInvalidConfig", err)
 		}
 	})
 }
@@ -129,13 +163,13 @@ func TestClientPromptValidatesAdmissionOnly(t *testing.T) {
 			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 		}
 		body, err := io.ReadAll(request.Body)
-		if err != nil || string(body) != `{"id":"msg_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","resume":false}` {
+		if err != nil || string(body) != `{"id":"msg_native_1","text":"protocol probe","delivery":"steer","resume":false}` {
 			t.Fatalf("prompt body = %q, %v", body, err)
 		}
-		_, _ = io.WriteString(writer, `{"data":{"admittedSeq":1,"id":"msg_native_1","sessionID":"ses_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","timeCreated":1789052190936,"promotedSeq":2}}`)
+		_, _ = io.WriteString(writer, `{"data":{"id":"msg_native_1","sessionID":"ses_native_1","time":{"created":1789052190936},"type":"user","payload":{"text":"protocol probe"},"delivery":"steer"}}`)
 	})
 	admission, err := newClient(t, server).Prompt(context.Background(), "ses_native_1", PromptRequest{ID: "msg_native_1", Text: "protocol probe", Delivery: "steer"})
-	if err != nil || admission.AdmittedSeq != 1 || admission.PromotedSeq == nil || *admission.PromotedSeq != 2 {
+	if err != nil || admission.ID != "msg_native_1" || admission.SessionID != "ses_native_1" || admission.Text != "protocol probe" || admission.Delivery != "steer" || admission.TimeCreated != 1789052190936 {
 		t.Fatalf("Prompt() = %+v, %v", admission, err)
 	}
 }
@@ -144,10 +178,10 @@ func TestClientPromptSerializesResumeTrue(t *testing.T) {
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		assertAuth(t, request)
 		body, err := io.ReadAll(request.Body)
-		if err != nil || string(body) != `{"id":"msg_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","resume":true}` {
+		if err != nil || string(body) != `{"id":"msg_native_1","text":"protocol probe","delivery":"steer","resume":true}` {
 			t.Fatalf("resume prompt body = %q, %v", body, err)
 		}
-		_, _ = io.WriteString(writer, `{"data":{"admittedSeq":1,"id":"msg_native_1","sessionID":"ses_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","timeCreated":1}}`)
+		_, _ = io.WriteString(writer, `{"data":{"id":"msg_native_1","sessionID":"ses_native_1","time":{"created":1},"type":"user","payload":{"text":"protocol probe"},"delivery":"steer"}}`)
 	})
 	if _, err := newClient(t, server).Prompt(context.Background(), "ses_native_1", PromptRequest{ID: "msg_native_1", Text: "protocol probe", Delivery: "steer", Resume: true}); err != nil {
 		t.Fatalf("Prompt(Resume:true) error = %v", err)
@@ -157,11 +191,20 @@ func TestClientPromptSerializesResumeTrue(t *testing.T) {
 func TestClientPromptRejectsAdmissionMismatchAndContextCancellation(t *testing.T) {
 	t.Run("mismatch", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-			_, _ = io.WriteString(writer, `{"data":{"admittedSeq":1,"id":"msg_other","sessionID":"ses_native_1","prompt":{"text":"protocol probe"},"delivery":"steer","timeCreated":1}}`)
+			_, _ = io.WriteString(writer, `{"data":{"id":"msg_other","sessionID":"ses_native_1","time":{"created":1},"type":"user","payload":{"text":"protocol probe"},"delivery":"steer"}}`)
 		})
 		_, err := newClient(t, server).Prompt(context.Background(), "ses_native_1", PromptRequest{ID: "msg_native_1", Text: "protocol probe", Delivery: "steer"})
 		if !errors.Is(err, ErrIdentityMismatch) {
 			t.Fatalf("Prompt() error = %v, want ErrIdentityMismatch", err)
+		}
+	})
+	t.Run("nested prompt shape", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"data":{"id":"msg_native_1","sessionID":"ses_native_1","time":{"created":1},"type":"user","prompt":{"text":"protocol probe"},"delivery":"steer"}}`)
+		})
+		_, err := newClient(t, server).Prompt(context.Background(), "ses_native_1", PromptRequest{ID: "msg_native_1", Text: "protocol probe", Delivery: "steer"})
+		if !errors.Is(err, ErrInvalidPrompt) {
+			t.Fatalf("Prompt() error = %v, want ErrInvalidPrompt for the pre-2.4 shape", err)
 		}
 	})
 	t.Run("cancelled", func(t *testing.T) {
@@ -175,68 +218,114 @@ func TestClientPromptRejectsAdmissionMismatchAndContextCancellation(t *testing.T
 	})
 }
 
-func TestClientInterruptRequiresExactNoContent(t *testing.T) {
+func TestClientInterruptRequiresTheRecordedInterruptedAnswer(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 			assertAuth(t, request)
-			if request.Method != http.MethodPost || request.URL.Path != "/api/session/ses_native_1/interrupt" || request.ContentLength != 0 {
-				t.Fatalf("request = %s %s length=%d", request.Method, request.URL.Path, request.ContentLength)
+			if request.Method != http.MethodPost || request.URL.Path != "/api/session/ses_native_1/interrupt" || request.URL.Query().Get("resume") != "false" || request.ContentLength != 0 {
+				t.Fatalf("request = %s %s?%s length=%d", request.Method, request.URL.Path, request.URL.RawQuery, request.ContentLength)
 			}
-			writer.WriteHeader(http.StatusNoContent)
+			_, _ = io.WriteString(writer, `{"interrupted":true}`)
 		})
 		if err := newClient(t, server).Interrupt(context.Background(), "ses_native_1"); err != nil {
 			t.Fatalf("Interrupt() error = %v", err)
 		}
 	})
-	t.Run("body", func(t *testing.T) {
+	t.Run("not applied", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"interrupted":false}`)
+		})
+		if err := newClient(t, server).Interrupt(context.Background(), "ses_native_1"); !errors.Is(err, ErrInterruptUnapplied) {
+			t.Fatalf("Interrupt() error = %v, want ErrInterruptUnapplied", err)
+		}
+	})
+	t.Run("malformed answers", func(t *testing.T) {
+		for _, body := range []string{`{}`, `{"interrupted":"true"}`, `{"interrupted":true,"interrupted":false}`, `not json`} {
+			server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+				_, _ = io.WriteString(writer, body)
+			})
+			if err := newClient(t, server).Interrupt(context.Background(), "ses_native_1"); !errors.Is(err, ErrMalformedResponse) {
+				t.Fatalf("Interrupt(%s) error = %v, want ErrMalformedResponse", body, err)
+			}
+		}
+	})
+	t.Run("pre-2.4 status", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 			writer.WriteHeader(http.StatusNoContent)
-			_, _ = io.WriteString(writer, "unexpected")
 		})
-		if err := newClient(t, server).Interrupt(context.Background(), "ses_native_1"); err != nil {
-			// net/http correctly strips a 204 body, so an exact status is the observable contract.
-			t.Fatalf("Interrupt() error = %v", err)
+		if err := newClient(t, server).Interrupt(context.Background(), "ses_native_1"); !errors.Is(err, ErrUnexpectedStatus) {
+			t.Fatalf("Interrupt() error = %v, want ErrUnexpectedStatus for the pre-2.4 no-content answer", err)
 		}
 	})
 }
 
-func TestClientOpensAuthenticatedSSEWithExclusiveCursor(t *testing.T) {
-	t.Run("global", func(t *testing.T) {
+func TestClientSessionOutcomeReadsTheRecordedReadback(t *testing.T) {
+	t.Run("recorded outcome", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
 			assertAuth(t, request)
-			if request.Method != http.MethodGet || request.URL.Path != "/api/event" || request.URL.RawQuery != "" || request.Header.Get("Accept") != "text/event-stream" {
-				t.Fatalf("request = %s %s?%s accept=%q", request.Method, request.URL.Path, request.URL.RawQuery, request.Header.Get("Accept"))
+			if request.Method != http.MethodGet || request.URL.Path != "/api/session/ses_native_1" {
+				t.Fatalf("request = %s %s", request.Method, request.URL.Path)
 			}
-			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-			_, _ = io.WriteString(writer, "data: {\"id\":\"evt_connected_1\",\"type\":\"server.connected\",\"data\":{}}\n\n")
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_native_1","outcome":"interrupted","tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}},"cost":0}}`)
 		})
-		body, err := newClient(t, server).OpenGlobalEvents(context.Background())
-		if err != nil {
-			t.Fatalf("OpenGlobalEvents() error = %v", err)
-		}
-		defer body.Close()
-		decoded, err := io.ReadAll(body)
-		if err != nil || !strings.Contains(string(decoded), "server.connected") {
-			t.Fatalf("stream = %q, %v", decoded, err)
+		state, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1")
+		if err != nil || state.ID != "ses_native_1" || state.Outcome != "interrupted" {
+			t.Fatalf("SessionOutcome() = %+v, %v", state, err)
 		}
 	})
-	t.Run("session", func(t *testing.T) {
+	t.Run("unsettled readback", func(t *testing.T) {
 		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-			assertAuth(t, request)
-			if request.URL.Path != "/api/session/ses_native_1/event" || request.URL.Query().Get("after") != "9" || request.URL.Query().Encode() != "after=9" {
-				t.Fatalf("request URL = %s", request.URL)
-			}
-			writer.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(writer, ": heartbeat\n\n")
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_native_1","time":{"created":1}}}`)
 		})
-		body, err := newClient(t, server).OpenSessionEvents(context.Background(), "ses_native_1", 9)
-		if err != nil {
-			t.Fatalf("OpenSessionEvents() error = %v", err)
-		}
-		if err := body.Close(); err != nil {
-			t.Fatalf("Close() error = %v", err)
+		state, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1")
+		if err != nil || state.ID != "ses_native_1" || state.Outcome != "" {
+			t.Fatalf("SessionOutcome() = %+v, %v, want an unsettled readback", state, err)
 		}
 	})
+	t.Run("identity mismatch", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			_, _ = io.WriteString(writer, `{"data":{"id":"ses_other","outcome":"succeeded"}}`)
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1"); !errors.Is(err, ErrIdentityMismatch) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrIdentityMismatch", err)
+		}
+	})
+	t.Run("missing session", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			writer.WriteHeader(http.StatusNotFound)
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "ses_native_1"); !errors.Is(err, ErrUnexpectedStatus) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrUnexpectedStatus", err)
+		}
+	})
+	t.Run("invalid session id", func(t *testing.T) {
+		server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+			t.Fatal("invalid session id must refuse before any request")
+		})
+		if _, err := newClient(t, server).SessionOutcome(context.Background(), "msg_native_1"); !errors.Is(err, ErrInvalidSession) {
+			t.Fatalf("SessionOutcome() error = %v, want ErrInvalidSession", err)
+		}
+	})
+}
+
+func TestClientOpensTheAuthenticatedGlobalSSE(t *testing.T) {
+	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		assertAuth(t, request)
+		if request.Method != http.MethodGet || request.URL.Path != "/api/event" || request.URL.RawQuery != "" || request.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("request = %s %s?%s accept=%q", request.Method, request.URL.Path, request.URL.RawQuery, request.Header.Get("Accept"))
+		}
+		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(writer, "data: {\"id\":\"evt_connected_1\",\"type\":\"server.connected\",\"data\":{}}\n\n")
+	})
+	body, err := newClient(t, server).OpenGlobalEvents(context.Background())
+	if err != nil {
+		t.Fatalf("OpenGlobalEvents() error = %v", err)
+	}
+	defer body.Close()
+	decoded, err := io.ReadAll(body)
+	if err != nil || !strings.Contains(string(decoded), "server.connected") {
+		t.Fatalf("stream = %q, %v", decoded, err)
+	}
 }
 
 func TestClientRejectsUnexpectedSSEResponse(t *testing.T) {
@@ -311,8 +400,8 @@ func TestClientRejectsNonSuccessAPIStatus(t *testing.T) {
 		writer.WriteHeader(http.StatusUnauthorized)
 		_, _ = io.WriteString(writer, `{"_tag":"UnauthorizedError"}`)
 	})
-	if err := newClient(t, server).Health(context.Background()); !errors.Is(err, ErrUnexpectedStatus) || !strings.Contains(err.Error(), "401") {
-		t.Fatalf("Health() error = %v, want 401 unexpected status", err)
+	if err := newClient(t, server).Readiness(context.Background(), 1234); !errors.Is(err, ErrUnexpectedStatus) || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("Readiness() error = %v, want 401 unexpected status", err)
 	}
 }
 
@@ -354,8 +443,8 @@ func assertRejectedConnectionHasNoBytes(t *testing.T, verifier ConnectionVerifie
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if err := client.Health(context.Background()); !errors.Is(err, ErrPeerOwnership) || cause != nil && !errors.Is(err, cause) {
-		t.Errorf("Health() error = %v, want ErrPeerOwnership and verifier cause", err)
+	if err := client.Readiness(context.Background(), 1234); !errors.Is(err, ErrPeerOwnership) || cause != nil && !errors.Is(err, cause) {
+		t.Errorf("Readiness() error = %v, want ErrPeerOwnership and verifier cause", err)
 	}
 	if err := <-received; err != nil {
 		t.Fatal(err)
@@ -364,7 +453,7 @@ func assertRejectedConnectionHasNoBytes(t *testing.T, verifier ConnectionVerifie
 
 func TestClientVerifiesEveryNewConnection(t *testing.T) {
 	server := newServer(t, func(writer http.ResponseWriter, request *http.Request) {
-		_, _ = io.WriteString(writer, `{"healthy":true}`)
+		_, _ = io.WriteString(writer, clientReadinessBody)
 	})
 	var verifications atomic.Int32
 	client, err := NewClient(Config{
@@ -379,12 +468,12 @@ func TestClientVerifiesEveryNewConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
-	if err := client.Health(context.Background()); err != nil {
-		t.Fatalf("first Health() error = %v", err)
+	if err := client.Readiness(context.Background(), 1234); err != nil {
+		t.Fatalf("first Readiness() error = %v", err)
 	}
 	client.httpClient.CloseIdleConnections()
-	if err := client.Health(context.Background()); err != nil {
-		t.Fatalf("second Health() error = %v", err)
+	if err := client.Readiness(context.Background(), 1234); err != nil {
+		t.Fatalf("second Readiness() error = %v", err)
 	}
 	if got := verifications.Load(); got != 2 {
 		t.Fatalf("connection verifications = %d, want one check per new connection", got)

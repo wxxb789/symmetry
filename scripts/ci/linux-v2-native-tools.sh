@@ -62,9 +62,9 @@ linux_v2_fetch_pi() {
 linux_v2_fetch_native_tools() {
   local destination=$1
   linux_v2_fetch_pi "$destination"
-  local opencode_url='https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-linux-x64-baseline.tar.gz'
-  local opencode_archive="$destination/opencode-linux-x64-baseline.tar.gz"
-  local opencode_archive_sha='763af386ef88a8cab18df00fcf055690e5a55e31a7088beabe02307142a6adce'
+  local opencode_url='https://github.com/anomalyco/opencode/releases/download/v2.4.1/opencode-linux-x64.tar.gz'
+  local opencode_archive="$destination/opencode-linux-x64.tar.gz"
+  local opencode_archive_sha='9ddd18e3faf64eaeccf6a0fcbc96a5c7a14520ae5fd5b61e5be51d894f478b47'
   opencode_unpack="$destination/opencode-release"
   opencode_executable="$opencode_unpack/opencode"
   curl --fail --silent --show-error --location --retry 5 --retry-delay 2 --retry-max-time 120 --retry-all-errors \
@@ -73,7 +73,8 @@ linux_v2_fetch_native_tools() {
   mkdir "$opencode_unpack"
   tar --extract --file "$opencode_archive" --directory "$opencode_unpack"
   test -x "$opencode_executable"
-  test "$(timeout 30s "$opencode_executable" --version)" = '1.18.32'
+  test "$(sha256sum "$opencode_executable" | cut -d' ' -f1)" = 'ec93043f18f8a6b4d8e71ec9260e292ba6f91b66b142782135d40f0b58b0c152'
+  test "$(timeout 30s "$opencode_executable" --version)" = 'opencode v2.4.1'
 }
 
 linux_v2_fetch_codex() {
