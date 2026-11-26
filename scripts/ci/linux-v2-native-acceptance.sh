@@ -415,6 +415,7 @@ printf 'Building static production Linux amd64 owner binaries.\n'
   env -u GH_TOKEN -u GITHUB_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$build_stage/symmetry-daemon" ./cmd/symmetry-daemon
   env -u GH_TOKEN -u GITHUB_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$build_stage/symmetry-linux-launcher-core" ./cmd/symmetry-linux-launcher
   env -u GH_TOKEN -u GITHUB_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$build_stage/symmetry-linux-clone-bootstrap" ./cmd/symmetry-linux-clone-bootstrap
+  env -u GH_TOKEN -u GITHUB_TOKEN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o "$build_stage/symmetry-ci-linux-v2-readback-reader" ./internal/linuxreadback/cmd/linux-v2-readback-reader
   env -u GH_TOKEN -u GITHUB_TOKEN cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
     -o "$build_stage/symmetry-linux-gate" native/linux-gate/c-gate/gate.c
   env -u GH_TOKEN -u GITHUB_TOKEN cc -O2 -static -fno-pie -no-pie -Wl,-z,relro,-z,now -Wl,-z,noexecstack \
@@ -533,6 +534,10 @@ OWNER_PID_REUSE_ROOT=$OWNER_TEST_ROOT/pid-reuse
 OWNER_PID_REUSE_HELPER=/usr/libexec/symmetry-test/literal-pid-reuse-helper
 OWNER_CONTROL_RECEIPT_ROOT=$A_HOME/ci-fixture/control-receipts
 PID_REUSE_WATCHER_UNIT=symmetry-ci-pid-reuse-watcher.service
+READBACK_READER=/usr/libexec/symmetry-test/linux-v2-readback-reader
+READBACK_CHANNEL=/run/symmetry-readback
+READBACK_READER_UNIT=symmetry-ci-readback-reader.service
+READBACK_LEAF_ROOT=/sys/fs/cgroup/system.slice/symmetry-owner.service/manager
 OWNER_STAGE_REPLAY_HOLDS=(
   reservation_durable create_started leaf_bound helper_bound launcher_bound gate_bound
   handoff_prepared handoff_committed lease_armed checkout_ready native_release
@@ -592,12 +597,16 @@ sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" \
 sudo install -d -o root -g "$A_GID" -m 2730 "$rootfs$OWNER_PID_REUSE_ROOT"
 sudo install -o root -g root -m 0555 "$build_stage/symmetry-ci-literal-pid-reuse-helper" \
   "$rootfs$OWNER_PID_REUSE_HELPER"
+sudo install -o root -g root -m 0555 "$build_stage/symmetry-ci-linux-v2-readback-reader" \
+  "$rootfs$READBACK_READER"
 for trusted_helper_path in /usr /usr/libexec /usr/libexec/symmetry-test; do
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$trusted_helper_path")" == '0:0:755' ]] ||
     fail "literal PID-reuse helper parent must be root-owned non-writable mode 0755: $trusted_helper_path"
 done
 [[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$OWNER_PID_REUSE_HELPER")" == '0:0:555:1' ]] ||
   fail 'literal PID-reuse helper must be a singly-linked root-owned mode-0555 executable outside A-writable data'
+[[ "$(sudo stat -c '%u:%g:%a:%h' "$rootfs$READBACK_READER")" == '0:0:555:1' ]] ||
+  fail 'root readback reader must be a singly-linked root-owned mode-0555 executable outside A-writable data'
 [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$OWNER_PID_REUSE_ROOT")" == "0:$A_GID:2730" ]] ||
   fail 'literal PID-reuse exchange directory must be root:A mode 02730'
 sudo chroot "$rootfs" /usr/sbin/useradd --uid "$A_UID" --user-group --create-home --home-dir "$A_HOME" --shell /bin/bash "$A_USER"
@@ -1909,6 +1918,7 @@ run_go_test() {
     --setenv="GOTMPDIR=$test_gotmp"
     --setenv=CGO_ENABLED=0
     --setenv=GOFLAGS=-mod=readonly
+    --setenv="SYMMETRY_LINUX_OWNER_READBACK_CHANNEL=$READBACK_CHANNEL"
   )
   # The bundle-based witnesses stand in for the installed daemon, whose units set UMask=0077;
   # without it the clone seed's new A-owned refs are B-accessible and its own revalidation refuses.
@@ -2123,6 +2133,96 @@ start_literal_pid_reuse_watcher() {
     "$OWNER_PID_REUSE_HELPER" "$A_GID" >"$watcher_log" 2>&1 || watcher_status=$?
   print_filtered_output_lines <"$watcher_log"
   (( watcher_status == 0 )) || fail 'the literal PID-reuse watcher did not become ready'
+}
+
+# The root readback reader serves A's converted assertions without granting A
+# any capability: only B-credentialed members of the operator leaf are read.
+start_readback_reader() {
+  [[ "$owner_leaf_parent" == "$READBACK_LEAF_ROOT" ]] ||
+    fail 'the readback leaf root must equal the installed owner manager cgroup'
+  local reader_log="$fixture_root/readback-reader.log"
+  local capability_log="$fixture_root/readback-reader-a-capabilities.log"
+  local reader_status=0
+  machine_run /usr/bin/mkdir -m 0770 "$READBACK_CHANNEL"
+  machine_run /usr/bin/chown root:"$A_GID" "$READBACK_CHANNEL"
+  machine_run /usr/bin/bash -c \
+    'test "$(/usr/bin/stat -c %u:%g:%a "$1")" = "0:$2:770"' \
+    bash "$READBACK_CHANNEL" "$A_GID" ||
+    fail 'the readback channel must be a root:A mode-0770 directory'
+  machine_run_as "$A_USER" "$A_GID" /usr/bin/bash -c 'test -w "$1"' bash "$READBACK_CHANNEL" ||
+    fail 'A cannot write the readback channel it must request through'
+  # A diagnostic row for the census: A's effective capability set decides which
+  # ptrace-gated reads a guest happens to allow; the converted legs never use it.
+  machine_run_as "$A_USER" "$A_GID" /usr/bin/grep --extended-regexp \
+    '^(NoNewPrivs|CapEff|CapPrm|CapBnd|CapAmb):' /proc/self/status \
+    >"$capability_log" 2>&1 || fail 'the A capability readback row did not run'
+  print_filtered_output_lines <"$capability_log"
+
+  machine_run /usr/bin/systemd-run --no-block --quiet \
+    --unit="$READBACK_READER_UNIT" --service-type=exec \
+    --property=Restart=no --property=KillMode=control-group --property=TimeoutStopSec=30s \
+    -- "$READBACK_READER" serve \
+    --channel "$READBACK_CHANNEL" --leaf-root "$READBACK_LEAF_ROOT" \
+    --a-uid "$A_UID" --a-gid "$A_GID" --b-uid "$B_UID" --b-gid "$B_GID"
+
+  machine_run /bin/bash -c '
+    set -Eeuo pipefail
+    unit=$1
+    channel=$2
+    helper=$3
+    gid=$4
+    for _ in {1..300}; do
+      state=$(/usr/bin/systemctl show --property=ActiveState --value "$unit" 2>/dev/null || true)
+      if [[ "$state" == failed ]]; then
+        /usr/bin/journalctl --no-pager --output=cat --grep="readback-reader:" -n 20 -u "$unit" >&2 || true
+        exit 1
+      fi
+      main_pid=$(/usr/bin/systemctl show --property=MainPID --value "$unit" 2>/dev/null || true)
+      ready="$channel/ready"
+      if [[ "$state" == active && "$main_pid" =~ ^[1-9][0-9]*$ && ! -L "$ready" && -f "$ready" ]]; then
+        [[ "$(/usr/bin/stat -c %u:%g:%a:%h "$ready")" == "0:$gid:440:1" ]]
+        /usr/bin/cmp --silent "$ready" <(printf "ready\n")
+        helper_identity=$(/usr/bin/stat -Lc %d:%i:%u:%g:%a "$helper")
+        main_identity=$(/usr/bin/stat -Lc %d:%i:%u:%g:%a "/proc/$main_pid/exe")
+        [[ "$main_identity" == "$helper_identity" ]]
+        printf "root readback reader ready: unit=%s MainPID=%s\n" "$unit" "$main_pid"
+        exit 0
+      fi
+      /usr/bin/sleep 0.1
+    done
+    /usr/bin/journalctl --no-pager --output=cat --grep="readback-reader:" -n 20 -u "$unit" >&2 || true
+    printf "root readback reader did not become ready within 30 seconds\n" >&2
+    exit 1
+  ' bash "$READBACK_READER_UNIT" "$READBACK_CHANNEL" "$READBACK_READER" "$A_GID" \
+    >"$reader_log" 2>&1 || reader_status=$?
+  print_filtered_output_lines <"$reader_log"
+  (( reader_status == 0 )) || fail 'the root readback reader did not become ready'
+}
+
+stop_readback_reader() {
+  local reader_log="$fixture_root/readback-reader-stop.log"
+  local reader_status=0
+  # systemctl stop is the only terminator: SIGTERM is the reader's clean stop,
+  # so no root write (and no A-planted name) ever enters the channel.
+  machine_run /usr/bin/systemctl stop "$READBACK_READER_UNIT"
+  machine_run /bin/bash -c '
+    set -Eeuo pipefail
+    unit=$1
+    channel=$2
+    for _ in {1..300}; do
+      state=$(/usr/bin/systemctl show --property=ActiveState --value "$unit" 2>/dev/null || true)
+      [[ "$state" == inactive || "$state" == failed ]] && break
+      /usr/bin/sleep 0.1
+    done
+    state=$(/usr/bin/systemctl show --property=ActiveState --value "$unit")
+    result=$(/usr/bin/systemctl show --property=Result --value "$unit")
+    status=$(/usr/bin/systemctl show --property=ExecMainStatus --value "$unit")
+    [[ "$state" == inactive && "$result" == success && "$status" == 0 ]]
+    [[ ! -e "$channel/ready" ]]
+    /usr/bin/journalctl --no-pager --output=cat --grep="readback-reader:" -n 40 -u "$unit" || true
+  ' bash "$READBACK_READER_UNIT" "$READBACK_CHANNEL" >"$reader_log" 2>&1 || reader_status=$?
+  print_filtered_output_lines <"$reader_log"
+  (( reader_status == 0 )) || fail 'the root readback reader did not stop cleanly'
 }
 
 stage_owner_request_file() {
@@ -3026,6 +3126,7 @@ v2_codex_containment_events="$fixture_root/linux-v2-codex-containment.json"
 v2_codex_stage_replay_events="$fixture_root/linux-v2-codex-stage-replay.json"
 v2_claude_containment_events="$fixture_root/linux-v2-claude-containment.json"
 v2_claude_stage_replay_events="$fixture_root/linux-v2-claude-stage-replay.json"
+start_readback_reader
 case "$fixture_case_set" in
   shared)
     # Legacy Linux owners must fail before effects; installed-v2 positives run separately below.
@@ -3120,6 +3221,7 @@ case "$fixture_case_set" in
       TestProductionLinuxV2CloneCleanupAuthenticatedScratch
     ;;
 esac
+stop_readback_reader
 machine_run_as "$A_USER" "$A_USER" /usr/bin/rmdir "$OWNER_TEST_LEAF"
 
 printf 'Linux amd64 A/B case set %s completed; verifying guest/Control teardown and exporting allowlisted evidence. This witness does not establish Goal acceptance or promote native capabilities.\n' \
