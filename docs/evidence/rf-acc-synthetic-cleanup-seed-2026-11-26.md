@@ -12,7 +12,7 @@ on the PR head (the contract allows "the next stop verbatim, or green with
 
 | File | Dispatch head `8065b96e` | Delivered | Change |
 | --- | --- | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04` | +10/−0 |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` | +12/−0 |
 | `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` | identical | untouched |
 | `daemon/internal/clonebootstrap/filesystem_linux_amd64.go` | `86811678e6741923bfd64031a40e0c7e531e46adb0f6f585301900fe919442af` | identical | untouched (production) |
 | `daemon/internal/clonebootstrap/main_linux_amd64.go` | `3fdd0a28f79875c40073e861b2ee67b492d7526611a9a9d536fef1cef3695a70` | identical | untouched (production) |
@@ -21,7 +21,10 @@ The dispatch head's script bytes are byte-identical to the script bytes #302's B
 (`70163ae1…` in findings `302-binding-run.md` §2.1), so the recorded stop and this root cause are
 read at the same revision. No production byte, no witness assertion, no gate and no case-set list
 changed; the delivered change is the script's `synthetic_goal_cleanup` fixture, the plan, this
-record, and the two TODO files.
+record, and the two TODO files. The pre-fix delivery was the same script at
+`ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04` (+10/−0, the implement-stage
+bytes); fix r1 adds the case-root class pin (§3), so the script's delivered bytes are the pinned
+bytes in the table.
 
 ## 2. Root cause (Stage 1)
 
@@ -142,11 +145,13 @@ every deployment to accommodate one fixture mode.
 
 - `scripts/ci/linux-v2-native-acceptance.sh:592`: `setfacl -m "u:$B_UID:r-x,m::r-x"` on the case
   root, beside the arm's existing seed/clone ACL rows, with a 2-line why comment naming the walk.
-- `:1459-1465`: three committed assertion rows in the arm's own fixture checks — B must be able to
-  read the case root and the seed root, and A must not hold write on the case root — so deleting
-  the grant, re-tightening either path, or widening the case root's class reddens the set before
-  the witness starts. `fail` aborts the case set, and the rows run inside the
-  `synthetic_goal_cleanup` guard, so no other set observes them.
+- `:1459-1467`: four committed assertion rows in the arm's own fixture checks — the case root's
+  delivered class is pinned (`root:A_GID` mode `0751`), B must be able to read the case root and
+  the seed root, and A must not hold write on the case root — so deleting the grant, re-tightening
+  either path, or widening the case root's class reddens the set before the witness starts (the
+  fix-r1 shape matrix in §6 shows the pin carrying every class change, including the read-type
+  `0755` that leaves all three access rows green). `fail` aborts the case set, and the rows run
+  inside the `synthetic_goal_cleanup` guard, so no other set observes them.
 - Containment unchanged: `config.json` stays `root:A 0640` and B-unreadable (the existing
   `B unexpectedly read …` refusal row stays), the source stays A-private, the seed keeps `0440` with
   its ACL mask, and the guest's write-denied checks on every ancestor are untouched. B gains only
@@ -164,7 +169,10 @@ is the case-root read row: the replica probe's red shape is the dispatch-head fi
 case root is `0751` and B is `other` with `--x` only (`B_TEST red -r 1`), and its green shape is
 the delivered fixture (`B_TEST green -r 0`); the seed-root read row guards the arm's pre-existing
 seed ACL (`u:$B_UID:r-x,m::r-x` since #296), so it was already satisfiable at the dispatch head.
-The rows' in-repo form runs inside the set and aborts it on a regression.
+The rows' in-repo form runs inside the set and aborts it on a regression. The class pin is the
+exception to red-first: the dispatch head's case root is `0751` too, so the pin starts silent and
+its red shape is the mutant row (§6 M-S1); it is the row that carries the read-type widening the
+review measured silent on the three access rows.
 
 ## 5. Local gates
 
@@ -173,8 +181,8 @@ The rows' in-repo form runs inside the set and aborts it on a regression.
 | script syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | no diagnostic |
 | fixture contracts | `(cd daemon && python3 ../scripts/ci/test-linux-v2-{source-subject,go-events,evidence,host-prerequisite-probe,owner-request-keys}.py)` and `python3 scripts/ci/test-rootless-compose-owner-claim.py` | 0 each | 6/6 ok, including the script-parsing evidence test |
 | CI structure pins | `python3 scripts/ci/test-ci-structure-extraction.py`; `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 each | 2/2 ok |
-| record cleanliness (CI doc gate) | `python scripts/ci/check-record-cleanliness.py --base 8065b96e --head <final delivered commit>` | 0 | 1 changed record passes the root-only check; the handover bytes carried 8 host paths and were refused (simplify finding 1, redacted in §8) |
-| citation existence (CI doc gate) | `python scripts/ci/check-citation-existence.py --base 8065b96e --head <final delivered commit>` | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices (`CLOSED-TODO.md:737`, `:752`, `:2512`) |
+| record cleanliness (CI doc gate) | `python scripts/ci/check-record-cleanliness.py --base 8065b96e --head HEAD` in the implement-stage scratch clone | 0 | 1 changed record passes the root-only check; the handover bytes carried 8 host paths and were refused (simplify finding 1, redacted in §8) |
+| citation existence (CI doc gate) | `python scripts/ci/check-citation-existence.py --base 8065b96e --head HEAD` in the implement-stage scratch clone | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices (`CLOSED-TODO.md:737`, `:752`, `:2512`) |
 | shellcheck (advisory, CI's own selection) | `shellcheck --severity=warning --format=gcc scripts/ci/*.sh`, one invocation per file, at the base and at the delivered bytes | 1 both | 20 findings before, 20 after; the same finding set with only the line numbers shifted (+3 above the case-root block, +10 below it); none on an added line |
 | format | `(cd daemon && gofmt -l .)` (WSL) | 0 | no file listed |
 | linux vet | `(cd daemon && GOOS=linux go vet ./...)` (WSL) | 0 | clean log |
@@ -185,10 +193,14 @@ The rows' in-repo form runs inside the set and aborts it on a regression.
 | Windows full suite | `(cd daemon && go test -count=1 ./...)` on the Windows host, Go 1.27.4 | 0 | 27 `ok` + 3 `[no test files]`, 0 `FAIL`; log sha256 `546726f998e03c0c374d97004fcda31939c7c9277cf9ab7f7440d2fc90a8272a` |
 | replica rows | §2.3 commands | 0 each | red/green/baseline observations above |
 
-All rows ran on the delivered bytes (`scripts/ci/linux-v2-native-acceptance.sh` sha256 `ce35bdf3…`
-inside the gate tree); the full-suite rows are independent of the doc-only delta that follows them,
-and the cheap gates (script syntax, fixture contracts, comment-cap, jscpd) are re-run at the final
-bytes in §8.
+The script-dependent rows ran on the implement-stage bytes
+(`scripts/ci/linux-v2-native-acceptance.sh` sha256
+`ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04`, +10/−0); every `daemon/` byte
+is identical at the dispatch head, the implement-stage delivery and the final bytes (§1), so the
+Go rows bind the delivered product bytes. Fix r1 adds the case-root class pin (two script lines,
+§3), so every script-dependent gate — script syntax, fixture contracts, comment-cap, jscpd, record
+cleanliness, citation existence and the record-sanitize check — is re-run at the final bytes in
+§8.
 
 ## 6. Adversarial satisfaction
 
@@ -198,12 +210,19 @@ bytes in §8.
   aborts the case set through `fail`, so a pass requires B to hold real read access — which is the
   requirement itself, however it is granted (ACL or a wider mode).
 - The A-write row cannot pass vacuously: the same guard installs the config and asserts A reads it
-  and B reads the case and seed roots (`:1450-1462`), so the case root must exist and resolve
+  and B reads the case and seed roots (`:1449-1468`), so the case root must exist and resolve
   before the row runs, and `machine_run_as` itself aborts when the guest passwd entry is
-  unreadable. Measured pins as A on the replica: delivered group class `r-x` → `test -w` exit 1
-  (silent); group class widened to `rwx` → exit 0 (fires); mask-only widening `m::rwx` → exit 0
-  (fires) even though the replica's kernel still refuses the underlying `open` there, so the
-  predicate never stayed silent on a measured widening.
+  unreadable. Fix-r1 measured pins as A on this host: delivered → `test -w` exit 1 (silent); a
+  widened group entry (`setfacl -m g::rwx`, which recomputes the mask) → exit 0 (fires); a
+  mask-only `m::rwx` → exit 1, because the group-class access is the group entry intersected with
+  the mask and the entry stays `r-x` — the pin, not this row, carries that shape.
+- The delivered-class pin cannot pass vacuously: it reads the case root the preceding
+  `install`/`setfacl` pair (`:589`, `:592`) provisioned on the same rootfs, and a missing root
+  leaves `%a` empty, so the comparison fails. Fix-r1 measured pins as root (matrix below):
+  delivered `0:52000:751` → silent; `-m 0755` with `:592` kept → `0:52000:755` → fires while all
+  three access rows stay green (B keeps its named `u:` entry, A stays covered by the `r-x` mask);
+  mask-only `m::rwx` → `0:52000:771` → fires; `g::rwx` → `0:52000:771` → fires (the A-write row
+  fires on this shape too); `0750` → `0:52000:750` → fires.
 - The replica rows cannot be satisfied by an unrelated syscall error: the denied shape asserts the
   exact class (`unix.EACCES`, not any error) and the readable shape requires the complete
   production seed open and verify (write-denied on every ancestor, identity, digest, path re-bind)
@@ -215,6 +234,47 @@ bytes in §8.
   the workflow requires the set's exit 0 plus a sanitized manifest — a skipped or unrun witness
   cannot satisfy the acceptance, and the added fixture rows run before the witness, so a fixture
   regression cannot be masked by a witness that never starts.
+
+The class pin's fix-r1 shape matrix (`guard-probe.sh`, log sha256
+`d046860256c892b3cb686d1ce20ccb962c8b6f28f2b9dbcde53cd68f1b364583`; `stat` and the row run as
+root, the access rows through `setpriv` at the guest uids; the B-config refusal row was refused in
+every shape and is omitted):
+
+```
+SHAPE delivered stat=0:52000:751
+ROW delivered pin=silent(0)
+ROW delivered B-read-caseroot=TRUE
+ROW delivered A-write-caseroot=silent(1)
+SHAPE widened stat=0:52000:755
+ROW widened pin=FIRED(1)
+ROW widened B-read-caseroot=TRUE
+ROW widened A-write-caseroot=silent(1)
+SHAPE maskrwx stat=0:52000:771
+ROW maskrwx pin=FIRED(1)
+ROW maskrwx B-read-caseroot=TRUE
+ROW maskrwx A-write-caseroot=silent(1)
+SHAPE groupw stat=0:52000:771
+ROW groupw pin=FIRED(1)
+ROW groupw B-read-caseroot=TRUE
+ROW groupw A-write-caseroot=TRUE(FIRED)
+SHAPE tight stat=0:52000:750
+ROW tight pin=FIRED(1)
+SHAPE nogrant stat=0:52000:751
+ROW nogrant pin=silent(0)
+ROW nogrant B-read-caseroot=FALSE(RED)
+```
+
+Mutants (fix r1; the mutation is the whole patch, applied to a scratch copy of the final script
+bytes, run, then the final copy re-run):
+
+| id | Mutation | Red probe (verbatim) | Exit | Restored |
+| --- | --- | --- | --- | --- |
+| M-S1 | script `:589`: `-m 0751` → `-m 0755`, `:592` kept (the plan's rejected alternative (b)) | the mutant's provisioning lines executed verbatim as root, then the delivered row text (mutant copy sha256 `caec60220ea9f2de314b91ee969656b39107f6617b96b1d98711054438f9ffdb`, log sha256 `a414393c63ba567a7ac75aae72e3d2567a49d52b31afe12721da439d4df234db`): `provisioned stat=0:52000:755`, `Linux v2 native acceptance setup failed: synthetic cleanup case root must stay root:A mode 0751`, `mutant row rc=1` | 1 | final copy sha256 `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` re-run: `provisioned stat=0:52000:751`, `final row rc=0` |
+
+CI reach: the row runs as root (its `sudo stat`) inside the `synthetic_goal_cleanup` case set of
+the dispatch-only `linux-native-v2-acceptance` workflow's fixture step, before the witness is
+dispatched, so a committed mutant of `:589` reddens CI on the PR head; no mutant row reddens only
+outside CI, so no oracle gap is recorded.
 
 ## 7. Residuals and the next stop
 
@@ -239,10 +299,19 @@ under its `wsl-out/` (including `run-probe2.out`, sha256 `f56b9e65…`); the WSL
 (`/opt/symmetry-owner-test/synthetic-goal-cleanup`, `…/production`, `path-sha256:5c6bf10f2d53df86dd8d92c771d06bdc0c88ea503f2d2593a31427705b4b71a9`) were
 removed after the run, returning `path-sha256:dba63390a9da5f52d3a7ffab205e03c8a75c3c703da0942ac059b6dad88a28ec` to its previous state. The
 final-bytes re-measure of the cheap gates and the scratch-clone commits (comment-cap, jscpd) is
-recorded below.
+recorded below. Fix r1 keeps its own scratch at
+`path-sha256:f909eaf6fa5378f3d0e758f291df3f05060daeb349b5757323f78f976c81e2d5` on this host: `guard-probe.sh`
+(sha256 `082641ad5d073104c1db76df81fd302bf2cfde68823fecf26ba84eda17e97f82`) with `guard-probe.log`
+(`d046860256c892b3cb686d1ce20ccb962c8b6f28f2b9dbcde53cd68f1b364583`), `mutant-probe.sh`
+(`1f073b3f03774360bd460b67e016483e151a9aa4a0829ad51b0fadbf79d42c39`) with `mutant-probe.log`
+(`a414393c63ba567a7ac75aae72e3d2567a49d52b31afe12721da439d4df234db`), the branch-diff added doc
+lines extracted for the scoped sanitize check, and the final/mutant script copies
+`linux-v2-native-acceptance.sh.final` (`78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea`)
+and `…mutant` (`caec60220ea9f2de314b91ee969656b39107f6617b96b1d98711054438f9ffdb`); the WSL-side
+probe roots were removed after the run.
 
-Final-bytes re-measure (scratch clone of `8065b96e` + the five delivered files; script sha256
-`ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04`):
+Implement-stage final-bytes re-measure (scratch clone of `8065b96e` + the five implement-stage
+delivered files; script sha256 `ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04`):
 
 | Gate | Exit | Result |
 | --- | --- | --- |
@@ -252,11 +321,30 @@ Final-bytes re-measure (scratch clone of `8065b96e` + the five delivered files; 
 | jscpd-changed on the final-bytes commit | 0 | 5 changed file(s), 1788 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new (re-run green after every later prose edit; the row's verdict, not its corpus counts, is the gate); notice: `docs/archive/CLOSED-TODO.md` carries added lines but sits above the gate's `--max-lines 5000` ceiling, so it is reported as a notice and never silently skipped (5624 lines at the base, 5659 delivered, unchanged class) |
 | record cleanliness on the final-bytes commit | 0 | 1 changed record passes the root-only check (the handover bytes were refused with 8 host paths, redacted above) |
 | citation existence on the final-bytes commit | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices |
-| A-write refusal pin (replica, as A) | 0 | delivered shape `test -w` exit 1 (row silent); mask-only `m::rwx` exit 0 and group class `rwx` exit 0 (row fires); log sha256 `d819c45c2cb6b83a7c3f54b02e728164f15a59101a2cd2cbeab5a0d0e299ae81` |
+| A-write row (implement-stage replica, as A) | 0 | delivered shape `test -w` exit 1 (row silent); the fix-r1 matrix below re-measures this row's firing set on the final bytes |
 
-Delivered documentation bytes: plan `15f03ac6625b3e9949c98077c44663808dd32ac7168f1b1da09949f506c5a835`
-(85 lines), `docs/TODO.md`
-`0740e34b7f56522b0e034fa7b517ffaa4f35ac28e100141a4b669d4108659b82` (+30/−11),
-`docs/archive/CLOSED-TODO.md`
-`ad7ceca558ae99a6dfc7db34750f91a7cb8569983c230996caafb03f2a1f2ca9` (+35/−0); this record is the
-fifth delivered file.
+Fix r1 re-measured (same commands, the fix-r1 scratch-clone commit of the five delivered files;
+script sha256 `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea`):
+
+| Gate | Exit | Result |
+| --- | --- | --- |
+| `bash -n` on the fix-r1 script (host bash and WSL bash) | 0 both | no diagnostic |
+| the 8 fixture/structure Python tests at the fix-r1 bytes (WSL as `accept`) | 0 each | 8/8 ok; the same tests need a POSIX python (`os.getuid`), so a Windows-host run of the exporter suite is environment-invalid |
+| comment-cap on the fix-r1 commit | 0 | no over-cap block; the fix adds no comment |
+| jscpd-changed on the fix-r1 commit | 0 | 5 changed file(s), 1788 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new; same CLOSED-TODO notice |
+| record cleanliness (`--base 8065b96e --head HEAD`) | 0 | 1 changed record passes the root-only check |
+| citation existence (`--base 8065b96e --head HEAD`) | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices |
+| record-sanitize root-only check on each changed doc | 0/0/0/1 | the plan, `docs/TODO.md` and this record pass; `docs/archive/CLOSED-TODO.md`'s whole-file check refuses at 18 pre-existing quoted-specimen lines, identical at the dispatch head and the final bytes, and the branch's only hunk `@@ -5624,0 +5625,35 @@` lies past every refused line; the branch-added doc lines, extracted with `git diff -U0` at the final bytes, pass (rc=0) |
+| shellcheck (advisory, CI's own selection: one `shellcheck --severity=warning --format=gcc scripts/ci/*.sh` invocation) | 1 both | 9 findings on the changed script at the pre-fix bytes and 9 at the fix-r1 bytes — the fix-r1 lines are the pre-fix lines shifted by the added block (1502→1504, 1624→1626, 1733→1735, 2121→2123, 2139→2141); none on an added line |
+| class pin matrix and mutant | 0/1 | §6 rows and M-S1: delivered silent; `0755` fires the pin while the three access rows stay green; logs `d0468602…` / `a414393c…` |
+
+Anchor re-measure at the fix-r1 script bytes (sha256 `78b27275…`, `nl -ba` and `grep -n`): the
+class-establishing sites are `:589` (`install -d … -m 0751`) and `:592` (`setfacl`), both carried
+by the pin at `:1459-1460`; the access rows are `:1461-1467` inside the arm `:1449-1468`; the
+finding's class census over the case-root permission sites returns exactly those two sites.
+
+Delivered documentation bytes: plan `b38b5ca21549e8cf8b7a1fa2ead5663df15e8f3f051b00a85d1d1cbfaeff8513`
+(89 lines; added by this branch). `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are cited by content, never by
+sha256: main merges rewrite them — TODO carries the seed goal's residual section (one open item,
++30/−11) and CLOSED-TODO the closed clone_checkout entry with the stop's first failing line
+verbatim and the `:592`/`:1459-1467` anchors (+35/−0). This record is the fifth delivered file.

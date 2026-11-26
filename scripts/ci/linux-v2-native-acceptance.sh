@@ -1456,6 +1456,8 @@ if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
   if machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_ROOT/config.json"; then
     fail 'native B unexpectedly read the root-controlled synthetic cleanup config'
   fi
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "0:$A_GID:751" ]] ||
+    fail 'synthetic cleanup case root must stay root:A mode 0751'
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
     fail 'native B cannot read the synthetic cleanup case root the clone seed path sits under'
   machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_SEEDS" ||

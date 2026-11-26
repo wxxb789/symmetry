@@ -5650,10 +5650,10 @@ section, whose pointer sentence names this one.
       its command main encoded the failure frame (`daemon/cmd/symmetry-linux-clone-bootstrap/main.go:27`),
       and the helper rendered `guest_stage=seed errno=13`
       (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:1108`, `:761-790`). The
-      arm now grants B read on the case root (`:592`) and asserts B's own read access to the case
-      root and the seed root and A's write denial on the case root (`:1459-1465`), so a re-tightening
-      or a class widening reddens the set before the witness starts; no production byte, witness
-      assertion or containment check changed, and the config
+      arm now grants B read on the case root (`:592`), pins the case root's delivered class and
+      asserts B's own read access to the case root and the seed root and A's write denial on the case
+      root (`:1459-1467`), so a re-tightening or a class widening reddens the set before the witness
+      starts; no production byte, witness assertion or containment check changed, and the config
       stays `root:A 0640` B-unreadable. Red/green measured in the resolute replica and every local
       gate recorded in the evidence record (delivered, pending the conductor's Bind on the PR head:
       the record's §7 states the observation that confirms closure).
