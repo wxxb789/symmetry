@@ -2041,6 +2041,18 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       the guard stays as-is (fail-closed is the accepted direction); the item closes on a live
       replay observation. Owner: conductor (new goal).
 
+- [ ] Dead-code candidate: stale `--pure` probe stub (PR #298 round-2 DS supplement V4,
+      2026-11-26, goal `rf-opencode-phase1`; `298-ds-audit-2.md` P3-1):
+      `daemon/internal/harness/probeconformance/cancellation_test.go:71` sets the opencode row's
+      `otherOutput` to `"opencode serve --hostname --port --pure"` — a pre-2.4.1 CLI surface the
+      pinned 2.4.1 build rejects — and no contract reaches it: the field is wired only into
+      `cancellationSuccessRunner` (`:151`, returned only for a non-`--version` call, `:215`), both
+      cancellation contracts assert the injected runner's only call is `--version` (`:172`), and
+      the struct's own comment (`:46-48`) records that no contract here reaches it. Pre-existing
+      since `5a9eae9e` (2026-11-17; `git show 7111828b:…` carries the same line). Keep-or-delete
+      when the file is next touched; not removed in PR #298's records-only round (no code bytes
+      change after `a3722677`).
+
 - [ ] rf-acc-witness-unresolved-exit: the App exits 0 on the `unresolved` stage-replay recovery while
       its own e2e requires a deliberate non-zero exit (2026-11-25, goal `rf-acc-pi-durability-matrices`;
       conductor ruling on implement `DECISION_NEEDED` #2; evidence record §4b, plan §3.10 class 1):

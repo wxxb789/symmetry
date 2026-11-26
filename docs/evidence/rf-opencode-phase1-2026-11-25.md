@@ -21,6 +21,9 @@ Round 4 (2026-11-26) applied the gdd review-3 findings STD-A01..A13 with the con
 dispositions (§13); its comparison base is `d63d6e0013673a937fd70a643b960f48d031f166`, and the
 live proof (§2 row 7) was re-run on the round-4 bytes.
 
+A records-only round (2026-11-26, PR #298 round 2 at `a3722677`) applied V1-V4 (§15) with no code
+byte changed; §5a's digests and the §2 row-7 receipt stay binding.
+
 No credential, relay host, machine hostname or host absolute path appears here. Receipts are cited
 by repository path and sha256, never copied. The amendment **merge** revision is not knowable
 before the merge: this record binds the delivered-file digests in §5; row 6 re-binds or re-runs
@@ -123,7 +126,7 @@ against the merge revision.
   - F4: the decoder classifies every durable type in the committed 2.4.1 receipts (completed in
     fix round r4, STD-A03): `session.execution.*`, `session.inbox.enqueued`,
     `session.step.started|ended|failed` and `session.tool.called|success` decode to typed kinds,
-    and the remaining recorded families (`session.step.first-token|streamed`, `session.tool.input.*`,
+    and the remaining recorded durable families (`session.step.first-token|streamed`, `session.tool.input.*`,
     `session.inbox.delivered`, `session.instructions.updated`, `session.reasoning.*`,
     `session.text.*`, `session.created|renamed|deleted`) are known-and-deliberately-uninterpreted,
     journaled with no unknown diagnostic; only types absent from the receipts stay
@@ -145,7 +148,11 @@ against the merge revision.
     unknown recorded types are known-and-deliberately-uninterpreted
     (`recordedUninterpretedEventTypes`), journaled as native frames instead of
     `opencode_unknown_session_event`; the recorded success session produces zero unknown
-    diagnostics (M18 reddens the rows). §7 residual 6's step/tool sentence is corrected.
+    diagnostics (M18 reddens the rows). §7 residual 6's step/tool sentence is corrected. The three
+    non-durable recorded types outside both sets — `session.reasoning.delta`, `session.text.delta`
+    and `session.usage.updated` (20 frames across the committed receipts, none with a durable
+    cursor; Sol round-2 P3-1) — are dropped at `GlobalFrameSessionID` before the session decoder
+    runs, so the known-set claim covers every frame that can reach it.
   - A04: the `listeningLinePattern` comment and the readiness test name/doc now name the inline
     synthetic streams; the unverifiable frozen-fixture-prefix claim is dropped from production and
     test text.
@@ -742,7 +749,8 @@ comparison base is `d63d6e0013673a937fd70a643b960f48d031f166`.
 | `go test -race -count=20 -timeout 900s -run '<the round-4 new rows>' ./internal/harness/opencode/` (WSL) | `daemon/` | 0 (20.066 s) |
 | the CI-exact race form `go-test-json-gate.py --stdio-boundary --assert …/opencode TestOpenCodeV2VerifierRejectsReleasedPeer -- go test -race -count=1 -timeout 600s -json ./...` (WSL) | `daemon/` | 1 — `internal/app` reaches its 600 s per-package budget (`FAIL … 600.347 s`; the dump shows an app row still running at the deadline). Not diff-attributable: the package passes under `-race` with budget (row below), its race time is dominated by rows this increment does not touch (§11), and the added app rows measure ~1 s; the §11-disclosed host/budget pressure is unchanged |
 | isolated probe `go test -race -count=1 -timeout 1500s ./internal/app/` (WSL; the timed-out package alone) | `daemon/` | 0 — `ok internal/app 1022.247 s` (1049 s wall of a 1500 s bound); the CI-exact form's 600 s per-package budget is host-dependent and round 2 measured 557.9 s on the bytes then (§11) |
-| `python <STATE_DIR>/scratch/comment-cap.py <worktree>` (conductor's script) | repo | 0 |
+| `python <STATE_DIR>/scratch/comment-cap.py <worktree>` (conductor's script) | repo | binding re-run at the committed head `a3722677`: **0**. The earlier `0` was measured at `d63d6e00` (the uncommitted fix stage) and did not bind the delivered bytes — the script diffs the committed HEAD, never the working tree (Sec round-2 P3). With the fix stage committed as `03cb4efe` the gate refuses: **1**, three 3-line blocks at `adapter_test.go:557,624,650` (reproduced in a scratch clone for this row); `a3722677` deletes those three docstrings and adds one hazard line (`adapter_test.go`, `-9/+1`, no code change), clearing the refusal |
+| the V2 non-durable census: `jq -r '.events[] \| select(.type == "session.reasoning.delta" or .type == "session.text.delta" or .type == "session.usage.updated") \| "\(.type) durable=\(has("durable"))"' daemon/internal/harness/testdata/opencode/2.4.1/linux-2026-11-25.json daemon/internal/harness/testdata/opencode/2.4.1/windows-2026-11-25-r2.json \| sort \| uniq -c` | repo | 4 `session.reasoning.delta`, 5 `session.text.delta`, 11 `session.usage.updated` — every frame `durable=false`, dropped at `GlobalFrameSessionID` before the session decoder (§1 A03) |
 | `python scripts/ci/model-routing-record-sanitize.py --check --root-only docs/evidence/…` and `docs/TODO.md` | repo | 0 and 0 |
 | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | repo | 0 |
 | `python3 scripts/ci/test-linux-v2-evidence.py` (WSL) | repo | 0 — 55 tests OK (48.98 s) |
@@ -759,3 +767,34 @@ comparison base is `d63d6e0013673a937fd70a643b960f48d031f166`.
 | the added-line host-path scan: the fix's own lines, the worktree diff, and the range as a whole | repo | 0 in this goal's changed lines; the range carries two pre-existing other-goal absolute-path literals (a runner home path in the claude cmdline test, disclosed in §11; a temporary-directory leaf path in the linuxreadback local-repro test), both outside this goal's changed paths and untouched by it; the `users/` check over `git diff origin/main...HEAD` and over the worktree diff → 0 matches |
 | the record's line anchors re-measured at the delivered bytes and cited with their file digests | repo | 3/3 — `adapter_test.go:162` is the version-refusal failure line (r4 `8713e403…eb23`, post-reflow), `cancellation_test.go:166` the cancellation failure line (r4 `53af150a…d5bc`), `linux-v2-native-tools.sh:76` the pinned-ELF digest check (r1 `500ac7b4…0c69`) |
 | the A06 staged-guest digest guard (`stage_guest_binary` on the pinned ELF digest) | repo | **oracle gap**: the guard only executes inside a dispatched `linux-v2-native-acceptance` run and no qualified Linux host was used in this stage; the call and its digest were read against `linux-v2-native-tools.sh:76` and `probe-linux.json`, and `bash -n` covers the script's syntax only |
+
+## 15. Records-only round (PR #298 round 2, V1-V4) and round-2 review outcomes
+
+Inputs at the committed head `a3722677`: Sol review round 2 (`298-opus-review-2.md`) verdict
+**ship** — every round-1 item reproduced fixed, 28/28 §5a rows equal HEAD, the live receipt's six
+digests equal HEAD, all 16 required checks green on the head — with one P3 (the three recorded
+non-durable session types; resolved by V2's sentence in §1's A03 wording); security review round 2
+(`298-sec-review-2.md`) with no P0/P1/P2 and one P3 (the §14 comment-cap row measured at the
+uncommitted fix stage; resolved by V1's binding re-run in that row); DS audit round 2
+(`298-ds-audit-2.md`) shippable with no P0/P1/P2 and two P3s — P3-1 the pre-existing unreached
+`--pure` stub (V4 below) and P3-2 the comment-only reflow past the round-4 gate runs (V1's
+refusal/trim record and the §5a `adapter_test.go` row). Both Codex threads —
+`daemon/internal/app/probe.go:111` (admit the daemon-validated profile alias; fixed by F3) and
+`daemon/internal/harness/opencode/adapter.go:374` (the turn-wait barrier; fixed by F4) — are valid
+and fixed, and both are resolved on the PR (`isResolved: true`, re-queried for this round). No
+thread stays open.
+
+This round changes no code byte: after `a3722677` only this record and `docs/TODO.md` change, so
+§5a's digests, §2 row 7's receipt (`sha256 399034a4…`, re-hashed for this round) and CI run
+`45769680265` (16/16 at `a3722677`) stay binding. V1 re-bound §14's comment-cap row to the
+committed head and recorded the pre-trim refusal; V2 narrowed §1's wording to durable frames and
+added the non-durable filter sentence; V3 is this section; V4 records the pre-existing unreached
+`--pure` stub at `daemon/internal/harness/probeconformance/cancellation_test.go:71` as a
+`docs/TODO.md` dead-code candidate with its no-caller evidence, and does not remove it.
+
+| Command (as run) | cwd | Exit |
+| --- | --- | --- |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only docs/evidence/rf-opencode-phase1-2026-11-25.md` and `… docs/TODO.md` | repo | 0 and 0 |
+| `python scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base a3722677 --head <records-only commit>` | scratch clone | 0 |
+| `gh api graphql … reviewThreads(first:10)` (thread state at the committed head) | repo | 2 threads, both `isResolved: true`, `isOutdated: false` |
+| `gh pr checks 298` (the head's CI run `45769680265`) | repo | 16/16 pass |
