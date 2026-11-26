@@ -275,7 +275,7 @@ Delivered files and their sha256 at the round-0 fix-round delivered bytes (`84dc
 over the delivered bytes, the same bytes the §7 clone gates ran on; `docs/TODO.md`,
 `docs/archive/CLOSED-TODO.md` and this record are deliberately not hashed, and
 `daemon/e2e/production_linux_v2_native_witness_test.go` is unchanged by design). Round 1
-re-measures the new bytes in §15; the script anchors below move in round 1:
+re-measured the script's anchors (§15.1); the script row below carries the head anchors:
 
 | file | sha256 |
 | --- | --- |
@@ -283,10 +283,11 @@ re-measures the new bytes in §15; the script anchors below move in round 1:
 | `scripts/ci/linux-v2-native-acceptance.sh` | `3254deef0bfdc16c741542623c293012aa1e1c265e6f881d74792121280f7bcb` |
 | `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md` | `5dadbcbaaacab9e09254a44bbfb9392d5cca08f2f1b956cf63067d5769295237` |
 
-Every anchor cited above and in the plan, measured with `grep -n`/`sed -n` on the delivered
-bytes (the Bind log's retained copy still hashes to `bf00da4f…` at
-`scratch/bind296r2/run-45737002125.log` under the GDD state root, and the probe line cited in §1
-is `native/run-45384436642.log:1227`):
+Every anchor cited above and in the plan, measured with `grep -n`/`sed -n` on the round-0
+delivered bytes (`84dc22c3`), except the script row, which is re-measured at the head `66b27e63`
+(round 1 moved the guard and the mount call; §15.1). The Bind log's retained copy still hashes
+to `bf00da4f…` at `scratch/bind296r2/run-45737002125.log` under the GDD state root, and the
+probe line cited in §1 is `native/run-45384436642.log:1227`:
 
 | anchor | cited construct |
 | --- | --- |
@@ -307,27 +308,27 @@ is `native/run-45384436642.log:1227`):
 | `state/linux_cgroup_v2_test.go:973,1095` | `TestLinuxV2AdmissionRetainsPreCheckoutCloneAfterRelease`, "unreleased row" |
 | `e2e/production_linux_v2_native_witness_test.go:1901,1968,1972,1973,1974,2183,2216` | pinned-CLI gate, precondition snapshot/loop/check/fatal, stderr path and tail helpers |
 | `e2e/production_linux_v2_owner_cli_test.go:54,1614,1640,2265,2288,2295,2308,2312,2314,2358,2387,2396,2421,4857,4861,4862,4875` | App stderr FD, the stderr-tail logger, the pre-existing report's call, the precondition helper, the shared claim-only literal, the new rows and predicates, the renamed capture-read row, the zero-value row, the leg's read/cause/log and row call |
-| `scripts/ci/linux-v2-native-acceptance.sh:3034-3039,3167-3184,3187-3190,3191` | guard block over its arguments plus the empty-argument refusal, ten prior legs, the mount leg with its ten arguments, opencode leg |
+| `scripts/ci/linux-v2-native-acceptance.sh:33,3031-3032,3213-3215` | at the head: the case-set allowlist (with `alternate_mount_refusal`), the mount leg's 2-line why comment at the deleted guard's site, its dispatch arm; round-0's guard and call anchors (`:3034-3039,3167-3184,3187-3190,3191`) are historical (§3, §15.1) |
 | `docs/evidence/goal-0006b-fixture-inventory-2026-09-29.md:82` | "intentionally first … cannot mask the proof" |
 | `run-45737002125.log:3146,3156,3226,3229` | journal insert, prior leg green, the stop, the retained-row projection |
 
 ## 11. Acceptance carried to the conductor's Bind
 
-Delivered, pending the conductor's Bind. Under the round-1 acceptance amendment the Bind runs
-`shared` **and** `alternate_mount_refusal` once each on the PR head: `shared` must still show the
-`:91` pre-existing-RunJournal stop gone (next stop or green recorded verbatim, and if the run
-reaches `stop_readback_reader` its Result row is recorded), and the new set must pass its
-mount-refusal leg and export `alternate-mount-refusal.json`. Two limbs cannot execute outside the
-guest and are proven locally by the rows above and in §15 instead: (i) the leg's stderr/cause
-assertions, whose text is grounded in the App's print chain (§1) and whose predicates are
-unit-pinned (§5); (ii) the leg's own compliance with the fresh/released precondition, which is
-the Bind's subject. `docs/archive/CLOSED-TODO.md` carries the closure statement in the
-"delivered, pending the conductor's Bind" form.
+**Met by Bind 2** (run `45778210044` on the head `66b27e63`; §Bind 2 below). Under the round-1
+acceptance amendment the Bind ran `shared` **and** `alternate_mount_refusal` once each on the PR
+head: `shared` keeps the `:91` pre-existing-RunJournal stop gone (its next stop, the pi
+provider-scoped-admission residual, recorded verbatim), and the new set passed its mount-refusal
+leg and exported `alternate-mount-refusal.json`. Two limbs cannot execute outside the guest; the
+Bind's passing leg is their guest proof, and the local rows above and in §15 stand behind them:
+(i) the leg's stderr/cause assertions, whose text is grounded in the App's print chain (§1) and
+whose predicates are unit-pinned (§5); (ii) the leg's own compliance with the fresh/released
+precondition. `docs/archive/CLOSED-TODO.md` carries the closure citing the run.
 
-## Bind — binding run on the fixed head 84dc22c3 (shared)
+## Bind (diagnostic) — run on the fixed head 84dc22c3 (shared)
 
-*Superseded by round 1 (§15): the mount-refusal leg now runs in its own case set
-(`alternate_mount_refusal`), and the conductor re-Binds `shared` and the new set on the new head.*
+*Diagnostic, not the binding record: round 1 (§15) moved the mount-refusal leg to its own case
+set (`alternate_mount_refusal`), and the conductor's binding run is Bind 2 on `66b27e63`
+(below).*
 
 One `shared` run on the exact PR-head bytes plus the two scratch-only files, watched once, then
 the scratch branch deleted and the temporary worktree removed. Full report:
@@ -391,20 +392,21 @@ are not run inputs; the full verified-row list and raw line numbers are in the f
 
 ## 12. Limits and residual risk
 
-- The new cause assertion is exact-text: if the guest's App prints the mount refusal through a
+- The new cause assertion is exact-text: if the guest's App printed the mount refusal through a
   different wrapper, the leg reds and prints the bounded captured stderr tail, so the failure is
-  loud and diagnosable rather than silent — but the Bind is what proves the guest text. The pin
-  also requires the witness marker and the mount phrase on the same line, which matches the App's
-  single print (`cmd/symmetry-daemon/main.go:35` prints one `%v` line through the single-line
-  wrappers at `linux_owner_witness_linux.go:3258` and `native_run.go:199`); a guest that wrapped
-  them onto separate lines would red the leg rather than silently pass it.
+  loud and diagnosable rather than silent. Bind 2's `alternate_mount_refusal` passed, which is
+  the guest proof that the pinned text matches; the pin also requires the witness marker and the
+  mount phrase on the same line, which matches the App's single print
+  (`cmd/symmetry-daemon/main.go:35` prints one `%v` line through the single-line wrappers at
+  `linux_owner_witness_linux.go:3258` and `native_run.go:199`).
 - The round-0 opencode coupling of §3 no longer exists: round 1 runs the mount leg in its own
   case set (§15), so no `shared` leg can observe the retained row.
-- The unmeasured `stop_readback_reader` row (`shared` aborts inside the `esac` before its single
-  call site) is measured by any case set whose dispatch completes; the new set's Bind measures it
-  if the mount-refusal leg passes (`docs/TODO.md`, readback residual).
+- The `stop_readback_reader` row was measured clean in Bind 2's `alternate_mount_refusal`
+  (`readback-reader: stop signal requests=0`, 0 `did not stop cleanly`); `shared` still aborts
+  before its single call site, so a `shared`-scoped stop row stays unmeasured (`docs/TODO.md`,
+  readback residual).
 - This stage pushes nothing and commits nothing: the delivered bytes are the worktree files; the
-  PR body for the round-1 delivered state is `findings/300-body.md` (§15).
+  PR body for the delivered state is `findings/300-body.md` (§15).
 
 ## 13. Apply round (2026-11-26, accepted simplify findings)
 
@@ -537,6 +539,17 @@ single-leg guest run of the same footprint as those sets.
 
 ### 15.4 Gates at the round-1 delivered bytes
 
+Rows measured at the round-1 bytes (`8a1a482c`), as titled. The `origin/main` merge `ff0975a7`
+(#298) re-based only `scripts/ci/linux-v2-native-acceptance.sh` among the run inputs (+4/−4,
+OpenCode 2.4.1 staging), so the script-dependent rows were re-measured at the head `66b27e63`
+in the records round (§16): `bash -n` 0; `actionlint` 0; `test-linux-v2-evidence.py` (WSL) 56
+tests OK; `test-ci-structure-extraction.py` (Windows and WSL) 72 tests OK (WSL: 3 pwsh skips);
+`test-ci-changed-path-classifier.py` (Windows and WSL) 37 tests OK. The clone-gate rows
+(comment-cap, jscpd, check-record-cleanliness, sanitize) re-ran on a scratch-clone commit of
+the final records bytes (§16). The Go rows stay attributed to `8a1a482c`: the range's only Go
+file is byte-identical at the head (§15.5), and the rest of the module surface is the merge's,
+exercised by the PR's `daemon` CI job.
+
 | gate | command | exit | result |
 | --- | --- | --- | --- |
 | Windows full module | `go test ./... -count=1` from `daemon/` (go1.27.4 windows/amd64) | 0 | 27 ok / 0 FAIL / 3 no test files; 207.9s wall |
@@ -558,20 +571,113 @@ single-leg guest run of the same footprint as those sets.
 
 ### 15.5 Delivered-byte digests (the guest/CI run inputs)
 
-| file | sha256 |
-| --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `920a0a3ea715d4951d8f96de9336d4152528d9a3a0e044a7c2125bc164c6d0c9` |
-| `.github/workflows/linux-native-v2-acceptance.yml` | `2d5500ce4b411e979cf974c19028514dceb5a729b3c73e8971add50f55bc27d8` |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` |
+Re-measured at the head `66b27e63` (X1, §16); the round-1 column is the `8a1a482c` blob the
+table previously carried:
 
-The two CI test files are harness-side and the four records are not run inputs; the delivered
-set is 10 files, +415/−143. `git diff --check` is clean and no added line carries a host
-absolute path.
+| file | sha256 at the head `66b27e63` | round-1 `8a1a482c` |
+| --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` | identical |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `920a0a3ea715d4951d8f96de9336d4152528d9a3a0e044a7c2125bc164c6d0c9` |
+| `.github/workflows/linux-native-v2-acceptance.yml` | `2d5500ce4b411e979cf974c19028514dceb5a729b3c73e8971add50f55bc27d8` | identical |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` | identical |
+
+Only the script differs: the `origin/main` merge `ff0975a7` (#298) brought the OpenCode 2.4.1
+staging changes into it (+4/−4). The two CI test files are harness-side and the four records
+are not run inputs; the branch's own range is 10 files, +1130/−37 (`origin/main...HEAD`,
+`ff0975a7...66b27e63`). `git diff --check` is clean and no added line carries a host absolute
+path. The Bind 2 run-input equality table below is authoritative for the run.
 
 ### 15.6 Acceptance carried to the conductor's Bind (amended)
 
-The Bind runs `shared` and `alternate_mount_refusal` once each on the PR head: `shared` must keep
-the `:91` stop gone (next stop or green recorded verbatim), and the new set must pass
-`TestProductionLinuxV2AlternateCgroupMountRefusal` and export `alternate-mount-refusal.json`; if
-its dispatch completes, record the `stop_readback_reader` Result row.
+Met by Bind 2 (§Bind 2 below): the Bind ran `shared` and `alternate_mount_refusal` once each on
+the head; `shared` keeps the `:91` stop gone (its next stop, the pi provider-scoped-admission
+residual, recorded verbatim), and the new set passed `TestProductionLinuxV2AlternateCgroupMountRefusal`,
+exported `alternate-mount-refusal.json`, and completed its dispatch, so the
+`stop_readback_reader` row is measured (clean).
+
+## Bind 2 — binding run on the merge head 66b27e63 (shared + alternate_mount_refusal)
+
+The conductor's Bind 2 ran `shared` and `alternate_mount_refusal` once each on the PR head
+`66b27e630b904f41fc5a77c5f9b512f8962c0571` plus the two scratch-only files (run head
+`11f5a9413639a929c64102a0ca35625a99c8cbed`): exactly one run, watched once; conclusion
+`failure` (`shared` only). Run id `45778210044`, attempt 1, created 2026-11-26T07:49:37Z,
+updated 07:56:13Z; `total_count=1` at every read of the runs list, including after the scratch
+branch deletion; the scratch branch was deleted and the temporary worktree removed. Full report:
+`findings/300-binding-run-2.md`.
+
+- `shared` keeps the `:91` stop gone: 0 occurrences of `pre-existing RunJournal`,
+  `is not physically released`, `may still own or require recovery` and of every earlier stop
+  class (including bare `/proc/`); all 21 legs that ran verified green; the set's first failing
+  line is the pre-existing, documented `pi_provider_action` provider-scoped-admission residual —
+  `reserve owner witness clone before source Git effects: Linux clone intent does not match the
+  current admitted Subject` (`production_linux_v2_native_witness_test.go:91`) — so it exits 1
+  (`Case set shared exited 1`; `Failed case sets: shared`). `stop_readback_reader` did not run for
+  `shared` (abort inside the `esac` at the pi leg `:3160`, before its single call site `:3226`),
+  so its Result row stays unmeasured, not failed; the start proof passed (`MainPID=7252`).
+- `alternate_mount_refusal` (its own guest/Store) verified
+  `TestProductionLinuxV2AlternateCgroupMountRefusal: run=1 pass=1 skip=0`, exported
+  `alternate_mount_refusal/alternate-mount-refusal.json` (2117 B, sha256
+  `6ec6e5636a7353b3475984e92ec95210f5ad75957b57ba0063b308ef16851e6f`; its manifest is
+  `status: passed` with `missing_allowlisted_files` empty), ran the reader stop proof cleanly
+  (`readback-reader: stop signal requests=0`; 0 `did not stop cleanly`) and exited 0
+  (`Case set alternate_mount_refusal exited 0`).
+
+Artifacts: `linux-v2-native-evidence-45778210044-1` (id `15096983460`, 3295 B, sha256
+`2cc49906b683fc4cf4b273075e1da9d9777a43d5b63121a5916b55fa5e845277`) and
+`linux-v2-host-prerequisite-45778210044-1` (id `15097466296`, 676 B, sha256
+`4e96cb3c01601eda20dc4796fffb0cc62e0c670a49564a2f9846945695653664`); both download-verified. The
+shared export failed its durability gate as before (`pi durability witness is unavailable:
+ack-loss-replay-checkout_ready.json`), so its members are the partial allowlist
+(`pi-native-provider-action.json`, `unprovisioned-owner-refusal.json`).
+
+### Run-input sha256 equality (run head `11f5a941` vs PR head `66b27e63`)
+
+`git diff --name-status 66b27e63 11f5a941` = exactly the two scratch-only additions, so every
+PR-head file executed by the run is byte-identical; the table pins the principal executed
+inputs. The merge head's `scripts/ci/linux-v2-native-acceptance.sh` digest is `70163ae1…` — it
+differs from §15.5's pre-merge digest (`920a0a3e…` at `8a1a482c`) because the `main` merge (#298)
+brought the OpenCode 2.4.1 staging changes into the script; the run executed the merge-head
+bytes. The other scripts the acceptance script invokes were measured equal too.
+
+| File | Run-head bytes | PR-head bytes | Equal? |
+| --- | --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` | `d57e01b59dae83bcf9cce789a398eeaba7628a6171023b667234c3e8cd1368a6` | yes |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | yes |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` | `bf53e78fa7fee74d98988c1a8c13cc910930aa08081b1adadd839973d09dd5c1` | yes |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `abaa740e1ad0cbbd85899d9d78590e327f531767cb3ddf4134468915f9b3e63a` | absent (scratch-only) | scratch-only |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent (scratch-only) | scratch-only |
+
+## 16. Round 2 (2026-11-26, conductor ruling X1-X5): records-only re-measure
+
+No code, test or script byte changed in this round; every executed input of Bind 2 (head
+`66b27e63`) stays byte-identical, so the binding run stands. Per item:
+
+- X1: §15.5's four digests re-measured at the head — only the script differs from round 1
+  (`70163ae1…` vs `920a0a3e…`, the merge's OpenCode 2.4.1 re-base); §15.4 carries the head
+  re-run clause for the script-dependent rows; the PR body (`findings/300-body.md`) carries the
+  same digests.
+- X2: §10's script anchor row replaced with the head anchors `:33,3031-3032,3213-3215`.
+- X3: the order-sensitive, duplicated allowlist detection (`test-linux-v2-evidence.py:469`,
+  `test-ci-structure-extraction.py:814`) and `parse_case_arms`'s arm-id whitelist
+  (`test-linux-v2-evidence.py:444`) are recorded as a `docs/TODO.md` residual; no code change,
+  to keep the Bind binding.
+- X4: Bind 2 (§Bind 2 above) is the binding row; the `84dc22c3` run is labelled diagnostic; the
+  `CLOSED-TODO` closure cites run `45778210044`.
+- X5: the readback-reader residual in `docs/TODO.md` now reads measured clean in run
+  `45778210044` (`alternate_mount_refusal`), with `shared` still aborting before its call site.
+
+Gates at the head `66b27e63` (all exit 0): `bash -n`; `actionlint`; `test-linux-v2-evidence.py`
+(WSL) 56 tests OK; `test-ci-structure-extraction.py` (Windows and WSL) 72 tests OK (WSL: 3 pwsh
+skips); `test-ci-changed-path-classifier.py` (Windows and WSL) 37 tests OK. Scratch-clone
+commit gates (a commit of the final records bytes on `66b27e63`): comment-cap 0; jscpd 0 — 10
+changed files, 1780 scanned sources, 1245 corpus clones, 0 tolerated among the added lines,
+none new; check-record-cleanliness `--base ff0975a7` 1 changed record passes (`--base
+7111828b`: 2 pass); sanitize `--check --root-only` whole-file 0 for `docs/TODO.md`, the plan
+and this record, 1 for `docs/archive/CLOSED-TODO.md` (identical at `7111828b`), and 0 over
+every changed doc's added lines.
+
+Anchor sweep at the head: every anchor cited above and in the plan re-resolves — the script
+(`:33,3031-3032,3213-3215`; `:79`, `:505`, `:963`, `:1339-1356`; the stop block `:2202-2226`;
+the pi leg `:3160`; the stop call `:3226`), the workflow (`:119-140`, `:130`), the exporter
+(`:318`, `:341`), the two CI test files (`:435-490`, `:2014-2037`; `:796-822`, `:1093-1097`,
+`:1148-1154`), and the e2e/production rows of §10 (§15.5 proves the Go file's bytes).

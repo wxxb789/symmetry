@@ -1909,12 +1909,15 @@ product-test stops (2026-11-26)`, and the conversion's residual is in
       closed; fix later with `ready.tmp` + `renameat` (the response path's pattern). Owner:
       conductor.
 
-- [ ] The reader stop proof stays unmeasured until a `shared` run reaches `stop_readback_reader`
-      (2026-11-26, goal `rf-acc-b-process-readback`; Bind 2 run `45737002125`, record §7): the run's
-      start proof passed (`MainPID=7149` after A's `CapEff` 0 row) but the set aborts before
-      `stop_readback_reader`'s single call site (`scripts/ci/linux-v2-native-acceptance.sh:3224`),
-      so the stop row (`Result=success`, `ExecMainStatus=0`, ready file removed) is unmeasured, not
-      failed. Owner: conductor (the first run that reaches the stop).
+- [ ] The reader stop proof is measured clean in run `45778210044` (`alternate_mount_refusal`);
+      `shared` still aborts before its call site (2026-11-26, goals `rf-acc-b-process-readback`
+      and `rf-acc-shared-journal-release`; Bind 2 run `45737002125` start proof, PR #300 Bind 2
+      run `45778210044` stop proof): the new set ran `stop_readback_reader` and its assertions
+      held (`readback-reader: stop signal requests=0`, 0 `did not stop cleanly`,
+      `ActiveState=inactive`/`Result=success`/`ExecMainStatus=0`, ready file removed); in
+      `shared` the dispatch aborts at the pi leg, before the single call site
+      (`scripts/ci/linux-v2-native-acceptance.sh:3226`), so a `shared`-scoped stop row stays
+      unmeasured, not failed. Owner: conductor (the first `shared` run that reaches the stop).
 
 ## rf-acc-containment-goal-admission: residuals (2026-11-26)
 
@@ -2176,9 +2179,11 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
 
 ## rf-acc-shared-journal-release: residuals (2026-11-26)
 
-The `shared` pi leg's `:91` pre-existing-RunJournal stop is delivered, pending the conductor's Bind
-on the head (goal `rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`,
-base `7111828b`); its text and closure statement are in `docs/archive/CLOSED-TODO.md` under
+The `shared` pi leg's `:91` pre-existing-RunJournal stop is bound by the conductor's Bind 2 (run
+`45778210044` on the head `66b27e63`: `:91` stays gone, `alternate_mount_refusal` passes;
+acceptance met) (goal `rf-acc-shared-journal-release`, branch
+`refactor/rf-acc-shared-journal-release`, base `7111828b`); its text and closure statement are in
+`docs/archive/CLOSED-TODO.md` under
 `## rf-acc-shared-journal-release: the shared pi leg refuses the prior refusal leg's RunJournal (2026-11-26)`.
 
 - [ ] A refused pre-containment claim row is retired only by the product's terminal/cleanup path
@@ -2191,6 +2196,17 @@ base `7111828b`); its text and closure statement are in `docs/archive/CLOSED-TOD
       mount-refusal leg now runs in its own case set (`alternate_mount_refusal`, record §15), so
       no other set observes the row. A product-side retirement for a claim that provably never
       started native work stays a separate decision. Owner: conductor.
+
+- [ ] The case-set pins' allowlist detection is order-sensitive and duplicated, and the dispatch
+      reader whitelists arm ids (2026-11-26, same goal, PR #300 round-2 review P3-1/P3-2,
+      `findings/300-opus-review-2.md`): `scripts/ci/test-linux-v2-evidence.py:469` and
+      `scripts/ci/test-ci-structure-extraction.py:814` find the allowlist only when the line
+      starts with `shared|codex_containment|`, so a semantics-free reorder reds with a message
+      naming the wrong cause; `parse_case_arms` (`test-linux-v2-evidence.py:435`) matches arms
+      with `[A-Za-z0-9_|*]+\)` (`:444`), so an arm id outside that alphabet is dropped from the
+      reader (both fail closed). Fix in a CI-maintenance change (one terminator-based reader
+      imported by both pins; a wider arm alphabet), not in PR #300: its code/script bytes stay
+      identical to the bytes Bind 2 bound. Owner: conductor.
 
 The pi `provider_action` leg's clone-reserve residual this goal unmasks stays under
 `## rf-acc-containment-goal-admission: residuals (2026-11-26)`.

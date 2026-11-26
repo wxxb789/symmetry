@@ -163,7 +163,7 @@ as `Linux v2 native owner preflight: %w`; `cgroup_linux.go:93` is the bare cause
 | 2 fix on the wrong side, no ad-hoc deletion | leg in `shared` (round 0: after the ten legs, with a runtime order guard) | record §15: the mount call and guard are gone from `shared`, no `rm`/Store reset in the diff, the case-set/arm pins red under mutation; the export replica proves the new set's own path |
 | 2 no weakened precondition or refusal assertion | — | record §9 + §15: `git diff` shows no change to `linuxV2RequireSafelyReleasedPriorJournal`, and the mount leg keeps every assertion byte-equivalent |
 | Invariants: ≤2-line comments, `go vet`, records rule | — | record §15: comment-cap before the re-measure, `go vet` rows, mutants for every new pin |
-| Acceptance: `:91` stop stays gone in `shared`; the new set passes its leg | — | carried to the conductor's Bind (§15): `shared` and `alternate_mount_refusal` once each |
+| Acceptance: `:91` stop stays gone in `shared`; the new set passes its leg | — | met by Bind 2 (run `45778210044` on `66b27e63`; record §Bind 2): `shared` keeps the `:91` stop gone (next stop, the pi admission residual, verbatim); the new set passes and exports its witness |
 
 ## 6. Local gates
 
@@ -179,13 +179,16 @@ scripts/ci/test-ci-changed-path-classifier.py`. Scratch harnesses, not committed
 Comment cap: `python <HOST-PATH>/.local/state/gdd/scratch/comment-cap.py <clone> 7111828b`
 before the final re-measure of digests and anchors. jscpd via the existing install (symlinked
 into the scratch clone; never `pnpm install`), plus `check-record-cleanliness.py` and
-`model-routing-record-sanitize.py`.
+`model-routing-record-sanitize.py`. The records round re-ran the script-dependent rows at the
+head and the clone gates on a scratch-clone commit of the final records bytes (record §15.4,
+§16).
 
 ## 7. Out of scope
 
 - Any production change (claim seeding before the preflight, retirement of a claim that
   provably never started native work): recorded as the option-(a) residual in `docs/TODO.md`.
-- The opencode leg's pinned-version gate and the unmeasured `stop_readback_reader` row: their own
-  tracked entries.
+- The opencode leg's pinned-version gate: its own tracked entry. The `stop_readback_reader` row
+  was measured clean in Bind 2's `alternate_mount_refusal` (record §Bind 2); `shared` still
+  aborts before its call site (`docs/TODO.md`, readback residual).
 - Weakening, deleting or renaming any refusal assertion; deleting journals; changing the
   `shared` arm's remaining leg order.

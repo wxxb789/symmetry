@@ -5519,7 +5519,7 @@ section, whose pointer sentence names this one.
       refuses the RunJournal left by the preceding green
       `TestProductionLinuxV2AlternateCgroupMountRefusal` leg; the check text and leg ordering are
       identical in `2f7a38c6` (origin/main). Owner: conductor, new goal
-      `rf-acc-shared-journal-release`. **Delivered, pending the conductor's Bind (2026-11-26, goal
+      `rf-acc-shared-journal-release`. **Delivered and bound (2026-11-26, goal
       `rf-acc-shared-journal-release`, branch `refactor/rf-acc-shared-journal-release`, base
       `7111828b`; plan `docs/plans/2026-11-26-rf-acc-shared-journal-release-plan.md`, record
       `docs/evidence/rf-acc-shared-journal-release-2026-11-26.md`):** the row is a claim-only
@@ -5531,5 +5531,9 @@ section, whose pointer sentence names this one.
       from the captured App stderr and requires its own retained row to stay claim-only; the pi
       leg's `physically released and safe` precondition and every refusal assertion are
       unchanged, and the option-(a) product-side retirement stays a residual in `docs/TODO.md`
-      under this goal's section. The conductor's Bind runs `shared` and `alternate_mount_refusal`
-      once each; it removes the `:91` stop.
+      under this goal's section. The conductor's Bind 2 (run `45778210044` on `66b27e63`, case
+      sets `shared` + `alternate_mount_refusal`) removed the `:91` stop: `shared` keeps it gone
+      with 21 verified rows (its next stop is the pre-existing pi provider-scoped-admission
+      residual, verbatim in the record's Bind 2 section), and the new set passed
+      `TestProductionLinuxV2AlternateCgroupMountRefusal`, exported `alternate-mount-refusal.json`
+      and exited 0 — acceptance met.
