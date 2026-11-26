@@ -47,10 +47,11 @@ def goal_assigned_runtime_spec(
     repository_resource_id: str,
     harness_kind: str,
     harness_version: str,
+    provider_access: bool = False,
 ) -> dict:
     # Goal assignment admits only native-harness runtimes with adapter operations
     # (assignment.ex:332,:519-530), so the goal-assigned claim fixtures carry native metadata.
-    return {
+    spec = {
         "runtime_key": runtime_key,
         "name": name,
         "capacity": 64,
@@ -83,6 +84,9 @@ def goal_assigned_runtime_spec(
             },
         },
     }
+    if provider_access:
+        spec["capabilities"]["provider_access"] = True
+    return spec
 
 
 def main() -> int:
@@ -127,15 +131,15 @@ def main() -> int:
 
     session_id = str(uuid.uuid4())
     runtime_specs = (
-        {
-            "runtime_key": "owner-witness-control-pi-generic",
-            "name": "Isolated generic Control provider-claim fixture; not a native runtime",
-            "capacity": 64,
-            "agent_profile": "pi-native",
-            "workspace": "native",
-            "repository_resource_id": fixture["pi_repository_resource_id"],
-            "capabilities": {"structured_input": True, "provider_access": True},
-        },
+        goal_assigned_runtime_spec(
+            "owner-witness-control-pi-generic",
+            "Isolated generic Control provider-claim fixture; goal-assigned native Pi",
+            "pi-native",
+            fixture["pi_repository_resource_id"],
+            "pi",
+            "1.5.2",
+            provider_access=True,
+        ),
         {
             "runtime_key": "owner-witness-control-opencode-generic",
             "name": "Isolated generic Control health-claim fixture; not a native runtime",

@@ -1694,8 +1694,11 @@ func linuxV2ReadOwnerWitnessRequestWithBarrierState(
 	admission, admitted, err := protocol.ParseAdmissionInput(request.Claim.Work.Input)
 	if linuxV2WitnessRequiresGoalAdmission(testCase) {
 		if err != nil || !admitted || admission.Subject.Validate() != nil ||
-			admission.Subject != request.Subject || admission.ProviderScope != nil {
+			admission.Subject != request.Subject {
 			return linuxV2OwnerWitnessRequest{}, fmt.Errorf("%s owner-witness claim must carry the Control admission for the exact Subject", testCase.harness)
+		}
+		if refusal := linuxV2AdmissionProviderScopeRefusal(testCase.providerActionRequired, admission.ProviderScope, request.Subject.ResourceID); refusal != nil {
+			return linuxV2OwnerWitnessRequest{}, refusal
 		}
 	} else if err != nil || admitted {
 		return linuxV2OwnerWitnessRequest{}, errors.New("owner-witness claim must be a real non-Goal Control task")
@@ -1791,11 +1794,14 @@ func linuxV2AckLossReplayStageSupported(stage string) bool {
 // Goal-routed request cases (writer GOAL_ADMISSION_CASES; the stage-replay kind legs emit
 // request_case "stage_replay") require the Control admission; provider-free opencode rows do not.
 var linuxV2GoalAdmissionRequestCases = map[linuxV2WitnessRequestKey]bool{
-	{harness: "pi", requestCase: "stage_replay"}:                true,
-	{harness: "codex", requestCase: "stage_replay"}:             true,
-	{harness: "claude_code", requestCase: "stage_replay"}:       true,
-	{harness: "codex", requestCase: "codex_containment"}:        true,
-	{harness: "claude_code", requestCase: "claude_containment"}: true,
+	{harness: "pi", requestCase: "pi_provider_action"}:                            true,
+	{harness: "pi", requestCase: "helper_sigkill_detached_child"}:                 true,
+	{harness: "pi", requestCase: "daemon_sigkill_helper_survives_detached_child"}: true,
+	{harness: "pi", requestCase: "stage_replay"}:                                  true,
+	{harness: "codex", requestCase: "stage_replay"}:                               true,
+	{harness: "claude_code", requestCase: "stage_replay"}:                         true,
+	{harness: "codex", requestCase: "codex_containment"}:                          true,
+	{harness: "claude_code", requestCase: "claude_containment"}:                   true,
 }
 
 type linuxV2WitnessRequestKey struct {
@@ -1816,9 +1822,9 @@ func TestLinuxV2WitnessRequiresGoalAdmissionRows(t *testing.T) {
 		{name: "stage_replay_pi_durability", testCase: linuxV2NativeWitnessCase{harness: "pi", requestCase: "stage_replay"}, want: true},
 		{name: "codex_containment", testCase: linuxV2CodexContainmentCase(), want: true},
 		{name: "claude_containment", testCase: linuxV2ClaudeContainmentCase(), want: true},
-		{name: "pi_provider_action", testCase: linuxV2PiProviderActionCase(), want: false},
-		{name: "helper_sigkill_detached_child", testCase: linuxV2HelperSIGKILLCase(), want: false},
-		{name: "daemon_sigkill_helper_survives_detached_child", testCase: linuxV2DaemonSIGKILLCase(), want: false},
+		{name: "pi_provider_action", testCase: linuxV2PiProviderActionCase(), want: true},
+		{name: "helper_sigkill_detached_child", testCase: linuxV2HelperSIGKILLCase(), want: true},
+		{name: "daemon_sigkill_helper_survives_detached_child", testCase: linuxV2DaemonSIGKILLCase(), want: true},
 		{name: "opencode_native_health", testCase: linuxV2OpenCodeNativeHealthCase(), want: false},
 		{name: "stage_replay_unprovisioned_refusal", testCase: linuxV2NativeWitnessCase{harness: "opencode", requestCase: "stage_replay"}, want: false},
 		{name: "wsl2_denial", testCase: linuxV2WSL2DenialCase(), want: false},
@@ -1872,6 +1878,112 @@ func linuxV2ClaimAllowsProviderSync(access protocol.ProviderAccess, resourceID s
 		}
 	}
 	return false
+}
+
+func linuxV2AdmissionProviderScopeIsExact(scope *protocol.ProviderScope, resourceID string) bool {
+	if scope == nil || len(scope.ResourceIDs) != 1 || scope.ResourceIDs[0] != resourceID ||
+		len(scope.OperationsByResource) != 1 || scope.ChangeTarget != nil {
+		return false
+	}
+	operations := scope.OperationsByResource[resourceID]
+	return len(operations) == 1 && operations[0] == protocol.ProviderOperationResourceSync
+}
+
+func linuxV2AdmissionProviderScopeRefusal(providerActionRequired bool, scope *protocol.ProviderScope, resourceID string) error {
+	if providerActionRequired {
+		if !linuxV2AdmissionProviderScopeIsExact(scope, resourceID) {
+			return errors.New("provider-action owner-witness admission must scope exactly resource.sync for the exact Subject")
+		}
+		return nil
+	}
+	if scope != nil {
+		return errors.New("provider-free owner-witness admission carries a provider scope")
+	}
+	return nil
+}
+
+func TestLinuxV2AdmissionAllowsProviderSyncRows(t *testing.T) {
+	const resourceID = "00000000-0000-4000-8000-000000000005"
+	exact := &protocol.ProviderScope{
+		ResourceIDs:          []string{resourceID},
+		OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationResourceSync}},
+	}
+	rows := []struct {
+		name  string
+		scope *protocol.ProviderScope
+		want  bool
+	}{
+		{name: "exact_control_composition", scope: exact, want: true},
+		{name: "nil_scope", scope: nil, want: false},
+		{name: "two_resources", scope: &protocol.ProviderScope{
+			ResourceIDs: []string{resourceID, "00000000-0000-4000-8000-000000000006"},
+			OperationsByResource: map[string][]protocol.ProviderOperation{
+				resourceID:                             {protocol.ProviderOperationResourceSync},
+				"00000000-0000-4000-8000-000000000006": {protocol.ProviderOperationResourceSync},
+			},
+		}, want: false},
+		{name: "other_resource", scope: &protocol.ProviderScope{
+			ResourceIDs:          []string{"00000000-0000-4000-8000-000000000006"},
+			OperationsByResource: map[string][]protocol.ProviderOperation{"00000000-0000-4000-8000-000000000006": {protocol.ProviderOperationResourceSync}},
+		}, want: false},
+		{name: "extra_operation", scope: &protocol.ProviderScope{
+			ResourceIDs: []string{resourceID},
+			OperationsByResource: map[string][]protocol.ProviderOperation{
+				resourceID: {protocol.ProviderOperationResourceSync, protocol.ProviderOperationChangeUpsert},
+			},
+		}, want: false},
+		{name: "wrong_operation", scope: &protocol.ProviderScope{
+			ResourceIDs:          []string{resourceID},
+			OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationChangeUpdate}},
+		}, want: false},
+		{name: "change_target", scope: &protocol.ProviderScope{
+			ResourceIDs:          []string{resourceID},
+			OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationResourceSync}},
+			ChangeTarget:         &protocol.ProviderChangeTarget{Kind: protocol.ProviderChangeTargetBranches},
+		}, want: false},
+	}
+	for _, row := range rows {
+		if got := linuxV2AdmissionProviderScopeIsExact(row.scope, resourceID); got != row.want {
+			t.Errorf("%s: linuxV2AdmissionProviderScopeIsExact = %t, want %t", row.name, got, row.want)
+		}
+	}
+}
+
+func TestLinuxV2AdmissionProviderScopeRefusalRows(t *testing.T) {
+	const resourceID = "00000000-0000-4000-8000-000000000005"
+	exact := &protocol.ProviderScope{
+		ResourceIDs:          []string{resourceID},
+		OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationResourceSync}},
+	}
+	providerRefusal := "provider-action owner-witness admission must scope exactly resource.sync for the exact Subject"
+	rows := []struct {
+		name                   string
+		providerActionRequired bool
+		scope                  *protocol.ProviderScope
+		wantErr                string
+	}{
+		{name: "provider_exact_scope", providerActionRequired: true, scope: exact},
+		{name: "provider_nil_scope", providerActionRequired: true, scope: nil, wantErr: providerRefusal},
+		{name: "provider_change_target", providerActionRequired: true, scope: &protocol.ProviderScope{
+			ResourceIDs:          []string{resourceID},
+			OperationsByResource: map[string][]protocol.ProviderOperation{resourceID: {protocol.ProviderOperationResourceSync}},
+			ChangeTarget:         &protocol.ProviderChangeTarget{Kind: protocol.ProviderChangeTargetBranches},
+		}, wantErr: providerRefusal},
+		{name: "provider_free_nil_scope", providerActionRequired: false, scope: nil},
+		{name: "provider_free_exact_scope", providerActionRequired: false, scope: exact, wantErr: "provider-free owner-witness admission carries a provider scope"},
+	}
+	for _, row := range rows {
+		err := linuxV2AdmissionProviderScopeRefusal(row.providerActionRequired, row.scope, resourceID)
+		if row.wantErr == "" {
+			if err != nil {
+				t.Errorf("%s: linuxV2AdmissionProviderScopeRefusal = %v, want nil", row.name, err)
+			}
+			continue
+		}
+		if err == nil || err.Error() != row.wantErr {
+			t.Errorf("%s: linuxV2AdmissionProviderScopeRefusal = %v, want %q", row.name, err, row.wantErr)
+		}
+	}
 }
 
 func newLinuxV2NativeFixture(t *testing.T, testCase linuxV2NativeWitnessCase) linuxV2NativeFixture {

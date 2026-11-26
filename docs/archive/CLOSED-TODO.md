@@ -5622,3 +5622,39 @@ section, whose pointer sentence names this one.
       stop, `owner_loss` captured (`owner_lost=true`, `error` absent, helper-issued `stop_proof`;
       both manifests passed). The optional `shared` `stop_receipt_durable` leg was not in the
       run's two case sets. Evidence record `## Bind 4`.
+
+## rf-acc-pi-provider-admission: the pi provider legs move to a provider-scoped Goal admission (2026-11-26)
+
+- [x] `pi_provider_action` and the two crash legs still need a provider-scoped admission
+      (2026-11-26, goal `rf-acc-containment-goal-admission`, stage-1(b); evidence record
+      `docs/evidence/rf-acc-containment-goal-admission-2026-11-25.md` §7(b)): Control composes
+      `provider_scope` (`resource_ids`, `operations_by_resource` → `["resource.sync"]`,
+      `change_target: nil`) iff `"resource.sync"` is in both `authority_policy.allowed_actions` and
+      `execution_policy.allowed_actions` (`control/lib/symmetry_control/goals/admission.ex:1218-1268`,
+      `:1304-1307`) and then adds `provider_access: true` (`:333-335`); the containment fixture's
+      goals set `allowed_actions: []` and stay provider-free by design. `pi_provider_action`,
+      `helper_sigkill_detached_child` and `daemon_sigkill_helper_survives_detached_child` keep the
+      legacy claim shape and stay latent behind the `shared` set's owner-leg stops; widening the
+      e2e admission branch to a provider-scoped admission needs its own ruling (the provider-access
+      assertions and the clone reserve would then both bind the same claim). **Delivered (2026-11-26,
+      goal `rf-acc-pi-provider-admission`, branch `refactor/rf-acc-pi-provider-admission`, base
+      `b27ea691`; plan `docs/plans/2026-11-26-rf-acc-pi-provider-admission-plan.md`, record
+      `docs/evidence/rf-acc-pi-provider-admission-2026-11-26.md`):** the conductor's ruling put the
+      three legs on the production path — a Goal admission whose Control-composed `provider_scope`
+      grants `resource.sync` — with `resource.sync` in both `allowed_actions` lists, the writer
+      pinned to the exact composed scope (and to `provider_scope: null` for the provider-free goal
+      legs), the e2e admission branch widened for those legs only, and the pi-native runtime
+      registered goal-assigned and provider-capable (one CI script beyond the owned list, named in
+      the plan §2.5 and record §8). Local evidence: Control composes the exact scope, issues the
+      single github/repository `resource.sync` grant and reports `{"provider_access": true}` for all
+      three legs against the delivered bytes on an ephemeral local database, the delivered writer
+      accepts the authentic Control claims for all three, the base adapter-free pi spec cannot be
+      assigned at all, and the base-vs-head formatter rewrite bodies are identical. The contract's
+      acceptance — the conductor's Bind `shared` run on the PR head, `TestProductionLinuxV2PiNativeProviderAction`
+      no longer stopping at the clone-intent/Subject refusal — is met: Bind303 (run `45811007804` on
+      `22d6c411`, case set `shared`) counted 0 occurrences of the refusal in the whole log, read the
+      retained journal claimed with `has_claim_grant`/`has_clone_intent`/`has_seed_receipt` true and
+      kept all 21 verified rows green. The leg's next stop is the next stage's (the authentic Pi turn
+      `"error"`), verbatim in the record §13 and in the `## rf-acc-pi-provider-admission: residuals`
+      section of `docs/TODO.md`; `stop_readback_reader` stayed unmeasured and the redacted-evidence
+      export was refused (`ack-loss-replay-checkout_ready.json`).
