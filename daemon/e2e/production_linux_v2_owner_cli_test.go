@@ -1172,6 +1172,20 @@ func linuxV2StageReplayHelperStopIsProven(stage string, marker linuxV2OwnerWitne
 	}
 }
 
+func linuxV2RequireHelperIssuedReleaseStopProof(helper *linuxV2OwnerWitnessProcess, file linuxWitnessJournalFile, found bool) error {
+	if helper == nil || !found || file.Journal.ContainmentCgroupReleaseProof == nil ||
+		file.Journal.ContainmentCgroupReleaseProof.StopReceipt == nil {
+		return errors.New("proven-helper stage-replay recovery lacks its release tombstone")
+	}
+	proof := file.Journal.ContainmentCgroupReleaseProof.StopReceipt.LinuxProof
+	holder := authority.LinuxCgroupProcessIdentity{PID: helper.PID, Identity: helper.Identity}
+	if proof == nil || proof.Kind != authority.LinuxCgroupStopProofHelper || proof.HelperExit != nil ||
+		!proof.Issuer.Equal(holder) || !proof.Reaper.Equal(holder) {
+		return errors.New("release tombstone does not carry the held helper's own owner-loss stop proof")
+	}
+	return nil
+}
+
 func linuxV2ValidateStageReplayResponseState(fixture linuxV2NativeFixture, stage string, response linuxV2OwnerWitnessResponse, expectedRecovery string) error {
 	request := fixture.request
 	if response.Version != 1 || response.Case != "stage_replay" || response.Harness != request.Harness ||
@@ -2018,6 +2032,11 @@ func runProductionLinuxV2StageCrashReplayCase(
 			t.Fatal("same-RunKey release tombstone changed the exact normal Anchor StopLeaf-backed StopReceipt")
 		}
 	}
+	if helperStopProvenWithoutOwner {
+		if err := linuxV2RequireHelperIssuedReleaseStopProof(marker.Owners.Helper, final, finalFound); err != nil {
+			t.Fatalf("stage %s recovery did not carry the held helper's own stop proof: %v", stage, err)
+		}
+	}
 	witness.Journal = linuxV2StageReplayJournalSnapshot(final, finalFound)
 	if witness.Journal != nil && response.JournalUnproven {
 		witness.Journal.NoUnprovenContainment = false
@@ -2376,6 +2395,61 @@ func TestLinuxV2StageReplayHelperStopIsProven(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := linuxV2StageReplayHelperStopIsProven(test.stage, test.marker, test.journal); got != test.want {
 				t.Fatalf("helper-stop-proven predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2StageReplayHelperIssuedReleaseStopProof(t *testing.T) {
+	helper := linuxV2OwnerWitnessProcess{PID: 41, Identity: "linux:v2:helper"}
+	helperExit := authority.LinuxCgroupExitProof{Version: authority.LinuxCgroupIdentityVersion}
+	holder := authority.LinuxCgroupProcessIdentity{PID: helper.PID, Identity: helper.Identity}
+	anchor := authority.LinuxCgroupProcessIdentity{PID: 42, Identity: "linux:v2:anchor"}
+	mirror := authority.LinuxCgroupProcessIdentity{PID: 43, Identity: "linux:v2:mirror"}
+	ownProof := func() *authority.LinuxCgroupStopProof {
+		return &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+			Issuer: holder, Reaper: holder,
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		helper *linuxV2OwnerWitnessProcess
+		proof  *authority.LinuxCgroupStopProof
+		want   bool
+	}{
+		{name: "held helper's own released-gate proof", helper: &helper, proof: ownProof(), want: true},
+		{name: "anchor-reap mirror proof", helper: &helper, proof: &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofMirror,
+			Issuer: mirror, Reaper: anchor, HelperExit: &helperExit,
+		}},
+		{name: "mirror kind carrying the held helper identity", helper: &helper, proof: &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofMirror,
+			Issuer: holder, Reaper: anchor, HelperExit: &helperExit,
+		}},
+		{name: "helper-kind proof reaped by the anchor", helper: &helper, proof: &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+			Issuer: holder, Reaper: anchor,
+		}},
+		{name: "helper-kind proof for another issuer", helper: &helper, proof: &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+			Issuer: anchor, Reaper: holder,
+		}},
+		{name: "helper-kind proof carrying a helper exit", helper: &helper, proof: &authority.LinuxCgroupStopProof{
+			Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+			Issuer: holder, Reaper: holder, HelperExit: &helperExit,
+		}},
+		{name: "release tombstone without a stop proof", helper: &helper},
+		{name: "held helper identity missing", proof: ownProof()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file := linuxWitnessJournalFile{Journal: state.RunJournal{RunContainmentState: state.RunContainmentState{
+				ContainmentCgroupReleaseProof: &authority.SupervisorHandoffReleaseProof{
+					StopReceipt: &authority.StopReceipt{LinuxProof: test.proof},
+				},
+			}}}
+			if err := linuxV2RequireHelperIssuedReleaseStopProof(test.helper, file, true); (err == nil) != test.want {
+				t.Fatalf("helper-issued release stop proof error = %v, want ok=%t", err, test.want)
 			}
 		})
 	}

@@ -5489,5 +5489,7 @@ section, whose pointer sentence names this one.
       helper's exit within 30 s after the same-RunKey recovery retires it — no validator, bound or
       production byte changed. Pinned by `TestLinuxV2StageReplayHelperStopIsProven` (8 rows) with
       its inverted-predicate mutant red (record §4) and the WSL owner-loss-latch probes (record
-      §5). Delivered, pending the conductor's Bind: the Bind runs `claude_containment` once and
+      §5); its fix round r1 pins the recovered tombstone at the same two stages to the held
+      helper's own released-gate proof (`linuxV2RequireHelperIssuedReleaseStopProof`, its own
+      8-row mutant-red row, record §3/§4). Delivered, pending the conductor's Bind: the Bind runs `claude_containment` once and
       records the next stop verbatim, or green.

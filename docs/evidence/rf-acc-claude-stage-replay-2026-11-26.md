@@ -13,10 +13,10 @@ final bytes.
 
 ## 1. Delivered files and digests
 
-| file | sha256 at the delivered bytes |
+| file | sha256 at the delivered r1 bytes |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `11616074bc08516038d79cca2346a2b93967d7283287ef962344fd6d06ac4939` |
-| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `54ad76943ca377afcd680c36760b075c20bdce3c4b027559ba2d0f23de0483f7` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `86002180c91244c1dd017a4a4498438affa07a6894f9d5372b7024e422c4b531` |
+| `docs/plans/2026-11-26-rf-acc-claude-stage-replay-plan.md` | `e42321733067dcfc5d476aee3cdda06c91f8192a5e4d79fe93853390ad50ca1b` |
 
 `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are deliberately not hashed anywhere. No production,
 validator, fixture-script or `pi/**` byte changed (§4).
@@ -40,10 +40,10 @@ witness output: --- FAIL: TestProductionLinuxV2StageCrashReplayMatrix/native_rel
 Which row, which helper, which process: the held row is the claude kind leg
 `native_release_claude` (`production_linux_v2_native_witness_test.go:195-233`; the `claude_containment`
 case set runs exactly this subtest, `linux-v2-native-acceptance.sh:2541-2547,3204-3207`). The pidfd
-is `marker.Owners.Helper` opened at `production_linux_v2_owner_cli_test.go:1933`
+is `marker.Owners.Helper` opened at `production_linux_v2_owner_cli_test.go:1947`
 (`linuxV2OpenStageOwnerPIDFD` re-verifies the exact creation identity across the open) — the
 `-linux-owner-helper-v2` process (pid 7168 in that run), **not** the released B target (pid 7182,
-captured live at `:1939-1962`; artifact `claude-stage-crash-replay-native-release.json` shows it as
+captured live at `:1953-1976`; artifact `claude-stage-crash-replay-native-release.json` shows it as
 `native_command_verified: true`, `pidfd_opened: true`, `exact_leaf_membership: true`,
 `provider_action_succeeded: false`). The same run's daemon StateDir inventory (raw rows 4517-4524;
 the `s owner-….sock 0` row is 4524) still lists the helper's recovery socket
@@ -97,15 +97,15 @@ Chain, all at the base revision:
    must be helper-issued with no helper exit (`:2628-2632`, `proof.Kind == helper`,
    `proof.HelperExit == nil`).
 5. **The fixture contradicts that at exactly the released-gate stages.** The post-kill wait
-   (`production_linux_v2_owner_cli_test.go:1972-1979`, the fixed bytes; the base anchor is
+   (`production_linux_v2_owner_cli_test.go:1989-1992`, the fixed bytes; the base anchor is
    `:1958-1964`, where the same 90 s wait fatals unconditionally) holds for
-   every stage in its helper list (`:1930-1932`). At the pre-release stages the same wait passes
+   every stage in its helper list (`:1944-1946`). At the pre-release stages the same wait passes
    because there the stop is unproven (no gate authorization, no authorized exec transition), so
    `stopOwned` errors and the helper self-kills — the guest history records exactly that
    (`docs/evidence/rf-acc-owner-loss-semantics-2026-11-25.md` §8/M12: the pre-release fresh-request
    leg observes the helper's owner-loss exit at 0.23 s in green runs). At `native_release` and
    `stop_receipt_durable` — the two stages whose durable boundary proves the released gate
-   (`linuxV2ValidateStageJournalBoundary:1554-1563` for `native_release`, `:1570-1574` for
+   (`linuxV2ValidateStageJournalBoundary:1525-1530` for `native_release`, `:1584-1587` for
    `stop_receipt_durable`) — the stop is proven, so the wait can never
    be satisfied. Contract candidate “the claude process tree outlives the owner” is excluded: no
    step of the owner-loss path is harness-specific, and the retained artifact binds the claude
@@ -128,27 +128,51 @@ alternative (make a proven-stop helper end itself) is recorded in the plan §3.3
   `linuxV2StageReplayHelperStopIsProven(stage, marker, journal)` (`:1162-1173`): `native_release`
   with the held marker's `released` state, `stop_receipt_durable` with the durable receipt — the
   two shapes the stage-boundary validator has already validated exactly
-  (`linuxV2ValidateStageJournalBoundary`, `:1495-1596`).
+  (`linuxV2ValidateStageJournalBoundary`, `:1509-1610`).
 - The crash-replay runner keeps the 90 s pre-recovery wait for every helper stage (so a slow
   unproven stop is waited out before the recovery starts, and no new race is introduced), but fails
-  on it only when the stage's stop is *not* proven (`:1972-1979`).
-- At the proven stages the runner then requires the helper's exit within 30 s after the same-RunKey
-  recovery (`:2050-2055`), which the recovery's `ReleaseAfterClear` + retire guarantees
-  (`app/linux_owner_recovery_linux.go:1381-1388`); a helper that outlives the whole leg still reds.
+  on it only when the stage's stop is *not* proven (`:1989-1992`).
+- Fix round r1 (review finding STD-A01): a second pure predicate,
+  `linuxV2RequireHelperIssuedReleaseStopProof(helper, file, found)` (`:1175-1187`), is consulted at
+  the same two proven stages right after the journal validator (`:2035-2039`): the recovered
+  release tombstone's `StopReceipt.LinuxProof` must be `Kind == helper` with the held helper as
+  both `Issuer` and `Reaper` and no `HelperExit` — the helper's own released-gate stop
+  (`platform/helper_v2_stop.go:985-1000` builds exactly that proof). An anchor-reap mirror proof
+  (`Kind == mirror`, a distinct mirror identity as `Issuer`, the anchor as `Reaper`, a set
+  `HelperExit`; `platform/helper_v2_stop.go:182-192`, `app/linux_owner_recovery_linux.go:1117-1125`)
+  is rejected. Before r1 this provenance was unpinned at `native_release` (the shared released
+  branch of `linuxV2ValidateStageReplayJournal`, `:1341-1344` at the delivered bytes, checks only
+  the five physical stop booleans), while `stop_receipt_durable` already chained the final receipt
+  to the helper's live Status StopEvidence through the receipt-equality block (`:2027-2034`,
+  `authority/supervisor.go:716-725` compares `LinuxProof` including `Kind`); the r1 check makes the
+  provenance explicit and uniform at both stages. The daemon-crash witness keeps owning the
+  separate "helper survives the daemon SIGKILL" property
+  (`production_linux_v2_native_witness_test.go:2629-2632`).
+- At the proven stages the runner keeps its post-recovery helper-exit poll within 30 s
+  (`:2069-2073`). It is defence-in-depth, not the leg's first detector (review finding STD-A02
+  correction): the recovery only answers `released` after `anchor.RetireHelper` observed the
+  helper's pidfd exit inside the same 30 s anchor bound (`platform/anchor_types.go:21-25`,
+  `platform/helper_v2_recovery.go:541-550`), and a recovery that cannot retire the helper exits
+  non-zero, which `requireLinuxV2RecoveryExitStatus` fatals on before the poll runs. The poll's own
+  sensitivity is exact: `linuxV2WaitPIDFDExited` returns any non-timeout poll error verbatim
+  (`production_linux_v2_native_witness_test.go:2600-2604`), so only its bounded-wait sentinel means
+  "helper still live".
 - No validator, bound, production, harness or fixture-script change: the response validator
   (`linuxV2ValidateStageReplayResponse` `:1144-1150`, `linuxV2ValidateStageReplayResponseState`
-  `:1175-1309`), the journal tombstone validator (`linuxV2ValidateStageReplayJournal`
-  `:1311-1417`), the post-recovery target-pidfd wait (`:2041-2049`) and the leaf checks stay
-  byte-identical.
+  `:1189-1323`), the journal tombstone validator (`linuxV2ValidateStageReplayJournal`
+  `:1325-1431`), the post-recovery target-pidfd wait (`:2060-2067`) and the leaf checks stay
+  byte-identical; the r1 predicate and its call site are additions outside them.
 
 ## 4. Red-first and mutant rows
 
-The new branch is pinned by the row `TestLinuxV2StageReplayHelperStopIsProven` — `:2352-2382`,
+The tolerance branch is pinned by the row `TestLinuxV2StageReplayHelperStopIsProven` — `:2371-2401`
+at the delivered r1 bytes,
 8 rows: `released native_release
 hold` and `stop-receipt durable hold` positive; the not-released/unknown marker, the receipt-less
 authority, the authority-less durable hold, and both pre-release shapes negative — and reddens
 when the `native_release` term is inverted. Mutant (scratch overlay, never written into the
-tree; `go test -overlay=… -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/`, WSL):
+tree; `go test -overlay=… -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/`, WSL), at the
+implement-stage bytes:
 the scratch copy `mutant-owner-cli.go` (a copy of the tree file, so its line numbers match) with
 `:1167` changed from
 `return marker.NativeReleaseState == "released"` to
@@ -168,7 +192,67 @@ FAIL
 MUTANT-EXIT=1
 ```
 
-The delivered bytes pass the same row (`ok e2e`, 8/8 subtests, §6).
+Fix round r1 re-ran that same inversion against the delivered r1 bytes (scratch
+`mutant-r1-predicate.go`, sha256 `fe9ffcbb22fcd070fb3697086e9bed94cceacd02ecf266315ada2d63eada4fa2`;
+overlay `overlay-r1-predicate.json`, sha256
+`ebb175bd9992e312dcb8758155dc83131fe1a5725836769baf00d73eadd4f5bc`; WSL): the same three rows red,
+exit non-zero, with its `t.Fatalf` line at `:2397` for the delivered bytes:
+
+```
+=== RUN   TestLinuxV2StageReplayHelperStopIsProven
+=== RUN   TestLinuxV2StageReplayHelperStopIsProven/released_native_release_hold
+    production_linux_v2_owner_cli_test.go:2397: helper-stop-proven predicate = false, want true
+=== RUN   TestLinuxV2StageReplayHelperStopIsProven/not-released_native_release_hold
+    production_linux_v2_owner_cli_test.go:2397: helper-stop-proven predicate = true, want false
+=== RUN   TestLinuxV2StageReplayHelperStopIsProven/unknown_native_release_hold
+    production_linux_v2_owner_cli_test.go:2397: helper-stop-proven predicate = true, want false
+--- FAIL: TestLinuxV2StageReplayHelperStopIsProven (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/released_native_release_hold (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/not-released_native_release_hold (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperStopIsProven/unknown_native_release_hold (0.00s)
+FAIL
+FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.024s
+FAIL
+```
+
+The r1 proof-provenance pin is its own row, `TestLinuxV2StageReplayHelperIssuedReleaseStopProof` —
+`:2403-2456`, 8 rows: the held helper's own released-gate proof positive; an anchor-reap mirror
+proof, a mirror kind carrying the held helper identity, a helper-kind proof reaped by the anchor,
+a helper-kind proof for another issuer, a helper-kind proof carrying a helper exit, a release
+tombstone without a stop proof, and a missing held-helper identity negative. Mutant (scratch
+`mutant-r1-lf.go`, sha256 `3838b06faf7163d5abdf7308bd2664a3404dfca3676c37e3494895d90485ceed`;
+overlay `overlay-r1-lf.json`, sha256
+`c87b3fbbf035d9f22945f8236f60f480e1e8f362c77b3179b474a4dc787633b7`): the provenance terms (`Kind`,
+`Reaper`, `HelperExit`) dropped, leaving only the issuer equality — 3 rows red at `:2451`, exit
+non-zero:
+
+```
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/held_helper's_own_released-gate_proof
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/anchor-reap_mirror_proof
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/mirror_kind_carrying_the_held_helper_identity
+    production_linux_v2_owner_cli_test.go:2451: helper-issued release stop proof error = <nil>, want ok=false
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_reaped_by_the_anchor
+    production_linux_v2_owner_cli_test.go:2451: helper-issued release stop proof error = <nil>, want ok=false
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_for_another_issuer
+=== RUN   TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_carrying_a_helper_exit
+    production_linux_v2_owner_cli_test.go:2451: helper-issued release stop proof error = <nil>, want ok=false
+--- FAIL: TestLinuxV2StageReplayHelperIssuedReleaseStopProof (0.00s)
+    --- PASS: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/held_helper's_own_released-gate_proof (0.00s)
+    --- PASS: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/anchor-reap_mirror_proof (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/mirror_kind_carrying_the_held_helper_identity (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_reaped_by_the_anchor (0.00s)
+    --- PASS: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_for_another_issuer (0.00s)
+    --- FAIL: TestLinuxV2StageReplayHelperIssuedReleaseStopProof/helper-kind_proof_carrying_a_helper_exit (0.00s)
+FAIL
+FAIL	github.com/wxxb789/symmetry/daemon/e2e	0.069s
+FAIL
+```
+
+The delivered r1 bytes pass both rows (`ok e2e`, 8/8 subtests each, §6). The r1 assertion's
+end-to-end firing (a mirror-proof tombstone) needs the privileged guest, so its first end-to-end
+oracle is the dispatch-only CI job `linux-v2-native-acceptance` (non-root runner user), which runs
+this matrix leg.
 
 ## 5. Root-cause probes (scratch, WSL, never in the tree)
 
@@ -188,27 +272,30 @@ rebuilt after the host restart and re-run on the final bytes — `PROBE-EXIT=0`)
 
 ## 6. Local gates
 
-| Gate | Command (working directory `daemon/`) | Exit | Result |
+| Gate | Command (working directory `daemon/` unless noted) | Exit | Result |
 | --- | --- | --- | --- |
-| formatting | `gofmt -l .` (Windows) | 0 | empty list |
-| vet | `go vet ./...` (Windows, go1.27.4) and (WSL Ubuntu-24.04, go1.27.0) | 0 / 0 | no findings on both surfaces |
+| formatting | `gofmt -l .` (Windows and WSL, r1 bytes) | 0 / 0 | empty list on both surfaces |
+| vet | `go vet ./...` (Windows, go1.27.4; WSL Ubuntu-24.04, go1.27.0) | 0 / 0 | empty diagnostics on both surfaces |
 | predicate row | `go test -count=1 -v -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 0 | `ok e2e`, 8/8 subtests PASS |
-| mutant row | `go test -overlay=… -count=1 -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 1 | §4: 3 rows red, `MUTANT-EXIT=1` |
+| r1 provenance row | `go test -count=1 -v -run '^TestLinuxV2StageReplayHelperIssuedReleaseStopProof$' ./e2e/` (WSL) | 0 | `ok e2e`, 8/8 subtests PASS |
+| mutant row | predicate inversion, `go test -overlay=… -count=1 -run '^TestLinuxV2StageReplayHelperStopIsProven$' ./e2e/` (WSL) | 1 | §4: 3 rows red |
+| r1 mutant row | provenance terms dropped, `go test -overlay=… -count=1 -run '^TestLinuxV2StageReplayHelperIssuedReleaseStopProof$' ./e2e/` (WSL) | 1 | §4: 3 rows red |
 | probes | `go test -overlay=… -count=1 -v -run '^TestScratch…$' ./internal/platform/` (WSL) | 0 | §5: both PASS (0.03 s / 0.04 s) |
-| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 3 `no test files`, 0 FAIL, 4m04.5s |
-| full suite (WSL, unprivileged `accept`, CI umask) | `umask 022; go test -count=1 ./...` | 0 | 31 `ok`, 3 `no test files`, 0 FAIL, 5m11.8s |
-| full suite (WSL, `accept`, as-is umask 0002) | `go test -count=1 ./...` | 1 | 28 `ok`; `internal/linuxpreflight` 2 + `internal/platform` 8 + `internal/workspace` 21 tests fail — the same 31 at the base revision (row below) |
-| full suite (WSL, root) | `go test -count=1 ./...` | 1 | 30 `ok`; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) |
+| full suite (Windows) | `go test -count=1 ./...` | 0 | 27 `ok`, 3 `no test files`, 0 FAIL |
+| full suite (WSL, unprivileged `accept`, CI umask 022) | `umask 022; go test -count=1 ./...` as user `accept` | 0 | 31 `ok`, 3 `no test files`, 0 FAIL, 4m24.2s |
+| full suite (WSL, root) | `go test -count=1 ./...` | 1 | 30 `ok`; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) — identical to the implement-stage set |
+| full suite (WSL, `accept`, as-is umask 0002) | `go test -count=1 ./...` | 1 | implement-stage environment row, not re-run after the r1 test-only delta: 28 `ok`; `internal/linuxpreflight` 2 + `internal/platform` 8 + `internal/workspace` 21 tests fail |
 | base attribution | `go test -count=1 ./internal/linuxpreflight/ ./internal/platform/ ./internal/workspace/` in a pristine `git archive 78166f2e` tree (WSL, `accept`, as-is umask) | 1 | the identical 31 failing test names (set difference empty both ways) |
-| comment cap | `python …/comment-cap.py <worktree>` (official) + the uncommitted-diff scan | 0 / 0 | no added comment block over 2 lines |
+| anchors | `bash verify-anchors-r1.sh` (repo root, scratch) | 0 | every cited line range in this record and the plan re-read at the delivered bytes; all exact |
+| comment cap | `python comment-cap.py <scratch clone> 7111828b` (official) + the uncommitted-diff scan | 0 / 0 | no added comment block over 2 lines |
 | sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only` per changed doc | 0/0/0/1 | record/plan/TODO pass; `CLOSED-TODO` exit 1 identical at base (pre-existing quoted specimens; the added lines carry no host path) |
-| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 7111828b --head HEAD` (scratch clone, pinned `node_modules/jscpd` 4.3.0) | 0 | 5 changed file(s), 1775 scanned source(s), 1254 clone(s) in the corpus, 0 tolerated, none new; notices: the changed 5,046-line Go test file and `CLOSED-TODO.md` exceed the audited `--max-lines 5000` ceiling, reported, never silently skipped |
+| duplication (jscpd) | `python scripts/ci/jscpd-changed.py --base 7111828b --head HEAD` (scratch clone, pinned `node_modules/jscpd` 4.3.0) | 0 | 5 changed file(s), 1775 scanned source(s), 1254 clone(s) in the corpus, 0 tolerated, none new; notices: the changed 5,120-line Go test file and `CLOSED-TODO.md` exceed the audited `--max-lines 5000` ceiling, reported, never silently skipped |
 
-The full suites ran one at a time, never beside another harness. The `accept`/022 row is the
-CI-parity surface (the CI daemon job runs as the non-root runner user); the as-is `accept` and root
-rows are carried because they expose this host's own preconditions, and both failure sets are
-attributed: at the same umask the base revision fails the same 31 tests, and the root refusals are
-the documented root guard.
+The full suites ran one at a time, never beside another harness, and the formatting, vet, focused
+rows, mutants, suites and anchor sweep above were all run at the delivered r1 bytes of §1. The
+`accept`/022 row is the CI-parity surface (the CI daemon job runs as the non-root runner user); the
+root row re-ran on the r1 bytes with the identical refusal set, and the as-is-umask row is this
+host's implement-stage environment record, kept with its base attribution.
 
 ## 7. Residual risks and limits
 
@@ -226,17 +313,24 @@ the documented root guard.
 - `stop_receipt_durable`'s pre-recovery wait now tolerates a resident helper under the same
   predicate; the stage-replay matrix and the `stale_leaf` witness both exercise that boundary with
   their own recovered-evidence assertions unchanged.
-- The changed `production_linux_v2_owner_cli_test.go` is 5,046 lines, above the duplication gate's
+- Fix round r1: the two proven stages pin the recovered tombstone to the held helper's own
+  released-gate proof (§3, call site `:2035-2039`), so a product regression that routes them
+  through the anchor-reap mirror path reds the leg at that assertion instead of passing on the
+  physical booleans alone; the daemon-crash witness still owns the separate "helper survived the
+  daemon SIGKILL" property for its own case.
+- The r1 assertion's end-to-end firing (a mirror-proof tombstone) needs the privileged guest; its
+  decision layer is pinned by the r1 row and its mutant (§4), and the dispatch-only CI job
+  `linux-v2-native-acceptance` (non-root runner user) is the first end-to-end oracle.
+- The changed `production_linux_v2_owner_cli_test.go` is 5,120 lines, above the duplication gate's
   audited `--max-lines 5000` ceiling, so `jscpd-changed.py` reports it unscanned (§6): clones
   inside its added lines are not checked by that gate, before or after this change. Raising the
   audited ceiling is a separate gate change, outside this goal's owned files.
 
 ## 8. Close-out
 
-Delivered, pending the conductor's Bind. The closure row moves to
-`docs/archive/CLOSED-TODO.md` with the plan/record paths; `docs/TODO.md` drops the entry that
-carried this stop as its next stop. The last step ran the comment cap *before* this final
-re-measure: `daemon/e2e/production_linux_v2_owner_cli_test.go` re-hashes to
-`11616074bc08516038d79cca2346a2b93967d7283287ef962344fd6d06ac4939` and the plan to
-`54ad76943ca377afcd680c36760b075c20bdce3c4b027559ba2d0f23de0483f7`, both unchanged across every
-gate row above; the §2/§3/§4/§5 anchors were re-read at these bytes.
+Delivered, pending the conductor's Bind: the implement round plus fix round r1 (review findings
+STD-A01/STD-A02, §3/§4/§7), with the r1 rows and mutants in §4 at the delivered bytes of §1. The
+closure row in `docs/archive/CLOSED-TODO.md` carries the plan/record paths; `docs/TODO.md` dropped
+the entry that carried this stop as its next stop. The last step ran the comment cap *before* the
+final re-measure: both §1 digests were re-read at the delivered bytes (§1 is their single source)
+and are unchanged across every gate row above; the §2/§3/§4/§5 anchors were re-read at these bytes.
