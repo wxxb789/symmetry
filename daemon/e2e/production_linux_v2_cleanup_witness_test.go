@@ -40,6 +40,9 @@ const (
 	linuxV2CleanupWitnessStateDir          = "/var/lib/symmetry-v2"
 	linuxV2CleanupWitnessEvidenceFile      = "TestProductionLinuxV2CloneCleanupAuthenticatedScratch.json"
 	linuxV2CleanupWitnessEvidenceLabel     = "INSTALLED SYNTHETIC-GOAL CLEANUP: REAL V2 PHYSICAL STOP + OPAQUE LEAF RELEASE + STORE/AUTHENTICATED ANCHOR/ROOT; TEST-LOCAL ARTIFACT DELIVERY ONLY"
+	// linuxV2CleanupWorkerShell is the POSIX shell the controlled B worker runs; the released
+	// image is its resolved path, because A's native-image pin opens every component O_NOFOLLOW.
+	linuxV2CleanupWorkerShell = "/bin/sh"
 )
 
 type linuxV2CleanupWitnessDocument struct {
@@ -466,8 +469,12 @@ exit 0
 			}
 		}
 	})
+	workerProgram, err := linuxV2CleanupApprovedWorkerProgram(linuxV2CleanupWorkerShell)
+	if err != nil {
+		t.Fatalf("resolve the controlled B worker shell for the Linux v2 native-image pin: %v", err)
+	}
 	process, startErr := execution.NewRunner().Start(ctx, execution.Invocation{
-		Program: "/bin/sh", Args: []string{"-c", command, "linux-v2-cleanup-worker"},
+		Program: workerProgram, Args: []string{"-c", command, "linux-v2-cleanup-worker"},
 		Dir: prepared.Path, Env: childEnvironment,
 		InitialLeaseDeadlineAt: leaseExpiresAt, InitialLeaseSequence: 1,
 		LinuxV2Required: true,
@@ -1483,6 +1490,25 @@ func linuxV2CleanupCommitEnvironment() []string {
 		"GIT_COMMITTER_EMAIL=synthetic-cleanup@example.invalid",
 		"GIT_COMMITTER_DATE=946684800 +0000",
 	}
+}
+
+func linuxV2CleanupApprovedWorkerProgram(shell string) (string, error) {
+	if !filepath.IsAbs(shell) || filepath.Clean(shell) != shell || shell == "/" {
+		return "", fmt.Errorf("controlled B worker shell %q is not a canonical absolute path", shell)
+	}
+	resolved, err := filepath.EvalSymlinks(shell)
+	if err != nil {
+		return "", fmt.Errorf("resolve controlled B worker shell %q through its symlinks: %w", shell, err)
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("inspect resolved controlled B worker image %q: %w", resolved, err)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 || info.Mode().Perm()&0o022 != 0 ||
+		info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return "", fmt.Errorf("resolved controlled B worker image %q is not a plain executable file: mode=%v", resolved, info.Mode())
+	}
+	return resolved, nil
 }
 
 func linuxV2CleanupChildEnvironment(

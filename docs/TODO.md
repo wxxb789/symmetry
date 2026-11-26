@@ -2184,18 +2184,14 @@ branch `refactor/rf-ci-owner-request-key-check`, base `8453da12`); its text is i
       §7.5); building that command needs its own ruling (which
       authority authorizes deletion and what evidence the disposition records).
 
-- [ ] Two retargeted case sets have an additional pre-existing stop of their own (2026-11-24, same
+- [ ] One retargeted case set has an additional pre-existing stop of its own (2026-11-24, same
       goal; pre-retarget baseline = the burndown's literal all-14 run `45431551609`, §3.16 of its
       record; burndown entries above): `shared` aborts in its owner-leg
       scratch group (`daemon/native/linux-gate/**`, three product-test stops) before any witness
-      runs, and `synthetic_goal_cleanup` re-observed on 2026-11-25 (credentialed `main` run
-      `45573253632`) stops in the same release class as `migration`'s arm:
-      `production_linux_v2_cleanup_witness_test.go:499: start controlled B Git worker through the
-      real Linux v2 launcher/anchor/helper: resume process "/bin/sh": one-use Linux v2 RELEASE
-      result is unresolved: Linux owner helper rejected operation (release_outcome_unknown)` (the
-      earlier `Linux v2 native release requires an App admission check` stop of run `45402706492`
-      no longer reproduces). Both case sets stay product-side and tracked; their pi rows stay
-      unreadable while those stops remain — the two pre-clone-guard legs are residuals behind the
+      runs. The `synthetic_goal_cleanup` half moved to `docs/archive/CLOSED-TODO.md` under
+      `## rf-acc-synthetic-cleanup-release: the controlled B worker's one-use RELEASE resolves
+      again (2026-11-26)`. The case set stays product-side and tracked; its pi rows stay
+      unreadable while that stop remains — the two pre-clone-guard legs are residuals behind the
       AppArmor-userns entry above (follow-up goal `rf-acc-apparmor-userns-profile`), the
       `clone_cleanup_linux_test.go:259` parent-death stop closed 2026-11-25; see
       `docs/archive/CLOSED-TODO.md` under `## rf-acc-clone-cleanup-parent-death` (the clone reserve
@@ -2255,3 +2251,39 @@ acceptance met) (goal `rf-acc-shared-journal-release`, branch
 
 The pi `provider_action` leg's clone-reserve residual this goal unmasks stays under
 `## rf-acc-containment-goal-admission: residuals (2026-11-26)`.
+
+## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)
+
+The conductor's Bind (run `45791682543` on `90157ff4`, one `synthetic_goal_cleanup` run,
+`total_count=1`) confirms the bound fix: the `:499 … release_outcome_unknown; stage=none` stop is
+gone and the worker is released as `/usr/bin/dash`. The re-Bind on the final comment-stripped bytes
+(Bind 2, run `45803728792` on `5f744370`, one run, `total_count=1`) reproduces the identical stop,
+so the acceptance stays bound on the final bytes (record §Bind 2). The next stop and this goal's
+residual follow.
+
+- [ ] The next stop is the labelled clone_checkout leg (2026-11-26, new goal
+      `rf-acc-synthetic-cleanup-seed`, gated on PR #302; identical first failing line in the
+      re-Bind, run `45803728792` on `5f744370`): first failing line, verbatim:
+      `production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the
+      real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2
+      RELEASE result is unresolved: Linux owner helper release outcome is unresolved
+      (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
+      guest_stage=seed errno=13)`. The set is not green: `Case set synthetic_goal_cleanup exited
+      1`; the seven AppArmor rows that ran are green; the export refused
+      (`pi durability witness is unavailable: synthetic-goal-cleanup.json`), so no manifest and no
+      `linux-v2-native-evidence-*` artifact exists. Owner: conductor.
+
+- [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
+      `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
+      (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) returns unlabelled refusals,
+      so `linuxOwnerHelperV2ReleaseErrorDetailFor`
+      (`daemon/internal/platform/helper_v2_protocol.go:591`) renders `stage=none` and a new leg
+      whose release image is not symlink-free would stop with the same cryptic class. The refusal
+      is correct and load-bearing; the witness's own resolution check refuses a non-canonical image
+      before the release, and the pin probe
+      (`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go`) pins the pin's refusal
+      shapes. A labelling change lands at the `PreparedGate.Release` call site
+      (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:928-932`), which the pin probe
+      does not exercise (it calls `pinNativeImage` directly), so it needs its own
+      `PreparedGate.Release`-level row; labelling is a production change (helper detail vocabulary)
+      needing its own ruling (PR #302 round-1 ruling V1, 2026-11-26). Owner: conductor.
