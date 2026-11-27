@@ -483,11 +483,17 @@ def normalise_case_arm(head: str) -> str:
     return candidate
 
 
-def parse_case_arms(lines: list[str]) -> tuple[dict[str, str], list[str]]:
-    arms: dict[str, str] = {}
-    unclassified: list[str] = []
+CASE_ARM_NAME = re.compile(r"[A-Za-z0-9_]+(?:\|[A-Za-z0-9_]+)*\Z")
+CASE_ARM_GLOB = frozenset("*?[]{}")
+CASE_ARM_REJECTION = re.compile(r"fail\b")
+
+
+def parse_case_arms(lines: list[str]) -> tuple[dict[str, str], str | None, list[str]]:
+    records: list[tuple[str, str, str]] = []
+    failures: list[str] = []
     pattern = None
     current: list[str] = []
+    head_line = ""
     for line in lines:
         stripped = line.strip()
         if pattern is None:
@@ -495,56 +501,80 @@ def parse_case_arms(lines: list[str]) -> tuple[dict[str, str], list[str]]:
                 break
             head, separator, tail = stripped.partition(")")
             candidate = normalise_case_arm(head) if separator else ""
-            if not re.fullmatch(r"[A-Za-z0-9_|*]+", candidate):
+            if not separator or not (
+                CASE_ARM_NAME.fullmatch(candidate)
+                or any(char in CASE_ARM_GLOB for char in candidate)
+            ):
                 if stripped:
-                    unclassified.append(stripped)
+                    failures.append(
+                        f"the case-set arm parser could not classify this line: {stripped}"
+                    )
                 continue
+            head_line = stripped
             pattern, current = candidate, [tail.strip()]
         else:
             current.append(stripped)
         if current[-1].endswith(";;"):
-            arms[pattern] = "\n".join(current)
+            records.append((pattern, head_line, "\n".join(current)))
             pattern = None
-    return arms, unclassified
+    arms: dict[str, str] = {}
+    default: str | None = None
+    for index, (candidate, verbatim, body) in enumerate(records):
+        if CASE_ARM_NAME.fullmatch(candidate):
+            arms[candidate] = body
+            continue
+        # A glob arm is the shell's default. Anywhere but last it shadows the arms below it and
+        # silently accepts their input, leaving this guard weaker than the printed case-set list.
+        if index != len(records) - 1:
+            failures.append(
+                "a case-set arm whose pattern is not a plain case-set name must be the block's "
+                f"final arm: {verbatim}"
+            )
+            continue
+        default = body
+    return arms, default, failures
 
 
-def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
+def bash_case_arms(text: str, function: str, header: str) -> tuple[dict[str, str], str | None]:
     lines = text[text.index(f"{function}() {{") :].splitlines()
     index = next(i for i, line in enumerate(lines) if line.strip() == header)
-    arms, _ = parse_case_arms(lines[index + 1 :])
-    return arms
+    arms, default, _ = parse_case_arms(lines[index + 1 :])
+    return arms, default
 
 
 CASE_SET_SUBJECT = 'case "$fixture_case_set" in'
 
 
-def acceptance_dispatch_arms(text: str) -> dict[str, str]:
+def acceptance_dispatch_arms(text: str) -> tuple[dict[str, str], str | None, list[str]]:
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if line.strip() != CASE_SET_SUBJECT:
             continue
-        arms, _ = parse_case_arms(lines[index + 1 :])
+        arms, default, failures = parse_case_arms(lines[index + 1 :])
         if any("run_native_owner_witness" in body for body in arms.values()):
-            return arms
+            return arms, default, failures
     raise AssertionError("the acceptance script no longer carries a case-set dispatch block")
 
 
-def acceptance_case_set_arms(source: str) -> tuple[dict[str, str], list[str]]:
+def acceptance_case_set_arms(source: str) -> tuple[dict[str, str], list[str], list[str]]:
     arms: dict[str, str] = {}
-    unclassified: list[str] = []
+    defaults: list[str] = []
+    failures: list[str] = []
     lines = source.splitlines()
     for index, line in enumerate(lines):
         if line.strip() != CASE_SET_SUBJECT:
             continue
-        block_arms, block_unclassified = parse_case_arms(lines[index + 1 :])
+        block_arms, block_default, block_failures = parse_case_arms(lines[index + 1 :])
         for pattern, body in block_arms.items():
             arms.setdefault(pattern, body)
-        unclassified.extend(block_unclassified)
-    return arms, unclassified
+        if block_default is not None:
+            defaults.append(block_default)
+        failures.extend(block_failures)
+    return arms, defaults, failures
 
 
 def case_set_arm_names(arms: dict[str, str]) -> set[str]:
-    return {name for pattern in arms for name in pattern.split("|") if name != "*"}
+    return {name for pattern in arms for name in pattern.split("|")}
 
 
 def acceptance_case_set_allowlist(source: str) -> tuple[str, ...]:
@@ -570,7 +600,7 @@ def acceptance_case_set_failures(text: str, exporter) -> list[str]:
     targets = [target for allowlist in exporter.MANUAL_CASE_SET_FILES.values() for target in allowlist]
     if len(targets) != len(set(targets)):
         failures.append("case-set witness allowlists are not disjoint")
-    arms = acceptance_dispatch_arms(text)
+    arms, _, _ = acceptance_dispatch_arms(text)
     if {name for pattern in arms for name in pattern.split("|")} != case_sets:
         failures.append("the dispatch arms and the case-set allowlist diverged")
     # The mount refusal retains a claim-only RunJournal no product path retires; its leg must
@@ -2108,11 +2138,11 @@ class ExporterTest(unittest.TestCase):
             acceptance_case_set_failures(ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), load_exporter()),
             [],
         )
-        arms = bash_case_arms(
+        arms, default = bash_case_arms(
             ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), "export_native_evidence", 'case "$fixture_case_set" in'
         )
-        self.assertEqual(set(arms), {"codex_containment", "claude_containment", "*"})
-        self.assertIn("native_kind=pi", arms["*"])
+        self.assertEqual(set(arms), {"codex_containment", "claude_containment"})
+        self.assertIn("native_kind=pi", default)
 
     def test_mutations_dropping_the_mount_case_set_or_rejoining_shared_redden_the_case_set_pins(self) -> None:
         exporter = load_exporter()
@@ -2719,7 +2749,8 @@ CREDENTIAL_GATED_FIXTURE_VARIABLES = (
 
 
 def shared_arm_harness(source: str) -> str:
-    arm = acceptance_dispatch_arms(source)["shared"]
+    arms, _, _ = acceptance_dispatch_arms(source)
+    arm = arms["shared"]
     preamble = [
         "set -Eeuo pipefail",
         "fixture_case_set=shared",
@@ -2870,19 +2901,19 @@ def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[
     if not allowlist:
         return ["the acceptance script no longer carries one case-set allowlist"]
     failures = []
-    dispatched = case_set_arm_names(acceptance_dispatch_arms(source))
+    dispatch_arms, _, _ = acceptance_dispatch_arms(source)
+    dispatched = case_set_arm_names(dispatch_arms)
     if set(allowlist) != dispatched:
         failures.append("the case-set allowlist and the script's own dispatch arms diverged")
-    admitted_arms, unclassified = acceptance_case_set_arms(source)
+    admitted_arms, admitted_defaults, arm_failures = acceptance_case_set_arms(source)
     admitted = case_set_arm_names(admitted_arms)
     if dispatched != admitted:
         failures.append(
             "a case-set arm outside the dispatch block admits a set the dispatcher does not run"
         )
-    failures.extend(
-        f"the case-set arm parser could not classify this line: {line}"
-        for line in unclassified
-    )
+    if sum(bool(CASE_ARM_REJECTION.search(body)) for body in admitted_defaults) != 1:
+        failures.append("the parsed case blocks must carry exactly one rejecting default arm")
+    failures.extend(arm_failures)
     if set(allowlist) != set(workflow_case_sets(workflow)):
         failures.append("the case-set allowlist and the workflow case-set matrix diverged")
     containment = {name.replace("_", "-") for name in acceptance_containment_case_sets(source)}
@@ -3202,6 +3233,19 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
                 workflow,
                 ('the case-set arm parser could not classify this line: ("review_probe") ;;',),
+            ),
+            (
+                "allowlist-wildcard-shadow-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  (*) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm whose pattern is not a plain case-set name must be the "
+                    "block's final arm: (*) ;;",
+                ),
             ),
             (
                 "workflow-extra-set",

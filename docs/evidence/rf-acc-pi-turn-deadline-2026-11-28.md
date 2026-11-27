@@ -13,7 +13,7 @@ Plan: `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md`. Shape reference:
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `a971ab561de05de300142f7cffab23d5642de5da562dfb6fd5572eaf8696c0ec` | The `shared` case set stages the authenticated Pi legs' task text into the fixed B home's Pi agent directory and installs it under the existing private-file discipline; the same home writer sets `defaultThinkingLevel` to `off` for `shared` and keeps the pre-r1 `minimal` for every other Pi case set (round 2, R29). |
-| `scripts/ci/test-linux-v2-evidence.py` | `136aafd0651a39aa152ef0bd2dbc69f568cc4e4de95334123d4194514e973f7c` | `parse_case_arms` normalises each arm's head — surrounding whitespace, an optional leading `(` or trailing `)` and any quoting — before matching it, so an ordinary Bash spelling such as `(review_probe) ;;` is recognised; and it now fails closed: a non-blank, non-`esac` line inside a `case "$fixture_case_set" in` block that still does not classify is reported as `the case-set arm parser could not classify this line: <verbatim>` rather than dropped, so an unenumerated spelling reddens the derivation loudly instead of silently shrinking every list (round 6, R52). `authenticated_pi_task_failures` derives its case-set list from the acceptance script's own allowlist (no hand-copied list) and runs the fixture's own guard, home-writer call and install block over every derived set: `shared`'s exact payload and `off` level, every other Pi case set's absent file, pre-r1 `minimal` level and absent install row, and the two containment sets' explicit exemption (no Pi home, no install row). One committed derivation test binds the derived list to the script's dispatch block, to every case-set arm the script carries in any `case "$fixture_case_set" in` block and to the CI workflow matrix; seventeen staging mutants and six case-set-list mutants each assert their own exact failure list. |
+| `scripts/ci/test-linux-v2-evidence.py` | `35680566c94474aec13136537017dac1707e729f9221a343a3eda3734901604f` | `parse_case_arms` normalises each arm's head — surrounding whitespace, an optional leading `(` or trailing `)` and any quoting — before matching it, so an ordinary Bash spelling such as `(review_probe) ;;` is recognised; and it now fails closed: a non-blank, non-`esac` line inside a `case "$fixture_case_set" in` block that still does not classify is reported as `the case-set arm parser could not classify this line: <verbatim>` rather than dropped, so an unenumerated spelling reddens the derivation loudly instead of silently shrinking every list (round 6, R52). Its arm map holds plain case-set names only: a glob-pattern arm is the shell's default and is accepted only as its block's final arm, so an inserted `(*) ;;` arm that would shadow the rejecting default is reported verbatim instead of silently overwriting the `*` entry, and the parsed case blocks must carry exactly one rejecting default arm (round 7, R54). `authenticated_pi_task_failures` derives its case-set list from the acceptance script's own allowlist (no hand-copied list) and runs the fixture's own guard, home-writer call and install block over every derived set: `shared`'s exact payload and `off` level, every other Pi case set's absent file, pre-r1 `minimal` level and absent install row, and the two containment sets' explicit exemption (no Pi home, no install row). One committed derivation test binds the derived list to the script's dispatch block, to every case-set arm the script carries in any `case "$fixture_case_set" in` block and to the CI workflow matrix; seventeen staging mutants and seven case-set-list mutants each assert their own exact failure list. |
 | `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `bf561a3adb9eaa9ec0bbb699487bdf08f6710328689dc0cfa24d144a1aa8ee68` | This increment's plan (fix r1: the thinking level, the decoder row, the guest-scoped task-text statement; round 2: the R28–R34 wording and scope; round 3: the derived pin, the explicit containment exemption and the 420 s bound label). |
 | `docs/TODO.md` | — (shared doc, cited by content) | Six `rf-acc-pi-turn-deadline: residuals` bullets: the credentialed re-dispatch, `stale_leaf`, the unobserved provider-free turns and holds, the decoder's `subject_hash` stop, the production carriers, and F1 (the unprojected provider `stopReason`). |
 
@@ -191,10 +191,11 @@ that are neither `codex_containment` nor `claude_containment` — `shared`,
 keep `minimal`, their pre-r1 value. The second B home, `CLONE_TEST_B_HOME`
 (`scripts/ci/linux-v2-native-acceptance.sh:538`), serves the clone/launcher scratch legs and stages
 no Pi home at all (`:721,989-993`), so the Pi staging home stays the single Pi staging site. One
-writer serves every pi case set; the placeholder-credential legs never reach the decoder, so the
-placeholder Bind's *observed* rows are unchanged by this increment — §7: 22 green event-gate rows
-in run 46046284991 and 24 in run 46049816624, with no authenticated row observed in either. That is
-not a claim about a credentialed Bind: the authenticated rows stay unobserved.
+writer serves every pi case set; the placeholder-credential legs never reach the decoder, and the
+two placeholder runs observed no authenticated row — §7: 22 green event-gate rows in run 46046284991
+and 24 in run 46049816624, no authenticated row observed in either. Those two runs are observations
+of their own subjects; this increment establishes no comparison between them. That is not a claim
+about a credentialed Bind: the authenticated rows stay unobserved.
 
 Recorded consequence, not hidden: the model is *told* the task by the fixture rather than inferring
 it from the Control goal. That is the relationship the WorkItem route had before `#303` and the one
@@ -208,7 +209,7 @@ text, so no leg asserts anything the fixture did not already admit.
   each. Decoder rows: the pre-fix profile's captured messages are rejected on the block shape
   (`[thinking, text]`), the delivered profile's message passes that gate, and the
   supplied-contract-values payload decodes to `candidate_completion` (§3.2).
-- Mutation rows over `authenticated_pi_task_failures` (seventeen staging mutations and six
+- Mutation rows over `authenticated_pi_task_failures` (seventeen staging mutations and seven
   case-set-list mutations, each asserted against the exact failure list it must produce; the
   pristine pair returns `[]`). The pin derives its case-set list from the acceptance script's own
   allowlist, so every mutant runs it over every allowlisted set and a leak into any of them is a
@@ -234,7 +235,7 @@ are verbatim rows:
 - `UNRUN` = `a case-set arm outside the dispatch block admits a set the dispatcher does not run`
 
 The multi-row `<set>` expectations are computed inside the test from the same two derived lists the
-pin uses; the derivation itself carries its own committed test and its six mutants below, so a
+pin uses; the derivation itself carries its own committed test and its seven mutants below, so a
 drifted or truncated list reddens there rather than silently shortening a mutant's expectation.
 
 | Mutation | Exact failure list |
@@ -257,7 +258,7 @@ drifted or truncated list reddens there rather than silently shortening a mutant
 | the Control fixture's `pi_provider_action` row renamed | `PROVIDER-ROW` |
 | the invocation's last argument dropped (argument count changed) | the fifteen `RC` rows in allowlist order |
 
-The six case-set-list mutants assert the derivation directly:
+The seven case-set-list mutants assert the derivation directly:
 
 | Mutation | Exact failure list |
 | --- | --- |
@@ -265,6 +266,7 @@ The six case-set-list mutants assert the derivation directly:
 | a standalone `  review_probe) ;;` arm inserted into the script's validation block before its rejecting `*)` arm | `UNRUN` alone |
 | a parenthesised `  (review_probe) ;;` arm inserted into the script's validation block before its rejecting `*)` arm | `UNRUN` alone |
 | a quoted parenthesised `  ("review_probe") ;;` arm inserted into the script's validation block before its rejecting `*)` arm | `the case-set arm parser could not classify this line: ("review_probe") ;;` alone |
+| an accepting glob arm `  (*) ;;` inserted into the script's validation block before its rejecting `*)` arm | `a case-set arm whose pattern is not a plain case-set name must be the block's final arm: (*) ;;` alone |
 | a name added to the CI workflow's `case_sets` matrix | `the case-set allowlist and the workflow case-set matrix diverged` |
 | the `native_containment_kind` arm removed for `codex_containment` | `the containment case sets and the writer's containment kinds diverged` |
 
@@ -297,10 +299,11 @@ of the staged file is the credentialed dispatch's row.
 
 The placeholder Bind runs the `shared` case set alone, with the ratified placeholder credential,
 and one gated leg, `pi_provider_action`, through `run_credential_gated_pi_provider_leg`
-(`scripts/ci/linux-v2-native-acceptance.sh:2613-2631`, the case name hard-coded at `:2615`); the two
-crash legs are only registered by `record_credential_gated_leg` (`:3303-3306`, declaration at
-`:2589`). It does not execute the pin: the pin is a local Python row that runs in the `daemon` job
-on the PR head (§8). What the Bind does establish, on the head it gated, is where `shared` stops.
+(`scripts/ci/linux-v2-native-acceptance.sh:2621-2640` of the delivered bytes, the case name
+hard-coded at `:2623`); the two crash legs are only registered by `record_credential_gated_leg`
+(`:3311-3314`, its declaration row at `:2597`). It does not execute the pin: the pin is a local
+Python row that runs in the `daemon` job on the PR head (§8). What the Bind does establish, on the
+head it gated, is where `shared` stops.
 
 Two scratch Binds ran; neither is the protected credentialed dispatch, and neither produced a green
 `shared` row:
@@ -359,7 +362,7 @@ image); the CI duplicates gate uses `HEAD^1` as its base, and the PR run's `cont
 out the synthetic merge `e81ed10c4b9000de1997e0a632fb5441bcc1b86b`, whose first parent is
 `3d377582`, logging five changed files (job 140689285159 of run 46053161751) — so the PR gate
 measures the five-path delta from the synthetic merge's main parent, not the four-path round-3 topic
-increment `f6dfea80..HEAD`.
+increment `f6dfea80..b048915d`.
 
 Range provenance, corrected in round 3: this increment's delta against the merged main tip is
 `3d377582..HEAD`, the five paths of §1 — the acceptance script and the test file (the fix) plus the
@@ -371,7 +374,7 @@ receipts were gated on their own heads, named in their own sections.
 | Command (working directory) | Exit | Result |
 | --- | --- | --- |
 | `bash -n scripts/ci/linux-v2-native-acceptance.sh` (repo root, WSL) | 0 | no output |
-| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 77 tests … OK` in 66.1 s (75 before round 3 added the derived-coverage test and the case-set-list mutation test; rounds 4 and 5 add no test method — they re-point the derivation and extend its mutant list) |
+| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 77 tests … OK` in 72.5 s (75 before round 3 added the derived-coverage test and the case-set-list mutation test; rounds 4–7 add no test method — they re-point the derivation and extend its mutant list) |
 | `python3 -B scripts/ci/test-linux-v2-owner-request-keys.py` (repo root, WSL) | 0 | `Ran 10 tests … OK` in 0.3 s |
 | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <plan, record, TODO>` (repo root) | 0 / 0 / 0 | all three changed docs pass root-only |
 | `python3 scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base <clone base commit> --head HEAD` | 0 | `1 changed record(s) pass the root-only check` |
@@ -430,6 +433,16 @@ round-4 §1 pointer and the §4 Bind-row qualifier) — so the fix-r5 receipt is
 file and the record. The acceptance script is byte-identical to the round-5 bytes (`a971ab56…`), the
 plan is unchanged from round 3 (`bf561a3adb9e…`), and the two measurement rows stay the round-2 ones
 named in the table. This round re-measured no arm.
+
+Fix r7 receipt (this round): the same code- and doc-scoped rows re-ran on the round-7 §1 bytes — the
+test file whose arm map now holds plain case-set names only, whose parser rejects any glob arm that
+is not its block's final arm and requires exactly one rejecting default arm across the parsed case
+blocks, carrying its seventh case-set-list mutant, and the record with the round-7 corrections (the
+§4 placeholder observation wording, the pinned round-3 range, the re-measured §7 line anchors and
+this receipt) — so the fix-r6 receipt is superseded for the test file and the record. The acceptance
+script is byte-identical to the round-5 bytes (`a971ab56…`), the plan is unchanged from round 3
+(`bf561a3adb9e…`), and the two measurement rows stay the round-2 ones named in the table. This round
+re-measured no arm.
 
 CI observation, not a gate of this increment: on the reviewed head `dd9da52f` the `compose` job
 (`.github/workflows/ci.yml:1793-1812`) failed in 41 s inside its smoke step, at the Control image's
