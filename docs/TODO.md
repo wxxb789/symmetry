@@ -2253,17 +2253,9 @@ gone and the worker is released as `/usr/bin/dash`. The re-Bind on the final com
 so the acceptance stays bound on the final bytes (record §Bind 2). The next stop and this goal's
 residual follow.
 
-- [ ] The next stop is the labelled clone_checkout leg (2026-11-26, new goal
-      `rf-acc-synthetic-cleanup-seed`, gated on PR #302; identical first failing line in the
-      re-Bind, run `45803728792` on `5f744370`): first failing line, verbatim:
-      `production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the
-      real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2
-      RELEASE result is unresolved: Linux owner helper release outcome is unresolved
-      (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
-      guest_stage=seed errno=13)`. The set is not green: `Case set synthetic_goal_cleanup exited
-      1`; the seven AppArmor rows that ran are green; the export refused
-      (`pi durability witness is unavailable: synthetic-goal-cleanup.json`), so no manifest and no
-      `linux-v2-native-evidence-*` artifact exists. Owner: conductor.
+The labelled `clone_checkout` stop from run `45803728792` on `5f744370` moved to
+[the seed fixture closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-seed-the-fixture-serves-the-seed-chain-to-b-2026-11-26).
+The conductor's re-Bind remains open under the seed residuals below.
 
 - [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
       `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
@@ -2312,6 +2304,45 @@ unmeasured) and the redacted-evidence export was refused
       env-gated production witness and the credentialed dispatch; a committed pin needs a seam
       that runs in CI — an env-gated probe test was ruled out because it would not run in CI
       either. Owner: conductor.
+
+## rf-acc-synthetic-cleanup-root-removal: residuals (2026-11-27)
+
+The seed residual closed: the conductor's re-Bind (Bind 2, run `45938637085` on `f3dbae66`) cleared
+the exact `:506 … guest_stage=seed errno=13` stop (0 occurrences of that frame in the 2,870-line
+log) and the witness reached the authenticated root cleanup after its durable Begin. The next
+failing line — `production_linux_v2_cleanup_witness_test.go:882: run exact root cleanup through the
+authenticated installed Anchor: Linux owner anchor returned no exact root clone-removal proof` —
+moved to
+[the root-removal closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-root-removal-the-authenticated-cleanup-requires-non-writable-b-created-entries-2026-11-27).
+The seed residual item and this goal's fix are recorded in
+[the root-removal evidence](evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.md).
+
+- [ ] Re-Bind the corrected PR head: #305 run `45956915653` was green on `dd20a485` only. Confirm
+      the prior `:882` root-proof stop remains absent and the fixed head reaches removal, A-side
+      cleanup, journal retirement and a passed export, or record the next failing line verbatim.
+      Owner: conductor.
+
+- [ ] The witness call site at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:574` is
+      exercised only inside the credentialed `synthetic_goal_cleanup` case set: deleting that line
+      reddens no locally runnable test (the predicates it calls are committed-tested). Oracle gap,
+      recorded in the evidence record §7; an env-gated probe was ruled out because it would not run
+      in CI either. Owner: conductor.
+
+- [ ] Oracle gap (§7): no fault fixture exercises the kernel `Fstat` error after the walk opens an
+      `O_PATH` component. The outer boundary in the credentialed witness at `:574` treats any walk
+      error as fatal before durable Begin or the Anchor call. The conductor ruled out adding a kernel
+      fault fixture for this round. Owner: conductor.
+
+- Production observation (decision note, 2026-11-27, goal `rf-acc-synthetic-cleanup-root-removal`):
+      an install-accepted clone root whose default ACL mask grants write produces a checkout whose
+      directories and files are group-writable, which the exact root-cleanup checks refuse. Today
+      that is fail-closed. The writable defaults remain on the production, daemon-service-workspace
+      and clone-test fixture roots. Shared cleanup does reach the clone-test root, but its targets
+      are provisioned before that root's writable default mask is installed (evidence §11). This
+      fix changes only the synthetic cleanup fixture. Candidates if the
+      conductor wants a production hardening: reject a writable default mask in the install
+      preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
+      checks ACL-aware. Evidence: record §2.3 and §11.
 
 ## rf-acc-pi-authentic-turn: stage-1 root cause and the pending ruling (2026-11-26)
 

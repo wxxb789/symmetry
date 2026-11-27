@@ -587,12 +587,19 @@ PY
 
 sudo install -d -o root -g root -m 0755 "$rootfs$OWNER_TEST_ROOT" "$rootfs$PRODUCTION_ROOT"
 sudo install -d -o root -g "$A_GID" -m 0751 "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT"
+if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
+  # The B clone bootstrap opens every seed ancestor O_RDONLY
+  # (clonebootstrap/filesystem_linux_amd64.go openReadOnlyAPathDirectory), so B needs read here.
+  sudo setfacl -m "u:$B_UID:r-x,m::r-x" "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT"
+fi
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$rootfs$SYNTHETIC_GOAL_CLEANUP_SEEDS"
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo setfacl -m "u:$B_UID:r-x,m::r-x,d:u:$B_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_SEEDS"
-sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" \
+# Inherited ACLs, not umask 077, govern the B bootstrap's Mkdirat(0770); mask out group write
+# so the binding/run/generation modes pass the exact root-cleanup checks.
+sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo install -d -o root -g "$A_GID" -m 2730 "$rootfs$OWNER_PID_REUSE_ROOT"
 sudo install -o root -g root -m 0555 "$build_stage/symmetry-ci-literal-pid-reuse-helper" \
@@ -1453,6 +1460,22 @@ if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
   if machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_ROOT/config.json"; then
     fail 'native B unexpectedly read the root-controlled synthetic cleanup config'
   fi
+  machine_run_as "$B_USER" "$B_USER" /usr/bin/bash -c 'test -r "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
+    fail 'native B cannot read the synthetic cleanup case root the clone seed path sits under'
+  machine_run_as "$B_USER" "$B_USER" /usr/bin/bash -c 'test -r "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_SEEDS" ||
+    fail 'native B cannot read the synthetic cleanup seed root'
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c '! test -w "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
+    fail 'native A unexpectedly gained write access to the root-controlled synthetic cleanup case root'
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "0:$A_GID:751" ]] ||
+    fail 'synthetic cleanup case root must stay root:A mode 0751'
+  expected_synthetic_cleanup_acl=$'user::rwx\nuser:'"$B_UID"$':r-x\ngroup::r-x\nmask::r-x\nother::--x'
+  [[ "$(sudo getfacl -cpn -- "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "$expected_synthetic_cleanup_acl" ]] ||
+    fail 'synthetic cleanup case root must have exactly the fixture B-read ACL'
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES")" == "$B_UID:$B_GID:750" ]] ||
+    fail 'synthetic cleanup clone root must stay B-owned mode 0750'
+  expected_synthetic_cleanup_clone_acl=$'user::rwx\nuser:'"$A_UID"$':r-x\ngroup::---\nmask::r-x\nother::---\ndefault:user::rwx\ndefault:user:'"$A_UID"$':r-x\ndefault:group::---\ndefault:mask::r-x\ndefault:other::---'
+  [[ "$(sudo getfacl -cpn -- "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES")" == "$expected_synthetic_cleanup_clone_acl" ]] ||
+    fail 'synthetic cleanup clone root must keep a non-writable default ACL mask so B-created binding/run/generation directories stay non-writable'
 fi
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   stage_config="$fixture_root/stage-replay/$hold_after/config.json"
