@@ -13,20 +13,22 @@ Windows rows on `go1.27.4 windows/amd64`.
 | --- | --- | --- |
 | `daemon/internal/app/linux_owner_witness_linux.go` | `3bf974a170e1fe237c2eebe1428719fac4467705c7c1dfe7ac9d3e1945006dcd` | `1b645c6e0120df260633346e3c2aa43d3c37264ad950a9685bfa824e96f78cfd` |
 | `daemon/internal/app/linux_owner_witness_linux_test.go` | `f8cdf9b5ff54f5713a157c19e4e805fb6186e1eeb3ee8d272aea39926e42d6a1` | `4aee0ec96c054bc902f313ad7864d893f9f1c44365dc053849f48e24635c5563` |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` | `e0c971dfbaf81ea66adf33c8a4e2af3cecb6692748fd1f9dc7c2b5195c728f75` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` | `d62606b97db63e62ddf286426fc8758977170d00a65c7c10039b4377ef3a0f53` |
 
-Every command and overlay mutant in §3, §4 and §6 executed against the delivered bytes above, in
-the working tree the conductor receives (no commit was made from this stage, `git status` shows
-only these three Go files plus the four docs paths). The plan and this record cannot carry their own
-digests; the scratch-clone receipt in §7 binds the seven-path revision it committed.
+Every command and overlay mutant in §3, §4 and §6 executed against the delivered bytes above. The
+apply stage re-delivered the e2e row's file (S1: the shared pre-recovery fixtures) and re-ran §4's
+mutants, §5's rows and §6/§7's gates on the post-S1 bytes; the earlier receipt for that one file
+(digest `e0c971dfbaf81ea66adf33c8a4e2af3cecb6692748fd1f9dc7c2b5195c728f75`) is PARTIAL and
+SUPERSEDED. The plan and this record cannot carry their own digests; the scratch-clone receipt in
+§7 binds the seven-path revision it committed, and no stage committed in the working tree.
 
 ## 2. Slice 1 — the early return and why the exit is terminal
 
 ### 2.1 The classification, verbatim
 
 `platform.LinuxOwnerAnchorClient.LookupHelper`
-(`daemon/internal/platform/linux_owner_anchor_linux.go:479-565`) returns a helper whose
-`Control` is non-nil only for the anchor's `attached` status (`:563-565`); for
+(`daemon/internal/platform/linux_owner_anchor_linux.go:479-576`) returns a helper whose
+`Control` is non-nil only for the anchor's `attached` status (`:575`); for
 `helper_exited` it returns `Control == nil` plus the exit proof and the two run pins (`:497-525`).
 The anchor serves `helper_exited` when `run.helperExit != nil`
 (`daemon/internal/platform/anchor_session.go:260,290-292`), and `run.helperExit` is written only by
@@ -128,12 +130,13 @@ tree; each mutant run's output was read from the guest's own scratch log and is 
 
 ### 4.1 What moved
 
-The call site (`daemon/e2e/production_linux_v2_owner_cli_test.go:2030-2036`) now makes one call
-into `linuxV2WaitStageReplayPreRecovery` (`:1202-1227`) with the predicate's value, the two pinned
+The call site (`daemon/e2e/production_linux_v2_owner_cli_test.go:2057-2062`) now makes one call
+into `linuxV2WaitStageReplayPreRecovery` (`:1207-1227`) with the predicate's value, the two pinned
 fds in a named-field `linuxV2StageReplayPreRecoveryPins`, and the two waiters
-(`linuxV2RequireTargetContainedBeforeRecovery`, `linuxV2WaitPIDFDExited`) whose local rows already
-exist (`TestLinuxV2OwnerLossSnapshotBeforeRecovery` local-replica subtests,
-`production_linux_v2_native_witness_test.go:2721`). Arms and texts are the pre-change ones:
+(`linuxV2RequireTargetContainedBeforeRecovery`, `linuxV2WaitPIDFDExited` at
+`production_linux_v2_native_witness_test.go:2721`) whose local rows already exist
+(`TestLinuxV2OwnerLossSnapshotBeforeRecovery` at `production_linux_v2_owner_cli_test.go:2790`,
+local-replica subtests `:2876-2897`). Arms and texts are the pre-change ones:
 
 | `snapshotRequired` / stage | Arm | Bound | Failure text (unchanged) |
 | --- | --- | --- | --- |
@@ -152,7 +155,7 @@ to the base texts.
 $ go test -count=1 -v -run '^TestLinuxV2StageReplayPreRecoveryWait' ./e2e
 --- PASS: TestLinuxV2StageReplayPreRecoveryWaitArms (0.00s)              (8 subtests)
 --- PASS: TestLinuxV2StageReplayPreRecoveryWaitFailurePropagates (0.00s)  (2 subtests)
-ok  	github.com/wxxb789/symmetry/daemon/e2e	0.016s
+ok  	github.com/wxxb789/symmetry/daemon/e2e	0.033s
 ```
 
 exit 0. `…WaitArms` computes `snapshotRequired` with the real predicate for each stage row and
@@ -162,15 +165,22 @@ not-released `native_release`, `helper_bound`, `launcher_bound`, `gate_bound`, `
 `checkout_ready`). `…WaitFailurePropagates` asserts both arms wrap their waiter's error
 (`errors.Is` on a sentinel) and that only the selected arm runs. Because the arbitration is one
 function with no branch left at the call site, a swapped, dropped or widened arm is a local failure;
-the named-field pins struct makes a positional fd transposition between the arms a compile error.
+the row asserts the fd identity and bound each arm receives, and the named-field `pins` literal
+requires the call site to name each fd, while a positional transposition there still compiles and
+stays the guest-only residue disclosed in the plan §3.
 
 ### 4.3 Mutants
 
 | Mutant | Overlay edit (`production_linux_v2_owner_cli_test.go` copy) | Result |
 | --- | --- | --- |
-| `m3_swap_arms` | the two arm bodies exchanged | RED, exit 1, 14 FAIL lines; `native_release` released row got `helper_exit` want `target_containment`, and every unproven row got `target_containment` |
-| `m4_drop_unproven_arm` | the unproven arm's wait deleted | RED, exit 1, 12 FAIL lines, 7 failing subtests; every unproven row got no arm |
-| `m5_widen_target_arm` | `case stage == "native_release"` → `case snapshotRequired` | RED, exit 1, 5 FAIL lines; the `stop_receipt_durable` row got `target_containment` want none |
+| `m3_swap_arms` | the two arm bodies exchanged | RED, exit 1, 9 failing subtests; the `native_release` released row got `helper_exit` want `target_containment`, every unproven row got `target_containment`, and both propagation subtests fail |
+| `m4_drop_unproven_arm` | the unproven arm's wait deleted | RED, exit 1, 7 failing subtests; every unproven row got no arm |
+| `m5_widen_target_arm` | `case stage == "native_release"` → `case snapshotRequired` | RED, exit 1, 1 failing subtest; the `stop_receipt_durable` row got `target_containment` want none |
+
+The apply stage rebuilt the three overlay copies from the post-S1 delivered bytes (copies and digests
+in the stage receipt; each re-applies the same overlay edit as its pre-S1 twin, with `m3` keeping
+the two-line hazard comment with the wait it documents, which the pre-S1 twin had dropped) and re-ran
+them here; the red rows above are those re-runs.
 
 ## 5. Assertion inventory — nothing weakened
 
@@ -181,11 +191,17 @@ the named-field pins struct makes a positional fd transposition between the arms
   (`…SnapshotPrecedesRecovery`, `…OwnerLossStage`, `…OwnerLossSummaryShape`) are untouched and pass.
 - Slice 2 keeps both arms, both bounds, both failure texts, the `helperPIDFD != nil` guard and the
   ordering of the calls; the predicate row (`TestLinuxV2StageReplayOwnerLossSnapshotRequired`, 13
-  rows) and the snapshot row (`TestLinuxV2OwnerLossSnapshotBeforeRecovery`, 16 rows + 3 local
-  pidfd replicas) are unmodified. No existing test was deleted, renamed or relaxed.
-- New assertions and their homes: the two app rows and the two e2e rows run in the `daemon` CI job
-  (`go test -count=1 -timeout 600s ./...`, `.github/workflows/ci.yml:1461`); the Go vet job runs
-  `go vet ./...` (`:992`). The conductor's Bind case sets `claude_containment` /
+  rows) keeps its values and assertions — the apply stage hoisted its two shared input literals into
+  `linuxV2PreRecoveryReleasedMarker`/`linuxV2PreRecoveryReceiptAuthority`, which `…WaitArms` now also
+  builds from, so the two rows cannot drift apart on that input — and the snapshot row
+  (`TestLinuxV2OwnerLossSnapshotBeforeRecovery`, 16 rows + 3 local pidfd replicas) is unmodified. No
+  existing test was deleted, renamed or relaxed.
+- New assertions and their homes: the two app rows and the two e2e rows are `//go:build linux &&
+  amd64`, so they run in `coverage-daemon` (`go test -count=1 -timeout 1200s
+  -coverprofile=coverage.out ./...`, `.github/workflows/ci.yml:682`, ubuntu) and the `daemon` job's
+  race pass (`go test -race -count=1 -timeout 600s -json ./...`, `:1063`, ubuntu), not in
+  `daemon-windows` (`:1461`, `windows-latest` at `:1402`); the Go vet job runs `go vet ./...`
+  (`:992`). The conductor's Bind case sets `claude_containment` /
   `codex_containment` execute the changed production arm through
   `TestProductionLinuxV2StageCrashReplayMatrix/<stage>`
   (`scripts/ci/linux-v2-native-acceptance.sh:2545,3223-3228`) and the extracted router function on
@@ -208,6 +224,8 @@ the named-field pins struct makes a positional fd transposition between the arms
 | WSL as root: `go test -count=1 -timeout 900s ./...` | 1 | 30 `ok`, 1 FAIL package; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) — the environment row of the established convention, not a code failure |
 | Host (Windows): `go vet ./...` | 0 | full module |
 | Host (Windows): `go test -count=1 -timeout 900s ./...` | 0 | 27 `ok`, 0 FAIL, 232 s wall |
+| WSL as user `accept`, `umask 022` (apply stage, post-S1 bytes): `gofmt -l` on the changed Go file (empty), `go vet ./...`, `go test -count=1 -timeout 900s ./...` | 0 | 31 `ok`, 0 FAIL, 222 s wall |
+| Host (Windows) (apply stage, post-S1 bytes): `go vet ./...`, `go test -count=1 -timeout 900s ./...` | 0 | 27 `ok`, 0 FAIL, 259 s wall (vet included) |
 
 The Windows run cannot compile the three changed files (`//go:build linux && amd64`); it is the
 standing head-wide regression check for the rest of the module and is attributed to CI for the
@@ -218,14 +236,31 @@ credentialed acceptance (§9).
 
 The three Go files, the plan, this record and the two TODO documents were committed in a scratch
 clone of the dispatch base (never in the worktree), and the three committed-blob gates ran against
-that commit; the PR-body receipt names the tested commit and its seven blobs, which this record
-cannot carry without changing the bytes it gates:
+that commit; the apply stage re-ran all three on the post-S1 seven-path revision (superseding the
+implement-stage receipt), and the stage receipt names the tested commit and its seven blobs, which
+this record cannot carry without changing the bytes it gates:
 
 | Command | Exit | Observation |
 | --- | ---: | --- |
-| `python -B scripts/ci/jscpd-changed.py --base d45e3298 --head HEAD` | 0 | 7 changed files, 0 tolerated and none new among the added lines (corpus counts in the PR-body receipt); the gate notices `daemon/e2e/production_linux_v2_owner_cli_test.go` and `docs/archive/CLOSED-TODO.md` are outside its scan scope, so clones inside them stay unchecked |
+| `python -B scripts/ci/jscpd-changed.py --base d45e3298 --head HEAD` | 0 | 7 changed files, 1794 scanned sources, 1245 clones in the corpus, 0 tolerated and none new among the added lines; the gate notices `daemon/e2e/production_linux_v2_owner_cli_test.go` and `docs/archive/CLOSED-TODO.md` are outside its scan scope, so clones inside them stay unchecked |
 | `python -B scripts/ci/check-record-cleanliness.py --base d45e3298 --head HEAD` | 0 | the changed record passes the root-only sanitizer check; an earlier revision of this record was refused for one guest-log path mention, which the delivered prose does not carry |
 | `python -B "$comment_cap" "$scratch_clone" d45e3298` | 0 | no added comment block exceeds the 2-line cap |
+
+The line anchors in this record and the plan were re-measured against the delivered bytes in the
+apply stage; the anchor targets' digests at that measurement:
+`daemon/internal/platform/linux_owner_anchor_linux.go` `1adb63e19df20bdc32db315762206402e5e2f5079b53faddfe8db802befbf331`,
+`daemon/internal/platform/anchor_session.go` `487cfcc104b6704dafe1ee7e604e2fd605f58a23d8d5376b65ebe1d9126e4e00`,
+`daemon/internal/platform/anchor_run.go` `eebec5a3b6ee26866b9a41b8230812cf25f7570c06c8e27d2efd92d6b5b4f112`,
+`daemon/internal/platform/helper_v2_recovery.go` `56c6cc8145cf273b79af6fcba55fee64ff25e7e0aa5b65f885e0288f9229b161`,
+`daemon/internal/platform/helper_v2_stop.go` `f8d5b77f706177418f3309f51dd61aecd78c2c61910903de5e7352cdb068ab87`,
+`daemon/internal/platform/helper_v2_server.go` `a00c6606f9da60b12322d93835f6d3f9d549cbce6b662dd5aefa1b8982c2da6b`,
+`daemon/internal/platform/helper_v2_protocol.go` `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75`,
+`daemon/internal/app/linux_owner_witness_linux.go` `1b645c6e0120df260633346e3c2aa43d3c37264ad950a9685bfa824e96f78cfd`,
+`daemon/internal/app/linux_owner_witness_linux_test.go` `4aee0ec96c054bc902f313ad7864d893f9f1c44365dc053849f48e24635c5563`,
+`daemon/e2e/production_linux_v2_owner_cli_test.go` `d62606b97db63e62ddf286426fc8758977170d00a65c7c10039b4377ef3a0f53`,
+`daemon/e2e/production_linux_v2_native_witness_test.go` `d988ca3bf8a0364f7d2f1c9aabe4cef14b53216e501a6002c49950e18d508abf`,
+`.github/workflows/ci.yml` `f3e29fab798f010fb256dd0a49a78711abe232d84b9fc843461aa0d092fc73f7`,
+`scripts/ci/linux-v2-native-acceptance.sh` `a7c453cb75958c218bd7a09dac4e56a1f749aef2f008e22886b23ac46307c360`.
 
 ## 8. Residuals
 

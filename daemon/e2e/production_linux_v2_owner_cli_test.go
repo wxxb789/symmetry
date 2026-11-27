@@ -2570,11 +2570,19 @@ func linuxV2RequireSameStoreJournalSnapshot(before, after map[state.RunKey]linux
 	return linuxV2RequireStoreJournalHistoryPreserved(before, after)
 }
 
-func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
-	released := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
-	receiptAuthority := state.RunJournal{RunContainmentState: state.RunContainmentState{
+func linuxV2PreRecoveryReleasedMarker() linuxV2OwnerWitnessStageMarker {
+	return linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
+}
+
+func linuxV2PreRecoveryReceiptAuthority() state.RunJournal {
+	return state.RunJournal{RunContainmentState: state.RunContainmentState{
 		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2, StopReceipt: &authority.StopReceipt{Version: authority.SupervisorVersionV2}},
 	}}
+}
+
+func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
+	released := linuxV2PreRecoveryReleasedMarker()
+	receiptAuthority := linuxV2PreRecoveryReceiptAuthority()
 	authorityWithoutReceipt := state.RunJournal{RunContainmentState: state.RunContainmentState{
 		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
 	}}
@@ -2608,10 +2616,8 @@ func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
 }
 
 func TestLinuxV2StageReplayPreRecoveryWaitArms(t *testing.T) {
-	released := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
-	receiptAuthority := state.RunJournal{RunContainmentState: state.RunContainmentState{
-		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2, StopReceipt: &authority.StopReceipt{Version: authority.SupervisorVersionV2}},
-	}}
+	released := linuxV2PreRecoveryReleasedMarker()
+	receiptAuthority := linuxV2PreRecoveryReceiptAuthority()
 	targetPIDFD, err := os.Open(os.DevNull)
 	if err != nil {
 		t.Fatalf("open pre-recovery wait target pin: %v", err)

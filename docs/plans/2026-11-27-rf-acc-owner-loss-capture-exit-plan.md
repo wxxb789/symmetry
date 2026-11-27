@@ -14,9 +14,10 @@ router row's shape, and what is out of scope.
   `linuxV2NativeWitnessOwnerLossStopWait = 40 * time.Second` (`:2860`) with
   `linuxV2NativeWitnessOwnerLossPollInterval = 250 * time.Millisecond` (`:2861`).
 - Terminal classification: `platform.LinuxOwnerAnchorClient.LookupHelper`
-  (`daemon/internal/platform/linux_owner_anchor_linux.go:479-525,563-565`) returns `Control == nil`
-  exactly on the anchor's `helper_exited` status (`daemon/internal/platform/anchor_session.go:265,291`),
-  i.e. `linuxOwnerAnchorRun.helperExit != nil`; the identity comes from the anchor's own run entry
+  (`daemon/internal/platform/linux_owner_anchor_linux.go:479-576`) returns `Control == nil` exactly
+  on the anchor's `helper_exited` status (`:497-525`; the `attached` return carrying `Control` is
+  `:575`), i.e. when `linuxOwnerAnchorRun.helperExit != nil`
+  (`daemon/internal/platform/anchor_session.go:260,291`); the identity comes from the anchor's own run entry
   for the exact grant (`anchor_session.go:247-250`), so the capture's `PID`/`Identity` equality
   against `reservation.Helper` is the exact-held check the grant cannot carry (no helper field in
   `platform.LinuxOwnerAnchorGrant`).
@@ -28,8 +29,8 @@ router row's shape, and what is out of scope.
   (`TestLinuxV2StageReplayOwnerLossSnapshotRequired`, `:2552-2588`) are already committed.
 - Existing local rows for the reused pieces: `linuxV2WaitPIDFDExited`
   (`production_linux_v2_native_witness_test.go:2721`) and
-  `linuxV2RequireTargetContainedBeforeRecovery` (`TestLinuxV2OwnerLossSnapshotBeforeRecovery`
-  local-replica subtests, `owner_cli_test.go:2734-2761`).
+  `linuxV2RequireTargetContainedBeforeRecovery` (`TestLinuxV2OwnerLossSnapshotBeforeRecovery`,
+  `production_linux_v2_owner_cli_test.go:2790`; local-replica subtests `:2876-2897`).
 
 ## 2. Slice 1 — the early return
 
@@ -63,7 +64,7 @@ router row's shape, and what is out of scope.
   only by `linuxOwnerAnchorRun.waitHelper` (`anchor_run.go:1304-1321`) after `linuxOwnerAnchorWaitPIDFD`
   proved the wait and reap of the exact creation identity; the anchor never clears it
   (`anchor_run.go` writes it once, `:1320`; `waitHelper` refuses an already-exited run `:1305`), and
-  `handleLookup` serves `attached` only while it is nil (`anchor_session.go:265-283`). A reaped
+  `handleLookup` serves `attached` only while it is nil (`anchor_session.go:261-274,295-309`). A reaped
   process cannot serve its endpoint again, and no code path recreates a helper for the same RunKey
   (`handleStartHelper` refuses an existing run; the run's `close` clears pins, not evidence).
 - Therefore, after the first `Control == nil` response, every later `LookupHelper` for the same
@@ -76,7 +77,7 @@ router row's shape, and what is out of scope.
 The row must measure the real `captureLinuxV2NativeWitnessOwnerLoss`, which reaches the anchor
 through `recovery.linuxV2OwnerForRecovery()`; a live anchor needs the installed A/B owner config, so
 no local row can construct one. Following the file's existing seam convention (the two variables at
-`:2979-2982`), production gains one unexported interface and one variable whose default is the real
+`:2999-3000`), production gains one unexported interface and one variable whose default is the real
 client:
 
 ```go
@@ -111,10 +112,10 @@ func linuxV2WaitStageReplayPreRecovery(stage string, snapshotRequired bool, pins
   pre-change fatal texts (`A helper did not exit with owner loss after the stage-replay kill: …`,
   `stage %s: the native target was not contained before recovery: …`), emitted through a single
   `t.Fatal(err)` at the call site.
-- The named-field `pins` struct makes a positional fd transposition between the arms a compile
-  error rather than a guest-only failure. Remaining guest-only residue: the one call itself and the
-  two passed function names; both waiters are locally pinned already (§1), and the row pins which
-  fd/bound each waiter receives.
+- The named-field `pins` literal requires the call site to name each fd, and the row asserts the fd
+  identity and bound each waiter receives; a positional transposition at the call site still
+  compiles, so the call-site literal stays disclosed guest-only residue along with the one call
+  itself and the two passed function names. Both waiters are locally pinned already (§1).
 - Assertions expected to redden under a swapped arm: the arm matrix row (§4) for every stage, plus
   failure propagation (`errors.Is` on a sentinel per arm, neither arm swallowing the other's error).
 
@@ -134,10 +135,12 @@ Red-first order is therefore: seam (behavior-preserving) → row → observe RED
 observe GREEN. New-row home: `daemon/internal/app/linux_owner_witness_linux_test.go` (slice 1) and
 `daemon/e2e/production_linux_v2_owner_cli_test.go` (slice 2). Bind coverage: the Bind's
 `claude_containment`/`codex_containment` case sets run
-`TestProductionLinuxV2StageCrashReplayMatrix/<stage>` (`scripts/ci/linux-v2-native-acceptance.sh:2546`)
+`TestProductionLinuxV2StageCrashReplayMatrix/<stage>` (`scripts/ci/linux-v2-native-acceptance.sh:2545`)
 and therefore execute the changed production arm and the extracted router function, but not the new
-local rows; those run in the `daemon` job (`go test -count=1 -timeout 600s ./...`,
-`.github/workflows/ci.yml:1461`).
+local rows; those are `//go:build linux && amd64` and run in `coverage-daemon`
+(`go test -count=1 -timeout 1200s -coverprofile=coverage.out ./...`, `.github/workflows/ci.yml:682`)
+and the `daemon` job's race pass (`go test -race -count=1 -timeout 600s -json ./...`, `:1063`), not
+in `daemon-windows` (`:1461`).
 
 ## 5. Out of scope (with reasons)
 

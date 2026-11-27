@@ -5751,7 +5751,7 @@ section, whose pointer sentence names this one.
       `docs/plans/2026-11-27-rf-acc-owner-loss-capture-exit-plan.md`, record
       `docs/evidence/rf-acc-owner-loss-capture-exit-2026-11-27.md` §4): the router call site's arm
       arbitration moved into `linuxV2WaitStageReplayPreRecovery`
-      (`daemon/e2e/production_linux_v2_owner_cli_test.go:1202-1227`), with the two pinned fds in
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:1207-1227`), with the two pinned fds in
       the named-field `linuxV2StageReplayPreRecoveryPins` and both waiters as parameters, so the
       call site keeps no branch that a swap could reroute; `TestLinuxV2StageReplayPreRecoveryWaitArms`
       pins the eight-row stage/marker/journal matrix through the real predicate (which arm, which
