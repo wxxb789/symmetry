@@ -571,6 +571,9 @@ exit 0
 	if err != nil || targetFlags&unix.O_PATH == 0 {
 		t.Fatal("B checkout request descriptor is not an O_PATH pin")
 	}
+	if err := linuxV2CleanupRequireCleanupShape(rootFD, targetRel, rootInfo, owner.BUID, owner.BGID); err != nil {
+		t.Fatalf("pinned B clone root/target chain is not the non-writable B-owned shape the authenticated root cleanup verifies: %v", err)
+	}
 	siblingPath := filepath.Join(filepath.Dir(intent.Target), siblingName)
 	siblingRel, err := filepath.Rel(binding.Root, siblingPath)
 	if err != nil || !linuxV2CleanupSafeRelativePath(siblingRel) {
@@ -1675,6 +1678,85 @@ func linuxV2CleanupSafeRelativePath(path string) bool {
 		return false
 	}
 	return true
+}
+
+func linuxV2CleanupShapeRefusal(stat unix.Stat_t, buid, bgid uint32, device uint64) string {
+	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		return "not a directory"
+	}
+	if uint32(stat.Uid) != buid || uint32(stat.Gid) != bgid {
+		return fmt.Sprintf("owner %d:%d is not B %d:%d", stat.Uid, stat.Gid, buid, bgid)
+	}
+	if stat.Mode&0o7000 != 0 {
+		return fmt.Sprintf("set-ID or sticky bits %#o", stat.Mode&0o7000)
+	}
+	if stat.Mode&0o022 != 0 {
+		return fmt.Sprintf("group or other write bits %#o", stat.Mode&0o022)
+	}
+	if uint64(stat.Dev) != device {
+		return fmt.Sprintf("device %d differs from the clone root device %d", stat.Dev, device)
+	}
+	return ""
+}
+
+func linuxV2CleanupRequireCleanupShape(rootFD int, relative string, rootInfo unix.Stat_t, buid, bgid uint32) error {
+	if refusal := linuxV2CleanupShapeRefusal(rootInfo, buid, bgid, uint64(rootInfo.Dev)); refusal != "" {
+		return fmt.Errorf("B clone root: %s", refusal)
+	}
+	current, owned := rootFD, false
+	components := strings.Split(relative, "/")
+	for index, component := range components {
+		next, err := linuxV2CleanupOpenAt(current, component, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC|unix.O_NOFOLLOW)
+		if owned {
+			_ = unix.Close(current)
+			owned = false
+		}
+		if err != nil {
+			return fmt.Errorf("open %q for the exact root-cleanup shape check: %w", component, err)
+		}
+		current, owned = next, true
+		var stat unix.Stat_t
+		if err := unix.Fstat(current, &stat); err != nil {
+			_ = unix.Close(current)
+			owned = false
+			return fmt.Errorf("stat %q for the exact root-cleanup shape check: %w", component, err)
+		}
+		if refusal := linuxV2CleanupShapeRefusal(stat, buid, bgid, uint64(rootInfo.Dev)); refusal != "" {
+			_ = unix.Close(current)
+			owned = false
+			return fmt.Errorf("B checkout ancestor %q: %s", strings.Join(components[:index+1], "/"), refusal)
+		}
+	}
+	if owned {
+		_ = unix.Close(current)
+	}
+	return nil
+}
+
+func TestLinuxV2CleanupShapeRefusalRows(t *testing.T) {
+	const buid, bgid, device = uint32(52001), uint32(52001), uint64(2096)
+	rows := []struct {
+		name string
+		stat unix.Stat_t
+		want string
+	}{
+		{"clean-b-owned", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: buid, Gid: bgid, Dev: device}, ""},
+		{"group-writable", unix.Stat_t{Mode: unix.S_IFDIR | 0o770, Uid: buid, Gid: bgid, Dev: device}, "group or other write bits 020"},
+		{"other-writable", unix.Stat_t{Mode: unix.S_IFDIR | 0o757, Uid: buid, Gid: bgid, Dev: device}, "group or other write bits 02"},
+		{"setgid", unix.Stat_t{Mode: unix.S_IFDIR | 0o2750, Uid: buid, Gid: bgid, Dev: device}, "set-ID or sticky bits 02000"},
+		{"sticky", unix.Stat_t{Mode: unix.S_IFDIR | 0o1750, Uid: buid, Gid: bgid, Dev: device}, "set-ID or sticky bits 01000"},
+		{"foreign-owner", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: 0, Gid: bgid, Dev: device}, "owner 0:52001 is not B 52001:52001"},
+		{"foreign-group", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: buid, Gid: 0, Dev: device}, "owner 52001:0 is not B 52001:52001"},
+		{"regular-file", unix.Stat_t{Mode: unix.S_IFREG | 0o644, Uid: buid, Gid: bgid, Dev: device}, "not a directory"},
+		{"cross-device", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: buid, Gid: bgid, Dev: 7}, "device 7 differs from the clone root device 2096"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			if got := linuxV2CleanupShapeRefusal(row.stat, buid, bgid, device); got != row.want {
+				t.Fatalf("shape refusal row differs: got %q want %q", got, row.want)
+			}
+		})
+	}
 }
 
 func linuxV2CleanupRequireLivePIDFD(pidfd int) error {

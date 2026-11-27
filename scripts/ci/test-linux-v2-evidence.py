@@ -2120,10 +2120,13 @@ SYNTHETIC_GOAL_CLEANUP_SEEDS=/owner/synthetic/seeds
 SYNTHETIC_GOAL_CLEANUP_CLONES=/owner/synthetic/clones
 sudo() {
   case "$1:${@: -1}" in
-    install:*|setfacl:/rootfs/owner/synthetic/seeds|setfacl:/rootfs/owner/synthetic/clones) ;;
+    install:*|setfacl:/rootfs/owner/synthetic/seeds) ;;
     setfacl:/rootfs/owner/synthetic)
       [[ "$2:$3" == '-m:u:52001:r-x,m::r-x' ]] || return 96
       printf 'case root granted\n'
+      ;;
+    setfacl:/rootfs/owner/synthetic/clones)
+      [[ "$2:$3" == '-m:u:52000:r-x,m::r-x,d:u:52000:r-x,d:m::r-x' ]] || return 96
       ;;
     stat:/rootfs/owner/synthetic/config.json) printf '0:52000:640:1\n' ;;
     stat:/rootfs/owner/synthetic)
@@ -2133,6 +2136,14 @@ sudo() {
       printf 'user::rwx\nuser:52001:r-x\n'
       if [[ "$shape" == acl ]]; then printf 'user:52002:r-x\n'; fi
       printf 'group::r-x\nmask::r-x\nother::--x\n'
+      ;;
+    stat:/rootfs/owner/synthetic/clones)
+      if [[ "$shape" == clone-mode ]]; then printf '52001:52001:770\n'; else printf '52001:52001:750\n'; fi
+      ;;
+    getfacl:/rootfs/owner/synthetic/clones)
+      printf 'user::rwx\nuser:52000:r-x\ngroup::---\nmask::r-x\nother::---\ndefault:user::rwx\ndefault:user:52000:r-x\ndefault:group::---\n'
+      if [[ "$shape" == clone-acl ]]; then printf 'default:mask::rwx\n'; else printf 'default:mask::r-x\n'; fi
+      printf 'default:other::---\n'
       ;;
     *) return 96 ;;
   esac
@@ -2156,6 +2167,12 @@ machine_run_as() {
             ("synthetic_goal_cleanup", "case-write", "native A unexpectedly gained write access to the root-controlled synthetic cleanup case root"),
             ("synthetic_goal_cleanup", "mode", "synthetic cleanup case root must stay root:A mode 0751"),
             ("synthetic_goal_cleanup", "acl", "synthetic cleanup case root must have exactly the fixture B-read ACL"),
+            ("synthetic_goal_cleanup", "clone-mode", "synthetic cleanup clone root must stay B-owned mode 0750"),
+            (
+                "synthetic_goal_cleanup",
+                "clone-acl",
+                "synthetic cleanup clone root must keep a non-writable default ACL mask so B-created binding/run/generation directories stay non-writable",
+            ),
         )
         for case_set, shape, error in cases:
             with self.subTest(case_set=case_set, shape=shape):

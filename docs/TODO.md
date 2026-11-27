@@ -2305,18 +2305,29 @@ unmeasured) and the redacted-evidence export was refused
       that runs in CI — an env-gated probe test was ruled out because it would not run in CI
       either. Owner: conductor.
 
-## rf-acc-synthetic-cleanup-seed: residuals (2026-11-26)
+## rf-acc-synthetic-cleanup-root-removal: residuals (2026-11-27)
 
-The first failing line of the `synthetic_goal_cleanup` set (the labelled
-`stage=clone_checkout arm=checkout_receipt wait_class=other guest_stage=seed errno=13` stop, run
-`45803728792` on `5f744370`) was root-caused to the arm's own fixture (goal
-`rf-acc-synthetic-cleanup-seed`, branch `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`):
-the `openat` of the case root failed because B had search but not read access. PR #304 scopes the
-B-read ACL to the synthetic set and checks access using Bash's ACL-aware builtin. The round-one
-Bind (`45836765410` on `6526dac9`) failed at the earlier setup check, before the witness; see the
-[evidence record](evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md).
+The seed residual closed: the conductor's re-Bind (Bind 2, run `45938637085` on `f3dbae66`) cleared
+the exact `:506 … guest_stage=seed errno=13` stop (0 occurrences of that frame in the 2,870-line
+log) and the witness reached the authenticated root cleanup after its durable Begin. The next
+failing line — `production_linux_v2_cleanup_witness_test.go:882: run exact root cleanup through the
+authenticated installed Anchor: Linux owner anchor returned no exact root clone-removal proof` —
+moved to
+[the root-removal closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-root-removal-the-authenticated-cleanup-requires-non-writable-b-created-entries-2026-11-27).
+The seed residual item and this goal's fix are recorded in
+[the root-removal evidence](evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.md).
 
-- [ ] Re-Bind the corrected PR head. Confirm the Go witness reaches RELEASE without the exact
-      `:506 … guest_stage=seed errno=13` stop. Record the next failing line verbatim (it may be
-      emitted at the same source line with a different stage), or confirm the green set exports
-      `synthetic-goal-cleanup.json` with a manifest. Owner: conductor.
+- [ ] Re-Bind the corrected PR head. Confirm the `:882 … Linux owner anchor returned no exact root
+      clone-removal proof` stop is gone and the set reaches launcher removal, the A-side cleanup and
+      journal retirement, or record the next failing line verbatim here. Owner: conductor.
+
+- Production observation (decision note, 2026-11-27, goal `rf-acc-synthetic-cleanup-root-removal`):
+      an install-accepted clone root whose default ACL mask grants write produces a checkout whose
+      directories and files are group-writable, which the exact root-cleanup checks refuse. Today
+      that is fail-closed but uncleanaable without operator intervention. The same default ACL shape
+      remains on the production, daemon-service-workspace and clone-test fixture roots
+      (`scripts/ci/linux-v2-native-acceptance.sh:689`, `:691`, `:876`); no cleanup leg touches them,
+      and the delivered fix is scoped to the `synthetic_goal_cleanup` arm. Candidates if the
+      conductor wants a production hardening: reject a writable default mask in the install
+      preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
+      checks ACL-aware. Evidence: record §2.3 and §11.
