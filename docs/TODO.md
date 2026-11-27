@@ -2387,23 +2387,26 @@ The goal's stage 1 and stage 2 are delivered (plan
 The authenticated-turn task text is now staged by the acceptance fixture
 (`scripts/ci/linux-v2-native-acceptance.sh`), and the `shared` Pi home's thinking level is off —
 every other Pi case set keeps its pre-r1 `minimal`. `authenticated_pi_task_failures`
-(`scripts/ci/test-linux-v2-evidence.py`) runs the fixture over all fifteen allowlisted case sets and
-pins the staging, its Control-fixture agreement, the thinking level, the absence of the staged file
-for every non-`shared` set, and the fixed-B-home install row. Record:
-`docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
+(`scripts/ci/test-linux-v2-evidence.py`) derives its case-set list from the script's own allowlist
+and runs the fixture over every derived set: the staging, its Control-fixture agreement, the
+thinking level, the absence of the staged file and of its fixed-B-home install row for every
+non-`shared` set, and the two containment sets' explicit exemption (no Pi home, no install row).
+Record: `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
 
 - [ ] Credentialed re-dispatch of the `shared` pi legs. Owner: conductor and owner. The row that
       must be green is `TestProductionLinuxV2PiNativeProviderAction` in a credentialed run
       (placeholder runs keep the credential-gated outcome). If a different leg stops first, its
       verbatim stop is the next goal.
 - [ ] `stale_leaf` in a credentialed run: the fixture stages the real provider credential into a
-      vehicle whose case was designed around an instant provider failure, so the delivered script
-      exposes its turn to the staged prompt text and its 30-second stop-receipt hold is unproven
-      (`wait for exact durable stop receipt: owner-witness command did not reach its requested
-      durable stage`, `stale_leaf` in run 45974323458). The delivered bytes show exposure of the
-      prompt text on a launch that reaches a turn, not that any such turn ran. The
-      other provider-free `pi-durability` case sets share the exposure but were not observed to fail
-      in that run — `stage_replay_create_started`, `stage_replay_leaf_bound`,
+      vehicle whose case was designed around an instant provider failure, so its 30-second
+      stop-receipt hold is unproven (`wait for exact durable stop receipt: owner-witness command did
+      not reach its requested durable stage`, `stale_leaf` in run 45974323458, log lines 9749 and
+      10031). The staged append is not one of its inputs: the delivered pin asserts the file is
+      neither staged nor installed for any non-`shared` case set, so this increment does not change
+      that vehicle's prompt exposure; what remains unproven is whether a credentialed launch of it
+      reaches a turn, or its hold. The other provider-free `pi-durability` case sets share the
+      credential exposure but were not observed to fail in that run — `stage_replay_create_started`,
+      `stage_replay_leaf_bound`,
       `stage_replay_launcher_bound`, `ack_loss_launcher_bound` and `migration` all exited 0 — so
       treat their turns and holds as exposed and unobserved until a credentialed run sees them. The
       Pi staging home serves a whole guest, so the fix is per case set — stage the ratified
@@ -2435,3 +2438,8 @@ for every non-`shared` set, and the fixed-B-home install row. Record:
       and the witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`)
       replaces Control's context envelope with a subject/run-key stub. Either change would carry the
       text for every native harness instead of the fixture's pi legs only.
+- [ ] F1 — the provider `stopReason` reaches the persisted diagnostic unprojected: `normalAssistantStop`
+      formats it with `%q` into `ErrUnexpectedAssistantStop` (`daemon/internal/harness/pi/rpc.go:853-860`)
+      while its sibling `errorMessage` goes through `projectStopErrorMessage`, so an oversized reason is
+      bounded only by the decoder's `defaultMaxRecordBytes` (`:19`, applied at `:212`). Product-side, out
+      of this fixture chain's scope. Owner: the next slice that touches `daemon/internal/harness/pi/rpc.go`.

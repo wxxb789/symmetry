@@ -39,9 +39,10 @@ observation bound, the fixture pin, and what stays out of scope.
 3. **The observation bound stays as it is, with the measurement recorded.** The bound is not the
    named side: measured sum in a guest-shaped jail (same model, same pinned Pi release, same argv and
    environment shape, same subject clone, same prompt bytes) an instructed turn settles in 9.5 s and
-   39.2 s and commits its file, while the stalling guest turn ran for the full 424.04 s bound. A
-   longer bound would spend the same wall time on the *unspecified* legs that produced the stall and
-   would not make any clause true; the record carries the numbers instead (§2.2).
+   39.2 s and commits its file, while the failed guest test reported 424.04 s — its own duration, four
+   seconds above the 420 s `linuxV2NativeTaskTimeout` it was actually observed for. A longer bound
+   would spend the same wall time on the *unspecified* legs that produced the stall and would not
+   make any clause true; the record carries the numbers instead (§2.2).
 4. Committed test pins, the plan, the evidence record, `docs/TODO.md`/`docs/archive/CLOSED-TODO.md`.
 
 ## 2. Decisions this plan fixes
@@ -77,24 +78,33 @@ tuned while every Pi turn failed at the provider in well under a second). Candid
 derive it from the claim's admission deadline (`claim.work.input.limits.deadline_at`, Control's
 default admission + 15 minutes), or extend it by a measured margin. The measurements decide against
 extending it: the specified turn is *short* (9.5 s and 39.2 s locally, against 100.2 s for the same
-bytes without the task text and 424.04 s in the guest), so the seven-minute window already carries a
->10x margin, and every second added to it is spent only by the *unspecified* legs that stalled —
-exactly the failure this goal removes. Raising a bound that is not the cause would also be the
-"raise it until it passes" move the contract forbids. The record states the measured margin so a
-later amendment has a number to argue with.
+bytes without the task text), so the 420 s window already carries a more-than-10x margin against the
+slowest instructed arm, and every second added to it is spent only by the *unspecified* legs that
+stalled — exactly the failure this goal removes. The 424.04 s the guest test reported is that test's
+own duration, not a wider bound. Raising a bound that is not the cause would also be the "raise it
+until it passes" move the contract forbids. The record states the measured margin so a later
+amendment has a number to argue with.
 
 ### 2.3 What the fixture pin has to prove
 
 `scripts/ci/test-linux-v2-evidence.py` (the suite that already pins the acceptance script and its
 `shared` arm) gains one row: the staged append file carries the Control fixture's own admitted task
 description for the authenticated legs and is installed into the fixed B home's Pi agent directory
-with the same private-file discipline as the other staged Pi files. Round 2 widens the pin to every
-case set the acceptance script allowlists (15) and restores the empty-input negative: for each
+with the same private-file discipline as the other staged Pi files. Round 2 widened the pin to every
+case set the acceptance script allowlists and restored the empty-input negative: for each
 non-`shared` case set the writer must stage **no** `APPEND_SYSTEM.md`, and the Pi home every other
-case set stages must keep its pre-r1 thinking level. Mutants: dropping the staging, re-pointing it
-at another directory, dropping it from the credential-file list, rewriting the text so it no longer
-carries the admitted description, making the writer unconditional, leaking the text into one more
-case set, and making the thinking level unconditional each redden their own exact row(s).
+case set stages must keep its pre-r1 thinking level. Round 3 rebuilds that coverage so the case-set
+list is derived from the script's own allowlist rather than hand-copied (with a committed test
+binding the derived tuple to the script's dispatch arms and the CI workflow's `case_sets` matrix),
+one uniform assertion runs over every derived set — `shared` stages the exact text at level `off`,
+every other Pi case set stages neither the text nor the level and must not list the file in the
+fixed B home install list — and the two containment sets are exempted explicitly, by asserting they
+staged no Pi home and that the install list does not carry the file. Mutants: dropping the staging,
+re-pointing it at another directory, dropping it from the credential-file list, rewriting the text
+so it no longer carries the admitted description, making the writer unconditional, leaking the text
+or the install row into one more case set, leaking it into a containment set, breaking the
+containment branch, editing either case-set list, and making the thinking level unconditional each
+redden their own exact row(s).
 
 ## 3. Evidence plan
 
