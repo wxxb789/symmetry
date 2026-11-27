@@ -2356,3 +2356,36 @@ and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
       `refactor/pi-authentic-turn-dispatch-runbook.md`), grouped per ruling 6G1. Expected on that
       run: no `credential_gated` manifest entry, all three Control provider receipts, and a green
       `TestProductionLinuxV2PiNativeProviderAction` row.
+
+## rf-acc-pi-turn-deadline: residuals (2026-11-28)
+
+The authenticated-turn task text is now staged by the acceptance fixture
+(`scripts/ci/linux-v2-native-acceptance.sh`), and `authenticated_pi_task_failures`
+(`scripts/ci/test-linux-v2-evidence.py`) pins the staging, its Control-fixture agreement and its
+fixed-B-home install row. Record: `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
+
+- [ ] Credentialed re-dispatch of the `shared` pi legs. Owner: conductor and owner. The row that
+      must be green is `TestProductionLinuxV2PiNativeProviderAction` in a credentialed run
+      (placeholder runs keep the credential-gated outcome). If a different leg stops first, its
+      verbatim stop is the next goal.
+- [ ] `stale_leaf` (and every provider-free `pi-durability` case set) in a credentialed run: the
+      fixture stages the real provider credential into vehicles whose cases were designed around an
+      instant provider failure, so their turns now run and miss the 30-second stop-receipt hold
+      (`wait for exact durable stop receipt: owner-witness command did not reach its requested
+      durable stage`, `stale_leaf` in run 45974323458). One B home serves a whole guest, so the fix
+      is per case set — stage the ratified placeholder credential for the case sets whose vehicles
+      are provider-free (`stale_leaf`, `migration`, `stage_replay_*`, `ack_loss_*`) and keep the
+      real credential for `shared`, or bound those holds to the fixture's own admission deadline.
+      Owner: the next goal's implementer; evidence in the record's next-stop section.
+- [ ] The `shared` set's provider-free `pi-durability` stage-replay legs (holds
+      `stop_receipt_durable`, `leaf_removed`, `journal_cleared`) have never been observed in a
+      credentialed run: the 45974323458 `shared` arm aborted at the first authenticated leg. With
+      the staged task text their turns settle quickly; whether their post-turn assertions hold on a
+      real provider turn is the credentialed re-dispatch's third observation. Owner: conductor.
+- decision note — production-side carriers for the same text, for `DECISION_NEEDED` if the fixture
+      carrier is ever retired: `control/lib/symmetry_control/goals/admission.ex:418,573` sets a
+      goal-admitted task's `goal` to the Goal title while the WorkItem route composes
+      `execution_goal/1` = title + description (`control/lib/symmetry_control/workspaces.ex:684,765`),
+      and the witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`)
+      replaces Control's context envelope with a subject/run-key stub. Either change would carry the
+      text for every native harness instead of the fixture's pi legs only.

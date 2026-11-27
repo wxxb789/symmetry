@@ -10,6 +10,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -2704,6 +2705,134 @@ def shared_arm_harness(source: str) -> str:
     return "\n".join(preamble) + "\n" + arm + "\nesac\n" + source[source.rindex("\nstop_readback_reader\n") :]
 
 
+CONTROL_CLAIMS_SCRIPT = ACCEPTANCE_SCRIPT.with_name("provision-linux-v2-control-claims.exs")
+CONTROL_PI_PROVIDER_ACTION_DESCRIPTION = re.compile(
+    r'"pi_provider_action", "pi-native", :pi, :pi_provider,\n\s*"(?P<description>[^"]*)"\},'
+)
+FIXTURE_HOME_PYTHON_MARKER = 'python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \\\n'
+FIXED_B_HOME = "/opt/symmetry-owner-test/fixed-b-home"
+FIXED_B_HOME_TASK_TEXT = f"{FIXED_B_HOME}/.pi/agent/APPEND_SYSTEM.md"
+FIXTURE_HOME_ARGUMENTS = (
+    "/home/a",
+    "/a/source",
+    "/clones",
+    "/seeds",
+    "/state",
+    "/share",
+    "pi-model",
+    "opencode-model",
+    "https://provider.invalid/v1",
+    "/api-key",
+    "11111111-1111-1111-1111-111111111111",
+    "22222222-2222-2222-2222-222222222222",
+    "33333333-3333-3333-3333-333333333333",
+    "shared",
+    "/synthetic/source",
+    "/synthetic/seeds",
+    "/synthetic/clones",
+)
+
+
+def extracted_authenticated_pi_task_block(source: str) -> str:
+    start = source.index("authenticated_pi_task_text=''")
+    return source[start : source.index("\nfi\n", start) + len("\nfi\n")]
+
+
+def extracted_authenticated_pi_install_block(source: str) -> str:
+    start = source.index('if [[ -n "$authenticated_pi_task_text" ]]; then')
+    return source[start : source.index("\nfi\n", start) + len("\nfi\n")]
+
+
+def extracted_fixture_home_python(source: str) -> str:
+    start = source.index(FIXTURE_HOME_PYTHON_MARKER) + len(FIXTURE_HOME_PYTHON_MARKER)
+    start = source.index("<<'PY'\n", start) + len("<<'PY'\n")
+    return source[start : source.index("\nPY\n", start)]
+
+
+def staged_authenticated_pi_task_text(source: str, root: pathlib.Path, case_set: str) -> str:
+    guard = root / "task-text.sh"
+    guard.write_text(
+        "set -Eeuo pipefail\nfixture_case_set=$1\n"
+        + extracted_authenticated_pi_task_block(source)
+        + '\nprintf "%s" "$authenticated_pi_task_text"\n',
+        encoding="utf-8",
+    )
+    result = subprocess.run(["bash", str(guard), case_set], capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise AssertionError(f"the staged task-text guard refused {case_set}: {result.stderr.strip()}")
+    return result.stdout
+
+
+def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
+    failures: list[str] = []
+    try:
+        shared = staged_authenticated_pi_task_text(source, root, "shared")
+        others = {
+            case_set: staged_authenticated_pi_task_text(source, root, case_set)
+            for case_set in ("stale_leaf", "stage_replay_leaf_bound", "codex_containment")
+        }
+    except (AssertionError, ValueError) as error:
+        return [str(error)]
+    if not shared:
+        failures.append("the shared case set stages no authenticated Pi task text")
+    failures.extend(
+        f"the {case_set} case set stages the authenticated Pi task text"
+        for case_set, text in others.items()
+        if text
+    )
+    description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
+    if description is None:
+        failures.append("the Control claim fixture no longer carries the pi_provider_action description")
+    elif shared and description.group("description") not in shared:
+        failures.append("the staged task text does not carry the Control fixture's admitted description")
+
+    python_body = root / "fixture-home.py"
+    python_body.write_text(extracted_fixture_home_python(source), encoding="utf-8")
+    api_key = root / "api-key"
+    api_key.write_text("sk-fixture-provider-key\n", encoding="utf-8")
+    arguments = list(FIXTURE_HOME_ARGUMENTS)
+    arguments[9] = str(api_key)
+    probe = "Use the real symmetry_resource_sync tool for the configured GitHub repository."
+    for index, task_text in enumerate((probe, "")):
+        fixture_root = root / f"fixture-{index}"
+        fixture_root.mkdir(parents=True)
+        result = subprocess.run(
+            [sys.executable, str(python_body), str(fixture_root), *arguments, task_text],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(f"the fixture home writer exited {result.returncode}: {result.stderr.strip()}")
+            continue
+        staged_file = fixture_root / "b-home/.pi/agent/APPEND_SYSTEM.md"
+        if task_text:
+            if not staged_file.exists() or staged_file.read_text(encoding="utf-8") != task_text + "\n":
+                failures.append("the fixture home writer did not stage the exact task text")
+        elif staged_file.exists():
+            failures.append("the fixture home writer staged a task text it was not given")
+
+    install = root / "install.sh"
+    install.write_text(
+        "set -Eeuo pipefail\n"
+        f"B_HOME={FIXED_B_HOME}\n"
+        "authenticated_pi_task_text=$1\n"
+        'b_native_credential_files=("$B_HOME/.pi/agent/auth.json")\n'
+        + extracted_authenticated_pi_install_block(source)
+        + '\nprintf "%s\\n" "${b_native_credential_files[@]}"\n',
+        encoding="utf-8",
+    )
+    for text, expected in ((probe, True), ("", False)):
+        result = subprocess.run(["bash", str(install), text], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            failures.append(f"the credential-file list rejected the staged task text: {result.stderr.strip()}")
+            continue
+        listed = FIXED_B_HOME_TASK_TEXT in result.stdout.splitlines()
+        if listed != expected:
+            failures.append("the fixed B home install list does not follow the staged task text")
+    return failures
+
+
 class CredentialGatedFixtureTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -2902,6 +3031,65 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                         self.assertIn("this case set is not passed", result.stderr)
                     else:
                         self.assertEqual(calls[-1], "stage-replay")
+
+    def test_authenticated_pi_task_staging_rows(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(authenticated_pi_task_failures(source, claims, self.root), [])
+
+    def test_mutations_of_the_authenticated_pi_task_staging_redden_the_rows(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
+        mutations = (
+            (
+                "unconditional-staging",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then\n  authenticated_pi_task_text=',
+                    "if true; then\n  authenticated_pi_task_text=",
+                    1,
+                ),
+                claims,
+            ),
+            (
+                "reworded-task-text",
+                source.replace("for the configured GitHub repository", "for the configured resource", 1),
+                claims,
+            ),
+            (
+                "no-fixture-write",
+                source.replace("    if authenticated_pi_task_text:\n", "    if False:\n", 1),
+                claims,
+            ),
+            (
+                "misplaced-install-target",
+                source.replace(
+                    'b_native_credential_files+=("$B_HOME/.pi/agent/APPEND_SYSTEM.md")',
+                    'b_native_credential_files+=("$B_HOME/.pi/agent/APPEND_SYSTEM.txt")',
+                    1,
+                ),
+                claims,
+            ),
+            (
+                "dropped-admitted-description",
+                source,
+                claims.replace(
+                    "Use the real symmetry_resource_sync tool for the configured GitHub repository, "
+                    "then create and commit one small file. Do not publish.",
+                    "Use the configured provider tool, then create and commit one small file.",
+                    1,
+                ),
+            ),
+        )
+        for name, mutant_source, mutant_claims in mutations:
+            with self.subTest(mutation=name):
+                self.assertNotEqual(
+                    (mutant_source, mutant_claims),
+                    (source, claims),
+                    "the mutation must change the fixture",
+                )
+                root = self.root / name
+                root.mkdir()
+                self.assertTrue(authenticated_pi_task_failures(mutant_source, mutant_claims, root), name)
 
 
 if __name__ == "__main__":
