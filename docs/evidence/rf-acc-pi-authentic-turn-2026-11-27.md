@@ -223,7 +223,35 @@ No raw event stream or credential is retained in the repository. The section bel
 verbatim historical Bind that **did not meet A1**. It supports U1, not acceptance on the fixed
 bytes. Its §1 reference denotes the input table at the old run, not the revised digests above.
 
-## Bind
+## Bind 2
+
+[Run 46024288348](https://github.com/wxxb789/symmetry/actions/runs/46024288348) is the single
+`shared` run for the fixed PR head `d9fb82499ed6a56614989469b9af09e59fa6e6ef` (parent `db213f88`).
+Its run head, `b46b8d8970c6adcecac4347924e102fc47450ca3`, has the PR head as its sole parent.
+Every PR-tracked byte matches; the only additions are the same two scratch blobs listed under
+Bind 1. The scratch ref was deleted and the run worktree removed; the head-filtered Actions
+query returned `total_count=1` for the one attempt before and after cleanup.
+
+1. **Case set:** `Case set shared exited 1` (log 3967). The **22** exact `verified … run=1 pass=1 skip=0` rows match Bind 1 in content and order.
+2. **Pi in its original slot:** After the marker-reader checks and before the Pi peer-negative check, log 3107 records `credential-gated TestProductionLinuxV2PiNativeProviderAction: run=1 pass=0 skip=0`. The [acceptance log](https://github.com/wxxb789/symmetry/actions/runs/46024288348/job/140591999131) at 3108 reads:
+
+   ```text
+   credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.
+   ```
+
+   `shared/credential-gated-legs.json` contains `"outcome":"credential_gated_pi_provider_action"` with `"test_result":"failed"`. The log also names `credential_gated_helper_sigkill_detached_child` and `credential_gated_daemon_sigkill_helper_survives_detached_child` (3110–3111), both before replay. Both crash legs are `not_run` in the declaration, and none of the three legs counted as passed.
+3. **Export and reader:** The [partial evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46024288348/artifacts/15212161896) (SHA-256 `331a8d860e7f3289b50736223fd527c9d700b3baf1ee354107af2df9b0e3c51f`) contains `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3223 B), `shared/stage-crash-replay-reservation_durable.json` (5728 B), and `shared/unprovisioned-owner-refusal.json` (691 B). The export again stopped at `pi durability witness is unavailable: ack-loss-replay-checkout_ready.json` (3964); `shared/manifest.json` was not published. The reader started (2514), but replay aborted before `stop_readback_reader`; its Result row did not run.
+4. **First unexpected failing line** (3677, without the Actions prefix):
+
+   ```text
+   witness output:     production_linux_v2_native_witness_test.go:224: stage reservation_durable recovery did not preserve the correct physical Journal state: pre-create abort tombstone reports a target or leaf creation
+   ```
+
+U1's named nonpass now survives the replay abort in the log and partial export. This satisfies
+the U3 reporting requirement, not a green run, a full export, or proof of an authentic provider turn.
+The `reservation_durable` failure remains outside this goal.
+
+### Bind 1 — A1 not met
 
 [Run 46020141750](https://github.com/wxxb789/symmetry/actions/runs/46020141750) was the sole
 placeholder-credential run of `shared` on PR #308 (attempt 1). The
