@@ -107,6 +107,13 @@ text so it no longer carries the admitted description each redden the row.
   designed to fail instantly now receives the real credential — but it is a different case set with
   its own fixture decision (stage the ratified placeholder for provider-free vehicles, or bound its
   stop-receipt hold). The record names it as the next verbatim stop; the fix is a separate goal.
-- **Raising the seven-minute default.** The default stays; only an admitted claim's own deadline
-  extends the window, and only by measurement.
+- **Raising the seven-minute default.** The default stays, and no path derives the observation
+  window from an admitted claim's own deadline (`claim.work.input.limits.deadline_at`) today: the
+  witness observes the static `linuxV2NativeTaskTimeout`
+  (`daemon/e2e/production_linux_v2_owner_cli_test.go:932`,
+  `daemon/e2e/production_linux_v2_native_witness_test.go:71`), and the admission deadline is
+  consumed by production admission validation (`daemon/internal/app/goal_admission_tx.go:356`,
+  `daemon/internal/app/deterministic_validation.go:107`) and copied into the harness launch limits
+  (`daemon/internal/app/goal_admission_tx.go:909`); none of these bounds the observation window.
+  A future bound change must derive from that deadline and be backed by measurement.
 - **`docs/archive/CLOSED-TODO.md` moves that no closed item owns.**

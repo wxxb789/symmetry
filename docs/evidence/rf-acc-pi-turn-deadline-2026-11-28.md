@@ -14,7 +14,7 @@ Plan: `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md`. Shape reference:
 | --- | --- | --- |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `ee018988b6057676a4fb00f5e03a7f1dfb3fd7d9cced5aa96e32917623a11b31` | The `shared` case set stages the authenticated Pi legs' task text into the fixed B home's Pi agent directory and installs it under the existing private-file discipline. |
 | `scripts/ci/test-linux-v2-evidence.py` | `d1b764a45a605f60754c2ab5fa4799fe3e809f21512f973bcdaf8789d688c852` | `authenticated_pi_task_failures` executes the staging, its Control-fixture agreement and its fixed-B-home install row; one pin and one five-mutant row. |
-| `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `a1754ed3f654435f4193656e21fb343b7cb1815cb7e67250926f28af7ffee879` | This increment's plan. |
+| `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `a6a6a912501812cf78102d49faa7439a8e561c903ccb14a18c3748fea3a20549` | This increment's plan (re-hashed after the apply stage's §4 wording fix). |
 | `docs/TODO.md` | `51bc4d610a67b863f86f821a5c4c8e727adf38cf91cb385e47081ae50b6ebe29` | The credentialed re-dispatch, the provider-free vehicle stop and the production carriers. |
 
 `docs/archive/CLOSED-TODO.md` is untouched: this increment closes no tracked item. No Go source is
@@ -117,8 +117,12 @@ This leg is fixed-scope: do not explore the repository or run its test suites or
 ```
 
 The first sentence is the Control fixture's own admitted description for `pi_provider_action`
-(`scripts/ci/provision-linux-v2-control-claims.exs` `@cases`), verbatim, and it is a prefix of the
-two crash legs' descriptions. Pi loads `<agent-dir>/APPEND_SYSTEM.md` as system-prompt instructions
+(`scripts/ci/provision-linux-v2-control-claims.exs:42-43`), verbatim. One B home serves every leg
+of a guest and `shared` admits all three authenticated legs, so the two crash legs receive this
+text too, although their own admitted descriptions differ in wording (`:46-47` and `:48-49` carry
+the detached-child helper and daemon crash witnesses); the placeholder credential registers both
+`not_run` (§7), so the consequence of that wording mismatch is unobserved until a credentialed
+cadence run. Pi loads `<agent-dir>/APPEND_SYSTEM.md` as system-prompt instructions
 (documented in the pinned release and verified live: the system message's `addendum` section carries
 the file), so `$B_HOME/.pi/agent/APPEND_SYSTEM.md` reaches the model without touching the request,
 the profile arguments, the tools or any assertion. The file joins `b_native_credential_files`, so
@@ -158,12 +162,15 @@ effect of the staged file is the credentialed dispatch's row.
 
 ## 7. Does the conductor's Bind execute it?
 
-The placeholder `shared` Bind runs the three authenticated legs through
-`run_credential_gated_pi_provider_leg`, which drives the same Go test to the placeholder 401 stop:
-the staged text cannot change a provider refusal, so every Bind row is expected to be byte-identical
-to Bind 2 of `rf-acc-pi-authentic-turn`. The two Python suites (including the new pin and its
-mutants) run in the `daemon` job on the PR head. The authenticated outcome is the owner's
-credentialed cadence, not the Bind.
+The placeholder `shared` Bind executes one gated leg, `pi_provider_action`, through
+`run_credential_gated_pi_provider_leg` (`scripts/ci/linux-v2-native-acceptance.sh:2613-2631`, the
+case name hard-coded at `:2615`), which drives the same Go test to the placeholder 401 stop; the two
+crash legs are only registered by `record_credential_gated_leg` (`:3303-3306`), and the declaration
+marks them `not_run` (`:2589`). The staged text cannot change a provider refusal, so every Bind row
+is expected to be byte-identical to Bind 2 of `rf-acc-pi-authentic-turn`, and the Bind proves nothing
+new for the two crash legs. The two Python suites (including the new pin and its mutants) run in the
+`daemon` job on the PR head. The authenticated outcome is the owner's credentialed cadence, not the
+Bind.
 
 ## 8. Gates
 
@@ -184,6 +191,15 @@ suites is the `daemon` job's Check Linux v2 fixture contracts step, which runs o
 
 No Go source changes, so no `gofmt`/`go vet`/Go test row is claimed here; the `daemon` job's fixture
 step and suites are the CI home of the added rows.
+
+Apply stage (the D1/D2/D3 wording fixes): the code-scoped rows above re-ran unchanged (`Ran 75
+tests`, `Ran 10 tests`, `bash -n`: exit 0), and the four doc-scoped rows re-ran at exit 0 on the
+final bytes of this record and of the plan
+(`a6a6a912501812cf78102d49faa7439a8e561c903ccb14a18c3748fea3a20549`) — `comment-cap.py`,
+`check-record-cleanliness.py`, both sanitizers and `jscpd-changed.py` (counts as its row above,
+nothing new); the implement-stage receipts for those two docs are superseded by these bytes. The
+stage's full `go test ./...` runs on the same tree: Windows exit 0, and WSL exit 1 with only the
+`internal/platform` uid=0 refusal rows; that package's bytes are identical to the dispatch base.
 
 ## 9. Residual risks and known limits
 
