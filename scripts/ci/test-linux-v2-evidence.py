@@ -483,10 +483,10 @@ def parse_case_arms(lines: list[str]) -> dict[str, str]:
         if pattern is None:
             if stripped == "esac":
                 break
-            if not re.fullmatch(r"[A-Za-z0-9_|*]+\)", stripped):
+            head, separator, tail = stripped.partition(")")
+            if not separator or not re.fullmatch(r"[A-Za-z0-9_|*]+", head):
                 continue
-            pattern, _, tail = stripped.partition(")")
-            pattern, current = pattern.strip(), [tail.strip()]
+            pattern, current = head, [tail.strip()]
         else:
             current.append(stripped)
         if current[-1].endswith(";;"):
@@ -501,10 +501,33 @@ def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
     return parse_case_arms(lines[index + 1 :])
 
 
+CASE_SET_SUBJECT = 'case "$fixture_case_set" in'
+
+
 def acceptance_dispatch_arms(text: str) -> dict[str, str]:
     lines = text.splitlines()
-    index = max(i for i, line in enumerate(lines) if line.strip() == 'case "$fixture_case_set" in')
-    return parse_case_arms(lines[index + 1 :])
+    for index, line in enumerate(lines):
+        if line.strip() != CASE_SET_SUBJECT:
+            continue
+        arms = parse_case_arms(lines[index + 1 :])
+        if any("run_native_owner_witness" in body for body in arms.values()):
+            return arms
+    raise AssertionError("the acceptance script no longer carries a case-set dispatch block")
+
+
+def acceptance_case_set_arms(source: str) -> dict[str, str]:
+    arms: dict[str, str] = {}
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != CASE_SET_SUBJECT:
+            continue
+        for pattern, body in parse_case_arms(lines[index + 1 :]).items():
+            arms.setdefault(pattern, body)
+    return arms
+
+
+def case_set_arm_names(arms: dict[str, str]) -> set[str]:
+    return {name for pattern in arms for name in pattern.split("|") if name != "*"}
 
 
 def acceptance_case_set_allowlist(source: str) -> tuple[str, ...]:
@@ -2830,11 +2853,14 @@ def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[
     if not allowlist:
         return ["the acceptance script no longer carries one case-set allowlist"]
     failures = []
-    dispatched = {
-        name for pattern in acceptance_dispatch_arms(source) for name in pattern.split("|")
-    }
+    dispatched = case_set_arm_names(acceptance_dispatch_arms(source))
     if set(allowlist) != dispatched:
         failures.append("the case-set allowlist and the script's own dispatch arms diverged")
+    admitted = case_set_arm_names(acceptance_case_set_arms(source))
+    if dispatched != admitted:
+        failures.append(
+            "a case-set arm outside the dispatch block admits a set the dispatcher does not run"
+        )
     if set(allowlist) != set(workflow_case_sets(workflow)):
         failures.append("the case-set allowlist and the workflow case-set matrix diverged")
     containment = {name.replace("_", "-") for name in acceptance_containment_case_sets(source)}
@@ -3112,12 +3138,25 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             (
                 "allowlist-extra-set",
                 source.replace(
-                    "|synthetic_goal_cleanup) ;;", "|synthetic_goal_cleanup|x_probe) ;;", 1
+                    "|synthetic_goal_cleanup) ;;", "|synthetic_goal_cleanup|review_probe) ;;", 1
                 ),
                 workflow,
                 (
                     "the case-set allowlist and the script's own dispatch arms diverged",
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
                     "the case-set allowlist and the workflow case-set matrix diverged",
+                ),
+            ),
+            (
+                "allowlist-standalone-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  review_probe) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
                 ),
             ),
             (
