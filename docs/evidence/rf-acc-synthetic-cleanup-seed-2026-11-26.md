@@ -271,46 +271,36 @@ separate failed Bind below, substitutes for these checks.
 - `python -B scripts/ci/check-record-cleanliness.py --repo "$scratch_clone" --base 07be175e --head HEAD`
 - `python -B "$comment_cap" "$scratch_clone" 07be175e`
 
-## Bind — FAILED before the Go witness on PR head `6526dac9`
+## Bind 2
 
-[Run 45836765410](https://github.com/wxxb789/symmetry/actions/runs/45836765410), attempt 1,
-ran only `synthetic_goal_cleanup` on `db89dc97f0d9109a7c15e14bc580a29df77cbb27`, the PR #304
-head `6526dac9` plus the scratch workflow and shim. The run failed during fixture setup. One push
-created one run (`total_count=1` by run head before and after branch deletion); the temporary
-worktree was removed and the PR head did not change.
+[Run 45938637085](https://github.com/wxxb789/symmetry/actions/runs/45938637085) is **BINDING** on
+PR #304 head `f3dbae66`. It supersedes the [first Bind](https://github.com/wxxb789/symmetry/actions/runs/45836765410),
+which stopped in setup on `6526dac9`. Attempt 1 ran only `synthetic_goal_cleanup` at
+`2119226c6657681aff68ae9a5bb253249fc28b42`, the pinned PR head plus the scratch workflow and shim.
 
-First failing line (raw log 2423, 14:16:40.9209399Z):
+Setup passed. The two B read checks, A write denial, `root:A 0751` pin and exact ACL match ran
+silently before the fixed-assets verification (log 2427). All seven AppArmor rows passed. The
+Go witness passed RELEASE and reached authenticated root cleanup after durable Begin. In the
+entire 2,870-line log, `:506` with `guest_stage=seed errno=13` and `:499` with `stage=none` each
+occur zero times, including zero occurrences of each frame and stage string separately.
+
+The case set is not green. The first failing witness line (log 2454) was:
 
 ```text
-Linux v2 native acceptance setup failed: native B cannot read the synthetic cleanup case root the clone seed path sits under
+witness output:     production_linux_v2_cleanup_witness_test.go:882: run exact root cleanup through the authenticated installed Anchor: Linux owner anchor returned no exact root clone-removal proof
 ```
 
-In all 2,563 log lines, `production_linux_v2_cleanup_witness_test.go:506`, `guest_stage=seed errno=13`,
-`production_linux_v2_cleanup_witness_test.go:499`, and `stage=none` each occur **0** times. The
-witness was not reached, so absence of the old frames does not establish that RELEASE now passes
-the seed stage. The class pin was silent; B's case-root read assertion failed before the seed-root
-read and A-write assertions ran. No AppArmor or cleanup test verification row was emitted.
-The conductor re-Binds after this round; this setup abort is not acceptance.
-`synthetic-goal-cleanup.json` did not export, and no manifest passed or was uploaded (log 2424,
-2481). The acceptance-side artifact was the **host prerequisite probe**, not cleanup evidence:
-`linux-v2-host-prerequisite-45836765410-1` (id `15127111028`), ZIP sha256
-`0a6c1ba56155cb431d833102e10491043f9713d0ff93fa27665132ede622d307` (matched the API digest).
+The missing proof does not establish whether the root removal occurred. The journal was
+`cleanup_pending` (log 2457); `synthetic-goal-cleanup.json` did not export and no manifest passed
+(2730, 2787). The host prerequisite artifact `linux-v2-host-prerequisite-45938637085-1` (ID
+`15171981683`) is not cleanup evidence. Its ZIP sha256, verified against the API digest, is
+`bbca42b9a35263452d746d618da042ff9c9cd0f3ed30b4dcb8c61b3ed23e5c64`.
 
 ### Run-input equality
 
-All 1,900 tracked PR-head entries matched the run head by path, mode, type, and Git object ID.
-The table gives the case-set inputs whose sha256 changed since the
-[PR #302 Bind 3](rf-acc-synthetic-cleanup-release-2026-11-26.md#bind-3); the other measured
-PR-tracked rows, including the cleanup witness and exporter, kept their previous hashes.
+All 1,900 PR-head tree entries matched the run head. Only the executed input below changed
+relative to the first Bind; the other measured inputs, scratch workflow and shim are unchanged.
 
-| Input | Run head sha256 = PR head sha256 |
+| Input changed since Bind 1 | Run `2119226c` sha256 = PR `f3dbae66` sha256 |
 | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` |
-| `scripts/ci/provision-linux-v2-control-claims.exs` | `82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3` |
-| `scripts/ci/register-linux-v2-claim-machine.py` | `f6029087c0acf8c42478018f0f9672fdf7a914a715d4e49d0eb3c3ee128ad773` |
-| `scripts/ci/write-linux-v2-owner-request.py` | `a6d007374c7c4d64a96b0cc9a7fefc73d4120d4dba31f6ce796a30f5730d677a` |
-| `daemon/e2e/production_linux_v2_native_witness_test.go` | `d988ca3bf8a0364f7d2f1c9aabe4cef14b53216e501a6002c49950e18d508abf` |
-
-The two additions are absent at the PR head. Their hashes match PR #302 Bind 3: workflow
-`8beeadf6d00d73dac74a10a49722c9b767dab20010875938c8af5725e8fb389f` (only the plain `case_sets`
-delta from `b0ba2694`) and shim `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`.
+| `scripts/ci/linux-v2-native-acceptance.sh` | `aac479e5fb80bcd0cc222f1afe96a2e9b010081cc0d2903e84c940e8e61c516d` |
