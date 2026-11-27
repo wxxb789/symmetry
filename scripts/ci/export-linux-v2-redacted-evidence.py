@@ -1555,9 +1555,6 @@ def validate_credential_gated_declaration(document: dict) -> tuple[str, ...]:
         recorded.append((leg["case"], leg["test"], leg["outcome"]))
     if sorted(recorded) != sorted((case, test, outcome) for case, test, outcome, _ in CREDENTIAL_GATED_LEGS):
         fail("credential-gated declaration legs do not match the exact pi authentic-provider legs")
-    for case, test, outcome in recorded:
-        if outcome != f"credential_gated_{case}":
-            fail("credential-gated declaration outcome does not name its exact case")
     return tuple(sorted(case for case, _, _ in recorded))
 
 

@@ -2413,49 +2413,53 @@ PY
   rm -f -- "$run_metadata"
 }
 
+# One tab-separated identity line per owner-witness case: config, request environment, test, receipt flag.
+owner_witness_case_identity() {
+  case "$1" in
+    pi_provider_action)
+      printf '%s\t%s\t%s\t%s\n' pi-provider-action.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST TestProductionLinuxV2PiNativeProviderAction 1
+      ;;
+    opencode_native_health)
+      printf '%s\t%s\t%s\t%s\n' opencode-health.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_REQUEST TestProductionLinuxV2OpenCodeNativeHealth 0
+      ;;
+    helper_sigkill_detached_child)
+      printf '%s\t%s\t%s\t%s\n' pi-helper-crash.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_CRASH_REQUEST TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild 1
+      ;;
+    daemon_sigkill_helper_survives_detached_child)
+      printf '%s\t%s\t%s\t%s\n' pi-daemon-crash.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_REQUEST TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild 1
+      ;;
+    codex_containment)
+      printf '%s\t%s\t%s\t%s\n' codex-containment.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST TestProductionLinuxV2CodexNativeContainment 0
+      ;;
+    claude_containment)
+      printf '%s\t%s\t%s\t%s\n' claude-containment.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST TestProductionLinuxV2ClaudeNativeContainment 0
+      ;;
+    *)
+      fail "unknown production Linux v2 owner witness case: $1"
+      ;;
+  esac
+}
+
+owner_witness_case_test_name() {
+  owner_witness_case_identity "$1" | cut -f3
+}
+
 run_native_owner_witness() {
   local case_name=$1
   local event_file=$2
   local config_file
   local request_environment
   local test_name
-  local provider_receipt_required=0
-  case "$case_name" in
-    pi_provider_action)
-      config_file=pi-provider-action.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST
-      test_name=TestProductionLinuxV2PiNativeProviderAction
-      provider_receipt_required=1
-      ;;
-    opencode_native_health)
-      config_file=opencode-health.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_REQUEST
-      test_name=TestProductionLinuxV2OpenCodeNativeHealth
-      ;;
-    helper_sigkill_detached_child)
-      config_file=pi-helper-crash.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_CRASH_REQUEST
-      test_name=TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild
-      provider_receipt_required=1
-      ;;
-    daemon_sigkill_helper_survives_detached_child)
-      config_file=pi-daemon-crash.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_REQUEST
-      test_name=TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild
-      provider_receipt_required=1
-      ;;
-    codex_containment)
-      config_file=codex-containment.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST
-      test_name=TestProductionLinuxV2CodexNativeContainment
-      ;;
-    claude_containment)
-      config_file=claude-containment.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST
-      test_name=TestProductionLinuxV2ClaudeNativeContainment
-      ;;
-    *) fail "unknown production Linux v2 owner witness case: $case_name" ;;
-  esac
+  local provider_receipt_required
+  local identity
+  identity=$(owner_witness_case_identity "$case_name")
+  IFS=$'\t' read -r config_file request_environment test_name provider_receipt_required <<<"$identity"
 
   local config_source="$fixture_root/$config_file"
   local guest_request="$OWNER_REQUEST_ROOT/$case_name.json"
@@ -2567,8 +2571,6 @@ declaration = pathlib.Path(sys.argv[1])
 separator = sys.argv.index("--")
 cases = sys.argv[2:separator]
 tests = sys.argv[separator + 1:]
-if len(cases) == 0 or len(cases) != len(tests):
-    raise SystemExit("credential-gated declaration requires one test name per gated case")
 legs = [
     {"case": case, "test": test, "outcome": "credential_gated_" + case}
     for case, test in sorted(zip(cases, tests))
@@ -2596,13 +2598,18 @@ PY
 run_credential_gated_pi_provider_leg() {
   local event_file=$1
   local case_name=pi_provider_action
-  local test_name=TestProductionLinuxV2PiNativeProviderAction
+  local config_file
+  local request_environment
+  local test_name
+  local identity
+  identity=$(owner_witness_case_identity "$case_name")
+  IFS=$'\t' read -r config_file request_environment test_name _ <<<"$identity"
   local guest_request="$OWNER_REQUEST_ROOT/$case_name.json"
   local output_directory="$A_HOME/ci-fixture/witness-output/$case_name"
-  prepare_owner_request "$case_name" "$case_name" "$fixture_root/pi-provider-action.json" \
+  prepare_owner_request "$case_name" "$case_name" "$fixture_root/$config_file" \
     "$OWNER_BARRIER_ROOT/$case_name" "$guest_request"
   if ! run_go_test "$event_file" ./e2e "^${test_name}$" production-credential-gated \
-    SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST "$guest_request" "$output_directory" -- "$test_name"; then
+    "$request_environment" "$guest_request" "$output_directory" -- "$test_name"; then
     fail "the credential-gated $case_name leg did not produce the expected placeholder-credential stop"
   fi
   machine_run /usr/bin/rm -f -- "$guest_request"
@@ -3280,8 +3287,10 @@ case "$fixture_case_set" in
       '^TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction$' peer-negative \
       '' '' '' -- TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction
     if (( placeholder_provider_credential )); then
-      record_credential_gated_leg helper_sigkill_detached_child TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild
-      record_credential_gated_leg daemon_sigkill_helper_survives_detached_child TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild
+      record_credential_gated_leg helper_sigkill_detached_child \
+        "$(owner_witness_case_test_name helper_sigkill_detached_child)"
+      record_credential_gated_leg daemon_sigkill_helper_survives_detached_child \
+        "$(owner_witness_case_test_name daemon_sigkill_helper_survives_detached_child)"
     else
       run_native_owner_witness helper_sigkill_detached_child "$v2_crash_events"
       run_native_owner_witness daemon_sigkill_helper_survives_detached_child "$v2_daemon_crash_events"

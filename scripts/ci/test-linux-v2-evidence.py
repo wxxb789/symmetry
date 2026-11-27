@@ -2537,9 +2537,11 @@ def shared_arm_harness(source: str, call_log: str) -> str:
         "set -Eeuo pipefail",
         "fixture_case_set=shared",
         f"call_log={call_log}",
-        "placeholder_provider_credential=$2",
+        "placeholder_provider_credential=$1",
         "credential_gated_cases=()",
         "credential_gated_tests=()",
+        extracted_bash_function(source, "owner_witness_case_identity"),
+        extracted_bash_function(source, "owner_witness_case_test_name"),
         *(f"{name}={name}" for name in CREDENTIAL_GATED_FIXTURE_VARIABLES),
         'run_go_test() { printf "go:%s\\n" "$1" >> "$call_log"; }',
         'run_unexpected_cgroup_procs_fd_witness() { printf "owner-fd-census\\n" >> "$call_log"; }',
@@ -2551,7 +2553,7 @@ def shared_arm_harness(source: str, call_log: str) -> str:
         'run_receipt_persist_failure_witness() { printf "receipt-persist\\n" >> "$call_log"; }',
         'run_literal_pid_reuse_witness() { printf "pid-reuse\\n" >> "$call_log"; }',
         'run_legacy_v1_replay_witness() { printf "v1-replay\\n" >> "$call_log"; }',
-        'record_credential_gated_leg() { printf "record:%s\\n" "$1" >> "$call_log"; credential_gated_cases+=("$1"); }',
+        'record_credential_gated_leg() { printf "record:%s %s\\n" "$1" "$2" >> "$call_log"; credential_gated_cases+=("$1"); }',
         'run_credential_gated_pi_provider_leg() { printf "gated-pi-run:%s\\n" "$1" >> "$call_log"; }',
         'case "$fixture_case_set" in',
         "shared)",
@@ -2633,7 +2635,7 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 call_log = self.root / f"calls-{mode}.txt"
                 call_log.write_text("", encoding="utf-8")
                 result = self.run_script(
-                    "arm.sh", shared_arm_harness(source, str(call_log)), str(call_log), mode
+                    "arm.sh", shared_arm_harness(source, str(call_log)), mode
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = call_log.read_text(encoding="utf-8").splitlines()
@@ -2655,8 +2657,14 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     self.assertNotIn("owner:pi_provider_action", calls)
                     self.assertNotIn("owner:helper_sigkill_detached_child", calls)
                     self.assertNotIn("owner:daemon_sigkill_helper_survives_detached_child", calls)
-                    self.assertIn("record:helper_sigkill_detached_child", calls)
-                    self.assertIn("record:daemon_sigkill_helper_survives_detached_child", calls)
+                    self.assertEqual(
+                        sorted(entry.removeprefix("record:") for entry in calls if entry.startswith("record:")),
+                        sorted(
+                            f"{case} {test}"
+                            for case, test, _, _ in CREDENTIAL_GATED_LEGS
+                            if case != "pi_provider_action"
+                        ),
+                    )
                     self.assertEqual(calls[-1], "gated-pi-run:v2_pi_events")
                     self.assertIn("deferred to the shared arm tail", result.stderr)
 

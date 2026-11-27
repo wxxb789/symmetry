@@ -26,22 +26,22 @@ and the daemon stop-text format.
 
 ### 2.1 Which legs are credential-gated, and why all three
 
-The fixture already marks the authentic-provider legs: `provider_receipt_required=1` for
-`pi_provider_action`, `helper_sigkill_detached_child` and
-`daemon_sigkill_helper_survives_detached_child` (`linux-v2-native-acceptance.sh:2398-2432`). All
+The fixture already marks the authentic-provider legs: `owner_witness_case_identity` carries the
+receipt flag `1` for `pi_provider_action`, `helper_sigkill_detached_child` and
+`daemon_sigkill_helper_survives_detached_child` (`linux-v2-native-acceptance.sh:2419-2434`). All
 three need a model turn that succeeds: the provider-action leg's e2e asserts
 `provider_action_succeeded` (its own witness response), and both crash legs need the detached
 child that only the model's `resource.sync` + commit can produce (the `post-commit` hook writes
-`post-commit-child.pid`, `:942-947`). Ruling 1B1's purpose clause — "so `shared`'s redacted export
+`post-commit-child.pid`, `:959-961`). Ruling 1B1's purpose clause — "so `shared`'s redacted export
 and `stop_readback_reader` become measurable" — is met only when all three stop aborting the set,
 because `validate_pi_durability_witnesses`
-(`scripts/ci/export-linux-v2-redacted-evidence.py:1479-1522`) requires every other allowlisted
-witness and the reader's single call site (`:3249`) is after the whole `case` block.
+(`scripts/ci/export-linux-v2-redacted-evidence.py:1503-1534`) requires every other allowlisted
+witness and the reader's single call site (`:3361`) is after the whole `case` block.
 
 ### 2.2 Credential mode is decided once, from the staged bytes
 
 `: "${SYMMETRY_OPENAI_API_KEY:?...}"` already requires a non-empty value (`:19`). Immediately
-before the fixture writes that value to `native_api_key_file` and unsets it (`:391-398`), it also
+before the fixture writes that value to `native_api_key_file` and unsets it (`:402-415`), it also
 compares it byte-for-byte with the ratified scratch placeholder (`sk-scratch-dummy`) and sets
 `placeholder_provider_credential=1` on an exact match. The comparison needs no daemon change, and
 any other value — including any real secret — leaves every path below byte-identical to today.
@@ -53,7 +53,7 @@ any other value — including any real secret — leaves every path below byte-i
   `newLinuxV2NativeFixture` refuses any fresh production witness while a prior journal is not
   physically released (`daemon/e2e/production_linux_v2_native_witness_test.go:2087-2100`; the
   same guard is why `alternate_mount_refusal` owns a case set, `docs/TODO.md`). Running it last
-  keeps the contract's stop text measurable while no later leg can be poisoned. Nothing else
+  keeps the contract's gated pi leg measurable while no later leg can be poisoned. Nothing else
   depends on the leg's position: each leg has its own Control claim, request, event file and
   result row.
 - `helper_sigkill_detached_child` and `daemon_sigkill_helper_survives_detached_child` are NOT
@@ -62,14 +62,15 @@ any other value — including any real secret — leaves every path below byte-i
   shared with the remaining legs.
 - Every gated leg prints one named outcome line, e.g.
   `credential_gated_pi_provider_action`, and the fixture writes a machine-readable declaration
-  (2.5). The named outcome is the single spelling used in the log, the declaration, the manifest
-  and the evidence record.
+  (2.5). The named outcome is the single spelling used in the log, the declaration and the evidence
+  record; the manifest's `credential_gated.legs` carries the bare case names, and the declaration's
+  `outcome` values are validated as `credential_gated_` + those names.
 
 ### 2.4 A gated run can never report itself passed
 
 The fixture exits non-zero whenever at least one leg was credential-gated: the set's "passed"
 line, the workflow's per-set manifest requirement and the exporter's passed-run completeness check
-(`:1486-1490`) are all gated on status 0, so the only honest terminal state is a failed set whose
+(`:1878-1881`) are all gated on status 0, so the only honest terminal state is a failed set whose
 manifest still lands (`status: "failed"`, `missing_allowlisted_files` naming what was not
 produced, `credential_gated` naming what was not proven). The Bind's "named stop is gone"
 therefore reads as: the set completes, the export lands, the reader's Result row runs, and the

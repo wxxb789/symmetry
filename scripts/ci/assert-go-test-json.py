@@ -6,6 +6,13 @@ import json
 import sys
 
 
+def first_matching_target(name: str, targets: list[str]) -> str | None:
+    for target in targets:
+        if name == target or name.startswith(target + "/"):
+            return target
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("events", metavar="EVENTS.json")
@@ -56,11 +63,9 @@ def main() -> int:
                 if action == "fail":
                     failures += 1
                     if selected_package and isinstance(name, str):
-                        matching = [
-                            target for target in gated if name == target or name.startswith(target + "/")
-                        ]
-                        if matching:
-                            gated_failures[matching[0]] += 1
+                        matching = first_matching_target(name, gated)
+                        if matching is not None:
+                            gated_failures[matching] += 1
                         elif gated:
                             foreign_failures += 1
                 if selected_package and name in counts and action in ("run", "pass", "skip"):
@@ -69,7 +74,7 @@ def main() -> int:
                     selected_package
                     and action == "skip"
                     and isinstance(name, str)
-                    and any(name == target or name.startswith(target + "/") for target in expected)
+                    and first_matching_target(name, expected) is not None
                 ):
                     skipped.append(name)
     except (OSError, UnicodeError) as error:
