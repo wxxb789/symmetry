@@ -2092,6 +2092,83 @@ def extract_witness_output_printer() -> str:
     return source[start : end + len("\n}\n")]
 
 
+def synthetic_cleanup_blocks(source: str) -> tuple[str, str, str]:
+    fail_start = source.index("\nfail() {\n")
+    fail_end = source.index("\n}\n", fail_start) + len("\n}\n")
+    setup_start = source.index('sudo install -d -o root -g root -m 0755 "$rootfs$OWNER_TEST_ROOT"')
+    setup_end = source.index('sudo install -d -o root -g "$A_GID" -m 2730', setup_start)
+    config = source.index('    "$fixture_root/synthetic-goal-cleanup.json" \\\n')
+    guard_start = source.rindex("\ndone\n", 0, config) + len("\ndone\n")
+    guard_end = source.index('for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"', config)
+    return source[fail_start:fail_end], source[setup_start:setup_end], source[guard_start:guard_end]
+
+
+class SyntheticCleanupGuardTest(unittest.TestCase):
+    def test_scoped_grant_and_permission_refusals(self) -> None:
+        fail, setup, guard = synthetic_cleanup_blocks(ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"))
+        harness = r'''
+set -Eeuo pipefail
+fixture_case_set=$1
+shape=$2
+A_USER=symmetry-a A_UID=52000 A_GID=52000
+B_USER=symmetry-b B_UID=52001 B_GID=52001
+rootfs=/rootfs fixture_root=/fixture
+OWNER_TEST_ROOT=/owner PRODUCTION_ROOT=/owner/production
+SYNTHETIC_GOAL_CLEANUP_ROOT=/owner/synthetic
+SYNTHETIC_GOAL_CLEANUP_SOURCE=/owner/synthetic/source
+SYNTHETIC_GOAL_CLEANUP_SEEDS=/owner/synthetic/seeds
+SYNTHETIC_GOAL_CLEANUP_CLONES=/owner/synthetic/clones
+sudo() {
+  case "$1:${@: -1}" in
+    install:*|setfacl:/rootfs/owner/synthetic/seeds|setfacl:/rootfs/owner/synthetic/clones) ;;
+    setfacl:/rootfs/owner/synthetic)
+      [[ "$2:$3" == '-m:u:52001:r-x,m::r-x' ]] || return 96
+      printf 'case root granted\n'
+      ;;
+    stat:/rootfs/owner/synthetic/config.json) printf '0:52000:640:1\n' ;;
+    stat:/rootfs/owner/synthetic)
+      if [[ "$shape" == mode ]]; then printf '0:52000:755\n'; else printf '0:52000:751\n'; fi
+      ;;
+    getfacl:/rootfs/owner/synthetic)
+      printf 'user::rwx\nuser:52001:r-x\n'
+      if [[ "$shape" == acl ]]; then printf 'user:52002:r-x\n'; fi
+      printf 'group::r-x\nmask::r-x\nother::--x\n'
+      ;;
+    *) return 96 ;;
+  esac
+}
+machine_run_as() {
+  case "$*" in
+    'symmetry-a symmetry-a /usr/bin/test -r /owner/synthetic/config.json') return 0 ;;
+    'symmetry-b symmetry-b /usr/bin/test -r /owner/synthetic/config.json') return 1 ;;
+    'symmetry-b symmetry-b /usr/bin/bash -c test -r "$1" bash /owner/synthetic') [[ "$shape" != case-read ]] ;;
+    'symmetry-b symmetry-b /usr/bin/bash -c test -r "$1" bash /owner/synthetic/seeds') [[ "$shape" != seed-read ]] ;;
+    'symmetry-a symmetry-a /usr/bin/bash -c ! test -w "$1" bash /owner/synthetic') [[ "$shape" != case-write ]] ;;
+    *) return 97 ;;
+  esac
+}
+'''
+        cases = (
+            ("synthetic_goal_cleanup", "delivered", ""),
+            ("shared", "case-read", ""),
+            ("synthetic_goal_cleanup", "case-read", "native B cannot read the synthetic cleanup case root the clone seed path sits under"),
+            ("synthetic_goal_cleanup", "seed-read", "native B cannot read the synthetic cleanup seed root"),
+            ("synthetic_goal_cleanup", "case-write", "native A unexpectedly gained write access to the root-controlled synthetic cleanup case root"),
+            ("synthetic_goal_cleanup", "mode", "synthetic cleanup case root must stay root:A mode 0751"),
+            ("synthetic_goal_cleanup", "acl", "synthetic cleanup case root must have exactly the fixture B-read ACL"),
+        )
+        for case_set, shape, error in cases:
+            with self.subTest(case_set=case_set, shape=shape):
+                result = subprocess.run(
+                    ["bash", "-c", harness + fail + setup + guard, "bash", case_set, shape],
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual((result.returncode, result.stderr), (
+                    (1, f"Linux v2 native acceptance setup failed: {error}\n") if error else (0, "")
+                ))
+                self.assertEqual(result.stdout, "case root granted\n" if case_set == "synthetic_goal_cleanup" else "")
+
+
 def report_tail_budget() -> int:
     match = REPORT_TAIL_BUDGET.search(NATIVE_WITNESS_SOURCE.read_text(encoding="utf-8"))
     if match is None:

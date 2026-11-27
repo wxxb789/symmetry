@@ -2253,17 +2253,9 @@ gone and the worker is released as `/usr/bin/dash`. The re-Bind on the final com
 so the acceptance stays bound on the final bytes (record §Bind 2). The next stop and this goal's
 residual follow.
 
-- [ ] The next stop is the labelled clone_checkout leg (2026-11-26, new goal
-      `rf-acc-synthetic-cleanup-seed`, gated on PR #302; identical first failing line in the
-      re-Bind, run `45803728792` on `5f744370`): first failing line, verbatim:
-      `production_linux_v2_cleanup_witness_test.go:506: start controlled B Git worker through the
-      real Linux v2 launcher/anchor/helper: resume process "/usr/bin/dash": one-use Linux v2
-      RELEASE result is unresolved: Linux owner helper release outcome is unresolved
-      (release_outcome_unknown; stage=clone_checkout arm=checkout_receipt wait_class=other
-      guest_stage=seed errno=13)`. The set is not green: `Case set synthetic_goal_cleanup exited
-      1`; the seven AppArmor rows that ran are green; the export refused
-      (`pi durability witness is unavailable: synthetic-goal-cleanup.json`), so no manifest and no
-      `linux-v2-native-evidence-*` artifact exists. Owner: conductor.
+The labelled `clone_checkout` stop from run `45803728792` on `5f744370` moved to
+[the seed fixture closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-seed-the-fixture-serves-the-seed-chain-to-b-2026-11-26).
+The conductor's re-Bind remains open under the seed residuals below.
 
 - [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
       `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
@@ -2312,3 +2304,19 @@ unmeasured) and the redacted-evidence export was refused
       env-gated production witness and the credentialed dispatch; a committed pin needs a seam
       that runs in CI — an env-gated probe test was ruled out because it would not run in CI
       either. Owner: conductor.
+
+## rf-acc-synthetic-cleanup-seed: residuals (2026-11-26)
+
+The first failing line of the `synthetic_goal_cleanup` set (the labelled
+`stage=clone_checkout arm=checkout_receipt wait_class=other guest_stage=seed errno=13` stop, run
+`45803728792` on `5f744370`) was root-caused to the arm's own fixture (goal
+`rf-acc-synthetic-cleanup-seed`, branch `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`):
+the `openat` of the case root failed because B had search but not read access. PR #304 scopes the
+B-read ACL to the synthetic set and checks access using Bash's ACL-aware builtin. The round-one
+Bind (`45836765410` on `6526dac9`) failed at the earlier setup check, before the witness; see the
+[evidence record](evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md).
+
+- [ ] Re-Bind the corrected PR head. Confirm the Go witness reaches RELEASE without the exact
+      `:506 … guest_stage=seed errno=13` stop. Record the next failing line verbatim (it may be
+      emitted at the same source line with a different stage), or confirm the green set exports
+      `synthetic-goal-cleanup.json` with a manifest. Owner: conductor.
