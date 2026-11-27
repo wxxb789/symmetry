@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
@@ -17,6 +19,11 @@ import (
 )
 
 const defaultMaxRecordBytes = 1 << 20
+const maxStopErrorMessageBytes = 200
+
+// Match full credential-shaped values before truncation can expose a partial token.
+var stopErrorCredentials = regexp.MustCompile(`Bearer[ ]+[^ ]{8,}|[A-Za-z0-9+/=_-]{32,}|` +
+	`sk-[A-Za-z0-9_-]{8,}|gho_[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}`)
 
 var (
 	ErrRecordTooLarge          = errors.New("pi rpc record exceeds limit")
@@ -853,9 +860,38 @@ func normalAssistantStop(raw json.RawMessage) error {
 	stopReason, ok := object["stopReason"]
 	var reason string
 	if !ok || !nonEmptyString(stopReason, &reason) || reason != "stop" {
+		var message string
+		if nonEmptyString(object["errorMessage"], &message) {
+			return fmt.Errorf("%w: %q: provider error: %s", ErrUnexpectedAssistantStop, reason, sanitizeStopErrorMessage(message))
+		}
 		return fmt.Errorf("%w: %q", ErrUnexpectedAssistantStop, reason)
 	}
 	return nil
+}
+
+func sanitizeStopErrorMessage(message string) string {
+	space := true
+	message = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			if space {
+				return -1
+			}
+			space = true
+			return ' '
+		}
+		space = false
+		return r
+	}, message)
+	message = strings.TrimSuffix(message, " ")
+	message = stopErrorCredentials.ReplaceAllString(message, "<redacted>")
+	if len(message) <= maxStopErrorMessageBytes {
+		return message
+	}
+	end := maxStopErrorMessageBytes
+	for !utf8.RuneStart(message[end]) {
+		end--
+	}
+	return message[:end] + "…"
 }
 
 func (validator *Validator) fail(err error) error {

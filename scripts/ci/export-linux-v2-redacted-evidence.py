@@ -354,6 +354,31 @@ PI_VEHICLE_INDEPENDENT_WITNESSES = {
     "opencode-native-health.json",
     "unprovisioned-owner-refusal.json",
 }
+# The fixture records this declaration only when the ratified placeholder provider credential was
+# staged into B; the named legs cannot run an authentic provider turn, so they are not proofs.
+CREDENTIAL_GATED_DECLARATION_TARGET = "credential-gated-legs.json"
+CREDENTIAL_GATED_MODE = "placeholder_provider_credential"
+CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE = "SYMMETRY_OPENAI_API_KEY"
+CREDENTIAL_GATED_LEGS = (
+    (
+        "daemon_sigkill_helper_survives_detached_child",
+        "TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild",
+        "credential_gated_daemon_sigkill_helper_survives_detached_child",
+        "pi-daemon-sigkill-helper-survives.json",
+    ),
+    (
+        "helper_sigkill_detached_child",
+        "TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild",
+        "credential_gated_helper_sigkill_detached_child",
+        "pi-helper-sigkill-detached-child.json",
+    ),
+    (
+        "pi_provider_action",
+        "TestProductionLinuxV2PiNativeProviderAction",
+        "credential_gated_pi_provider_action",
+        "pi-native-provider-action.json",
+    ),
+)
 CLEANUP_VEHICLE_WITNESS = "synthetic-goal-cleanup.json"
 FORBIDDEN_KEYS = (
     "lease_token",
@@ -1482,8 +1507,12 @@ def validate_pi_durability_witnesses(
     binary_sha256: str,
     version_line: str,
     source_tree_digest: str,
+    credential_gated_targets: frozenset = frozenset(),
 ) -> None:
-    expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES
+    if not credential_gated_targets <= MANUAL_CASE_SET_FILES[case_set]:
+        fail("credential-gated declaration names a witness outside its case set")
+    # A declared credential-gated witness is a recorded unproven outcome, never a staged-pi proof.
+    expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES - credential_gated_targets
     for target in sorted(expected):
         document = documents.get(target)
         if document is None:
@@ -1505,6 +1534,33 @@ def validate_pi_durability_witnesses(
             fail(f"{target} pi durability witness does not bind --source-tree-digest")
 
 
+def validate_credential_gated_declaration(document: dict) -> tuple[str, ...]:
+    if set(document) != {"version", "mode", "credential_environment_variable", "legs"}:
+        fail("credential-gated declaration has unexpected or missing fields")
+    if (
+        document["version"] != 1
+        or document["mode"] != CREDENTIAL_GATED_MODE
+        or document["credential_environment_variable"] != CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE
+    ):
+        fail("credential-gated declaration version, mode or credential variable does not match its fixed shape")
+    legs = document["legs"]
+    if not isinstance(legs, list) or len(legs) != len(CREDENTIAL_GATED_LEGS):
+        fail("credential-gated declaration must name exactly the pi authentic-provider legs")
+    recorded = []
+    for leg in legs:
+        if not isinstance(leg, dict) or set(leg) != {"case", "test", "outcome"}:
+            fail("credential-gated declaration leg has unexpected or missing fields")
+        if not all(isinstance(leg[field], str) for field in ("case", "test", "outcome")):
+            fail("credential-gated declaration leg fields must be strings")
+        recorded.append((leg["case"], leg["test"], leg["outcome"]))
+    if sorted(recorded) != sorted((case, test, outcome) for case, test, outcome, _ in CREDENTIAL_GATED_LEGS):
+        fail("credential-gated declaration legs do not match the exact pi authentic-provider legs")
+    for case, test, outcome in recorded:
+        if outcome != f"credential_gated_{case}":
+            fail("credential-gated declaration outcome does not name its exact case")
+    return tuple(sorted(case for case, _, _ in recorded))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("manual", "compose", "legacy"))
@@ -1523,7 +1579,14 @@ def main() -> int:
     parser.add_argument("--native-archive-sha256")
     parser.add_argument("--native-version-line")
     parser.add_argument("--source-tree-digest")
+    parser.add_argument("--credential-gated-declaration")
     arguments = parser.parse_args()
+
+    if arguments.credential_gated_declaration is not None:
+        if arguments.mode != "manual" or arguments.case_set != "shared":
+            fail("a credential-gated declaration is only defined for the manual shared case set")
+        if arguments.run_status != "failed":
+            fail("a credential-gated case set can never be exported as a passed run")
 
     native_kind = arguments.native_kind
     native_binary = arguments.native_binary
@@ -1662,6 +1725,31 @@ def main() -> int:
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
 
+    credential_gated_targets: frozenset = frozenset()
+    credential_gated_cases: tuple[str, ...] = ()
+    if arguments.credential_gated_declaration is not None:
+        try:
+            data, document = read_regular(
+                pathlib.Path(arguments.credential_gated_declaration), secret_values
+            )
+        except FileNotFoundError:
+            fail("credential-gated declaration is unavailable")
+        credential_gated_cases = validate_credential_gated_declaration(document)
+        declared = {case: target for case, _, _, target in CREDENTIAL_GATED_LEGS}
+        credential_gated_targets = frozenset(declared[case] for case in credential_gated_cases)
+        destination = output / CREDENTIAL_GATED_DECLARATION_TARGET
+        if destination.exists() or destination.is_symlink():
+            fail("evidence destination already exists")
+        atomic_write(output, CREDENTIAL_GATED_DECLARATION_TARGET, data, runner_uid, runner_gid)
+        copied.append(
+            {
+                "file": CREDENTIAL_GATED_DECLARATION_TARGET,
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+        )
+        expected_destinations.add(CREDENTIAL_GATED_DECLARATION_TARGET)
+
     if native_kind in CONTAINMENT_KINDS:
         document = published_documents.get(CONTAINMENT_KINDS[native_kind][1])
         if document is None:
@@ -1696,6 +1784,7 @@ def main() -> int:
             native_binary_sha256,
             native_version_line,
             arguments.source_tree_digest,
+            credential_gated_targets,
         )
 
     # A failed witness run is the one case whose daemon-side stall the uploaded
@@ -1765,6 +1854,12 @@ def main() -> int:
         "files": copied,
         "missing_allowlisted_files": missing,
     }
+    if credential_gated_cases:
+        manifest["credential_gated"] = {
+            "mode": CREDENTIAL_GATED_MODE,
+            "declaration": CREDENTIAL_GATED_DECLARATION_TARGET,
+            "legs": list(credential_gated_cases),
+        }
     if native_kind is not None:
         manifest["native_binary"] = {
             "kind": native_kind,

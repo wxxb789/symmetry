@@ -5735,3 +5735,29 @@ section, whose pointer sentence names this one.
       See record §4–§6 for the production-check probes and the guard, and the mutant table in §7.
       Delivered, pending the conductor's Bind on the fixed head (§9); the green `## Bind` entry
       records the prior head, not acceptance of these bytes.
+
+## rf-acc-pi-authentic-turn: the stage-1 root cause and its two ruling items (2026-11-27)
+
+Moved from `docs/TODO.md`, section `## rf-acc-pi-authentic-turn: stage-1 root cause and the pending
+ruling (2026-11-26)`; the residual that stays open is the credentialed proof
+([`## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn`](../TODO.md#rf-acc-pi-authentic-turn-the-credentialed-proof-of-the-authentic-turn-2026-11-27)).
+
+- [x] Rule the goal's `DECISION_NEEDED` (stage-1 record §7). The owner's rulings of 2026-11-27
+      accepted 1B1 (placeholder recognition with a named credential-gated outcome, set continues),
+      2C1 (bounded redacted provider error), 3A3 (the credentialed path stays a `main` dispatch)
+      and 6G1 (batch credentialed dispatches). Delivered by stage 2 (`docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md`,
+      record `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`): the fixture decides the mode
+      from the bytes it writes into B, the two detached-child legs are recorded
+      `credential_gated_*`, `pi_provider_action` still runs at the `shared` arm's tail behind a
+      gate row that reads `credential-gated … run=1 pass=0 skip=0`, the declaration
+      `credential-gated-legs.json` and `manifest.credential_gated` publish the named outcomes, and
+      a gated run exits 1 after `stop_readback_reader`, so the reader's Result row and the redacted
+      export become measurable again without the set ever reading as passed.
+- [x] Diagnosability: the final-message check now appends one bounded, redacted provider
+      `errorMessage` (`daemon/internal/harness/pi/rpc.go:860-869`, cap 200 bytes, credential shapes
+      replaced by `<redacted>`), with the red-first row `redacts_token_shapes` beside the existing
+      non-`stop` reason row and the mutant that removes the redaction reddening exactly that row
+      (record §3, §5). Classification and every fail-closed decision are unchanged.
+
+Delivered, pending the conductor's Bind on the PR head and the owner-approved A3 `main` dispatch;
+the gated run's own rows are the pre-Bind proof, and the Bind acceptance is the conductor's.

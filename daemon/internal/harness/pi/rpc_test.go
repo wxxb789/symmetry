@@ -358,6 +358,54 @@ func TestValidatorRejectsDuplicateSettledTrailingEventAndBadFinalAssistant(t *te
 	}
 }
 
+func TestValidatorReportsProviderStopError(t *testing.T) {
+	const stopError = "pi rpc final assistant message did not stop normally"
+	const providerError = ": provider error: "
+	const unauthorized = `401: {"message":"Authentication Error, Invalid API key provided.","type":"token_not_found_in_db","param":"key","code":"401"}`
+	capPrefix := strings.Repeat("a ", 99) + "b"
+	for _, test := range []struct {
+		name, reason, errorField, wantSuffix string
+	}{
+		{"provider_401", "error", `,"errorMessage":` + strconvQuote(unauthorized), providerError + unauthorized},
+		{
+			"redacts_token_shapes", "aborted",
+			`,"errorMessage":` + strconvQuote("\t rejected\r\n\u2003\x00 sk-livekeymaterial12345, gho_test12345678, ghp_test12345678, github_pat_test_12345678, xoxb-test-token12345, Bearer\t\u00a0abcdefgh, abcdefghijklmnop+/=_-0123456789ABCDE\x7f"),
+			providerError + "rejected <redacted>, <redacted>, <redacted>, <redacted>, <redacted>, <redacted> <redacted>",
+		},
+		{
+			"caps_at_utf8_boundary", "error",
+			`,"errorMessage":` + strconvQuote(" \t"+capPrefix+strings.Repeat("界\n\u0085\x00\u2003", 500)),
+			providerError + capPrefix + "…",
+		},
+		{"missing_error", "error", "", ""},
+		{"empty_error", "error", `,"errorMessage":""`, ""},
+		{"whitespace_error", "error", `,"errorMessage":" \n\t "`, ""},
+		{"number_error", "error", `,"errorMessage":401`, ""},
+		{"array_error", "error", `,"errorMessage":["unauthorized"]`, ""},
+		{"object_error", "error", `,"errorMessage":{"message":"unauthorized"}`, ""},
+		{"null_error", "error", `,"errorMessage":null`, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			validator := readyToSettle(t, `{"role":"assistant","content":"done","stopReason":`+strconvQuote(test.reason)+test.errorField+`}`)
+			want := stopError + ": " + strconvQuote(test.reason) + test.wantSuffix
+			if _, err := validator.Finish(); !errors.Is(err, ErrUnexpectedAssistantStop) || err.Error() != want {
+				t.Fatalf("Finish() error = %q, want %q (wrapping ErrUnexpectedAssistantStop)", err, want)
+			}
+		})
+	}
+	t.Run("no_message", func(t *testing.T) {
+		if err := normalAssistantStop(nil); err != ErrUnexpectedAssistantStop || err.Error() != stopError {
+			t.Fatalf("normalAssistantStop(nil) error = %q, want bare ErrUnexpectedAssistantStop", err)
+		}
+	})
+	t.Run("normal_stop", func(t *testing.T) {
+		validator := readyToSettle(t, `{"role":"assistant","content":"done","stopReason":"stop","errorMessage":"unauthorized"}`)
+		if _, err := validator.Finish(); err != nil {
+			t.Fatalf("Finish() error = %v, want nil", err)
+		}
+	})
+}
+
 func TestValidatorBindsFinalAssistantToTheLastLowLevelRun(t *testing.T) {
 	validator := registeredValidator(t)
 	observeJSON(t, validator, `{"type":"response","id":"state-1","command":"get_state","success":true,"data":{"sessionId":"s","sessionFile":"C:/s.jsonl"}}`)

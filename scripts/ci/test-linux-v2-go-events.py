@@ -84,6 +84,38 @@ class GoEventGateTests(unittest.TestCase):
             result = citest.run_gate(SCRIPT, str(path), "TestWitness")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_credential_gated_mode_requires_the_exact_unproven_counts(self) -> None:
+        run = {"Action": "run", "Test": "TestWitness"}
+        failed = {"Action": "fail", "Test": "TestWitness"}
+        package_failed = {"Action": "fail"}
+        passed = {"Action": "pass", "Test": "TestWitness"}
+        for name, events, want_success in (
+            ("expected failure", [run, failed, package_failed], True),
+            ("subtest failure", [run, {"Action": "fail", "Test": "TestWitness/child"}, package_failed], True),
+            ("pass", [run, passed], False),
+            ("missing run", [failed, package_failed], False),
+            ("missing fail event", [run], False),
+            ("skip", [run, failed, {"Action": "skip", "Test": "TestWitness"}], False),
+            ("foreign named failure", [run, failed, {"Action": "fail", "Test": "TestOther"}], False),
+        ):
+            with self.subTest(name=name):
+                result = self.run_gate(events, "--credential-gated", "TestWitness", "TestWitness")
+                self.assertEqual(result.returncode == 0, want_success, result.stderr)
+                if want_success:
+                    self.assertIn("credential-gated TestWitness: run=1 pass=0 skip=0", result.stdout)
+
+    def test_credential_gated_mode_never_relaxes_the_default_gate(self) -> None:
+        events = [{"Action": "run", "Test": "TestWitness"}, {"Action": "fail", "Test": "TestWitness"}]
+        result = self.run_gate(events, "TestWitness")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("credential-gated", result.stdout)
+
+    def test_credential_gated_mode_refuses_unnamed_targets(self) -> None:
+        events = [{"Action": "run", "Test": "TestWitness"}, {"Action": "fail", "Test": "TestWitness"}]
+        result = self.run_gate(events, "--credential-gated", "TestOther", "TestWitness")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be expected test names", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

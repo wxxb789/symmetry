@@ -2344,28 +2344,22 @@ The seed residual item and this goal's fix are recorded in
       preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
       checks ACL-aware. Evidence: record §2.3 and §11.
 
-## rf-acc-pi-authentic-turn: stage-1 root cause and the pending ruling (2026-11-26)
+## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn (2026-11-27)
 
-Stage 1 of goal `rf-acc-pi-authentic-turn` (contract under the GDD contracts root; base and
-dispatch head `07be175e`) is delivered: record `docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md`,
-plan `docs/plans/2026-11-26-rf-acc-pi-authentic-turn-plan.md`. The measured root cause of the
-`shared` leg's `pi rpc final assistant message did not stop normally: "error"` stop is that the
-turn never received a credential: the ratified scratch Bind pattern supplies an inline placeholder
-key, the configured provider rejects it with HTTP 401, and the pinned pi release turns that answer
-into the `stopReason:"error"` message the daemon refuses. No source, fixture or Control byte is
-wrong, and no run on either path has produced a green authentic turn yet.
+Stage 1 (root cause) and stage 2 (slices 1B1 and 2C1 of the owner rulings, 2026-11-27) of goal
+`rf-acc-pi-authentic-turn` are delivered: records `docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md`
+and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
+`docs/plans/2026-11-26-rf-acc-pi-authentic-turn-plan.md` and
+`docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md`. The stage-1 items are closed in
+`docs/archive/CLOSED-TODO.md`; what stays open is the proof that only a real credential can give.
 
-- [ ] Rule the goal's `DECISION_NEEDED` (record §7). Options: (a) credential the acceptance for
-      this goal's bytes by adding the branch to the environment's deployment branch policy — the
-      only option that can prove an authentic turn; (b) a deterministic local pi provider stub —
-      recommended only as a non-provider row, and reachable only through a fixture mode because
-      the fixture admits `https://` base URLs alone; (c) an explicitly documented credential-gated
-      leg — completes the dummy-credential set and its export/`stop_readback_reader` rows behind a
-      named unproven outcome. Recommendation: (a) plus (c), and an amendment of the goal's
-      acceptance clause if (a) is chosen. Owner: conductor.
-- [ ] Diagnosability, same ruling: the final-message check in `daemon/internal/harness/pi/rpc.go:848-861`
-      reports only the stop reason, so an authentication failure and a transport failure yield the
-      identical witness stop (both measured, record §4.2-§4.3) although the message object it
-      already holds carries the provider's own `errorMessage`. Surfacing it changes production
-      daemon error text, so it needs the ruling; its red-first row belongs beside the existing
-      non-`stop` reason row in `daemon/internal/harness/pi/rpc_test.go:345-347`. Owner: conductor.
+- [ ] Credentialed proof of the authentic pi turn and of the two detached-child crash legs.
+      Owner: conductor and owner. Under the ratified placeholder credential the `shared` wall now
+      completes with the three authentic-provider legs named `credential_gated_*` and never
+      reported as passed (the fixture, the exported `credential-gated-legs.json` declaration and
+      the manifest's `credential_gated`/`missing_allowlisted_files` rows all say so), so
+      `stop_readback_reader` and the redacted export become measurable again; the only path that
+      can prove the real turn is the owner-approved `main` dispatch (ruling A3; runbook
+      `refactor/pi-authentic-turn-dispatch-runbook.md`), grouped per ruling 6G1. Expected on that
+      run: no `credential_gated` manifest entry, all three Control provider receipts, and a green
+      `TestProductionLinuxV2PiNativeProviderAction` row.
