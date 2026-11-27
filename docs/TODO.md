@@ -2360,9 +2360,11 @@ and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
 ## rf-acc-pi-turn-deadline: residuals (2026-11-28)
 
 The authenticated-turn task text is now staged by the acceptance fixture
-(`scripts/ci/linux-v2-native-acceptance.sh`) with the Pi home's thinking level off, and
-`authenticated_pi_task_failures` (`scripts/ci/test-linux-v2-evidence.py`) pins the staging, its
-Control-fixture agreement, the thinking level and the fixed-B-home install row. Record:
+(`scripts/ci/linux-v2-native-acceptance.sh`), and the `shared` Pi home's thinking level is off —
+every other Pi case set keeps its pre-r1 `minimal`. `authenticated_pi_task_failures`
+(`scripts/ci/test-linux-v2-evidence.py`) runs the fixture over all fifteen allowlisted case sets and
+pins the staging, its Control-fixture agreement, the thinking level, the absence of the staged file
+for every non-`shared` set, and the fixed-B-home install row. Record:
 `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
 
 - [ ] Credentialed re-dispatch of the `shared` pi legs. Owner: conductor and owner. The row that
@@ -2370,33 +2372,37 @@ Control-fixture agreement, the thinking level and the fixed-B-home install row. 
       (placeholder runs keep the credential-gated outcome). If a different leg stops first, its
       verbatim stop is the next goal.
 - [ ] `stale_leaf` in a credentialed run: the fixture stages the real provider credential into a
-      vehicle whose case was designed around an instant provider failure, so its turn now runs and
-      misses the 30-second stop-receipt hold (`wait for exact durable stop receipt: owner-witness
-      command did not reach its requested durable stage`, `stale_leaf` in run 45974323458). The
+      vehicle whose case was designed around an instant provider failure, so the delivered script
+      exposes its turn to the staged prompt text and its 30-second stop-receipt hold is unproven
+      (`wait for exact durable stop receipt: owner-witness command did not reach its requested
+      durable stage`, `stale_leaf` in run 45974323458). The delivered bytes show exposure of the
+      prompt text on a launch that reaches a turn, not that any such turn ran. The
       other provider-free `pi-durability` case sets share the exposure but were not observed to fail
       in that run — `stage_replay_create_started`, `stage_replay_leaf_bound`,
       `stage_replay_launcher_bound`, `ack_loss_launcher_bound` and `migration` all exited 0 — so
-      treat their holds as exposed and unobserved until a credentialed run sees them. One B home
-      serves a whole guest, so the fix is per case set — stage the ratified placeholder credential
-      for the case sets whose vehicles are provider-free (`stale_leaf`, `migration`,
-      `stage_replay_*`, `ack_loss_*`) and keep the real credential for `shared`, or bound those
-      holds to the fixture's own admission deadline. Owner: the next goal's implementer; evidence in
-      the record's next-stop section.
+      treat their turns and holds as exposed and unobserved until a credentialed run sees them. The
+      Pi staging home serves a whole guest, so the fix is per case set — stage the ratified
+      placeholder credential for the case sets whose vehicles are provider-free (`stale_leaf`,
+      `migration`, `stage_replay_*`, `ack_loss_*`) and keep the real credential for `shared`, or
+      bound those holds to the fixture's own admission deadline. Owner: the next goal's implementer;
+      evidence in the record's next-stop section.
 - [ ] The production decoder rejects the model's TaskResult on `subject_hash` before any leg can
       pass: the witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`)
       hands the model a subject without its canonical hash and the embedded schema states no hash
-      rule. Measured on the retained arm carrier (record §3.2): the same final message decodes to
-      `candidate_completion` once the exact subject and `subject_hash` are supplied in the task text
-      (`goal-0006i` precedent: "the exact contract values must be supplied in the task text").
+      rule. Measured on the retained arm carrier (record §3.2): the JSON payload extracted from the
+      `sup1` arm's final message decodes to `candidate_completion` once the exact subject and
+      `subject_hash` are supplied in the task text — a diagnostic on an extracted payload, not a
+      delivered-arm result (`goal-0006i` precedent: "the exact contract values must be supplied in
+      the task text").
       Carriers are the fixture's staged task text (this increment's mechanism, values computed from
       the resolved subject) or a product-side carrier in the witness context. Owner: conductor
       (`DECISION_NEEDED`).
 - [ ] The `shared` set's provider-free `pi-durability` stage-replay legs (holds
       `stop_receipt_durable`, `leaf_removed`, `journal_cleared`) have never been observed in a
       credentialed run: the 45974323458 `shared` arm aborted at the first authenticated leg. With
-      the staged task text their turns now run (not observed in a credentialed run); whether their
-      post-turn assertions hold on a real provider turn is the credentialed re-dispatch's third
-      observation. Owner: conductor.
+      the staged task text those legs are exposed to the prompt text, but neither a turn nor a
+      post-turn assertion has been observed in a credentialed run; whether either is reached on a
+      real provider turn is the credentialed re-dispatch's third observation. Owner: conductor.
 - decision note — production-side carriers for the same text, for `DECISION_NEEDED` if the fixture
       carrier is ever retired: `control/lib/symmetry_control/goals/admission.ex:418,573` sets a
       goal-admitted task's `goal` to the Goal title while the WorkItem route composes

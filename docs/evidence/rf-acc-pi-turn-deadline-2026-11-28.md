@@ -12,10 +12,10 @@ Plan: `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md`. Shape reference:
 
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `0ab1545f4081b73b2114af350e8c2b5a16e2a2dd3e280f1c8480e1d17c2751b6` | The `shared` case set stages the authenticated Pi legs' task text into the fixed B home's Pi agent directory and installs it under the existing private-file discipline; the staged Pi home sets `defaultThinkingLevel` to `off` so the final assistant message carries the one `text` block the production decoder accepts. |
-| `scripts/ci/test-linux-v2-evidence.py` | `9335f40c28901dd4664a8bb4abab8c448e53aed09c6c766f5b8262a6e0bb9210` | `authenticated_pi_task_failures` runs the fixture's own guard, home-writer call and install block over four case sets and pins the staged payload, the thinking level and both install-list directions; one pin and eleven exact-expectation mutant rows. |
-| `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `1f91095bc677fada561b32c63c3520fb996a21de696773564259dc76d4e0561a` | This increment's plan (fix r1: the thinking level, the decoder row, the guest-scoped task-text statement). |
-| `docs/TODO.md` | — (shared doc, cited by content) | Five `rf-acc-pi-turn-deadline: residuals` bullets: the credentialed re-dispatch, `stale_leaf`, the unobserved provider-free holds, the decoder's `subject_hash` stop and the production carriers. |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `a971ab561de05de300142f7cffab23d5642de5da562dfb6fd5572eaf8696c0ec` | The `shared` case set stages the authenticated Pi legs' task text into the fixed B home's Pi agent directory and installs it under the existing private-file discipline; the same home writer sets `defaultThinkingLevel` to `off` for `shared` and keeps the pre-r1 `minimal` for every other Pi case set (round 2, R29). |
+| `scripts/ci/test-linux-v2-evidence.py` | `0b5f3dcd189032f5f89556db822728e4b1956940378e54b30ea19e1ba2bb62b6` | `authenticated_pi_task_failures` runs the fixture's own guard, home-writer call and install block over all fifteen allowlisted case sets and pins the staged payload, the `shared` thinking level, the pre-r1 level of every other Pi case set, the absence of the staged file on every non-`shared` set and both install-list directions; one pin and fifteen exact-expectation mutant rows. |
+| `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `5cb192855e63952c0d6c1153e9cc2ea4690711d0a2b5063dacf563f6d7235fd8` | This increment's plan (fix r1: the thinking level, the decoder row, the guest-scoped task-text statement; round 2: the R28–R34 wording and scope). |
+| `docs/TODO.md` | — (shared doc, cited by content) | Five `rf-acc-pi-turn-deadline: residuals` bullets: the credentialed re-dispatch, `stale_leaf`, the unobserved provider-free turns and holds, the decoder's `subject_hash` stop and the production carriers. |
 
 `docs/archive/CLOSED-TODO.md` is untouched: this increment closes no tracked item. No Go source is
 changed, so no Go gate binds a delivered byte here (§8).
@@ -86,47 +86,65 @@ directory, the clone at
 the guest's workspace path and the home at the guest's fixed-B-home path, with the host network
 shared (the guest keeps the host netns).
 
-| Arm (staged profile) | Wall to `agent_settled` | Turns | Tools | Commit | Final stop |
-| --- | --- | --- | --- | --- | --- |
-| delivered bytes, no append, `minimal` (`exact`) | 100.2 s | 27 | `bash` 40, `read` 4, `symmetry_resource_sync` 1 | none | `stop` |
-| delivered text, `minimal` (`instructed`, run 1) | 9.5 s | 6 | `symmetry_resource_sync` 1, `write` 1, `bash` 3 | 1 | `stop` |
-| delivered text, `minimal` (`instructed`, run 2) | 39.2 s | 22 | `symmetry_resource_sync` 1, `write` 1, `read` 3, `bash` 16 | 1 | `stop` |
-| delivered text, `minimal` (re-measured control) | 10.4 s | 4 | `symmetry_resource_sync` 1, `write` 1, `bash` 3 | 1 | `stop` |
-| delivered text, `off` (the delivered bytes) | 7.3 s | 5 | `symmetry_resource_sync` 1, `bash` 3 | 1 | `stop` |
-| delivered text + the exact contract values, `off` (not delivered) | 5.2 s | 3 | `symmetry_resource_sync` 1, `bash` 2 | 1 | `stop` |
+| Arm | Staged profile | Wall to `agent_settled` | Turns | Tools | Commit | Final stop |
+| --- | --- | --- | --- | --- | --- | --- |
+| `c2` | the carrier, no staged append, `minimal` | 100.2 s | 27 | `bash` 40, `read` 4, `symmetry_resource_sync` 1 | none | `stop` |
+| `c1` | delivered text, `minimal` | 9.5 s | 6 | `symmetry_resource_sync` 1, `write` 1, `bash` 3 | 1 | `stop` |
+| `c3` | delivered text, `minimal` | 39.2 s | 22 | `symmetry_resource_sync` 1, `write` 1, `read` 3, `bash` 16 | 1 | `stop` |
+| `min1` | delivered text, the pre-fix level `minimal` | 10.4 s | 4 | `symmetry_resource_sync` 1, `write` 1, `bash` 3 | 1 | `stop` |
+| `off1` | delivered text, the delivered level `off` | 7.3 s | 5 | `symmetry_resource_sync` 1, `bash` 3 | 1 | `stop` |
+| `sup1` | delivered text plus the exact contract values, `off` (not delivered) | 5.2 s | 3 | `symmetry_resource_sync` 1, `bash` 2 | 1 | `stop` |
 
-The jail narrows what a model can explore, so its `exact` row (100.2 s) is a lower bound for the
+The jail narrows what a model can explore, so its `c2` row (100.2 s) is a lower bound for the
 guest's unspecified turn, which burned the full 424.04 s; the guest row of §3.1 is the binding one.
-Every instructed row does the fixture's task end to end: one brokered `resource.sync` per run, one
-commit and a normal stop. Against the unchanged 424.04 s bound that is a >10x margin, so the bound
-needs no amendment (`plan §2.2`).
+Every text-staged arm settled with one brokered `resource.sync` call, one commit and a normal stop.
+That is a >10x margin against the unchanged 424.04 s bound, so the bound needs no amendment
+(`plan §2.2`). No arm's original final message was accepted by the production decoder; §3.2's
+decoder table is the per-arm verdict.
 
-The pre-fix rows ran with the staged Pi home's `defaultThinkingLevel` `minimal`; the delivered bytes
-set it to `off` (fix r1, RP-01), because the production decoder requires exactly one `text` block in
-the final assistant message (`DecodeAssistantTaskResult`, `daemon/internal/harness/pi/rpc.go:901`;
-the one-block rule is `:916`; the committed multi-block refusal is `adapter_test.go:657`). The final
-assistant message of each captured arm and the decoder's verdict on it:
+The pre-fix arms ran with the staged Pi home's `defaultThinkingLevel` `minimal`; the delivered bytes
+set it to `off` for the `shared` case set only, because the production decoder — reached by the
+authenticated legs alone — requires exactly one `text` block in the final assistant message
+(`DecodeAssistantTaskResult`, `daemon/internal/harness/pi/rpc.go:901`; the one-block rule is `:916`;
+the committed multi-block refusal is `adapter_test.go:657`). Every other Pi case set keeps the level
+it had before r1 (round-2 scope, §4). The final assistant message of each captured arm and the
+decoder's verdict on it, quoted as the whole `ErrInvalidTaskResult` string:
 
-| Arm (staged profile) | Final message blocks | `DecodeAssistantTaskResult` on the captured message |
+| Arm | Final message blocks | `DecodeAssistantTaskResult` on the captured message |
 | --- | --- | --- |
-| delivered text, `minimal` (all three retained runs and the re-measured control) | `[thinking, text]` | rejected: `pi task result must be one complete JSON object` (two blocks) |
-| delivered text, `off` (the delivered bytes) | `[text]` | the one-block gate passes; rejected on the model's own JSON: `convert task-result generated DTO: subject_hash does not match canonical subject` (the model wrote the subject's `tree_digest` in place of the canonical hash) |
-| delivered text + the exact contract values, `off` (not delivered) | `[text]`, the text block carrying a prose preamble before the JSON | as delivered rejected (the whole text must be one JSON object); the JSON payload after the preamble decodes to `candidate_completion` |
+| `c1`, `c3`, `min1` — delivered text, `minimal` | `[thinking, text]` | rejected: `pi task result must be one complete JSON object` |
+| `c2` — the carrier with no staged append, `minimal` | `[thinking, text]` | rejected: the same two-block string |
+| `off1` — the delivered writer's settings, model and text, `off` | `[text]` | the one-block gate passes; the whole rejection is `pi task result must be one complete JSON object: convert task-result generated DTO: subject_hash does not match canonical subject` (the model wrote the subject's `tree_digest` in place of the canonical hash) |
+| `sup1` — delivered settings and model, extended task text, `off` (not delivered) | `[text]`, the text block carrying a prose preamble before the JSON | as delivered rejected: `pi task result must be one complete JSON object`; decoding the JSON payload alone, after the preamble, returns `candidate_completion` — a diagnostic on an extracted payload, not a delivered-arm result |
 
 The delivered bytes remove the block-shape rejection. The remaining decoder rejection is the model's
-inability to derive the canonical `subject_hash` from what the product sends: the third row is the
+inability to derive the canonical `subject_hash` from what the product sends: the `sup1` row is the
 counterfactual that isolates it (with the contract values supplied, the same payload decodes), and
 §9 records it as the next credential-row stop.
 
-### 3.3 The measured bytes are the delivered bytes
+### 3.3 Per arm: reproduced byte for byte, re-measured, or only captured
 
-The `APPEND_SYSTEM.md` the two `instructed` runs staged under their jailed fixed-B home is
-byte-equal to `authenticated_pi_task_text` + `"\n"` in `scripts/ci/linux-v2-native-acceptance.sh`
-(303 bytes, compared after the runs by a `python3` comparison of the two files; both compared
-equal). For the re-measured arms, the delivered script's own home-writer call, run with the arm's
-model and base URL, emits a home whose `settings.json` and `models.json` are byte-equal to the
-arm's jailed home (`cmp`, both files), so the profile bytes the arms measured are the delivered
-writer's own bytes.
+The retained arms fall into two groups. The fix round's first captures — `c1`, `c2`, `c3`, logs
+under the GDD state root's `scratch/pi-turn-deadline/runs/` — are **captured only**: their staged
+homes were never compared with the delivered writer, and `c2` staged no append file at all (its
+`exact`/no-text row, 40 `bash` calls and no commit). The fix-r1 re-measurement — `off1`, `min1`,
+`sup1`, under the WSL scratch jail root, each run retaining `logs/final-message.json` and
+`logs/summary.json`, with the jailed home left at `/opt/pi-run-<arm>/home/` — is **re-measured**.
+
+For the re-measured group the delivered writer was re-run for the `shared` case set with the arm's
+model and base URL, and the emitted home compared with the arm's jailed home. The exact rows
+(`cmp`, re-executed on the delivered bytes, §8):
+
+| Arm | `settings.json` | `models.json` | `APPEND_SYSTEM.md` |
+| --- | --- | --- | --- |
+| `off1` | equal (104 B, `off`) | equal (254 B) | equal (303 B) |
+| `min1` | **differs** (108 B, `minimal`) | equal (254 B) | equal (303 B) |
+| `sup1` | equal (104 B, `off`) | equal (254 B) | **differs** (648 B) |
+
+So `off1` reproduced all three staged inputs byte for byte; `min1` reproduced the model config and
+the task text but staged the pre-fix thinking level; `sup1` reproduced the settings and model but
+staged the extended text with the contract values. No byte equality outside those rows is claimed,
+and none of the three is a credentialed guest at the PR head.
 
 ## 4. The fix
 
@@ -152,11 +170,22 @@ the profile arguments, the tools or any assertion. The file joins `b_native_cred
 the existing install and validation rows give it the same B-owned 0600 singly-linked discipline as
 the other staged Pi files, and the containment kinds never see it (the text is empty for them).
 
-The same home writer sets the staged Pi profile's `defaultThinkingLevel` to `off` (fix r1, RP-01):
+The same home writer sets the staged Pi profile's `defaultThinkingLevel` to `off` for the `shared`
+case set and keeps the pre-fix `minimal` for every other Pi case set (fix r1, RP-01; round 2, R29):
 the pinned release's own `docs/settings.md` lists `off` among the level values, and the re-measured
-arms (§3.2) show the resulting final assistant message without the `thinking` block. One writer
-serves every pi case set; the placeholder-credential legs never reach the decoder, so §7's Bind rows
-are unchanged.
+arms (§3.2) show the resulting final assistant message without the `thinking` block. The census
+behind that scope: the acceptance script's allowlist names 15 case sets
+(`scripts/ci/linux-v2-native-acceptance.sh:33`) and the writer stages a Pi home for the 13 of them
+that are neither `codex_containment` nor `claude_containment` — `shared`,
+`stage_replay_create_started`, `stage_replay_leaf_bound`, `stage_replay_launcher_bound`,
+`ack_loss_launcher_bound`, `stale_leaf`, `migration`, `alternate_mount_refusal`,
+`stale_journal_run_key`, `stale_journal_run_key_legacy`, `stale_journal_fence`,
+`stale_journal_subject`, `synthetic_goal_cleanup`. `off` reaches `shared` alone; the other twelve
+keep `minimal`, their pre-r1 value. The second B home, `CLONE_TEST_B_HOME`
+(`scripts/ci/linux-v2-native-acceptance.sh:538`), serves the clone/launcher scratch legs and stages
+no Pi home at all (`:721,989-993`), so the Pi staging home stays the single Pi staging site. One
+writer serves every pi case set; the placeholder-credential legs never reach the decoder, so §7's
+Bind rows are unchanged.
 
 Recorded consequence, not hidden: the model is *told* the task by the fixture rather than inferring
 it from the Control goal. That is the relationship the WorkItem route had before `#303` and the one
@@ -165,18 +194,32 @@ text, so no leg asserts anything the fixture did not already admit.
 
 ## 5. Red/green controls
 
-- No-text control (§3.2 `exact`): 40 `bash` calls, no commit. Guest control (§3.1): the full bound,
+- No-text control (§3.2 `c2`): 40 `bash` calls, no commit. Guest control (§3.1): the full bound,
   no `resource.sync` receipt. The fix's green rows: two instructed runs, one receipt and one commit
   each. Decoder rows: the pre-fix profile's captured messages are rejected on the block shape
   (`[thinking, text]`), the delivered profile's message passes that gate, and the
   supplied-contract-values payload decodes to `candidate_completion` (§3.2).
-- Mutation rows over `authenticated_pi_task_failures` (eleven mutations, each asserted against the
-  exact failure list it must produce; the pristine pair returns `[]`). The rows run in the `daemon`
-  job's Check Linux v2 fixture contracts step as the non-root runner user:
+- Mutation rows over `authenticated_pi_task_failures` (fifteen mutations, each asserted against the
+  exact failure list it must produce; the pristine pair returns `[]`). Every mutant runs the pin
+  over all fifteen allowlisted case sets, so a leak into any of them is a row. The rows run in the
+  `daemon` job's Check Linux v2 fixture contracts step as the non-root runner user:
 
-| Mutation | Failure list |
+In the table, `<set>` ranges over the twelve non-containment case sets other than `shared`, in
+`STAGING_CASE_SETS` order: `stage_replay_create_started`, `stage_replay_leaf_bound`,
+`stage_replay_launcher_bound`, `ack_loss_launcher_bound`, `stale_leaf`, `migration`,
+`alternate_mount_refusal`, `stale_journal_run_key`, `stale_journal_run_key_legacy`,
+`stale_journal_fence`, `stale_journal_subject`, `synthetic_goal_cleanup`. Every `<set>` row is
+verbatim `the <set> case set stages the authenticated Pi task text`, and a `LEVEL` row is verbatim
+`the <set> case set stages the authenticated thinking level 'off'`.
+
+| Mutation | Exact failure list |
 | --- | --- |
-| the `shared` guard made unconditional (`if true; then`) | the three case-set rows (`stale_leaf`, `stage_replay_leaf_bound`, `codex_containment`) plus `the fixed B home install list stages the task text without it` |
+| the `shared` text guard made unconditional (`if [[ "$fixture_case_set" == shared ]]` → `if true`) | the twelve `<set>` rows in order, then `the fixed B home install list stages the task text without it` |
+| the home writer's `if authenticated_pi_task_text:` replaced by `if True:` | the twelve `<set>` rows in order, nothing else |
+| the `shared` guard extended to `migration` | `the migration case set stages the authenticated Pi task text` |
+| the `shared` guard extended to `synthetic_goal_cleanup`, a set the previous four-set pin never ran | `the synthetic_goal_cleanup case set stages the authenticated Pi task text` |
+| the staged thinking level made unconditional (`… = "off" if fixture_identity_suffix == "shared" else "minimal"` → `= "off"`) | the twelve `LEVEL` rows in order |
+| the staged thinking level raised for `shared` (`… = "off" if … else "minimal"` → `"minimal"`) | `the staged pi home no longer sets the thinking level off: 'minimal'` |
 | the staged text reworded (`for the configured GitHub repository` → `for the configured resource`) | `the shared case set does not stage the exact authenticated Pi task text` |
 | the fixed-scope paragraph deleted from the staged text | `the shared case set does not stage the exact authenticated Pi task text` |
 | the invocation's last argument (`"$authenticated_pi_task_text"`) blanked to `""` | `the shared case set does not stage the exact authenticated Pi task text` |
@@ -185,19 +228,21 @@ text, so no leg asserts anything the fixture did not already admit.
 | the install row removed from the acceptance script | `the fixed B home install list omits the staged task text` |
 | the Control fixture's description reworded | `the shared case set does not stage the exact authenticated Pi task text` |
 | the Control fixture's `pi_provider_action` row renamed | `the Control claim fixture no longer carries the pi_provider_action description` |
-| the invocation's last argument dropped (argument count changed) | `the fixture staging script for {shared, stale_leaf, stage_replay_leaf_bound, codex_containment} exited 1` |
-| the staged thinking level raised (`off` → `minimal`) | `the staged pi home no longer sets the thinking level off: 'minimal'` |
+| the invocation's last argument dropped (argument count changed) | the fifteen `the fixture staging script for <case set> exited 1` rows in `STAGING_CASE_SETS` order |
 
 ## 6. Which userland each property needs
 
 The new pin and its mutants are bash/python text-and-staging rows: they execute the fixture's own
 guard, the fixture home writer's real shell call (its argument list included) and the install-list
-block verbatim over four case sets, and assert the staged file bytes against the Control fixture's
-description plus the fixed-scope paragraph. No permission, ACL, ownership or environment assertion is added, so
-the runner-mirroring requirement (lesson 160) is not engaged; the rows run in the `daemon` job's
-Check Linux v2 fixture contracts step on the runner image, and the local runs above are recorded as
-this host's oracle (WSL `Ubuntu-24.04`, `VERSION_CODENAME=noble`, python 3.12.3). The guest-side
-effect of the staged file is the credentialed dispatch's row.
+block verbatim over every allowlisted case set (15), and assert the staged file bytes against the
+Control fixture's description plus the fixed-scope paragraph. For each non-`shared` case set the pin
+also asserts the writer staged **no** `APPEND_SYSTEM.md` — the empty-input negative restored in
+round 2 (R28) — and, for the case sets that stage a Pi home, that its thinking level stayed
+`minimal`. No permission, ACL, ownership or environment assertion is added, so the
+runner-mirroring requirement (lesson 160) is not engaged; the rows run in the `daemon` job's Check
+Linux v2 fixture contracts step on the runner image, and the local runs above are recorded as this
+host's oracle (WSL `Ubuntu-24.04`, `VERSION_CODENAME=noble`, python 3.12.3). The guest-side effect
+of the staged file is the credentialed dispatch's row.
 
 ## 7. Does the conductor's Bind execute it?
 
@@ -211,6 +256,10 @@ new for the two crash legs. The two Python suites (including the new pin and its
 `daemon` job on the PR head. The authenticated outcome is the owner's credentialed cadence, not the
 Bind.
 
+The `## Bind (round 1)` section at the end of this record is the conductor's placeholder Bind
+receipt and is committed exactly as the Bind worker delivered it; §7 predicts its rows, and the
+section itself is the evidence.
+
 ## 8. Gates
 
 Every command below ran on the delivered bytes of §1 within the range `ac04f3e2..HEAD`; the
@@ -218,16 +267,22 @@ doc-scoped rows ran in a scratch clone holding exactly those bytes as one commit
 the two Python suites is the `daemon` job's Check Linux v2 fixture contracts step (it runs them
 from the `daemon` directory on the runner image).
 
+Range provenance: the branch also merges `origin/main`'s `3d377582` (#309). The rows below bind this
+increment's own five paths (§1); main's merged `daemon/e2e` and docs paths lie outside that set and
+carry their own gates and CI.
+
 | Command (working directory) | Exit | Result |
 | --- | --- | --- |
 | `bash -n scripts/ci/linux-v2-native-acceptance.sh` (repo root, WSL) | 0 | no output |
-| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 75 tests … OK` (was 73 before this increment; fix r1 keeps 75) |
+| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 75 tests … OK` in 64.0 s (73 before this increment; 75 since fix r1; round 2 widens the existing pin and adds four mutant rows inside it) |
 | `python3 -B scripts/ci/test-linux-v2-owner-request-keys.py` (repo root, WSL) | 0 | `Ran 10 tests … OK` |
 | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <plan, record, TODO>` (repo root) | 0 / 0 / 0 | all three changed docs pass root-only |
 | `python3 scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base ac04f3e2 --head HEAD` | 0 | `1 changed record(s) pass the root-only check` |
 | `comment-cap.py <scratch clone> ac04f3e2` | 0 | no added comment block over 2 lines |
 | `python3 scripts/ci/jscpd-changed.py --repo <scratch clone> --base ac04f3e2 --head HEAD` | 0 | `5 changed file(s), 1803 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new` |
 | pinned `ruff` 0.17.5 `check scripts/ci` and `format --check scripts/ci`, in the delivered tree and in the dispatch base tree (WSL) | — | identical finding sets at both revisions: `30` findings with `25` E501 rows (none of them on a line this range adds) and `8` files-to-reformat; the advisory CI step is `continue-on-error`, and the range moves neither number |
+| the delivered `shared` home writer re-run against each retained arm's jailed home (`cmp`, WSL, §3.3) | 0 for every `equal` cell | `off1` equal/equal/equal; `min1` settings differ by design (pre-fix level); `sup1` append differs by design (extended text) |
+| `go test -mod=mod -count=1 -run 'TestScratchRP01' ./internal/harness/pi` in a scratch `daemon` copy whose `internal/harness/pi` and `internal/protocol` trees are byte-identical to the delivered ones (WSL, Go 1.27.0) | 0 | `ok … 0.203s`: the six captured messages reject or decode exactly as §3.2's table records, including `off1`'s full string |
 
 The Go rows, declared once: `git diff --stat ac04f3e2..HEAD` lists only the five paths of §1, so no
 Go source is changed, no `gofmt`/`go vet` or Go test row binds a delivered byte, and the `daemon`
@@ -242,11 +297,27 @@ the final bytes of §1 — the test file and the acceptance script after the RP-
 the plan/record/TODO after their wording fixes — so every implement- and apply-stage receipt for
 those files is superseded by these bytes.
 
+Fix r2 receipt (this round): the same code-scoped and doc-scoped rows re-ran on the §1 bytes of
+this table — the acceptance script with the scoped thinking level, the test file with the
+fifteen-case-set pin, the restored empty-input negative and fifteen mutants, and the plan/record/TODO
+with the R27–R36 wording — so the fix-r1 receipt above is superseded for every path this round
+touches. The two §3.3/§3.2 measurement rows are this round's re-measurement.
+
+CI observation, not a gate of this increment: on the reviewed head `dd9da52f` the `compose` job
+(`.github/workflows/ci.yml:1793-1812`) failed in 41 s inside its smoke step, at the Control image's
+signing-key import — `gpg: no valid OpenPGP data found.` from the
+`curl … microsoft.asc | gpg --dearmor` line (`docker/control.Dockerfile:46-47`). That Dockerfile is
+unchanged by this diff, and the sibling PR #309's `compose` job passed six minutes earlier on the
+same workflow, so the failure is an infrastructure flake and not attributable to this change. The
+conductor attempted a rerun on the same head; it was refused while the run still had `control` in
+progress. No `known-flakes` row is added: rule 63 needs a second PR to establish the pattern.
+
 ## 9. Residual risks and known limits
 
-- **The next verbatim stops are named, not fixed.** In the `shared` arm the first authenticated leg
-  now fails at the production decoder rather than at the bound: the model writes the subject's
-  `tree_digest` where the canonical `subject_hash` is required, and neither the goal title nor the
+- **The next verbatim stops are named, not fixed.** In the local `shared`-shaped arms the first
+  authenticated leg now fails at the production decoder rather than at the bound — a local
+  reproduction on the captured messages, not a proved credentialed guest stop: the model writes the
+  subject's `tree_digest` where the canonical `subject_hash` is required, and neither the goal title nor the
   witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`) carries a
   hash the model can copy (§3.2: with the exact subject and hash supplied, the same payload
   decodes; the same canonical-hash burden applies to every native harness's TaskResult, not only
@@ -256,21 +327,27 @@ those files is superseded by these bytes.
   `45974323458`: `wait for exact durable stop receipt: owner-witness command did not reach its
   requested durable stage`, command live, journal at `claimed`) shares the credential-staging layer:
   the fixture stages the real provider credential into a `pi-durability` vehicle whose case was
-  designed around an instant provider failure, so its turn now runs. One B home serves a whole
-  guest, so the fix is per case set (stage the ratified placeholder for the provider-free sets); it
-  is a separate goal and is recorded in `docs/TODO.md`.
-- **The model prefixed prose once.** In one of the three `off` arms the final text block began with
-  a prose sentence before the JSON; the decoder accepts only a whole-text JSON object, so that arm
-  would fail as delivered even with the contract values supplied (§3.2, third decoder row). The
-  other four captured messages were pure JSON; the model-side risk is unmeasured and belongs to the
+  designed around an instant provider failure. What the delivered script proves for that vehicle is
+  exposure to the staged prompt text on the next launch that reaches a turn; it does **not** prove
+  that the turn ran, or that its post-turn hold was reached, in any credentialed run — neither has
+  been observed. The Pi staging home serves a whole guest (`CLONE_TEST_B_HOME` serves only the
+  clone/launcher scratch legs and stages no Pi home), so the fix is per case set (stage the
+  ratified placeholder for the provider-free sets); it is a separate goal and is recorded in
+  `docs/TODO.md`.
+- **The model prefixed prose once.** In the `sup1` arm the final text block began with a prose
+  sentence before the JSON; the decoder accepts only a whole-text JSON object, so that arm would
+  fail as delivered even with the contract values supplied (§3.2, the `sup1` row). The
+  other captured messages were pure JSON; the model-side risk is unmeasured and belongs to the
   credentialed row.
 - The `shared` set's own provider-free `pi-durability` stage-replay and ack-loss legs receive the
-  staged append text too (one B home per guest) although their profile is `provider_access=False`
-  and their cases were designed around an instant provider failure; their turns now run. Their
-  post-turn holds (`stop_receipt_durable`, `leaf_removed`, `journal_cleared`, the 30-second
-  stop-receipt barrier) have never been reached in a credentialed run — the `shared` arm aborted at
-  the first authenticated leg — so whether they hold on a real provider turn is unobserved here and
-  is the credential re-dispatch's third observation.
+  staged append text too (one Pi staging home per guest) although their profile is
+  `provider_access=False` and their cases were designed around an instant provider failure. The
+  delivered script proves those legs would be *exposed* to the staged prompt text on a launch that
+  reaches a turn; it does not show that any such turn ran. Their post-turn holds
+  (`stop_receipt_durable`, `leaf_removed`, `journal_cleared`, the 30-second stop-receipt barrier)
+  have never been reached in a credentialed run — the `shared` arm aborted at the first
+  authenticated leg — so whether the turns or the holds are reached on a real provider turn is
+  unobserved here and is the credential re-dispatch's third observation.
 - The local arms are a jail, not the guest: no cgroup containment, no A/B ownership, no
   post-commit hook (the guest's hook can block its commit for up to 20 s) and no systemd. They
   support the *direction and size* of the effect; the credentialed dispatch remains the acceptance
@@ -288,11 +365,55 @@ those files is superseded by these bytes.
 - Plan and record; `docs/TODO.md` entries for the five open items.
 - The measurement harness and its raw arm logs (`c1`, `c2`, `c3`: `summary.json`,
   `bridge-requests.jsonl`, `pi.stdout.jsonl`) under the GDD state root's `scratch/pi-turn-deadline/`;
-  the same harness's scripts (`run-turn3.sh`, `bridge-stub.py`, the generated bridge extension).
-- The fix round's re-measured arm logs (`runs/off1`, `runs/min1`, `runs/sup1`, each with its
-  captured `final-message.json` and `summary.json`) under the WSL `<scratch>` jail root, the
-  retained runs' extracted final messages beside their `pi.stdout.jsonl`, and the throwaway decoder
-  check — a scratch copy of the daemon module holding one `_test.go` that calls
-  `DecodeAssistantTaskResult` on those captured messages, never placed in the repository tree.
+  the same harness's scripts (`run-turn3.sh`, `run-turn4.sh`, `bridge-stub.py`, the generated
+  bridge extension) — retained as historical material only, see §10.1.
+- The fix round's re-measured arms: `off1`, `min1`, `sup1`, each keeping its `logs/`
+  `final-message.json` and `summary.json` under the WSL scratch jail root, with the arm's jailed
+  home left at `/opt/pi-run-<arm>/home/`. The throwaway decoder check is a scratch copy of the
+  daemon module holding one `_test.go` that calls `DecodeAssistantTaskResult` on those captured
+  messages, never placed in the repository tree.
 - The failure-of-record material: the credentialed run log and evidence archive of `45974323458`
   under the GDD state root's `scratch/cred-45974323458/`.
+
+### 10.1 The retained measurement harness is unsafe to run as written (R31)
+
+`run-turn3.sh` and `run-turn4.sh` are retained as the historical reproduction of §3.2's arms, not as
+a probe a reader may run. As written they read the operator's configured provider key out of
+`models.yml`, pass it as a **process argument** (`python3 - "$home" "$key" "$arm" "$level"`), write
+`auth.json` before `chmod 0600` — a window at the umask default — and leave the credential-bearing
+home behind under `/opt/pi-run-<tag>/home/`. An argument is readable by any same-user process
+through `/proc/<pid>/cmdline`.
+
+The corrected pattern for any re-measurement:
+
+1. a dedicated, short-lived measurement key, never the operator's configured key;
+2. the key supplied only through a private file or a file descriptor — never argv, never a logged
+   command's environment;
+3. the home created `0700` and `auth.json` created `0600` from the start, with no write-then-`chmod`
+   window;
+4. `auth.json` removed on exit, and the home directory removed with it.
+
+The key that produced the retained arms must be treated as **exposed** and rotated by its owner.
+
+Conductor remediation, 2026-11-28: the credential-bearing `auth.json` file in each of the three
+retained arms' jail homes (`/opt/pi-run-<arm>/home/.pi/agent/` for `<arm>` in `off1`, `min1` and
+`sup1`) was removed, and every remaining file in those homes was verified to contain zero
+occurrences of the key.
+
+## Bind (round 1)
+
+**ROUND 1 / SCRATCH / ACT SUPERSEDED — not the protected credentialed dispatch.** [Run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991), attempt 1, ran only `shared` with the ratified placeholder credential. The head-filtered Actions census was `total_count=1`. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46046284991/artifacts/15222292091) is 4,449 bytes; downloaded SHA-256 `0c70c0d6f54aa9cf045ca1f4cedb630677c2c511314748b05061b0789dc318b0` matches the Actions digest.
+
+| Input | PR #310 `dd9da52f00e8d44cbc39a1590b307220a8567906` | Run `a75ad21c42145b083660501f7a4f350eed8e211f` |
+| --- | --- | --- |
+| Files already present at the PR head | Delivered tree, including the §1 bytes | Byte-identical: the PR head is the sole parent; the only tree changes are the two additions below |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | Absent | SHA-256 `bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b`; ratified workflow with only `case_sets=(shared)` changed; shared push filter unchanged |
+| `scripts/ci/scratch-gh-shim` | Absent | SHA-256 `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`; unmodified ratified shim |
+
+Observations from the [acceptance log](https://github.com/wxxb789/symmetry/actions/runs/46046284991/job/140666554575), using raw `gh run view --log` line numbers and omitting only the Actions prefix:
+
+1. Line 3979: `Case set shared exited 1`. There were **22** `verified … run=1 pass=1 skip=0` rows; the credential-gated leg is not one of them.
+2. `verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0` is absent. Line 3689: `witness output:     production_linux_v2_native_witness_test.go:224: stage reservation_durable recovery did not preserve the correct physical Journal state: pre-create abort tombstone reports a target or leaf creation`. `helper_bound` was not reached. The two replay Go files are unchanged from `ac04f3e2`; the #309 round-2 head that verified `reservation_durable` is not an ancestor of this PR head.
+3. **Authenticated Pi first failure: not observed.** The placeholder run has no `subject_hash` rejection line; the protected workflow returned zero dispatches at `dd9da52f` when queried. The `subject_hash` claim in §9 comes from the local decoder measurement in §3.2, not this run: retained `off1` RPC transcript line 189 has one final `text` block and sets `subject_hash` to `subject.tree_digest`, which differs from the recomputed canonical Subject hash. This confirms the field name for the local capture, not the next stop in a protected run.
+4. Line 3107: `credential-gated TestProductionLinuxV2PiNativeProviderAction: run=1 pass=0 skip=0`. Line 3108: `credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.` Line 3976: `redacted evidence export failed: pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`. The partial export contains `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3223 B), `shared/stage-crash-replay-reservation_durable.json` (5728 B), and `shared/unprovisioned-owner-refusal.json` (691 B). The replay JSON is not a pass receipt.
+5. No `shared/manifest.json` was published, so there is no manifest status. The first non-gated failure, line 3685, is `Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`.

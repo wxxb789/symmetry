@@ -1123,6 +1123,8 @@ import sys
     synthetic_source, synthetic_seeds, synthetic_clones, authenticated_pi_task_text,
 ) = sys.argv[1:]
 fixture = pathlib.Path(fixture_root)
+# The production decoder accepts one text block; only the shared set runs authenticated Pi legs.
+authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"
 
 def config(kind, profile, model, resource_id, provider_access=None):
     provider_access = kind == "pi" if provider_access is None else provider_access
@@ -1249,7 +1251,13 @@ else:
     (private_home / ".config/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".local/share/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".pi/agent/settings.json").write_text(
-        json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "off"}),
+        json.dumps(
+            {
+                "defaultProvider": "openai",
+                "defaultModel": pi_model,
+                "defaultThinkingLevel": authenticated_pi_thinking_level,
+            }
+        ),
         encoding="utf-8",
     )
     (private_home / ".pi/agent/auth.json").write_text(

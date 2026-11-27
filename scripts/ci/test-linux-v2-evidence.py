@@ -2715,7 +2715,26 @@ FIXED_SCOPE_PARAGRAPH = (
     "This leg is fixed-scope: do not explore the repository or run its test suites or gates, "
     "and return the required final TaskResult JSON object as your only final answer."
 )
-STAGING_CASE_SETS = ("shared", "stale_leaf", "stage_replay_leaf_bound", "codex_containment")
+STAGING_CASE_SETS = (
+    "shared",
+    "codex_containment",
+    "claude_containment",
+    "stage_replay_create_started",
+    "stage_replay_leaf_bound",
+    "stage_replay_launcher_bound",
+    "ack_loss_launcher_bound",
+    "stale_leaf",
+    "migration",
+    "alternate_mount_refusal",
+    "stale_journal_run_key",
+    "stale_journal_run_key_legacy",
+    "stale_journal_fence",
+    "stale_journal_subject",
+    "synthetic_goal_cleanup",
+)
+STAGING_PI_CASE_SETS = tuple(name for name in STAGING_CASE_SETS if not name.endswith("_containment"))
+STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
+STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
 
 
 def extracted_authenticated_pi_task_block(source: str) -> str:
@@ -2761,7 +2780,6 @@ def staging_script(source: str, root: pathlib.Path, case_set: str) -> pathlib.Pa
         "SYNTHETIC_GOAL_CLEANUP_SEEDS=/synthetic/seeds\n"
         "SYNTHETIC_GOAL_CLEANUP_CLONES=/synthetic/clones\n"
         + extracted_authenticated_pi_task_block(source)
-        + '\nprintf "%s" "$authenticated_pi_task_text" > "$fixture_root/guard-text"\n'
         + extracted_fixture_home_invocation(source)
         + f"B_HOME={FIXED_B_HOME}\n"
         'b_native_credential_files=("$B_HOME/.pi/agent/settings.json" '
@@ -2785,6 +2803,13 @@ def staged_home_run(source: str, root: pathlib.Path, case_set: str) -> tuple[sub
     return result, fixture_root
 
 
+def staged_thinking_level(fixture_root: pathlib.Path) -> object:
+    settings_file = fixture_root / STAGED_SETTINGS_PATH
+    if not settings_file.exists():
+        return None
+    return json.loads(settings_file.read_text(encoding="utf-8")).get("defaultThinkingLevel")
+
+
 def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
     failures: list[str] = []
     description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
@@ -2800,21 +2825,25 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
             )
     shared_result, shared_root = runs["shared"]
     if shared_result.returncode == 0:
-        staged_file = shared_root / "b-home/.pi/agent/APPEND_SYSTEM.md"
+        staged_file = shared_root / STAGED_TASK_TEXT_PATH
         staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
         if expected is not None and staged != expected:
             failures.append("the shared case set does not stage the exact authenticated Pi task text")
-        settings_file = shared_root / "b-home/.pi/agent/settings.json"
-        settings = json.loads(settings_file.read_text(encoding="utf-8")) if settings_file.exists() else {}
-        level = settings.get("defaultThinkingLevel")
+        level = staged_thinking_level(shared_root)
         if level != "off":
             failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
     for case_set in STAGING_CASE_SETS[1:]:
         result, fixture_root = runs[case_set]
         if result.returncode != 0:
             continue
-        if (fixture_root / "guard-text").read_text(encoding="utf-8"):
+        if (fixture_root / STAGED_TASK_TEXT_PATH).exists():
             failures.append(f"the {case_set} case set stages the authenticated Pi task text")
+        if case_set in STAGING_PI_CASE_SETS:
+            level = staged_thinking_level(fixture_root)
+            if level != "minimal":
+                failures.append(
+                    f"the {case_set} case set stages the authenticated thinking level {level!r}"
+                )
     if shared_result.returncode == 0 and FIXED_B_HOME_TASK_TEXT not in shared_result.stdout.splitlines():
         failures.append("the fixed B home install list omits the staged task text")
     stale_leaf_result, _ = runs["stale_leaf"]
@@ -3040,10 +3069,91 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
                 claims,
                 (
-                    "the stale_leaf case set stages the authenticated Pi task text",
+                    "the stage_replay_create_started case set stages the authenticated Pi task text",
                     "the stage_replay_leaf_bound case set stages the authenticated Pi task text",
-                    "the codex_containment case set stages the authenticated Pi task text",
+                    "the stage_replay_launcher_bound case set stages the authenticated Pi task text",
+                    "the ack_loss_launcher_bound case set stages the authenticated Pi task text",
+                    "the stale_leaf case set stages the authenticated Pi task text",
+                    "the migration case set stages the authenticated Pi task text",
+                    "the alternate_mount_refusal case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key_legacy case set stages the authenticated Pi task text",
+                    "the stale_journal_fence case set stages the authenticated Pi task text",
+                    "the stale_journal_subject case set stages the authenticated Pi task text",
+                    "the synthetic_goal_cleanup case set stages the authenticated Pi task text",
                     "the fixed B home install list stages the task text without it",
+                ),
+            ),
+            (
+                "raised-thinking-level",
+                source.replace(
+                    'authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"',
+                    'authenticated_pi_thinking_level = "minimal"',
+                    1,
+                ),
+                claims,
+                ("the staged pi home no longer sets the thinking level off: 'minimal'",),
+            ),
+            (
+                "negative-writer-unconditional",
+                source.replace("    if authenticated_pi_task_text:\n", "    if True:\n", 1),
+                claims,
+                (
+                    "the stage_replay_create_started case set stages the authenticated Pi task text",
+                    "the stage_replay_leaf_bound case set stages the authenticated Pi task text",
+                    "the stage_replay_launcher_bound case set stages the authenticated Pi task text",
+                    "the ack_loss_launcher_bound case set stages the authenticated Pi task text",
+                    "the stale_leaf case set stages the authenticated Pi task text",
+                    "the migration case set stages the authenticated Pi task text",
+                    "the alternate_mount_refusal case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key_legacy case set stages the authenticated Pi task text",
+                    "the stale_journal_fence case set stages the authenticated Pi task text",
+                    "the stale_journal_subject case set stages the authenticated Pi task text",
+                    "the synthetic_goal_cleanup case set stages the authenticated Pi task text",
+                ),
+            ),
+            (
+                "migration-leak",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then',
+                    'if [[ "$fixture_case_set" == shared || "$fixture_case_set" == migration ]]; then',
+                    1,
+                ),
+                claims,
+                ("the migration case set stages the authenticated Pi task text",),
+            ),
+            (
+                "newly-covered-set-leak",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then',
+                    'if [[ "$fixture_case_set" == shared || "$fixture_case_set" == synthetic_goal_cleanup ]]; then',
+                    1,
+                ),
+                claims,
+                ("the synthetic_goal_cleanup case set stages the authenticated Pi task text",),
+            ),
+            (
+                "unconditional-off-thinking-level",
+                source.replace(
+                    'authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"',
+                    'authenticated_pi_thinking_level = "off"',
+                    1,
+                ),
+                claims,
+                (
+                    "the stage_replay_create_started case set stages the authenticated thinking level 'off'",
+                    "the stage_replay_leaf_bound case set stages the authenticated thinking level 'off'",
+                    "the stage_replay_launcher_bound case set stages the authenticated thinking level 'off'",
+                    "the ack_loss_launcher_bound case set stages the authenticated thinking level 'off'",
+                    "the stale_leaf case set stages the authenticated thinking level 'off'",
+                    "the migration case set stages the authenticated thinking level 'off'",
+                    "the alternate_mount_refusal case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_run_key case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_run_key_legacy case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_fence case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_subject case set stages the authenticated thinking level 'off'",
+                    "the synthetic_goal_cleanup case set stages the authenticated thinking level 'off'",
                 ),
             ),
             (
@@ -3121,16 +3231,21 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 claims,
                 (
                     "the fixture staging script for shared exited 1",
-                    "the fixture staging script for stale_leaf exited 1",
-                    "the fixture staging script for stage_replay_leaf_bound exited 1",
                     "the fixture staging script for codex_containment exited 1",
+                    "the fixture staging script for claude_containment exited 1",
+                    "the fixture staging script for stage_replay_create_started exited 1",
+                    "the fixture staging script for stage_replay_leaf_bound exited 1",
+                    "the fixture staging script for stage_replay_launcher_bound exited 1",
+                    "the fixture staging script for ack_loss_launcher_bound exited 1",
+                    "the fixture staging script for stale_leaf exited 1",
+                    "the fixture staging script for migration exited 1",
+                    "the fixture staging script for alternate_mount_refusal exited 1",
+                    "the fixture staging script for stale_journal_run_key exited 1",
+                    "the fixture staging script for stale_journal_run_key_legacy exited 1",
+                    "the fixture staging script for stale_journal_fence exited 1",
+                    "the fixture staging script for stale_journal_subject exited 1",
+                    "the fixture staging script for synthetic_goal_cleanup exited 1",
                 ),
-            ),
-            (
-                "raised-thinking-level",
-                source.replace('"defaultThinkingLevel": "off"', '"defaultThinkingLevel": "minimal"', 1),
-                claims,
-                ("the staged pi home no longer sets the thinking level off: 'minimal'",),
             ),
         )
         for name, mutant_source, mutant_claims, expected in mutations:

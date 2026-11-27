@@ -31,10 +31,11 @@ observation bound, the fixture pin, and what stays out of scope.
    (`$B_HOME/.pi/agent/APPEND_SYSTEM.md`, `docs/configuration.md` in the pinned 1.5.2 release), so
    the model receives the same task the Control fixture admits. Nothing else changes for those legs:
    the same request, the same profile args, the same tools, the same assertions.
-   The fixture's Pi home sets its thinking level to `off`
-   (`$B_HOME/.pi/agent/settings.json`): the production decoder accepts exactly one `text` block in
-   the final assistant message, and a reasoning model at any other level prepends a `thinking`
-   block (fix r1, RP-01; the retained per-arm rows are in the record §3.2).
+   The fixture's Pi home sets its thinking level to `off` for the `shared` case set only
+   (`$B_HOME/.pi/agent/settings.json`; every other Pi case set keeps the pre-r1 `minimal`): the
+   production decoder accepts exactly one `text` block in the final assistant message, and a
+   reasoning model at any other level prepends a `thinking` block (fix r1, RP-01; the round-2 scope
+   and the retained per-arm rows are in the record §3.2 and §4).
 3. **The observation bound stays as it is, with the measurement recorded.** The bound is not the
    named side: measured sum in a guest-shaped jail (same model, same pinned Pi release, same argv and
    environment shape, same subject clone, same prompt bytes) an instructed turn settles in 9.5 s and
@@ -53,13 +54,16 @@ way `execution_goal/1` does, (b) the Control *fixture* putting the description i
 agent-directory append. (a) and (b) are production Control and a non-owned fixture file; the
 contract's owned set is the witness test, its helpers and the acceptance script's `shared` arm, and
 it routes production changes to `DECISION_NEEDED`. (c) is inside the owned set and is scoped by
-case set *and by guest*: only the `shared` case set stages it, but one B home serves every leg of a
-guest, so the staged text also reaches the provider-free `pi-durability` stage-replay and ack-loss
-legs that `shared` runs itself — their cases were designed around an instant provider failure,
-their turns now run, they are told to use a brokered `symmetry_resource_sync` tool their profile
-does not authorize (`provider_access=False`), and their post-turn barrier holds
-(`stop_receipt_durable`, `leaf_removed`, `journal_cleared`, the 30-second stop-receipt hold) have
-never been reached in a credentialed run. It restores exactly the text the
+case set *and by guest*: only the `shared` case set stages it, but the Pi staging home serves every
+leg of a guest (the second B home, `CLONE_TEST_B_HOME`, serves only the clone/launcher scratch legs
+and stages no Pi home), so the staged text is also *exposed* to the provider-free `pi-durability`
+stage-replay and ack-loss legs that `shared` runs itself. Their cases were designed around an
+instant provider failure; the delivered script proves they would be exposed to the staged prompt
+text on a launch that reaches a turn, and does not show that any such turn ran. They are told to
+use a brokered `symmetry_resource_sync` tool their profile does not authorize
+(`provider_access=False`), and their post-turn barrier holds (`stop_receipt_durable`,
+`leaf_removed`, `journal_cleared`, the 30-second stop-receipt hold) have never been reached in a
+credentialed run. It restores exactly the text the
 fixture's Control table already carries (`provision-linux-v2-control-claims.exs` `@cases`
 descriptions). Recorded consequence, not hidden: the model is *told* the task by the fixture
 instead of inferring it from the Control goal — the same relationship the product has, where the
@@ -84,9 +88,13 @@ later amendment has a number to argue with.
 `scripts/ci/test-linux-v2-evidence.py` (the suite that already pins the acceptance script and its
 `shared` arm) gains one row: the staged append file carries the Control fixture's own admitted task
 description for the authenticated legs and is installed into the fixed B home's Pi agent directory
-with the same private-file discipline as the other staged Pi files. Mutants: dropping the staging,
-re-pointing it at another directory, dropping it from the credential-file list, or rewriting the
-text so it no longer carries the admitted description each redden the row.
+with the same private-file discipline as the other staged Pi files. Round 2 widens the pin to every
+case set the acceptance script allowlists (15) and restores the empty-input negative: for each
+non-`shared` case set the writer must stage **no** `APPEND_SYSTEM.md`, and the Pi home every other
+case set stages must keep its pre-r1 thinking level. Mutants: dropping the staging, re-pointing it
+at another directory, dropping it from the credential-file list, rewriting the text so it no longer
+carries the admitted description, making the writer unconditional, leaking the text into one more
+case set, and making the thinking level unconditional each redden their own exact row(s).
 
 ## 3. Evidence plan
 
@@ -100,7 +108,9 @@ text so it no longer carries the admitted description each redden the row.
   append. Rows: wall time to `agent_settled`, tool calls, the bridge stub's request log, the commit
   count, the Pi bash-log bytes, the final assistant `stopReason`, the final assistant message's
   content block types, and the production decoder's verdict on that captured message
-  (`DecodeAssistantTaskResult`).
+  (`DecodeAssistantTaskResult`). The arms are named `c1`/`c2`/`c3` (fix round) and
+  `off1`/`min1`/`sup1` (re-measurement); the record's §3.3 states per arm what it reproduced byte
+  for byte, what was re-measured, and what was only captured.
 - Guest: the conductor's Bind re-runs `shared` on the PR head (placeholder credential; the
   credential-gated named outcome is the expected row) and the owner's credentialed cadence is the
   acceptance row for the authenticated turn.
