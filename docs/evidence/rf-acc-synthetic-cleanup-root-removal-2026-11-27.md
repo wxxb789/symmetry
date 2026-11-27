@@ -11,9 +11,9 @@ the credentialed acceptance; the conductor re-Binds the corrected PR head (§9).
 | --- | --- | --- |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `aac479e5fb80bcd0cc222f1afe96a2e9b010081cc0d2903e84c940e8e61c516d` (= the Bind 2 run input) | `60d63a8b0dd1a7d0fb72c920d68ab6a82f841d654e0f4dc2525ad85dd0cbba2d` |
 | `scripts/ci/test-linux-v2-evidence.py` | `d410828e7de0c5c90f8f7ef8f0559ce9a744ad12187840e0b64b2e822850075d` | `e1d3d68a73c6a893f31bc3f254118201d2d10c1589d1febabc4ce20aff592246` |
-| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` | `454198d526c400627e822d50b193efe7dc4fbb0be99d883b064a04e9750c7522` |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` | `8cea49859f3bec47e3fc25c27586c3f70fc04a411e1f54fb5f80b2afcd188f7f` |
 
-`git rev-parse HEAD:daemon f3dbae66:daemon 07be175e:daemon` all return
+`git rev-parse d4e455f1:daemon f3dbae66:daemon 07be175e:daemon` all return
 `22d5cc959d3b2980b23bd79e6947a31c19dbc728`, so the probe binaries built from the dispatch base
 exercise the exact daemon bytes the Bind 2 run executed. The plan file and this record are bound by
 the PR body receipt and the committed-blob gates (§10).
@@ -33,7 +33,7 @@ umask-reduced mode: with the Bind 2 fixture's `d:u:$B_UID:rwx,d:m::rwx` defaults
 at mode `0770` and files opened with mode `0644` land at `0660` (§4 rows).
 
 The witness then calls the authenticated anchor at
-`daemon/e2e/production_linux_v2_cleanup_witness_test.go:880` (`:882` is the failure line). Inside
+`daemon/e2e/production_linux_v2_cleanup_witness_test.go:879` (`:882` is the failure line). Inside
 the anchor worker `daemon/native/linux-gate/protocol/clone_cleanup_linux.go`:
 
 1. `verifyCleanupPathFD(rootFD, BUID, BGID, "B clone root")` (`:320`, `:332`) accepts the clone
@@ -62,7 +62,7 @@ refusing check — the reproduction in §3-§5 names it. No removal happened and
 precede the launcher spawn (`runCloneCleanupChild`), the witness's own durable Begin is the only
 cleanup write in the RunJournal (the projection in Bind 2 §2 reads `cleanup_pending`), and the
 target-removal proof is persisted only after a green root proof
-(`production_linux_v2_cleanup_witness_test.go:966`, `RecordLinuxCloneTargetRemoval`), which never
+(`production_linux_v2_cleanup_witness_test.go:963`, `RecordLinuxCloneTargetRemoval`), which never
 ran.
 
 ### 2.3 The wrong layer is the fixture
@@ -188,6 +188,8 @@ delivered bytes.
 | fixture spec reverted to `d:u:$B_UID:rwx,d:m::rwx` | script copy | exit 1, 9 failures (stub argument pin) |
 | `stat.Mode&0o022 != 0` → `== 0` | witness copy | `TestLinuxV2CleanupShapeRefusalRows` exit 1 (`clean-b-owned` row) |
 | owner check deleted | witness copy | exit 1 (`foreign-owner` row) |
+| per-component refusal inverted (`refusal != ""` → `refusal == ""`) at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:1724` | witness copy `d7317ba8280a87816ed6b430da08598e2362f71f3063493b2f5fc3781bb70337` | `TestLinuxV2CleanupShapeWalkRows` exit 1, 3 failures (`clean-tree`, `ancestor-refusal`, `open-error`) |
+| walk treats the borrowed root FD as owned (`current, owned := rootFD, false` → `rootFD, true`) at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:1706` | witness copy `825b46af2060d3a51f0b0202f0ce70a0ad5c43ab655fee0279845748a568bb0c` | `TestLinuxV2CleanupShapeWalkRows` exit 1, 2 failures (`ancestor-refusal`, `open-error`: `open "binding-omp" … bad file descriptor`) |
 
 ## 8. Local gates (Windows and WSL, from the delivered worktree)
 
@@ -199,8 +201,9 @@ delivered bytes.
 | Host Go 1.27.4, from `daemon/`: `go vet ./...` | 0 | whole module, Windows |
 | Host Go: `gofmt -l e2e/` | 0 | no files listed |
 | WSL Go (same module), from `daemon/`: `go vet ./...` | 0 | whole module including the linux witness |
-| WSL Go: `go test -count=1 ./e2e` | 0 | package ok (env-gated witnesses skip) |
+| WSL Go: `go test -count=1 ./e2e` | 0 | package ok (env-gated witnesses skip; the committed shape rows run) |
 | WSL Go: `go test -count=1 -run '^TestLinuxV2CleanupShapeRefusalRows$' ./e2e` | 0 | 9 rows pass |
+| WSL Go: `go test -count=1 -run '^TestLinuxV2CleanupShapeWalkRows$' ./e2e` | 0 | 4 rows pass (clean tree, root refusal, ancestor refusal, open error) |
 
 Head-wide suites (the daemon race suite and the credentialed case set) are CI's and the conductor's,
 not claimed here.
@@ -232,7 +235,7 @@ substitutes for them.
   operator intervention. Candidates: reject a writable default mask in the install preflight, set
   the created modes explicitly in the clone bootstrap, or make the cleanup mode checks ACL-aware.
   The same shape remains on the production, daemon-service-workspace and clone-test fixture roots
-  (`scripts/ci/linux-v2-native-acceptance.sh:689`, `:691`, `:876`); no cleanup leg touches them
+  (`scripts/ci/linux-v2-native-acceptance.sh:691-693`, `:878`); no cleanup leg touches them
   today, and this increment's owned scope is the `synthetic_goal_cleanup` arm only.
 - The anchor's status-blind client error (`linux_owner_anchor_linux.go:81`) stays; the witness-side
   shape assertion is the attribution available without a production protocol change.

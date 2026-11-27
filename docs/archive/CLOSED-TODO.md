@@ -5726,7 +5726,7 @@ section, whose pointer sentence names this one.
       the synthetic clone root to `d:u:$A_UID:r-x,d:m::r-x` defaults (B's `rwx` comes from
       ownership; the installed clone-root contract still holds — record §5), adds a setup guard
       pinning the clone root's `B 0750` mode and exact access+default ACL
-      (`scripts/ci/linux-v2-native-acceptance.sh:1475-1479`), extends the Python guard test
+      (`scripts/ci/linux-v2-native-acceptance.sh:1474-1478`), extends the Python guard test
       (`scripts/ci/test-linux-v2-evidence.py`), and adds the witness-side named shape assertion
       (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:574`, `:1683`, `:1702`, `:1736`).
       Resolute-chroot guard red/green rows, the production-check probes, the delivered-shape

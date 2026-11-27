@@ -1976,3 +1976,81 @@ func linuxV2CleanupWriteWitness(outputDir string, document linuxV2CleanupWitness
 	}
 	return nil
 }
+
+func TestLinuxV2CleanupShapeWalkRows(t *testing.T) {
+	relative := "binding-omp/run-omp/generation-1"
+	buildTree := func(t *testing.T) (string, int, unix.Stat_t, uint32, uint32) {
+		t.Helper()
+		root := t.TempDir()
+		directories := []string{
+			filepath.Join(root, "binding-omp"),
+			filepath.Join(root, "binding-omp", "run-omp"),
+			filepath.Join(root, "binding-omp", "run-omp", "generation-1"),
+		}
+		if err := os.MkdirAll(directories[2], 0o750); err != nil {
+			t.Fatalf("create exact B-owned shape fixture: %v", err)
+		}
+		for _, directory := range append([]string{root}, directories...) {
+			if err := os.Chmod(directory, 0o750); err != nil {
+				t.Fatalf("pin exact B-owned shape fixture mode: %v", err)
+			}
+		}
+		rootFD, err := linuxV2CleanupOpenAbsoluteDirectory(root)
+		if err != nil {
+			t.Fatalf("open exact B-owned shape fixture root: %v", err)
+		}
+		t.Cleanup(func() { _ = unix.Close(rootFD) })
+		var rootInfo unix.Stat_t
+		if err := unix.Fstat(rootFD, &rootInfo); err != nil {
+			t.Fatalf("stat exact B-owned shape fixture root: %v", err)
+		}
+		if rootInfo.Mode&unix.S_IFMT != unix.S_IFDIR || rootInfo.Mode&0o022 != 0 {
+			t.Fatalf("shape fixture root is not a non-writable directory: %#o", rootInfo.Mode)
+		}
+		return root, rootFD, rootInfo, uint32(rootInfo.Uid), uint32(rootInfo.Gid)
+	}
+
+	t.Run("clean-tree", func(t *testing.T) {
+		_, rootFD, rootInfo, buid, bgid := buildTree(t)
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err != nil {
+			t.Fatalf("exact B-owned shape walk was refused: %v", err)
+		}
+	})
+
+	t.Run("root-refusal", func(t *testing.T) {
+		_, rootFD, rootInfo, buid, bgid := buildTree(t)
+		want := fmt.Sprintf("B clone root: owner %d:%d is not B %d:%d", rootInfo.Uid, rootInfo.Gid, buid+1, bgid)
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid+1, bgid); err == nil || err.Error() != want {
+			t.Fatalf("shape walk root refusal row differs: got %v want %q", err, want)
+		}
+	})
+
+	t.Run("ancestor-refusal", func(t *testing.T) {
+		root, rootFD, rootInfo, buid, bgid := buildTree(t)
+		ancestor := filepath.Join(root, "binding-omp", "run-omp")
+		if err := os.Chmod(ancestor, 0o770); err != nil {
+			t.Fatalf("widen exact B-owned shape fixture ancestor: %v", err)
+		}
+		want := `B checkout ancestor "binding-omp/run-omp": group or other write bits 020`
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err == nil || err.Error() != want {
+			t.Fatalf("shape walk ancestor refusal row differs: got %v want %q", err, want)
+		}
+		if err := os.Chmod(ancestor, 0o750); err != nil {
+			t.Fatalf("restore exact B-owned shape fixture ancestor: %v", err)
+		}
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err != nil {
+			t.Fatalf("borrowed clone root descriptor did not survive the ancestor refusal: %v", err)
+		}
+	})
+
+	t.Run("open-error", func(t *testing.T) {
+		_, rootFD, rootInfo, buid, bgid := buildTree(t)
+		err := linuxV2CleanupRequireCleanupShape(rootFD, "binding-omp/missing/generation-1", rootInfo, buid, bgid)
+		if err == nil || !errors.Is(err, unix.ENOENT) || !strings.Contains(err.Error(), `open "missing" for the exact root-cleanup shape check`) {
+			t.Fatalf("shape walk open-error row differs: got %v", err)
+		}
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err != nil {
+			t.Fatalf("borrowed clone root descriptor did not survive the open refusal: %v", err)
+		}
+	})
+}

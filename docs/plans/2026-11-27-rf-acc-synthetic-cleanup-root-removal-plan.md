@@ -54,7 +54,7 @@ and is only harder to attribute than it should be.
 - `scripts/ci/linux-v2-native-acceptance.sh:600-603`: the synthetic clone root keeps its access ACL
   (`u:$A_UID:r-x,m::r-x`) and receives `d:u:$A_UID:r-x,d:m::r-x` defaults — B's `rwx` comes from
   ownership, A keeps traversal/read, and B-created entries are no longer writable by the mask.
-- `:1475-1479`: setup-time guard pinning the synthetic clone root at `$B_UID:$B_GID:750` and at the
+- `:1474-1478`: setup-time guard pinning the synthetic clone root at `$B_UID:$B_GID:750` and at the
   exact access+default ACL, so a regression to a writable mask reddens in setup with a named
   message instead of at the next Bind.
 - `scripts/ci/test-linux-v2-evidence.py` (`SyntheticCleanupGuardTest`): the harness stub answers the
@@ -63,9 +63,10 @@ and is only harder to attribute than it should be.
 - `daemon/e2e/production_linux_v2_cleanup_witness_test.go:574`: the witness asserts, before Begin,
   that the pinned root/target chain satisfies exactly the non-writable B-owned directory shape the
   authenticated root cleanup verifies (`linuxV2CleanupShapeRefusal`/`linuxV2CleanupRequireCleanupShape`,
-  `:1683`, `:1702`), with `TestLinuxV2CleanupShapeRefusalRows` (`:1736`) pinning the predicate. A
-  future shape refusal stops at the witness with the offending component instead of the generic
-  anchor line.
+  `:1683`, `:1702`), with `TestLinuxV2CleanupShapeRefusalRows` (`:1736`) pinning the predicate and
+  `TestLinuxV2CleanupShapeWalkRows` (`:1980`) pinning the walk's root, ancestor, open-error and
+  borrowed-root-FD rows. A future shape refusal stops at the witness with the offending component
+  instead of the generic anchor line.
 - Rejected alternatives:
   - (a) Production bootstrap change (e.g. `Fchmod(0o750)` after each `Mkdirat`): a production
     behavior change outside the owned files, and unnecessary — the installed contract is satisfied

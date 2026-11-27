@@ -2326,7 +2326,7 @@ The seed residual item and this goal's fix are recorded in
       directories and files are group-writable, which the exact root-cleanup checks refuse. Today
       that is fail-closed but uncleanaable without operator intervention. The same default ACL shape
       remains on the production, daemon-service-workspace and clone-test fixture roots
-      (`scripts/ci/linux-v2-native-acceptance.sh:689`, `:691`, `:876`); no cleanup leg touches them,
+      (`scripts/ci/linux-v2-native-acceptance.sh:691-693`, `:878`); no cleanup leg touches them,
       and the delivered fix is scoped to the `synthetic_goal_cleanup` arm. Candidates if the
       conductor wants a production hardening: reject a writable default mask in the install
       preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
