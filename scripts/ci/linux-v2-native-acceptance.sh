@@ -597,8 +597,8 @@ sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo setfacl -m "u:$B_UID:r-x,m::r-x,d:u:$B_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_SEEDS"
-# A writable default ACL mask defeats the B bootstrap's umask 077 (Mkdirat 0o770) and leaves the
-# binding/run/generation directories group-writable, which the exact root-cleanup checks refuse.
+# Inherited ACLs, not umask 077, govern the B bootstrap's Mkdirat(0770); mask out group write
+# so the binding/run/generation modes pass the exact root-cleanup checks.
 sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo install -d -o root -g "$A_GID" -m 2730 "$rootfs$OWNER_PID_REUSE_ROOT"

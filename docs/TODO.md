@@ -2317,9 +2317,10 @@ moved to
 The seed residual item and this goal's fix are recorded in
 [the root-removal evidence](evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.md).
 
-- [ ] Re-Bind the corrected PR head. Confirm the `:882 … Linux owner anchor returned no exact root
-      clone-removal proof` stop is gone and the set reaches launcher removal, the A-side cleanup and
-      journal retirement, or record the next failing line verbatim here. Owner: conductor.
+- [ ] Re-Bind the corrected PR head: #305 run `45956915653` was green on `dd20a485` only. Confirm
+      the prior `:882` root-proof stop remains absent and the fixed head reaches removal, A-side
+      cleanup, journal retirement and a passed export, or record the next failing line verbatim.
+      Owner: conductor.
 
 - [ ] The witness call site at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:574` is
       exercised only inside the credentialed `synthetic_goal_cleanup` case set: deleting that line
@@ -2327,13 +2328,18 @@ The seed residual item and this goal's fix are recorded in
       recorded in the evidence record §7; an env-gated probe was ruled out because it would not run
       in CI either. Owner: conductor.
 
+- [ ] Oracle gap (§7): no fault fixture exercises the kernel `Fstat` error after the walk opens an
+      `O_PATH` component. The outer boundary in the credentialed witness at `:574` treats any walk
+      error as fatal before durable Begin or the Anchor call. The conductor ruled out adding a kernel
+      fault fixture for this round. Owner: conductor.
+
 - Production observation (decision note, 2026-11-27, goal `rf-acc-synthetic-cleanup-root-removal`):
       an install-accepted clone root whose default ACL mask grants write produces a checkout whose
       directories and files are group-writable, which the exact root-cleanup checks refuse. Today
-      that is fail-closed but uncleanaable without operator intervention. The same default ACL shape
-      remains on the production, daemon-service-workspace and clone-test fixture roots
-      (`scripts/ci/linux-v2-native-acceptance.sh:691-693`, `:878`); no cleanup leg touches them,
-      and the delivered fix is scoped to the `synthetic_goal_cleanup` arm. Candidates if the
+      that is fail-closed. The writable defaults remain on the production, daemon-service-workspace
+      and clone-test fixture roots. Shared cleanup does reach the clone-test root, but its targets
+      are provisioned before that root's writable default mask is installed (evidence §11). This
+      fix changes only the synthetic cleanup fixture. Candidates if the
       conductor wants a production hardening: reject a writable default mask in the install
       preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
       checks ACL-aware. Evidence: record §2.3 and §11.

@@ -5707,8 +5707,9 @@ section, whose pointer sentence names this one.
       authenticated installed Anchor: Linux owner anchor returned no exact root clone-removal
       proof` stop of the `synthetic_goal_cleanup` set (moved from `docs/TODO.md`, section
       `## rf-acc-synthetic-cleanup-root-removal: residuals (2026-11-27)`; Bind 2, run `45938637085`
-      on `f3dbae66`; journal `cleanup_pending`, no `synthetic-goal-cleanup.json` export, no
-      manifest). Root cause and fix (goal `rf-acc-synthetic-cleanup-root-removal`, 2026-11-27, base
+      at historical #304 run head `2119226c`, subject `f3dbae66`; journal `cleanup_pending`, no
+      `synthetic-goal-cleanup.json` export or manifest). Root cause and fix (goal
+      `rf-acc-synthetic-cleanup-root-removal`, 2026-11-27, base
       `d4e455f1`; plan `docs/plans/2026-11-27-rf-acc-synthetic-cleanup-root-removal-plan.md`,
       record `docs/evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.md`): the B clone
       bootstrap creates the binding/run/generation directories with `Mkdirat(0o770)` under
@@ -5720,17 +5721,17 @@ section, whose pointer sentence names this one.
       (`daemon/native/linux-gate/protocol/clone_cleanup_linux.go:274`,
       `:320`, `:332`), the RunKey walk behind it too (`:358`, `:399`, `:410`), and the launcher core
       re-checks the same predicates (`daemon/internal/launchercore/main_linux_amd64.go:243`, `:253`,
-      `:259`, `:1548`, `:1554`, `:1558`). The anchor maps any worker error to the status
-      `clone_cleanup_unproven` (`daemon/internal/platform/anchor_server.go:1205`) and the client
-      reports the status-blind line (`daemon/internal/platform/linux_owner_anchor_linux.go:81`); no
-      removal happened, because every refusal precedes the launcher spawn. The delivered fix scopes
+      `:259`, `:1548`, `:1554`, `:1558`). The reproduced cleanup execution refusal maps to
+      `clone_cleanup_unproven`; a State-authority failure maps to `cleanup_authority_unproven`
+      (`daemon/internal/platform/anchor_server.go:1202–1209`). The client renders both as one error
+      (`daemon/internal/platform/linux_owner_anchor_linux.go:75–81`), so the historical line cannot
+      distinguish the causes. The reproduced refusal precedes launcher spawn. The fix scopes
       the synthetic clone root to `d:u:$A_UID:r-x,d:m::r-x` defaults (B's `rwx` comes from
       ownership; the installed clone-root contract still holds — record §5), adds a setup guard
       pinning the clone root's `B 0750` mode and exact access+default ACL
       (`scripts/ci/linux-v2-native-acceptance.sh:1474-1478`), extends the Python guard test
       (`scripts/ci/test-linux-v2-evidence.py`), and adds the witness-side named shape assertion
       (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:574`, `:1683`, `:1702`, `:1736`).
-      Resolute-chroot guard red/green rows, the production-check probes, the delivered-shape
-      removal and five mutants are in the record §4-§7. Delivered, pending the conductor's Bind: the
-      `:882` stop is expected to clear; the next observation is recorded in the residual section of
-      `docs/TODO.md`.
+      See record §4–§6 for the production-check probes and the guard, and the mutant table in §7.
+      Delivered, pending the conductor's Bind on the fixed head (§9); the green `## Bind` entry
+      records the prior head, not acceptance of these bytes.

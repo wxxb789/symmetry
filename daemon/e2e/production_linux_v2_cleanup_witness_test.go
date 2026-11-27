@@ -1743,6 +1743,7 @@ func TestLinuxV2CleanupShapeRefusalRows(t *testing.T) {
 		{"clean-b-owned", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: buid, Gid: bgid, Dev: device}, ""},
 		{"group-writable", unix.Stat_t{Mode: unix.S_IFDIR | 0o770, Uid: buid, Gid: bgid, Dev: device}, "group or other write bits 020"},
 		{"other-writable", unix.Stat_t{Mode: unix.S_IFDIR | 0o757, Uid: buid, Gid: bgid, Dev: device}, "group or other write bits 02"},
+		{"setuid", unix.Stat_t{Mode: unix.S_IFDIR | 0o4750, Uid: buid, Gid: bgid, Dev: device}, "set-ID or sticky bits 04000"},
 		{"setgid", unix.Stat_t{Mode: unix.S_IFDIR | 0o2750, Uid: buid, Gid: bgid, Dev: device}, "set-ID or sticky bits 02000"},
 		{"sticky", unix.Stat_t{Mode: unix.S_IFDIR | 0o1750, Uid: buid, Gid: bgid, Dev: device}, "set-ID or sticky bits 01000"},
 		{"foreign-owner", unix.Stat_t{Mode: unix.S_IFDIR | 0o750, Uid: 0, Gid: bgid, Dev: device}, "owner 0:52001 is not B 52001:52001"},
@@ -1981,7 +1982,10 @@ func TestLinuxV2CleanupShapeWalkRows(t *testing.T) {
 	relative := "binding-omp/run-omp/generation-1"
 	buildTree := func(t *testing.T) (string, int, unix.Stat_t, uint32, uint32) {
 		t.Helper()
-		root := t.TempDir()
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatalf("resolve exact B-owned shape fixture root: %v", err)
+		}
 		directories := []string{
 			filepath.Join(root, "binding-omp"),
 			filepath.Join(root, "binding-omp", "run-omp"),
@@ -2007,6 +2011,31 @@ func TestLinuxV2CleanupShapeWalkRows(t *testing.T) {
 		if rootInfo.Mode&unix.S_IFMT != unix.S_IFDIR || rootInfo.Mode&0o022 != 0 {
 			t.Fatalf("shape fixture root is not a non-writable directory: %#o", rootInfo.Mode)
 		}
+		t.Cleanup(func() {
+			var got unix.Stat_t
+			if err := unix.Fstat(rootFD, &got); err != nil || got.Dev != rootInfo.Dev || got.Ino != rootInfo.Ino {
+				t.Errorf("borrowed clone root descriptor did not survive the shape walk: %v", err)
+			}
+			entries, err := os.ReadDir("/proc/self/fd")
+			if err != nil {
+				t.Fatalf("list descriptors after shape walk: %v", err)
+			}
+			for _, entry := range entries {
+				if entry.Name() == strconv.Itoa(rootFD) {
+					continue
+				}
+				target, err := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				if err != nil {
+					t.Fatalf("read descriptor %s after shape walk: %v", entry.Name(), err)
+				}
+				if target == root || strings.HasPrefix(target, root+"/") {
+					t.Errorf("shape walk retained descriptor %s for %q", entry.Name(), target)
+				}
+			}
+		})
 		return root, rootFD, rootInfo, uint32(rootInfo.Uid), uint32(rootInfo.Gid)
 	}
 
@@ -2040,6 +2069,17 @@ func TestLinuxV2CleanupShapeWalkRows(t *testing.T) {
 		}
 		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err != nil {
 			t.Fatalf("borrowed clone root descriptor did not survive the ancestor refusal: %v", err)
+		}
+	})
+
+	t.Run("target-refusal", func(t *testing.T) {
+		root, rootFD, rootInfo, buid, bgid := buildTree(t)
+		if err := os.Chmod(filepath.Join(root, relative), 0o770); err != nil {
+			t.Fatalf("widen exact B-owned shape fixture target: %v", err)
+		}
+		want := `B checkout ancestor "binding-omp/run-omp/generation-1": group or other write bits 020`
+		if err := linuxV2CleanupRequireCleanupShape(rootFD, relative, rootInfo, buid, bgid); err == nil || err.Error() != want {
+			t.Fatalf("shape walk target refusal row differs: got %v want %q", err, want)
 		}
 	})
 
