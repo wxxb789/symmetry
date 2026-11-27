@@ -5693,3 +5693,45 @@ section, whose pointer sentence names this one.
       exits in record §6). No production or Go witness bytes changed in this fix; the config stays
       B-unreadable at `root:A 0640`. Delivered, pending the conductor's re-Bind: the earlier #304
       Bind stopped in setup and did not verify RELEASE.
+
+      **Bind 2** (run `45938637085` on `f3dbae66`, one `synthetic_goal_cleanup` run) closed this
+      item: setup passed, the exact `:506 … guest_stage=seed errno=13` frame and `:499 … stage=none`
+      occur 0 times in the 2,870-line log, and the witness reached the authenticated root cleanup
+      after its durable Begin (`cleanup_pending`). The set is still not green: the next failing line
+      moved to
+      [the root-removal closure](#rf-acc-synthetic-cleanup-root-removal-the-authenticated-cleanup-requires-non-writable-b-created-entries-2026-11-27).
+
+## rf-acc-synthetic-cleanup-root-removal: the authenticated cleanup requires non-writable B-created entries (2026-11-27)
+
+- [x] The `production_linux_v2_cleanup_witness_test.go:882: run exact root cleanup through the
+      authenticated installed Anchor: Linux owner anchor returned no exact root clone-removal
+      proof` stop of the `synthetic_goal_cleanup` set (moved from `docs/TODO.md`, section
+      `## rf-acc-synthetic-cleanup-root-removal: residuals (2026-11-27)`; Bind 2, run `45938637085`
+      at historical #304 run head `2119226c`, subject `f3dbae66`; journal `cleanup_pending`, no
+      `synthetic-goal-cleanup.json` export or manifest). Root cause and fix (goal
+      `rf-acc-synthetic-cleanup-root-removal`, 2026-11-27, base
+      `d4e455f1`; plan `docs/plans/2026-11-27-rf-acc-synthetic-cleanup-root-removal-plan.md`,
+      record `docs/evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.md`): the B clone
+      bootstrap creates the binding/run/generation directories with `Mkdirat(0o770)` under
+      `umask(0o077)` (`daemon/internal/clonebootstrap/filesystem_linux_amd64.go:216`, `:244`,
+      `:365`), and the fixture's writable default ACL mask
+      (`scripts/ci/linux-v2-native-acceptance.sh:600-601` before this fix) supplied the group bits:
+      the pinned target and its ancestors were `0770`, the B files created through `0666` opens
+      `0660`. The anchor's first target check refused
+      (`daemon/native/linux-gate/protocol/clone_cleanup_linux.go:274`,
+      `:320`, `:332`), the RunKey walk behind it too (`:358`, `:399`, `:410`), and the launcher core
+      re-checks the same predicates (`daemon/internal/launchercore/main_linux_amd64.go:243`, `:253`,
+      `:259`, `:1548`, `:1554`, `:1558`). The reproduced cleanup execution refusal maps to
+      `clone_cleanup_unproven`; a State-authority failure maps to `cleanup_authority_unproven`
+      (`daemon/internal/platform/anchor_server.go:1202–1209`). The client renders both as one error
+      (`daemon/internal/platform/linux_owner_anchor_linux.go:75–81`), so the historical line cannot
+      distinguish the causes. The reproduced refusal precedes launcher spawn. The fix scopes
+      the synthetic clone root to `d:u:$A_UID:r-x,d:m::r-x` defaults (B's `rwx` comes from
+      ownership; the installed clone-root contract still holds — record §5), adds a setup guard
+      pinning the clone root's `B 0750` mode and exact access+default ACL
+      (`scripts/ci/linux-v2-native-acceptance.sh:1474-1478`), extends the Python guard test
+      (`scripts/ci/test-linux-v2-evidence.py`), and adds the witness-side named shape assertion
+      (`daemon/e2e/production_linux_v2_cleanup_witness_test.go:574`, `:1683`, `:1702`, `:1736`).
+      See record §4–§6 for the production-check probes and the guard, and the mutant table in §7.
+      Delivered, pending the conductor's Bind on the fixed head (§9); the green `## Bind` entry
+      records the prior head, not acceptance of these bytes.

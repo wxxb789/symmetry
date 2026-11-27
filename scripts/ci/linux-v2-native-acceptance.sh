@@ -597,7 +597,9 @@ sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo setfacl -m "u:$B_UID:r-x,m::r-x,d:u:$B_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_SEEDS"
-sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:u:$B_UID:rwx,d:m::rwx" \
+# Inherited ACLs, not umask 077, govern the B bootstrap's Mkdirat(0770); mask out group write
+# so the binding/run/generation modes pass the exact root-cleanup checks.
+sudo setfacl -m "u:$A_UID:r-x,m::r-x,d:u:$A_UID:r-x,d:m::r-x" \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
 sudo install -d -o root -g "$A_GID" -m 2730 "$rootfs$OWNER_PID_REUSE_ROOT"
 sudo install -o root -g root -m 0555 "$build_stage/symmetry-ci-literal-pid-reuse-helper" \
@@ -1469,6 +1471,11 @@ if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
   expected_synthetic_cleanup_acl=$'user::rwx\nuser:'"$B_UID"$':r-x\ngroup::r-x\nmask::r-x\nother::--x'
   [[ "$(sudo getfacl -cpn -- "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "$expected_synthetic_cleanup_acl" ]] ||
     fail 'synthetic cleanup case root must have exactly the fixture B-read ACL'
+  [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES")" == "$B_UID:$B_GID:750" ]] ||
+    fail 'synthetic cleanup clone root must stay B-owned mode 0750'
+  expected_synthetic_cleanup_clone_acl=$'user::rwx\nuser:'"$A_UID"$':r-x\ngroup::---\nmask::r-x\nother::---\ndefault:user::rwx\ndefault:user:'"$A_UID"$':r-x\ndefault:group::---\ndefault:mask::r-x\ndefault:other::---'
+  [[ "$(sudo getfacl -cpn -- "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES")" == "$expected_synthetic_cleanup_clone_acl" ]] ||
+    fail 'synthetic cleanup clone root must keep a non-writable default ACL mask so B-created binding/run/generation directories stay non-writable'
 fi
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   stage_config="$fixture_root/stage-replay/$hold_after/config.json"
