@@ -44,6 +44,11 @@ The closed `TestAutonomousReturnReleasesItsInputReader` observation appended to 
 `## Observed flakes, cause unknown: three observations (2026-11-22 CI runs and PR #220 review)`
 section below was moved on 2026-11-25 from branch `refactor/rf-flake-autonomous-return-reader`.
 
+The two closed stage-replay residuals (the router call-site arm pin and the terminal
+`helper_exited` re-dial of the owner-loss capture) were appended to the new
+`## rf-acc-owner-loss-capture-exit` section below on 2026-11-27 from branch
+`refactor/rf-acc-owner-loss-capture-exit`.
+
 The citation existence check and the changed-path classifier fixture appended to `## Record and
 documentation hygiene` below were moved on 2026-11-20 from branch `fix/ci-classifier-gates`.
 
@@ -5735,3 +5740,40 @@ section, whose pointer sentence names this one.
       See record §4–§6 for the production-check probes and the guard, and the mutant table in §7.
       Delivered, pending the conductor's Bind on the fixed head (§9); the green `## Bind` entry
       records the prior head, not acceptance of these bytes.
+
+## rf-acc-owner-loss-capture-exit: closed stage-replay residuals (2026-11-27)
+
+### Stage-replay wait selection
+
+- [x] Stage-replay router stage→arm mapping unpinned locally (moved from `docs/TODO.md`, section
+      `## rf-acc-claude-stage-replay: residuals (2026-11-26)`; contract round-2 ruling Y3 P3-3,
+      restored by round-4 Q3; goal `rf-acc-claude-stage-replay`). Closure (goal
+      `rf-acc-owner-loss-capture-exit`, 2026-11-27, branch
+      `refactor/rf-acc-owner-loss-capture-exit`, base `d45e3298`; plan
+      `docs/plans/2026-11-27-rf-acc-owner-loss-capture-exit-plan.md`, record
+      `docs/evidence/rf-acc-owner-loss-capture-exit-2026-11-27.md` §4): the fixture and local
+      wait table both pass raw stage evidence through `linuxV2WaitStageReplayPreRecovery`
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go`). The step owns the helper-pin guard,
+      wait routing and the snapshot decision the matrix consumes. The record identifies the
+      inversion, shortened bound and missing-guard overlays and the rows that catch each one.
+      The `checkout_ready` census, guest-only product-mutant row and snapshot-trust item stay open.
+
+### Terminal helper exit during owner-loss capture
+
+- [x] Owner-loss capture re-dials a terminal `helper_exited` helper for the full 40 s (moved from
+      `docs/TODO.md`, same section; contract round-4 ruling R2, Sol r4 F1, P3 speculative; goal
+      `rf-acc-claude-stage-replay`). Closure (goal `rf-acc-owner-loss-capture-exit`, same branch,
+      base, plan and record): `captureLinuxV2NativeWitnessOwnerLoss` now ends the poll on the first
+      exact-identity terminal exit (`Control == nil` plus the held helper's `PID`/`Identity`
+      equality, `daemon/internal/app/linux_owner_witness_linux.go`). The schema and previously
+      populated fields are preserved; the terminal reason takes precedence over a later lookup
+      error that the old loop could report at the deadline. The anchor writes `helperExit` only
+      from `waitHelper`'s proved wait/reap (`daemon/internal/platform/anchor_run.go:1304-1321`)
+      and never clears it. The
+      owner-loss latch plus the helper's cached stop proof exist only inside the helper process
+      (`daemon/internal/platform/helper_v2_recovery.go:190-200`,
+      `daemon/internal/platform/helper_v2_stop.go:275-316`), so no later dial can reach them.
+      Record §3 separates the original red-first run from the fix-round foreign-helper overlay;
+      the binding pre-fix acceptance observed live helpers, not the terminal return. The seam
+      default's own local-row gap is filed as the residual
+      `The owner-loss capture's anchor seam default has no local row` in `docs/TODO.md`.

@@ -1159,7 +1159,7 @@ func linuxV2ExpectedStageReplayRecovery(stage string) string {
 	}[stage]
 }
 
-func linuxV2StageReplayOwnerLossSnapshotRequired(stage string, marker linuxV2OwnerWitnessStageMarker, journal state.RunJournal) bool {
+func linuxV2StageReplayOwnerLossSnapshotRequired(stage string, marker *linuxV2OwnerWitnessStageMarker, journal *state.RunJournal) bool {
 	switch stage {
 	case "native_release":
 		return marker.NativeReleaseState == "released"
@@ -1197,6 +1197,38 @@ func linuxV2RequireTargetContainedBeforeRecovery(targetPIDFD *os.File, timeout t
 		return fmt.Errorf("native target remained live before its same-RunKey recovery: %w", err)
 	}
 	return nil
+}
+
+type linuxV2StageReplayPreRecoveryPins struct {
+	targetPIDFD *os.File
+	helperPIDFD *os.File
+}
+
+func linuxV2WaitStageReplayPreRecovery(
+	stage string,
+	marker *linuxV2OwnerWitnessStageMarker,
+	journal *state.RunJournal,
+	pins linuxV2StageReplayPreRecoveryPins,
+	waitTargetContained func(*os.File, time.Duration) error,
+	waitHelperExited func(int, time.Duration) error,
+) (bool, error) {
+	snapshotRequired := linuxV2StageReplayOwnerLossSnapshotRequired(stage, marker, journal)
+	if pins.helperPIDFD == nil {
+		return snapshotRequired, nil
+	}
+	switch {
+	case !snapshotRequired:
+		// Unproven owner-loss stops self-kill the helper within linuxOwnerHelperV2StopTimeout,
+		// so the fixture waits strictly past that bound before the recovery can race it.
+		if err := waitHelperExited(int(pins.helperPIDFD.Fd()), linuxV2OwnerLossStopWait); err != nil {
+			return snapshotRequired, fmt.Errorf("A helper did not exit with owner loss after the stage-replay kill: %w", err)
+		}
+	case stage == "native_release":
+		if err := waitTargetContained(pins.targetPIDFD, linuxV2OwnerLossStopWait); err != nil {
+			return snapshotRequired, fmt.Errorf("stage %s: the native target was not contained before recovery: %w", stage, err)
+		}
+	}
+	return snapshotRequired, nil
 }
 
 func linuxV2RequireOwnerLossSnapshotBeforeRecovery(
@@ -2018,7 +2050,6 @@ func runProductionLinuxV2StageCrashReplayCase(
 		witness.GitHooks.PostCheckoutAbsentAtCheckoutCAS = live.postCheckoutAbsentAtCheckoutCAS
 		targetPIDFD = live.pidfd
 	}
-	ownerLossSnapshotRequired := linuxV2StageReplayOwnerLossSnapshotRequired(stage, marker, initial.Journal)
 	if err := linuxV2KillOwnerWitnessCommand(command); err != nil {
 		t.Fatalf("SIGKILL exact stage-replay App process: %v", err)
 	}
@@ -2027,18 +2058,11 @@ func runProductionLinuxV2StageCrashReplayCase(
 			t.Fatalf("A anchor exited with the SIGKILLed stage-replay process: %v", err)
 		}
 	}
-	if helperPIDFD != nil {
-		if ownerLossSnapshotRequired {
-			if stage == "native_release" {
-				if err := linuxV2RequireTargetContainedBeforeRecovery(targetPIDFD, linuxV2OwnerLossStopWait); err != nil {
-					t.Fatalf("stage %s: the native target was not contained before recovery: %v", stage, err)
-				}
-			}
-		} else if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), linuxV2OwnerLossStopWait); err != nil {
-			// Unproven owner-loss stops self-kill the helper within linuxOwnerHelperV2StopTimeout,
-			// so the fixture waits strictly past that bound before the recovery can race it.
-			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", err)
-		}
+	ownerLossSnapshotRequired, err := linuxV2WaitStageReplayPreRecovery(stage, &marker, &initial.Journal,
+		linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD},
+		linuxV2RequireTargetContainedBeforeRecovery, linuxV2WaitPIDFDExited)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if testCase.afterStageProcessKilled != nil {
 		testCase.afterStageProcessKilled(t, fixture, binary, anchorPIDFD, helperPIDFD)
@@ -2549,11 +2573,19 @@ func linuxV2RequireSameStoreJournalSnapshot(before, after map[state.RunKey]linux
 	return linuxV2RequireStoreJournalHistoryPreserved(before, after)
 }
 
-func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
-	released := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
-	receiptAuthority := state.RunJournal{RunContainmentState: state.RunContainmentState{
+func linuxV2PreRecoveryReleasedMarker() linuxV2OwnerWitnessStageMarker {
+	return linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
+}
+
+func linuxV2PreRecoveryReceiptAuthority() state.RunJournal {
+	return state.RunJournal{RunContainmentState: state.RunContainmentState{
 		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2, StopReceipt: &authority.StopReceipt{Version: authority.SupervisorVersionV2}},
 	}}
+}
+
+func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
+	released := linuxV2PreRecoveryReleasedMarker()
+	receiptAuthority := linuxV2PreRecoveryReceiptAuthority()
 	authorityWithoutReceipt := state.RunJournal{RunContainmentState: state.RunContainmentState{
 		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
 	}}
@@ -2579,8 +2611,123 @@ func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
 		{name: "pre-release hold with a durable receipt", stage: "checkout_ready", journal: receiptAuthority},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if got := linuxV2StageReplayOwnerLossSnapshotRequired(test.stage, test.marker, test.journal); got != test.want {
+			if got := linuxV2StageReplayOwnerLossSnapshotRequired(test.stage, &test.marker, &test.journal); got != test.want {
 				t.Fatalf("owner-loss snapshot-required predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2StageReplayPreRecoveryWaitArms(t *testing.T) {
+	released := linuxV2PreRecoveryReleasedMarker()
+	receiptAuthority := linuxV2PreRecoveryReceiptAuthority()
+	targetPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait target pin: %v", err)
+	}
+	defer targetPIDFD.Close()
+	helperPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait helper pin: %v", err)
+	}
+	defer helperPIDFD.Close()
+	for _, test := range []struct {
+		name         string
+		stage        string
+		marker       linuxV2OwnerWitnessStageMarker
+		journal      state.RunJournal
+		noHelperPin  bool
+		wantSnapshot bool
+		want         string
+	}{
+		{name: "released native_release hold takes the snapshot arm containment wait", stage: "native_release", marker: released, wantSnapshot: true, want: "target_containment"},
+		{name: "stop-receipt durable hold keeps no pre-recovery wait", stage: "stop_receipt_durable", journal: receiptAuthority, wantSnapshot: true},
+		{name: "stop-receipt durable hold without receipt keeps the unproven helper-exit wait", stage: "stop_receipt_durable", want: "helper_exit"},
+		{name: "not-released native_release hold keeps the unproven helper-exit wait", stage: "native_release", marker: linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "not_released"}, want: "helper_exit"},
+		{name: "helper-bound hold keeps the unproven helper-exit wait", stage: "helper_bound", want: "helper_exit"},
+		{name: "launcher-bound hold with a released marker keeps the unproven helper-exit wait", stage: "launcher_bound", marker: released, want: "helper_exit"},
+		{name: "gate-bound hold with a durable receipt keeps the unproven helper-exit wait", stage: "gate_bound", journal: receiptAuthority, want: "helper_exit"},
+		{name: "handoff-prepared hold keeps the unproven helper-exit wait", stage: "handoff_prepared", marker: released, want: "helper_exit"},
+		{name: "handoff-committed hold keeps the unproven helper-exit wait", stage: "handoff_committed", marker: released, want: "helper_exit"},
+		{name: "lease-armed hold keeps the unproven helper-exit wait", stage: "lease_armed", marker: released, journal: receiptAuthority, want: "helper_exit"},
+		{name: "checkout-ready hold keeps the unproven helper-exit wait", stage: "checkout_ready", journal: receiptAuthority, want: "helper_exit"},
+		{name: "leaf-removed hold without helper pin keeps no pre-recovery wait", stage: "leaf_removed", noHelperPin: true},
+		{name: "released native_release without helper pin keeps the snapshot without a wait", stage: "native_release", marker: released, noHelperPin: true, wantSnapshot: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pins := linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD}
+			if test.noHelperPin {
+				pins.helperPIDFD = nil
+			}
+			const wantWait = 90 * time.Second
+			var arms []string
+			waitTargetContained := func(file *os.File, timeout time.Duration) error {
+				if file != targetPIDFD || timeout != wantWait {
+					t.Fatalf("snapshot arm containment wait = pin %p bound %s, want pin %p bound %s", file, timeout, targetPIDFD, wantWait)
+				}
+				arms = append(arms, "target_containment")
+				return nil
+			}
+			waitHelperExited := func(pidfd int, timeout time.Duration) error {
+				if pidfd != int(helperPIDFD.Fd()) || timeout != wantWait {
+					t.Fatalf("unproven arm helper-exit wait = pidfd %d bound %s, want pidfd %d bound %s", pidfd, timeout, int(helperPIDFD.Fd()), wantWait)
+				}
+				arms = append(arms, "helper_exit")
+				return nil
+			}
+			required, err := linuxV2WaitStageReplayPreRecovery(test.stage, &test.marker, &test.journal, pins, waitTargetContained, waitHelperExited)
+			if err != nil {
+				t.Fatalf("pre-recovery wait arm error = %v", err)
+			}
+			if got := strings.Join(arms, ","); got != test.want {
+				t.Fatalf("stage %s pre-recovery wait arms = %q, want %q (snapshot required = %t)", test.stage, got, test.want, required)
+			}
+			if required != test.wantSnapshot {
+				t.Fatalf("owner-loss snapshot required = %t, want %t", required, test.wantSnapshot)
+			}
+		})
+	}
+}
+
+func TestLinuxV2StageReplayPreRecoveryWaitFailurePropagates(t *testing.T) {
+	sentinel := errors.New("pre-recovery wait sentinel")
+	targetPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait target pin: %v", err)
+	}
+	defer targetPIDFD.Close()
+	helperPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait helper pin: %v", err)
+	}
+	defer helperPIDFD.Close()
+	for _, test := range []struct {
+		name   string
+		stage  string
+		marker linuxV2OwnerWitnessStageMarker
+		want   string
+	}{
+		{name: "unproven helper-exit arm", stage: "helper_bound", want: "helper_exit"},
+		{name: "released native_release containment arm", stage: "native_release", marker: linuxV2PreRecoveryReleasedMarker(), want: "target_containment"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var arms []string
+			waitTargetContained := func(*os.File, time.Duration) error {
+				arms = append(arms, "target_containment")
+				return sentinel
+			}
+			waitHelperExited := func(int, time.Duration) error {
+				arms = append(arms, "helper_exit")
+				return sentinel
+			}
+			_, err := linuxV2WaitStageReplayPreRecovery(test.stage, &test.marker, &state.RunJournal{},
+				linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD},
+				waitTargetContained, waitHelperExited)
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("pre-recovery wait error = %v, want the %s arm failure wrapped", err, test.want)
+			}
+			if len(arms) != 1 || arms[0] != test.want {
+				t.Fatalf("pre-recovery wait arms = %v, want only the %s arm", arms, test.want)
 			}
 		})
 	}
@@ -4520,7 +4667,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 		if !finalFound || proof == nil || proof.StopReceipt == nil || !proof.StopReceipt.LinuxProof.Equal(*receiptProof) {
 			t.Fatal("same-RunKey replay did not release from the exact durable receipt")
 		}
-		if linuxV2StageReplayOwnerLossSnapshotRequired(responseLoss.hold, marker, initial.Journal) {
+		if linuxV2StageReplayOwnerLossSnapshotRequired(responseLoss.hold, &marker, &initial.Journal) {
 			if err := linuxV2RequireOwnerLossSnapshotBeforeRecovery(replayResponse.OwnerLoss, responseLoss.hold, marker.Owners.Helper, receiptProof); err != nil {
 				t.Fatalf("ack-stop-receipt replay lacks its pre-recovery owner-loss snapshot: %v", err)
 			}
