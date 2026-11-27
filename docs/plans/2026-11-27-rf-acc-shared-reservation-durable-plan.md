@@ -22,28 +22,30 @@ the correct physical Journal state: pre-create abort tombstone reports a target 
 | Authority validator | `never_created` requires `proof.LeafNeverAppeared == proof.CreateStarted` | `internal/authority/cgroup.go:383` |
 | State producer | `CreateStarted: false`, `LeafNeverAppeared: false`, `LeafAbsent: true`, `Validated` | `internal/state/linux_cgroup_journal.go:903-916` |
 
-`linuxV2ValidateStageReplayJournal` calls `abort.Validate()` first (`:1467`); a proof that fails it
-returns the other message. So the switch at `:1475` only sees proofs with
+`linuxV2ValidateStageReplayJournal` calls `abort.Validate()` first (dispatch base `:1467`); a proof
+that fails it returns the other message. So the switch at `:1475` (dispatch base) only sees proofs with
 `LeafNeverAppeared == CreateStarted`, and every such proof fails the clause:
 
 - `CreateStarted=false` ⇒ `LeafNeverAppeared=false` ⇒ `!abort.LeafNeverAppeared` is true;
 - `CreateStarted=true` ⇒ `abort.CreateStarted` is true.
 
 The demanded combination `CreateStarted=false && LeafNeverAppeared=true` is not one of the two
-legal `never_created` shapes; `internal/authority/authority_v2_test.go:236-243` pins them
-("post-create-intent proof inferred never-created from path absence alone" is refused;
-`CreateStarted=true, LeafNeverAppeared=true` is the accepted "exact never-appeared proof"). The
+legal `never_created` shapes; `internal/authority/authority_v2_test.go:231-244` pins them (the
+positive pre-mkdir `Validate`/`ValidFor` check at `:231-233`; "post-create-intent proof inferred
+never-created from path absence alone" refused at `:235-237`; `CreateStarted=true,
+LeafNeverAppeared=true` accepted as the "exact never-appeared proof" at `:239-241`, and its
+`ValidFor` refusal for another creation-intent state at `:242-244`). The
 producer's pre-mkdir shape is itself pinned by
-`internal/state/linux_clone_journal_test.go:255-258`. The clause can therefore never pass: it is a
+`internal/state/linux_clone_journal_test.go:256-260`. The clause can therefore never pass: it is a
 dead assertion that reddens any journal reaching it.
 
 ### 1.2 The `reservation_durable` boundary requires the pre-mkdir shape
 
-`linuxV2ValidateStageJournalBoundary` (`:1617-1620`) refuses the held marker unless
+`linuxV2ValidateStageJournalBoundary` (dispatch base `:1617-1620`; delivered `:1871-1874`) refuses the held marker unless
 `reservation.CreateStarted == false`, no leaf identity and no helper. Recovery then takes
-`linux_owner_recovery_linux.go:140-146` (`!reservation.CreateStarted` →
+`linux_owner_recovery_linux.go:139-146` (`!reservation.CreateStarted` →
 `abortNeverCreatedLinuxV2Reservation`) and persists the fence-inferred pre-mkdir tombstone whose
-policy is stated at `internal/authority/cgroup.go:138-139` and `internal/state/linux_cgroup_journal.go:898-902`:
+policy is stated at `internal/authority/cgroup.go:140-141` and `internal/state/linux_cgroup_journal.go:898-902`:
 exclusive durable creator fence, no filesystem observation, no stop receipt, no leaf removal
 authority. The recovery is exactly the designed behaviour; the witness clause contradicts it.
 
@@ -86,6 +88,13 @@ for a proof the contract forbids.
 - `never_created` must be the pre-mkdir fence shape: `!CreateStarted && !LeafNeverAppeared` and no
   helper/helper-exit. The two conjuncts that `Validate` already implies stay explicit, matching the
   sibling `removed_empty` clause's style; the one that contradicts `Validate` is the defect.
+- The predicate alone accepted either pre-effect disposition at any `aborted_no_target` hold, so
+  `linuxV2ValidateStageReplayJournal` takes the held `stage` and binds the disposition to it
+  (`linuxV2ValidateHeldStageAbortDisposition`): `reservation_durable` may present only the
+  `never_created` fence shape, `helper_bound` may present only the `removed_empty`/
+  `absent_after_rmdir` shape, and any other held stage presenting a no-target tombstone is refused.
+  The call sites pass the held barrier stage they already validate against
+  `linuxV2ExpectedStageReplayRecovery`.
 - Nothing else changes: `Validate`, the producer, the tombstone semantics, the boundary validators,
   the replay matrix's stage list and the acceptance script stay byte-identical. The `shared` arm's
   pi-leg credential gate (ruling 1B1) is untouched, so the gated outcome is recorded exactly as
@@ -93,13 +102,15 @@ for a proof the contract forbids.
 
 ## 3. Edge cases the contract demands
 
-- `aborted_no_target` from a pre-create hold is the only producer of the `never_created` clause
-  (`reservation_durable`); `create_started`/`leaf_bound` recover `unresolved`, `helper_bound` and
-  `launcher_bound` recover `removed_empty`/`absent_after_rmdir` with a helper, `gate_bound` and
-  later recover `released`. No other leg consumes the changed conjunct.
+- `linuxV2ExpectedStageReplayRecovery` maps exactly two holds to `aborted_no_target`:
+  `reservation_durable` (only the `never_created` fence shape may satisfy it) and `helper_bound`
+  (only the `removed_empty`/`absent_after_rmdir` shape with its helper reap evidence may satisfy
+  it). `create_started`, `leaf_bound` and `launcher_bound` recover `unresolved`; `gate_bound` and
+  later recover `released`. No other leg consumes the changed conjunct or the new binding.
 - A tombstone that claims the create CAS advanced (`CreateStarted=true`) or a helper/helper exit
   stays refused by the clause; the accepted `CreateStarted=true, LeafNeverAppeared=true` shape is
-  not the pre-mkdir fence and is refused here too.
+  not the pre-mkdir fence and is refused here too. A valid `removed_empty` proof is refused at
+  `reservation_durable` and a valid pre-mkdir proof at `helper_bound`, each with its own message.
 - The leg's remaining assertions (clone-abort proof, RunKey/Subject binding, `ValidFor` against the
   durable reservation) are unchanged; the fix removes the only stop the leg was observed to raise
   and cannot make an earlier one pass.
@@ -109,7 +120,8 @@ for a proof the contract forbids.
 | New behaviour | Committed red-capable test | Runs where |
 | --- | --- | --- |
 | The pre-mkdir tombstone the state producer writes for a never-created reservation satisfies the stage-replay clause | `TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape` in `daemon/e2e`, driving `state.Store.AbortNeverCreatedLinuxCgroupReservation` | `daemon` job race pass (`go test -race ./...`), local WSL |
-| The clause still refuses a target/leaf-creation tombstone (`CreateStarted=true` shape) | same test, red row over a mutated copy | same |
+| The clause still refuses a target/leaf-creation tombstone (`CreateStarted`, helper, helper exit, claimed absence: one field per row) | same test, red rows over a mutated copy | same |
+| Each hold presents only its own valid disposition, and no other hold may present a no-target tombstone | `TestLinuxV2HeldStageBindsThePreEffectAbortDisposition` (predicate) and `TestLinuxV2StageReplayJournalBindsTheAbortDispositionToTheHeldStage` (the replay validator the leg calls) | same |
 | The old clause text rejects that same production tombstone | scratch-clone revert of the one token, same test | local WSL, recorded; not committed |
 
 Evidence plan: run the new row and the reverted-clause row in WSL with exact exit codes; run the
