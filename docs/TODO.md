@@ -2357,6 +2357,31 @@ and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
       run: no `credential_gated` manifest entry, all three Control provider receipts, and a green
       `TestProductionLinuxV2PiNativeProviderAction` row.
 
+## rf-acc-shared-reservation-durable: the shared Bind on the PR head (2026-11-27)
+
+The goal's stage 1 and stage 2 are delivered (plan
+`docs/plans/2026-11-27-rf-acc-shared-reservation-durable-plan.md`, record
+`docs/evidence/rf-acc-shared-reservation-durable-2026-11-27.md`). The closed part moved to
+`docs/archive/CLOSED-TODO.md`.
+
+- [ ] The conductor's `shared` Bind on the PR head (the contract's acceptance): report the case-set
+      exit, the `verified …` sequence and its first disagreement, the `reservation_durable` leg's
+      outcome (expected: no `:224` stop), the credential-gated pi outcome verbatim in the log, its
+      declaration member and the export status, the reader Result, and the first unexpected failure
+      if the arm stops later in the replay matrix. The leg is CI-only, so no local run substitutes
+      for it (record §5, §7, §10). The authentic pi proof stays with
+      `## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn` above.
+
+- [ ] Deferred code tidiness (2026-11-28, round-3 records round; record §4, §11): the no-target
+      proof selector `linuxV2StageReplayNoTargetAbort` deep-clones the reservation proof first and
+      then, when the nested clone proof is present and preferred, overwrites that pointer and
+      discards the first copy (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`). No
+      result or precedence changes: the selected value is identical and the discarded copy
+      participates in no assertion. Deferred because a code change would void the round-3 binding
+      run for the delivered Go blob (`96306f49…`); the fix is to return the preferred clone proof
+      first, else the reservation proof, else nil, cloning only the selected proof. Owner: the next
+      slice that already touches this file.
+
 ## rf-acc-pi-turn-deadline: residuals (2026-11-28)
 
 The authenticated-turn task text is now staged by the acceptance fixture

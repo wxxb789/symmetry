@@ -596,7 +596,7 @@ func TestProductionLinuxV2UnresolvedJournalBlocksFreshRun(t *testing.T) {
 		if err := linuxV2ValidateStageReplayResponse(freshFixture, "handoff_committed", response); err != nil {
 			t.Fatalf("admitted fresh recovery response failed exact-state assertions: %v", err)
 		}
-		admittedFinal, admittedFinalFound, err := linuxV2ValidateStageReplayJournal(freshFixture, response)
+		admittedFinal, admittedFinalFound, err := linuxV2ValidateStageReplayJournal(freshFixture, "handoff_committed", response)
 		if err != nil || !admittedFinalFound {
 			t.Fatalf("admitted fresh recovery did not preserve its exact Journal state: found=%t error=%v", admittedFinalFound, err)
 		}

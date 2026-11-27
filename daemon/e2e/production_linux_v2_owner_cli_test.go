@@ -23,6 +23,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
@@ -1400,7 +1401,7 @@ func linuxV2ValidateStageReplayResponseState(fixture linuxV2NativeFixture, stage
 	return nil
 }
 
-func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response linuxV2OwnerWitnessResponse) (linuxWitnessJournalFile, bool, error) {
+func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, stage string, response linuxV2OwnerWitnessResponse) (linuxWitnessJournalFile, bool, error) {
 	key := state.RunKey{RunID: fixture.request.RunKey.RunID, Generation: fixture.request.RunKey.Generation}
 	file, found, err := readLinuxWitnessJournalForKey(fixture.stateDir, key)
 	if err != nil {
@@ -1444,24 +1445,17 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response li
 			return file, found, errors.New("never-created reservation was represented as a target stop or remains unproven")
 		}
 		if found {
-			if err := linuxV2VerifyNoTargetCloneAbort(fixture, file.Journal); err != nil {
+			abort := linuxV2StageReplayNoTargetAbort(file.Journal)
+			if err := linuxV2ValidateHeldStageAbortDisposition(stage, abort); err != nil {
 				return file, found, err
 			}
-		}
-		if found {
-			var abort *authority.LinuxCgroupReservationAbortProof
-			if file.Journal.ContainmentCgroup != nil && file.Journal.ContainmentCgroup.AbortProof != nil {
-				copy := file.Journal.ContainmentCgroup.AbortProof.Clone()
-				abort = &copy
+			if err := linuxV2VerifyNoTargetCloneAbort(fixture, file.Journal); err != nil {
+				return file, found, err
 			}
 			if cloneAbort := file.Journal.LinuxCloneAbortProof; cloneAbort != nil {
 				if cloneAbort.Validate() != nil || cloneAbort.Intent.RunID != fixture.request.RunKey.RunID ||
 					cloneAbort.Intent.Generation != fixture.request.RunKey.Generation || cloneAbort.Intent.ResourceID != fixture.request.Subject.ResourceID {
 					return file, found, errors.New("no-target clone tombstone changed the exact RunKey/Subject")
-				}
-				if cloneAbort.CgroupAbortProof != nil {
-					copy := cloneAbort.CgroupAbortProof.Clone()
-					abort = &copy
 				}
 			}
 			if abort == nil || abort.Validate() != nil || !abort.CreatorFenced || !abort.NoProducerCanAct {
@@ -1472,18 +1466,8 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response li
 					reservation.OwnerUID, reservation.Anchor, *reservation.Mirror, reservation.Helper, reservation.Launcher) {
 				return file, found, errors.New("no-target abort proof does not bind its exact durable reservation")
 			}
-			switch abort.LeafDisposition {
-			case authority.LinuxCgroupAbortLeafNeverCreated:
-				if abort.CreateStarted || !abort.LeafNeverAppeared || abort.Helper != nil || abort.HelperExit != nil {
-					return file, found, errors.New("pre-create abort tombstone reports a target or leaf creation")
-				}
-			case authority.LinuxCgroupAbortLeafRemovedEmpty, authority.LinuxCgroupAbortLeafAbsentAfterRmdir:
-				if !abort.CreateStarted || !abort.LeafEmpty || !abort.LeafAbsent || abort.LeafNeverAppeared || abort.Helper == nil ||
-					abort.HelperExit == nil || !abort.HelperExit.Waited || !abort.HelperExit.Reaped {
-					return file, found, errors.New("no-gate helper abort lacks exact empty-leaf/helper-reap evidence")
-				}
-			default:
-				return file, found, errors.New("no-target tombstone has an unknown cgroup leaf disposition")
+			if err := linuxV2ValidatePreEffectAbortTombstone(*abort); err != nil {
+				return file, found, err
 			}
 		}
 	case "no_native_effects":
@@ -1506,6 +1490,282 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response li
 		}
 	}
 	return file, found, nil
+}
+
+func linuxV2StageReplayNoTargetAbort(journal state.RunJournal) *authority.LinuxCgroupReservationAbortProof {
+	var abort *authority.LinuxCgroupReservationAbortProof
+	if journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof != nil {
+		copy := journal.ContainmentCgroup.AbortProof.Clone()
+		abort = &copy
+	}
+	if cloneAbort := journal.LinuxCloneAbortProof; cloneAbort != nil && cloneAbort.CgroupAbortProof != nil {
+		copy := cloneAbort.CgroupAbortProof.Clone()
+		abort = &copy
+	}
+	return abort
+}
+
+func linuxV2ValidateHeldStageAbortDisposition(stage string, abort *authority.LinuxCgroupReservationAbortProof) error {
+	if abort == nil {
+		return nil
+	}
+	switch stage {
+	case "reservation_durable":
+		if abort.LeafDisposition != authority.LinuxCgroupAbortLeafNeverCreated {
+			return errors.New("reservation_durable recovery accepted leaf-bound abort evidence")
+		}
+	case "helper_bound":
+		if abort.LeafDisposition == authority.LinuxCgroupAbortLeafNeverCreated {
+			return errors.New("helper_bound recovery accepted a never-created abort tombstone")
+		}
+	default:
+		return fmt.Errorf("stage %q cannot present a no-target abort tombstone", stage)
+	}
+	return nil
+}
+
+func linuxV2ValidatePreEffectAbortTombstone(abort authority.LinuxCgroupReservationAbortProof) error {
+	switch abort.LeafDisposition {
+	case authority.LinuxCgroupAbortLeafNeverCreated:
+		if abort.CreateStarted || abort.LeafNeverAppeared || abort.Helper != nil || abort.HelperExit != nil {
+			return errors.New("pre-create abort tombstone reports a target or leaf creation")
+		}
+	case authority.LinuxCgroupAbortLeafRemovedEmpty, authority.LinuxCgroupAbortLeafAbsentAfterRmdir:
+		if !abort.CreateStarted || !abort.LeafEmpty || !abort.LeafAbsent || abort.LeafNeverAppeared || abort.Helper == nil ||
+			abort.HelperExit == nil || !abort.HelperExit.Waited || !abort.HelperExit.Reaped {
+			return errors.New("no-gate helper abort lacks exact empty-leaf/helper-reap evidence")
+		}
+	default:
+		return errors.New("no-target tombstone has an unknown cgroup leaf disposition")
+	}
+	return nil
+}
+
+func linuxV2PreMkdirAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {
+	t.Helper()
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open a state store for the pre-mkdir tombstone: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close the pre-mkdir tombstone store: %v", err)
+		}
+	})
+	mirror := linuxV2JournalOwner(12)
+	reservation := state.LinuxCgroupReservation{
+		Version: state.LinuxCgroupReservationVersion, LaunchToken: strings.Repeat("3", authority.TokenBytes*2),
+		Secret: strings.Repeat("4", authority.SecretBytes*2), PipeToken: strings.Repeat("5", authority.TokenBytes*2),
+		JobID: strings.Repeat("6", authority.TokenBytes*2), OwnerUID: 1000,
+		RecoveryEndpoint: "/run/symmetry/stage-replay-tombstone.sock",
+		Parent: authority.LinuxCgroupParentIdentity{
+			BootID: "00000000-0000-4000-8000-0000000000b1", MountID: 9, Device: 12, Inode: 15,
+			Path: "/system.slice/symmetry.slice/delegated",
+		},
+		LeafName: strings.Repeat("7", authority.TokenBytes*2),
+		Anchor:   linuxV2JournalOwner(11), Mirror: &mirror,
+	}
+	journal := state.RunJournal{
+		RunID: "stage-replay-pre-mkdir-tombstone", Generation: 1, RuntimeKey: "local", RuntimeID: "runtime-1",
+		ClaimedRuntimeEpoch: 1, ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Now().UTC().Add(time.Hour),
+		LocalState: "running", WorkspaceBindingKey: "binding-1",
+		Work: protocol.Work{Goal: "implement", AgentProfile: "pi", Workspace: "isolated", Input: json.RawMessage(`{}`)},
+	}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("save the pre-mkdir stage-replay journal: %v", err)
+	}
+	key := journal.Key()
+	if _, err := store.ReserveLinuxCgroup(key, journal.Fence(), reservation, nil); err != nil {
+		t.Fatalf("reserve the never-created cgroup: %v", err)
+	}
+	aborted, err := store.AbortNeverCreatedLinuxCgroupReservation(key, journal.Fence(), reservation)
+	if err != nil {
+		t.Fatalf("abort the never-created cgroup reservation: %v", err)
+	}
+	if aborted.ContainmentCgroup == nil || aborted.ContainmentCgroup.AbortProof == nil {
+		t.Fatal("the never-created abort persisted no pre-mkdir tombstone")
+	}
+	return aborted.ContainmentCgroup.AbortProof.Clone()
+}
+
+func TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape(t *testing.T) {
+	t.Parallel()
+	tombstone := linuxV2PreMkdirAbortTombstone(t)
+	if err := linuxV2ValidatePreEffectAbortTombstone(tombstone); err != nil {
+		t.Fatalf("the persisted pre-mkdir tombstone was refused: %v", err)
+	}
+	observed := tombstone
+	observed.LeafNeverAppeared = true
+	if err := observed.Validate(); err == nil {
+		t.Fatal("the authority accepted a pre-mkdir tombstone claiming an observed absence")
+	}
+	targetOrLeaf := "pre-create abort tombstone reports a target or leaf creation"
+	for _, test := range []struct {
+		name   string
+		mutate func(proof *authority.LinuxCgroupReservationAbortProof)
+		want   string
+	}{
+		{name: "createStarted", want: targetOrLeaf, mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+			proof.CreateStarted = true
+		}},
+		{name: "helper", want: targetOrLeaf, mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+			helper := authority.LinuxCgroupProcessIdentity{PID: 31, Identity: "linux:v2:helper:31"}
+			proof.Helper = &helper
+		}},
+		{name: "helperExit", want: targetOrLeaf, mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+			exit := authority.LinuxCgroupExitProof{
+				Version: authority.LinuxCgroupIdentityVersion, Process: proof.Anchor, Witness: proof.Anchor,
+				Waited: true, Reaped: true,
+			}
+			proof.HelperExit = &exit
+		}},
+		{name: "claimedAbsent", want: targetOrLeaf, mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+			proof.LeafNeverAppeared = true
+		}},
+		{name: "removedEmpty", want: "no-gate helper abort lacks exact empty-leaf/helper-reap evidence",
+			mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+				proof.LeafDisposition = authority.LinuxCgroupAbortLeafRemovedEmpty
+			}},
+		{name: "unknown", want: "no-target tombstone has an unknown cgroup leaf disposition",
+			mutate: func(proof *authority.LinuxCgroupReservationAbortProof) {
+				proof.LeafDisposition = "unknown_leaf_disposition"
+			}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := tombstone
+			test.mutate(&mutated)
+			if err := linuxV2ValidatePreEffectAbortTombstone(mutated); err == nil || err.Error() != test.want {
+				t.Fatalf("mutated pre-mkdir tombstone error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	t.Run("postCreateClaimedAbsence", func(t *testing.T) {
+		postCreate := tombstone
+		postCreate.CreateStarted, postCreate.LeafNeverAppeared = true, true
+		if err := postCreate.Validate(); err != nil {
+			t.Fatalf("the authority refused its own accepted never-appeared proof: %v", err)
+		}
+		if err := linuxV2ValidatePreEffectAbortTombstone(postCreate); err == nil || err.Error() != targetOrLeaf {
+			t.Fatalf("a create-started tombstone was not refused with the target/leaf-creation message: %v", err)
+		}
+	})
+}
+
+func linuxV2RemovedEmptyAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {
+	t.Helper()
+	proof := linuxV2PreMkdirAbortTombstone(t)
+	helper := authority.LinuxCgroupProcessIdentity{PID: 4101, Identity: "linux:v2:helper:4101"}
+	exit := authority.LinuxCgroupExitProof{
+		Version: authority.LinuxCgroupIdentityVersion, Process: helper, Witness: proof.Anchor, Waited: true, Reaped: true,
+	}
+	proof.LeafDisposition = authority.LinuxCgroupAbortLeafRemovedEmpty
+	proof.CreateStarted = true
+	proof.LeafEmpty = true
+	proof.LeafAbsent = true
+	proof.RmdirSucceeded = true
+	proof.LeafIdentity = &authority.LinuxCgroupIdentity{
+		Version: authority.LinuxCgroupIdentityVersion, Parent: proof.Parent, LeafName: proof.LeafName,
+		LeafDevice: 12, LeafInode: 4101,
+	}
+	proof.Helper = &helper
+	proof.HelperExit = &exit
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("the removed-empty helper tombstone fixture is not a valid authority proof: %v", err)
+	}
+	return proof
+}
+
+func TestLinuxV2HeldStageBindsThePreEffectAbortDisposition(t *testing.T) {
+	t.Parallel()
+	neverCreated := linuxV2PreMkdirAbortTombstone(t)
+	removedEmpty := linuxV2RemovedEmptyAbortTombstone(t)
+	for _, test := range []struct {
+		name, stage string
+		proof       authority.LinuxCgroupReservationAbortProof
+		want        string
+	}{
+		{name: "reservation_durable accepts its own pre-mkdir tombstone", stage: "reservation_durable", proof: neverCreated},
+		{name: "reservation_durable refuses a valid removed-empty tombstone", stage: "reservation_durable", proof: removedEmpty,
+			want: "reservation_durable recovery accepted leaf-bound abort evidence"},
+		{name: "helper_bound accepts its own removed-empty tombstone", stage: "helper_bound", proof: removedEmpty},
+		{name: "helper_bound refuses a valid pre-mkdir tombstone", stage: "helper_bound", proof: neverCreated,
+			want: "helper_bound recovery accepted a never-created abort tombstone"},
+		{name: "gate_bound refuses a valid pre-mkdir tombstone", stage: "gate_bound", proof: neverCreated,
+			want: `stage "gate_bound" cannot present a no-target abort tombstone`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proof := test.proof
+			err := linuxV2ValidateHeldStageAbortDisposition(test.stage, &proof)
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("held-stage disposition error = %v, want the proof accepted", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != test.want {
+				t.Fatalf("held-stage disposition error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func linuxV2HeldStageReplayFixture(t *testing.T, proof authority.LinuxCgroupReservationAbortProof) linuxV2NativeFixture {
+	t.Helper()
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("the held-stage replay fixture needs a valid abort tombstone: %v", err)
+	}
+	stateDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(stateDir, "runs"), 0o700); err != nil {
+		t.Fatalf("create the held-stage replay journal directory: %v", err)
+	}
+	journal := state.RunJournal{
+		RunID: "held-stage-abort-disposition", Generation: 1, LocalState: "running",
+		RunCloneState: state.RunCloneState{
+			LinuxCloneAbortProof: &authority.LinuxCloneAbortProof{
+				Version: authority.LinuxCloneVersion, CgroupAbortProof: &proof,
+			},
+		},
+	}
+	raw, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("encode the held-stage replay journal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "runs", "journal-held-stage.json"), raw, 0o600); err != nil {
+		t.Fatalf("write the held-stage replay journal: %v", err)
+	}
+	return linuxV2NativeFixture{
+		stateDir: stateDir,
+		request:  linuxV2OwnerWitnessRequest{RunKey: linuxV2WitnessRunKey{RunID: journal.RunID, Generation: journal.Generation}},
+	}
+}
+
+func TestLinuxV2StageReplayJournalBindsTheAbortDispositionToTheHeldStage(t *testing.T) {
+	t.Parallel()
+	neverCreated := linuxV2PreMkdirAbortTombstone(t)
+	removedEmpty := linuxV2RemovedEmptyAbortTombstone(t)
+	cloneAbortRefusal := "no-target outcome lacks the exact clone-abort proof and A seed/ref absence attestations"
+	for _, test := range []struct {
+		name, stage, want string
+		proof             authority.LinuxCgroupReservationAbortProof
+	}{
+		{name: "helper_bound replay carrying a valid pre-mkdir tombstone", stage: "helper_bound", proof: neverCreated,
+			want: "helper_bound recovery accepted a never-created abort tombstone"},
+		{name: "reservation_durable replay carrying a valid removed-empty tombstone", stage: "reservation_durable", proof: removedEmpty,
+			want: "reservation_durable recovery accepted leaf-bound abort evidence"},
+		{name: "reservation_durable replay carrying its own valid pre-mkdir tombstone", stage: "reservation_durable", proof: neverCreated,
+			want: cloneAbortRefusal},
+		{name: "helper_bound replay carrying its own valid removed-empty tombstone", stage: "helper_bound", proof: removedEmpty,
+			want: cloneAbortRefusal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := linuxV2HeldStageReplayFixture(t, test.proof)
+			response := linuxV2OwnerWitnessResponse{RecoveryState: "aborted_no_target", NoTargetAbort: true}
+			_, found, err := linuxV2ValidateStageReplayJournal(fixture, test.stage, response)
+			if err == nil || !found || err.Error() != test.want {
+				t.Fatalf("held-stage replay journal error = %v, want %q", err, test.want)
+			}
+		})
+	}
 }
 
 func linuxV2VerifyNoTargetCloneAbort(fixture linuxV2NativeFixture, journal state.RunJournal) error {
@@ -2085,7 +2345,7 @@ func runProductionLinuxV2StageCrashReplayCase(
 	if err := linuxV2ValidateStageReplayResponse(fixture, stage, response); err != nil {
 		t.Fatalf("stage %s recovery response failed exact-state assertions: %v", stage, err)
 	}
-	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, response)
+	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, stage, response)
 	if err != nil {
 		t.Fatalf("stage %s recovery did not preserve the correct physical Journal state: %v", stage, err)
 	}
@@ -3511,7 +3771,7 @@ func runProductionLinuxV2LiteralPIDReuse(t *testing.T, caseRoot string) {
 	if err := linuxV2ValidateStageReplayResponse(fixture, "leaf_removed", response); err != nil {
 		t.Fatalf("same-RunKey recovery did not clear only the exact old stopped leaf receipt: %v", err)
 	}
-	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, response)
+	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, "leaf_removed", response)
 	if err != nil || !finalFound || final.Journal.ContainmentCgroup != nil || final.Journal.ContainmentAuthority != nil ||
 		final.Journal.ContainmentCgroupReleaseProof == nil {
 		t.Fatalf("literal PID reuse recovery did not clear the exact old RunJournal after receipt: found=%t error=%v", finalFound, err)
@@ -4393,7 +4653,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 	if err := linuxV2ValidateStageReplayResponseState(fixture, stage, firstResponse, "unresolved"); err != nil {
 		t.Fatalf("first %s response-lost state violates the retained Journal contract: %v", stage, err)
 	}
-	firstJournal, firstFound, err := linuxV2ValidateStageReplayJournal(fixture, firstResponse)
+	firstJournal, firstFound, err := linuxV2ValidateStageReplayJournal(fixture, stage, firstResponse)
 	if err != nil || !firstFound {
 		t.Fatalf("first %s response-lost attempt lacks the exact pending Journal/tombstone: found=%t error=%v", stage, firstFound, err)
 	}
@@ -4426,7 +4686,7 @@ func runProductionLinuxV2AckLossReplay(t *testing.T, stage, caseRoot string) {
 	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners, initial.Journal); err != nil {
 		t.Fatalf("%s ACK-loss replay duplicated or replaced an owner process: %v", stage, err)
 	}
-	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, replayResponse)
+	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, stage, replayResponse)
 	if err != nil {
 		t.Fatalf("same-RunKey response replay did not converge exact Journal for %s: %v", stage, err)
 	}
@@ -4599,7 +4859,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 	} else {
 		t.Fatalf("helper %s first outcome = %q, want authenticated cached completion or unresolved", responseLoss.operation, firstResponse.Outcome)
 	}
-	firstJournal, firstFound, err := linuxV2ValidateStageReplayJournal(fixture, firstResponse)
+	firstJournal, firstFound, err := linuxV2ValidateStageReplayJournal(fixture, responseLoss.hold, firstResponse)
 	if err != nil || !firstFound {
 		t.Fatalf("first helper %s response-loss attempt lacks its exact journal/tombstone: found=%t error=%v", responseLoss.operation, firstFound, err)
 	}
@@ -4658,7 +4918,7 @@ func runProductionLinuxV2HelperResponseLoss(t *testing.T, caseRoot string, respo
 	if err := linuxV2RequireSameOwnerIdentities(marker.Owners, replayResponse.Owners, initial.Journal); err != nil {
 		t.Fatalf("helper response-loss replay duplicated/replaced owner identities: %v", err)
 	}
-	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, replayResponse)
+	final, finalFound, err := linuxV2ValidateStageReplayJournal(replayFixture, responseLoss.hold, replayResponse)
 	if err != nil {
 		t.Fatalf("same-RunKey helper replay journal is not exact: %v", err)
 	}
@@ -4839,7 +5099,7 @@ func runProductionLinuxV2MigrationDenial(t *testing.T, caseRoot string) {
 	if err := linuxV2ValidateStageReplayResponseState(fixture, "native_release", response, "unresolved"); err != nil {
 		t.Fatalf("migration did not fail closed through the production App: %v", err)
 	}
-	final, found, err := linuxV2ValidateStageReplayJournal(fixture, response)
+	final, found, err := linuxV2ValidateStageReplayJournal(fixture, "native_release", response)
 	if err != nil {
 		t.Fatalf("migration denial did not retain the exact unproven RunJournal: %v", err)
 	}
@@ -4982,7 +5242,7 @@ func runProductionLinuxV2StaleLeafIdentity(t *testing.T, caseRoot string) {
 	if err := linuxV2ValidateStageReplayResponseState(fixture, "stop_receipt_durable", response, "unresolved"); err != nil {
 		t.Fatalf("stale cgroup leaf identity did not fail closed: %v", err)
 	}
-	final, found, err := linuxV2ValidateStageReplayJournal(fixture, response)
+	final, found, err := linuxV2ValidateStageReplayJournal(fixture, "stop_receipt_durable", response)
 	if err != nil {
 		t.Fatalf("stale leaf mismatch did not retain the exact unproven RunJournal: %v", err)
 	}
@@ -5148,7 +5408,7 @@ func runProductionLinuxV2StopReceiptPersistenceFailure(t *testing.T, caseRoot st
 	if err := linuxV2ValidateStageReplayResponse(fixture, "native_release", response); err != nil {
 		t.Fatalf("same-RunKey receipt recovery response is not exact: %v", err)
 	}
-	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, response)
+	final, finalFound, err := linuxV2ValidateStageReplayJournal(fixture, "native_release", response)
 	if err != nil {
 		t.Fatalf("same-RunKey receipt recovery did not persist the physical stop: %v", err)
 	}
