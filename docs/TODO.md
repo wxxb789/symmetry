@@ -2312,3 +2312,29 @@ unmeasured) and the redacted-evidence export was refused
       env-gated production witness and the credentialed dispatch; a committed pin needs a seam
       that runs in CI — an env-gated probe test was ruled out because it would not run in CI
       either. Owner: conductor.
+
+## rf-acc-pi-authentic-turn: stage-1 root cause and the pending ruling (2026-11-26)
+
+Stage 1 of goal `rf-acc-pi-authentic-turn` (contract under the GDD contracts root; base and
+dispatch head `07be175e`) is delivered: record `docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md`,
+plan `docs/plans/2026-11-26-rf-acc-pi-authentic-turn-plan.md`. The measured root cause of the
+`shared` leg's `pi rpc final assistant message did not stop normally: "error"` stop is that the
+turn never received a credential: the ratified scratch Bind pattern supplies an inline placeholder
+key, the configured provider rejects it with HTTP 401, and the pinned pi release turns that answer
+into the `stopReason:"error"` message the daemon refuses. No source, fixture or Control byte is
+wrong, and no run on either path has produced a green authentic turn yet.
+
+- [ ] Rule the goal's `DECISION_NEEDED` (record §7). Options: (a) credential the acceptance for
+      this goal's bytes by adding the branch to the environment's deployment branch policy — the
+      only option that can prove an authentic turn; (b) a deterministic local pi provider stub —
+      recommended only as a non-provider row, and reachable only through a fixture mode because
+      the fixture admits `https://` base URLs alone; (c) an explicitly documented credential-gated
+      leg — completes the dummy-credential set and its export/`stop_readback_reader` rows behind a
+      named unproven outcome. Recommendation: (a) plus (c), and an amendment of the goal's
+      acceptance clause if (a) is chosen. Owner: conductor.
+- [ ] Diagnosability, same ruling: the final-message check in `daemon/internal/harness/pi/rpc.go:848-861`
+      reports only the stop reason, so an authentication failure and a transport failure yield the
+      identical witness stop (both measured, record §4.2-§4.3) although the message object it
+      already holds carries the provider's own `errorMessage`. Surfacing it changes production
+      daemon error text, so it needs the ruling; its red-first row belongs beside the existing
+      non-`stop` reason row in `daemon/internal/harness/pi/rpc_test.go:345-347`. Owner: conductor.
