@@ -2356,3 +2356,18 @@ and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
       `refactor/pi-authentic-turn-dispatch-runbook.md`), grouped per ruling 6G1. Expected on that
       run: no `credential_gated` manifest entry, all three Control provider receipts, and a green
       `TestProductionLinuxV2PiNativeProviderAction` row.
+
+## rf-acc-shared-reservation-durable: the shared Bind on the PR head (2026-11-27)
+
+The goal's stage 1 and stage 2 are delivered (plan
+`docs/plans/2026-11-27-rf-acc-shared-reservation-durable-plan.md`, record
+`docs/evidence/rf-acc-shared-reservation-durable-2026-11-27.md`). The closed part moved to
+`docs/archive/CLOSED-TODO.md`.
+
+- [ ] The conductor's `shared` Bind on the PR head (the contract's acceptance): report the case-set
+      exit, the `verified …` sequence and its first disagreement, the `reservation_durable` leg's
+      outcome (expected: no `:224` stop), the credential-gated pi outcome verbatim in the log, its
+      declaration member and the export status, the reader Result, and the first unexpected failure
+      if the arm stops later in the replay matrix. The leg is CI-only, so no local run substitutes
+      for it (record §5, §7, §10). The authentic pi proof stays with
+      `## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn` above.

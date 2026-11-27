@@ -23,6 +23,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/config"
 	"github.com/wxxb789/symmetry/daemon/internal/harness"
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
+	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
@@ -1472,18 +1473,8 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response li
 					reservation.OwnerUID, reservation.Anchor, *reservation.Mirror, reservation.Helper, reservation.Launcher) {
 				return file, found, errors.New("no-target abort proof does not bind its exact durable reservation")
 			}
-			switch abort.LeafDisposition {
-			case authority.LinuxCgroupAbortLeafNeverCreated:
-				if abort.CreateStarted || !abort.LeafNeverAppeared || abort.Helper != nil || abort.HelperExit != nil {
-					return file, found, errors.New("pre-create abort tombstone reports a target or leaf creation")
-				}
-			case authority.LinuxCgroupAbortLeafRemovedEmpty, authority.LinuxCgroupAbortLeafAbsentAfterRmdir:
-				if !abort.CreateStarted || !abort.LeafEmpty || !abort.LeafAbsent || abort.LeafNeverAppeared || abort.Helper == nil ||
-					abort.HelperExit == nil || !abort.HelperExit.Waited || !abort.HelperExit.Reaped {
-					return file, found, errors.New("no-gate helper abort lacks exact empty-leaf/helper-reap evidence")
-				}
-			default:
-				return file, found, errors.New("no-target tombstone has an unknown cgroup leaf disposition")
+			if err := linuxV2ValidatePreEffectAbortTombstone(*abort); err != nil {
+				return file, found, err
 			}
 		}
 	case "no_native_effects":
@@ -1506,6 +1497,103 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, response li
 		}
 	}
 	return file, found, nil
+}
+
+// LeafNeverAppeared is the observed post-create-intent shape (internal/authority/cgroup.go);
+// the CreateStarted=false hold must stay the pre-mkdir fence shape with both flags false.
+func linuxV2ValidatePreEffectAbortTombstone(abort authority.LinuxCgroupReservationAbortProof) error {
+	switch abort.LeafDisposition {
+	case authority.LinuxCgroupAbortLeafNeverCreated:
+		if abort.CreateStarted || abort.LeafNeverAppeared || abort.Helper != nil || abort.HelperExit != nil {
+			return errors.New("pre-create abort tombstone reports a target or leaf creation")
+		}
+	case authority.LinuxCgroupAbortLeafRemovedEmpty, authority.LinuxCgroupAbortLeafAbsentAfterRmdir:
+		if !abort.CreateStarted || !abort.LeafEmpty || !abort.LeafAbsent || abort.LeafNeverAppeared || abort.Helper == nil ||
+			abort.HelperExit == nil || !abort.HelperExit.Waited || !abort.HelperExit.Reaped {
+			return errors.New("no-gate helper abort lacks exact empty-leaf/helper-reap evidence")
+		}
+	default:
+		return errors.New("no-target tombstone has an unknown cgroup leaf disposition")
+	}
+	return nil
+}
+
+func linuxV2PreMkdirAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {
+	t.Helper()
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("open a state store for the pre-mkdir tombstone: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close the pre-mkdir tombstone store: %v", err)
+		}
+	})
+	mirror := linuxV2JournalOwner(12)
+	reservation := state.LinuxCgroupReservation{
+		Version: state.LinuxCgroupReservationVersion, LaunchToken: strings.Repeat("3", authority.TokenBytes*2),
+		Secret: strings.Repeat("4", authority.SecretBytes*2), PipeToken: strings.Repeat("5", authority.TokenBytes*2),
+		JobID: strings.Repeat("6", authority.TokenBytes*2), OwnerUID: 1000,
+		RecoveryEndpoint: "/run/symmetry/stage-replay-tombstone.sock",
+		Parent: authority.LinuxCgroupParentIdentity{
+			BootID: "00000000-0000-4000-8000-0000000000b1", MountID: 9, Device: 12, Inode: 15,
+			Path: "/system.slice/symmetry.slice/delegated",
+		},
+		LeafName: strings.Repeat("7", authority.TokenBytes*2),
+		Anchor:   linuxV2JournalOwner(11), Mirror: &mirror,
+	}
+	journal := state.RunJournal{
+		RunID: "stage-replay-pre-mkdir-tombstone", Generation: 1, RuntimeKey: "local", RuntimeID: "runtime-1",
+		ClaimedRuntimeEpoch: 1, ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Now().UTC().Add(time.Hour),
+		LocalState: "running", WorkspaceBindingKey: "binding-1",
+		Work: protocol.Work{Goal: "implement", AgentProfile: "pi", Workspace: "isolated", Input: json.RawMessage(`{}`)},
+	}
+	if err := store.SaveJournal(journal); err != nil {
+		t.Fatalf("save the pre-mkdir stage-replay journal: %v", err)
+	}
+	key := journal.Key()
+	if _, err := store.ReserveLinuxCgroup(key, journal.Fence(), reservation, nil); err != nil {
+		t.Fatalf("reserve the never-created cgroup: %v", err)
+	}
+	aborted, err := store.AbortNeverCreatedLinuxCgroupReservation(key, journal.Fence(), reservation)
+	if err != nil {
+		t.Fatalf("abort the never-created cgroup reservation: %v", err)
+	}
+	if aborted.ContainmentCgroup == nil || aborted.ContainmentCgroup.AbortProof == nil {
+		t.Fatal("the never-created abort persisted no pre-mkdir tombstone")
+	}
+	return aborted.ContainmentCgroup.AbortProof.Clone()
+}
+
+func TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape(t *testing.T) {
+	t.Parallel()
+	tombstone := linuxV2PreMkdirAbortTombstone(t)
+	if err := linuxV2ValidatePreEffectAbortTombstone(tombstone); err != nil {
+		t.Fatalf("the persisted pre-mkdir tombstone was refused: %v", err)
+	}
+	createStarted := tombstone
+	createStarted.CreateStarted, createStarted.LeafNeverAppeared = true, true
+	if err := linuxV2ValidatePreEffectAbortTombstone(createStarted); err == nil ||
+		err.Error() != "pre-create abort tombstone reports a target or leaf creation" {
+		t.Fatalf("a create-started tombstone was not refused with the target/leaf-creation message: %v", err)
+	}
+	observed := tombstone
+	observed.LeafNeverAppeared = true
+	if err := observed.Validate(); err == nil {
+		t.Fatal("the authority accepted a pre-mkdir tombstone claiming an observed absence")
+	}
+	removedEmpty := tombstone
+	removedEmpty.LeafDisposition = authority.LinuxCgroupAbortLeafRemovedEmpty
+	if err := linuxV2ValidatePreEffectAbortTombstone(removedEmpty); err == nil ||
+		err.Error() != "no-gate helper abort lacks exact empty-leaf/helper-reap evidence" {
+		t.Fatalf("a pre-mkdir tombstone claiming empty-leaf removal was not refused: %v", err)
+	}
+	unknown := tombstone
+	unknown.LeafDisposition = "unknown_leaf_disposition"
+	if err := linuxV2ValidatePreEffectAbortTombstone(unknown); err == nil ||
+		err.Error() != "no-target tombstone has an unknown cgroup leaf disposition" {
+		t.Fatalf("an unknown leaf disposition was not refused: %v", err)
+	}
 }
 
 func linuxV2VerifyNoTargetCloneAbort(fixture linuxV2NativeFixture, journal state.RunJournal) error {

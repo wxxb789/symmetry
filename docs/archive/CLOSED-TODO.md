@@ -5836,3 +5836,22 @@ ruling (2026-11-26)`; the residual that stays open is the credentialed proof
 
 The validator rows prove the projection; the owner-approved A3 `main` dispatch remains the
 proof path for an authentic provider turn.
+
+## rf-acc-shared-reservation-durable: the pre-create abort tombstone expectation (2026-11-27)
+
+Stage 1 and stage 2 of goal `rf-acc-shared-reservation-durable` are delivered: plan
+`docs/plans/2026-11-27-rf-acc-shared-reservation-durable-plan.md`, record
+`docs/evidence/rf-acc-shared-reservation-durable-2026-11-27.md`. What stays open is the conductor's
+`shared` Bind on the PR head
+([`## rf-acc-shared-reservation-durable: the shared Bind on the PR head`](../TODO.md#rf-acc-shared-reservation-durable-the-shared-bind-on-the-pr-head-2026-11-27)).
+
+- [x] Rule the `reservation_durable` wall (contract stage 1 and 2). The `:224` stop is the
+      witness's own contradiction, not a daemon or platform defect: the pre-fix clause at
+      `daemon/e2e/production_linux_v2_owner_cli_test.go:1477` demanded `CreateStarted=false` with
+      `LeafNeverAppeared=true`, and `authority.LinuxCgroupReservationAbortProof.Validate()`
+      (`internal/authority/cgroup.go:383`) permits no such proof, so the clause was unsatisfiable
+      from `41e64851` (#9, 2026-10-13) onward; #308's pi-leg deferral only made the replay leg
+      reachable. The clause now demands the pre-mkdir fence shape the state producer persists, and
+      `TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape` drives that production tombstone
+      (red on the reverted clause, green on the fix; record §5). No production file changed and the
+      pi leg's credential-gated recording (1B1) is untouched.
