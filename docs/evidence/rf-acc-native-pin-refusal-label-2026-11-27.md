@@ -1,16 +1,17 @@
 # rf-acc-native-pin-refusal-label — evidence record
 
 Contract: `goal-rf-acc-native-pin-refusal-label.md` (GDD state root, outside the repository).
-Dispatch base `d45e3298` (`main`); delivered head `76cb92b1`, parent `07452d16`. Branch:
-`refactor/rf-acc-native-pin-refusal-label`. Plan:
-`docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`. Every row below ran on the
-delivered bytes whose digests are in §1 unless the row names another revision, and line anchors are
-delivered-byte anchors except where a section names the dispatch head (§2); the conductor's Bind
-on the PR head is the acceptance and is not claimed here (§8).
+Dispatch base `d45e3298` (`main`), branch `refactor/rf-acc-native-pin-refusal-label`. Plan:
+`docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`. The receipt blocks name their
+own subjects (§6); the credentialed acceptance and its comparator are separate (§8 and Bind).
 
-## 1. Subject bytes (sha256)
+## 1. Changed Go files (SHA-256)
 
-| File | Dispatch head `d45e3298` | Delivered | Diff |
+The reviewed code/test snapshot `76cb92b1` (parent `07452d16`) has the five Go blobs below.
+They are unchanged in fix pass C (`97e86f75`). Except for §2's dispatch-base trace,
+unqualified source anchors refer to those Go blobs.
+
+| File | Dispatch base `d45e3298` | Reviewed snapshot | Diff |
 | --- | --- | --- | --- |
 | `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` | `76f8a0ff803af08a359bbc18e1275d0363308328044209cf8e91e346c8ac91d8` | `c2adf63fae19559cce34c77937443f6da16736f940a195e2cca040ead0dd6a2e` | +6/−1 |
 | `daemon/native/linux-gate/protocol/release_pin_label_linux_test.go` | absent | `3d3a814056f29804496279aca99a7d12f3450004152cdfb43e1414cf00e264a9` | new, 56 lines |
@@ -18,12 +19,10 @@ on the PR head is the acceptance and is not claimed here (§8).
 | `daemon/internal/platform/helper_v2_protocol.go` | `4ac73de34f901c91a3cef10e3704e9530f520db321deb6af4e38669bc6eb9d75` | `29c2251101903bdd8d3ef7c4b3696c198c3c66ee81356d607e514e20e251d358` | +2/−1 |
 | `daemon/internal/platform/linux_owner_helper_v2_linux_test.go` | `17c7e40ec0e551debfaf7accfb3c7f48f72e822deff4fdfd9058348a71616fa7` | `e3f904b61529397c4b81fb979bd54d30aa0e38c27557d0ed72ac2cb7541fe396` | +5/−0 |
 
-Documents: `docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`
-(`6c147ee680e63ac5adddc30037cac9f37d4778972c0aa550b08a7571c8515366`), `docs/TODO.md` (residual
-section renamed, the closed item moved out, the Re-Bind item kept open) and
-`docs/archive/CLOSED-TODO.md` (the closure block added) — cited by content, not digest, because
-main merges change them — and this record (see §6 for the committed-blob gates that bind it; a
-record cannot contain its own digest).
+The four documentation paths in the stage manifests (§6) are the plan, this evidence record,
+`docs/TODO.md` (residual section renamed, closed item moved out, Re-Bind kept open) and
+`docs/archive/CLOSED-TODO.md` (closure block added). The shared TODO files are cited by content;
+the immutable Git trees pin their historical blobs as well as each historical copy of this record.
 
 No production byte outside `daemon/native/linux-gate/protocol/` and
 `daemon/internal/platform/helper_v2_protocol.go` changed; no C helper, `gate.c`, script, workflow,
@@ -53,10 +52,11 @@ fixtures share.
    release or exec-status channel unavailable, `:998` one-use send/close result uncertain, `:1032`
    aborted before the exec acknowledgement settled; delivered `:980`, `:1003-1004`, `:1037`):
    pre-existing, outside this goal's clause, carried as residual (§7).
-4. **The pin site was the one unlabelled, leg-specific pre-packet refusal.** Its input is the leg's
-   own image path; the other pre-packet refusals (`command.Validate`, `validateReleaseOwnerPipe`,
-   `monotonicDeadlineNS`, owner-pipe duplication, `encodeGuardedRelease`) are program-independent
-   and stay out of scope.
+4. **Only the pre-packet image-approval refusal is in scope.** `command.Validate` can reject the
+   leg's supplied command, including its executable path (`wire_linux.go:416-471`), and
+   `encodeGuardedRelease` can reject an over-bound command or grant (`wire.go:715-730`). Neither
+   is the pin refusal. Other pre-send failures, including owner-pipe/guard failures, are not
+   relabelled by this goal.
 
 **Wrong layer: the `PreparedGate.Release` pin call site**, which knows the release context but
 returned the pin's error unwrapped. `pinNativeImage` is the wrong layer: `verifyInstalledCloneBootstrap`
@@ -78,7 +78,7 @@ failure cannot be a syscall error — the class includes `ENOTDIR` from the pare
 `ENOENT` from the image open, each kept inside the pin's own message text. The arm's wait-class,
 clone-read and guest-stage shapes are all false, so the detail carries only the stage and arm.
 
-| Delivered site | Change |
+| Reviewed snapshot site | Change |
 | --- | --- |
 | `gate_lifecycle_linux.go:638` | `ReleaseSubStepNativeImage = "native_image"` |
 | `gate_lifecycle_linux.go:662` | `ReleaseArmNativeImagePin = "image_pin"` |
@@ -88,7 +88,7 @@ clone-read and guest-stage shapes are all false, so the detail carries only the 
 | `linux_owner_helper_v2_linux_test.go:922` | arm census row, literal `stage=native_image arm=image_pin` |
 | `linux_owner_helper_v2_linux_test.go:1223-1226` | validator accepted-shape row `{Stage: "native_image", Arm: "image_pin"}` |
 
-Census (`grep -rn "native_image\|image_pin" daemon/ --include=*.go`, delivered bytes, 9 hits): the
+Census (`grep -rn "native_image\|image_pin" daemon/ --include=*.go`, §1 Go blobs, 9 hits): the
 two new production token sites above (`:638`, `:662`), the four new/updated test rows (the
 arm-census literal at `linux_owner_helper_v2_linux_test.go:922`, the validator shape at `:1225`,
 and the new row's two literal assertions at `release_pin_label_linux_test.go:45-46`), and two
@@ -101,12 +101,12 @@ Existing strings unchanged: the two production diffs are the added vocabulary/sh
 the replacement of the one unwrapped return (`git diff --numstat d45e3298`: `gate_lifecycle_linux.go`
 +6/−1, `helper_v2_protocol.go` +2/−1); the census table's existing literal rows are unedited (+1
 row, 0 changes), so every previously rendered `stage=… arm=…` literal is preserved, and the
-classifier, wire and redaction tests pass unchanged on the delivered bytes (§6, §7).
+classifier, wire and redaction tests passed unchanged on the apply and fix-pass-C subjects (§6).
 
 ## 4. Red first, the new rows, and the mutants
 
-Red first (scratch tree, base production bytes plus the two final test files, WSL Ubuntu-24.04 as
-the unprivileged `accept` user, `daemon/`):
+Base red (fix pass C Go inputs, with both changed production files restored to their dispatch-base
+SHA-256 values in §1; WSL Ubuntu-24.04 as unprivileged `accept`, `daemon/`):
 `go test -count=1 -run '^TestPreparedGateReleaseLabelsTheNativeImagePinRefusal$' ./native/linux-gate/protocol/`
 exited 1 with both subtests red, verbatim (staging path elided):
 
@@ -125,13 +125,12 @@ stage through the shared `stageSymlinkedNativeImageParent` helper) — and asser
 carries `stage=native_image arm=image_pin` as literals, no errno/wait/read/guest fields, and the
 pin's own refusal detail.
 
-Mutants (each applied to a copy of the delivered tree in the scratch area, never to the worktree;
-the delivered files re-hashed after the pass: `gate_lifecycle_linux.go` `c2adf63fae19559c…`,
-`helper_v2_protocol.go` `29c2251101903bdd…` — unchanged). Rows ran in the WSL Ubuntu-24.04 (Noble)
-userland, non-root A shape (`setpriv --reuid=52000 --clear-groups`, `HOME` under the trusted probe
-home), on the mutant's own binary. No Resolute userland exists on this host: the staged probe rootfs
-named for Resolute reports `VERSION_CODENAME=noble` (fix-stage probe), and the review reproduced the
-same reddening in that Noble userland, so this record claims no Resolute run:
+Mutants below use apply R2's Go snapshot (§1 and §6), with one production blob replaced in each
+scratch subject by the SHA-256 listed after the table. They ran in Noble userland as a non-root A
+user (`setpriv --reuid=52000 --clear-groups`, trusted `HOME`), where a mutant binary built. The
+fix-stage probe found that even the rootfs named for Resolute reported `VERSION_CODENAME=noble`;
+independent review reproduced the refusal-label discrimination in Noble. No Resolute run was
+performed.
 
 | id | mutation | red row and observed output |
 | --- | --- | --- |
@@ -149,43 +148,61 @@ Each mutant copy's mutated production file (full sha256): M1
 `c6d97ae3fbd4b512f613d66a1cd99b26cb4debde17524b7ce6480c861024540d`
 (`helper_v2_protocol.go`).
 
-Red→green on the same rows (WSL Ubuntu-24.04, `VERSION_CODENAME=noble`, A shape, test binaries
-built from the scratch trees): base production bytes + the two final test files → exit 1 (verbatim
-above, red); the final bytes → exit 0 for the new row and for every
-`TestLinuxOwnerHelperV2ReleaseErrorDetail*` row (classifier, census, read class, redaction,
-closed-vocabulary validator). The review reproduced both directions independently in the same Noble
-userland, and the fix stage re-ran the base-red protocol row plus the delivered green rows on the
-final bytes (§6).
+Local Noble result: the base-override protocol binary ran both subtests and failed as quoted
+above. Without the overrides, fix pass C passed both subtests and the changed packages, including
+the platform classifier, census, read-class, redaction and closed-vocabulary rows (§6). The
+platform base override did **not** build; M3–M5, not that compile failure, are the executed
+platform red assertions.
 
 ## 5. New-assertion attribution (Bind versus CI)
 
-The conductor's Bind executes the credentialed `synthetic_goal_cleanup` case set, not Go unit
-tests; on the green head that leg releases a resolved symlink-free image, so the new label adds no
-stop to it and the Bind's role for this clause is regression: the set stays green and every
-previously-labelled stop in that log renders byte-identically (contract Acceptance). The new rows
-execute in the CI `daemon` job (`.github/workflows/ci.yml`: `go test -race -count=1 -timeout 600s
--json ./...` on `ubuntu-latest`, non-root runner) and locally in the WSL Ubuntu-24.04 (Noble)
-userland (implement, apply and fix stages). All three rows sit in `//go:build linux && amd64`
-files: the Windows job (`ci.yml:1461`, `go test -count=1 -timeout 600s ./...` on `windows-latest`,
-with the `GOOS=windows` golangci-lint step above it) neither compiles nor runs those rows, and
-compiles the changed non-test file `helper_v2_protocol.go` only as part of the package build. They
-are not executed by the Bind; the Bind does not become the first place they run.
+The conductor's credentialed `synthetic_goal_cleanup` Bind did not execute the three new unit
+assertions. Its leg releases a resolved symlink-free image, not one that triggers the pin refusal.
+The assertion sites are `release_pin_label_linux_test.go` (both inputs) and
+`linux_owner_helper_v2_linux_test.go:922` and `:1225` (census and validator). Their CI home is the
+non-root Linux `daemon` race step (`.github/workflows/ci.yml:971,1055-1063`); §4 and §6 record the
+local executions, not a Linux CI verdict.
 
-## 6. Gates on the delivered bytes (§1 digests)
+The first line of each changed Go file is `//go:build linux && amd64`:
+`daemon/internal/platform/helper_v2_protocol.go:1`,
+`daemon/internal/platform/linux_owner_helper_v2_linux_test.go:1`,
+`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:1`,
+`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go:1` and
+`daemon/native/linux-gate/protocol/release_pin_label_linux_test.go:1`. Windows compiled none of
+these files and ran none of the new rows. Both the historical local Windows gates and the
+`daemon-windows` job (`ci.yml:1399-1402,1461`) cover the Windows build and its selected tests,
+not the Linux-only changes.
 
-Three receipt blocks follow, each naming the subject revision and file set it gated: the implement
-stage on `07452d16` (8 changed paths; the protocol test file then 67 lines, before the shared
-staging helper existed), the apply stage on `76cb92b1` (the 9-path delivered set, whose accepted
-simplifications reworked the two protocol test files and the plan, this record and `CLOSED-TODO` —
-no Go source), and this fix stage on the final bytes (the same 9 paths, with this record and the
-plan re-edited — again no Go source). The fix block binds the delivered bytes; the apply block
-supersedes the implement block, and the implement-stage WSL rows whose package is
-`native/linux-gate/protocol` are PARTIAL and SUPERSEDED there by the apply-stage rows
-(`release_pin_label_linux_test.go` `3d3a8140…`). The Windows `go vet` rows are unaffected by the
-test-file edits (`//go:build linux && amd64`), and the head-wide full suites are CI's
-(`.github/workflows/ci.yml` daemon job) and the conductor's.
+## 6. Historical gate receipts by gated subject
 
-Implement-stage receipts (`07452d16`):
+Each Git tree ID is the digest manifest for its commit (paths, modes and blob IDs). The stage
+checks used the matching worktree bytes for source and sanitizer gates and the named scratch
+commits for committed-blob gates. File sets are relative to dispatch base `d45e3298`. §1 gives
+SHA-256 for the five Go files and names the four document paths; the table below lists only
+exceptions to the fix-pass-C SHA-256 values for the Go files, plan and record.
+
+| Gated scratch commit | Tree digest and matched worktree snapshot | Changed path set |
+| --- | --- | --- |
+| Implement R2 `cf4ae2cf26863db37ad9d26552b41fd84e20ba4b` | `e68b33c19f5d4bc0565445033f5dfed1a022466a` = `07452d16` | 8: the five Go paths minus `native_image_pin_linux_test.go`, plus the four documents |
+| Apply R2 `18bf015814bc13fddb60622b71b0e2de8ab77c8d` | `b1ca95cf52cc0ecade1d51c0cbcb0faf7e63e770` = `76cb92b1` | 9: all five Go paths and four documents |
+| Fix pass C `97e86f752b1ba314100062a27ab2583dc0343aa4` | `c6c97c615b91a9a12b4b7b4e79c5ef7e3757d393` = the PR snapshot in Bind | The same 9 paths as apply R2 |
+
+Fix-pass-C document SHA-256: plan `6c147ee680e63ac5adddc30037cac9f37d4778972c0aa550b08a7571c8515366`,
+record `d2a47466d40f20a710b93cf157f3565482aaf255c8a2871a7e9898023a573f82`. Earlier deltas:
+
+| Path | Implement R2 SHA-256 or scope | Apply R2 SHA-256 if different from fix pass C |
+| --- | --- | --- |
+| `native_image_pin_linux_test.go` | not changed from dispatch base (§1) | same as fix pass C |
+| `release_pin_label_linux_test.go` | `a35137e577abc9668a87a086760f41f7bb59e3c3e7b16ccf67863af33eb259c8` (67 lines) | same as fix pass C |
+| Plan | `4150aef7eff0482958aff9c4e137e1f18d3958cd30a6c37c346572171eb6804e` | `82024fbc6aaf662fe0429c0f7f130b800d7bca6656b921c1e8f84f63d69830c5` |
+| Evidence record | `8aa8b67ba67b97daae83d43a8845163931e798918b604f6fdce6f3639bed4d40` | `bc3948ac38f7a7af00e18881695950a9c9af2dacce8fb9581050ea01d8a46d0e` |
+
+The `CLOSED-TODO` closure wording also changed from implement R2 to apply R2 (which now names the
+pre-rename heading); the tree manifests pin that change without a separate shared-doc SHA-256.
+
+**Implement R2 (`cf4ae2cf`) — PARTIAL; SUPERSEDED by apply R2 (`18bf0158`)** for the changed
+protocol test blobs and documents. The implement-only full suites below are historical, not
+full-suite evidence for either later subject.
 
 | Gate | Exit | Result |
 | --- | ---: | --- |
@@ -196,8 +213,9 @@ Implement-stage receipts (`07452d16`):
 | Host (Go 1.27.4), from `daemon/`: `go test -count=1 -timeout 1200s ./...` | 0 | 27 packages `ok`, 0 fail, incl. `internal/app` 201.4s, `cmd/symmetry-daemon` 0.7s |
 | WSL: `go test -race -count=1 -timeout 1800s ./internal/platform/ ./native/linux-gate/protocol/` | 0 | `ok platform 73.671s`, `ok protocol 9.696s` (the two changed packages; the CI daemon job runs the same race shape over `./...`) |
 
-Apply-stage receipts (`76cb92b1`, 9 paths; the two changed packages; WSL runs as the unprivileged
-`accept` user, which the platform wire harness requires — a root process is refused):
+**Apply R2 (`18bf0158`) — PARTIAL; SUPERSEDED by fix pass C (`97e86f75`)** for the re-edited plan
+and record. Its changed-package tests remain evidence for the same Go blobs; WSL ran as
+unprivileged `accept` because the platform wire harness refuses root.
 
 | Gate | Exit | Result |
 | --- | ---: | --- |
@@ -207,8 +225,8 @@ Apply-stage receipts (`76cb92b1`, 9 paths; the two changed packages; WSL runs as
 | WSL: `go test -count=1 ./native/linux-gate/protocol/ ./internal/platform/` | 0 | `ok protocol 6.958s`, `ok platform 35.473s` (both changed packages; a head-wide `./...` re-run is the CI daemon job's and the conductor's) |
 | WSL: `go test -race -count=1 ./internal/platform/ ./native/linux-gate/protocol/` | 0 | `ok platform 64.887s`, `ok protocol 8.032s` |
 
-Fix-stage receipts on the final bytes (`go test` rows from `daemon/`, focused on the changed
-packages; WSL on Ubuntu-24.04, the host rows on Windows with Go 1.27.4):
+**Fix pass C (`97e86f75`)** — focused tests from `daemon/` in WSL Ubuntu-24.04 and vet on Windows
+with Go 1.27.4. This receipt does not cover subsequent documentation edits or a head-wide rerun.
 
 | Gate | Exit | Result |
 | --- | ---: | --- |
@@ -218,31 +236,29 @@ packages; WSL on Ubuntu-24.04, the host rows on Windows with Go 1.27.4):
 | WSL: `go test -count=1 -v -run '^TestPreparedGateReleaseLabelsTheNativeImagePinRefusal$' ./native/linux-gate/protocol/` | 0 | both subtests `--- PASS` (no skip) |
 | WSL: `go test -count=1 ./native/linux-gate/protocol/ ./internal/platform/` | 0 | `ok protocol`, `ok platform` (both changed packages; a head-wide `./...` re-run is the CI daemon job's and the conductor's) |
 | WSL: `go test -race -count=1 ./internal/platform/ ./native/linux-gate/protocol/` | 0 | both packages `ok` under the race detector |
-| WSL, scratch tree with the base production bytes plus the two final protocol test files: `go test -count=1 -run '^TestPreparedGateReleaseLabelsTheNativeImagePinRefusal$' ./native/linux-gate/protocol/` | 1 | both subtests red, verbatim as quoted in §4 (base-red re-run, protocol binary only) |
-| WSL, scratch tree with the base `helper_v2_protocol.go` plus the final platform test files: `go test -count=1 -run '^TestLinuxOwnerHelperV2ReleaseErrorDetail' ./internal/platform/` | 1 | build refusal: the census and validator rows name `linuxgate.ReleaseSubStepNativeImage` / `ReleaseArmNativeImagePin`, which the base lacks (plan §4 item 4) |
+| WSL, base override specified in §4: `go test -count=1 -run '^TestPreparedGateReleaseLabelsTheNativeImagePinRefusal$' ./native/linux-gate/protocol/` | 1 | both protocol subtests ran red as quoted in §4 |
+| Same base override, restoring **both** `gate_lifecycle_linux.go` and `helper_v2_protocol.go`: `go test -count=1 -run '^TestLinuxOwnerHelperV2ReleaseErrorDetail' ./internal/platform/` | 1 | `basered-platform.txt:2-3`: undefined `linuxgate.ReleaseSubStepNativeImage` and `linuxgate.ReleaseArmNativeImagePin` at `linux_owner_helper_v2_linux_test.go:922:14` and `:922:51` (census row); no platform assertions ran. The validator at `:1225` uses literals. §4 M2 is a separate compile failure (`build-platform-M2.test.log:2`, duplicate case at `helper_v2_protocol.go:519:3`). |
 
-Committed-blob gates, differing rows only (the three subjects' other rows agree; the fix stage ran
-on a scratch clone of `d45e3298` plus exactly the 9 delivered files, and its scratch revision plus
-the delivered-to-clone equality table are in the fix-stage report):
+Record and committed-blob gates, bound to the same three manifests above. `HEAD` in each quoted
+command is that row's gated scratch revision, not the current branch tip.
 
 | Gate | Exit | Result |
 | --- | ---: | --- |
-| `python -B scripts/ci/jscpd-changed.py --base d45e3298 --head HEAD` on the final bytes | 0 | 9 changed file(s), 1795 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new; the notice records that `docs/archive/CLOSED-TODO.md` is outside the configured scan scope |
-| the same gate on `07452d16` / `76cb92b1` (superseded) | 0 / 0 | 8 changed file(s) (no `native_image_pin_linux_test.go`) / 9 changed file(s) |
-| the owner comment-cap probe on the final-bytes clone commit, base `d45e3298` | 0 | no comment block over the 2-line cap among the added lines (same outcome on the two earlier subjects) |
-| `python -B scripts/ci/check-record-cleanliness.py --base d45e3298 --head HEAD` on the final bytes | 0 | 1 changed record passes the root-only check (same outcome on the two earlier subjects) |
-| `python -B scripts/ci/check-citation-existence.py --base d45e3298 --head HEAD` on the final bytes | 0 | 1 changed document passes the path and symbol check (`722` path citations, with the standing three ignore-rule notes for pre-existing portal and deps citations; same outcome on the two earlier subjects) |
-| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` on this record, the plan and `docs/TODO.md` | 0 / 0 / 0 | no host absolute path anywhere in the three; `docs/archive/CLOSED-TODO.md` exits 1 for spans already present at `d45e3298` (its added closure block adds none) — the apply-stage block reported the same outcome; the implement-stage block carried no such row |
+| `python -B scripts/ci/jscpd-changed.py --base d45e3298 --head HEAD` | 0 each | Fix C `97e86f75` and apply R2 `18bf0158`: 9 changed files; implement R2 `cf4ae2cf`: 8. Each scanned 1,795 sources, found 1,245 corpus clones and no new clone; `docs/archive/CLOSED-TODO.md` is outside scan scope. Fix C reported zero tolerated. |
+| `comment-cap.py <clone> d45e3298` | 0 each | No added comment block over two lines on `cf4ae2cf`, `18bf0158` or `97e86f75`. |
+| `python -B scripts/ci/check-record-cleanliness.py --base d45e3298 --head HEAD` | 0 each | One changed record passes at each of `cf4ae2cf`, `18bf0158` and `97e86f75`. |
+| `python -B scripts/ci/check-citation-existence.py --base d45e3298 --head HEAD` | 0 each | One record passes with 722 path citations and three pre-existing ignore-rule notes on `cf4ae2cf`, `18bf0158` and `97e86f75`. |
+| `python scripts/ci/model-routing-record-sanitize.py --check --root-only` | 0 / 0 / 0 / 1 each | `18bf0158` and `97e86f75` worktree equivalents: record, plan and `docs/TODO.md` passed; `docs/archive/CLOSED-TODO.md` failed for unchanged spans from `d45e3298`. No implement-stage sanitizer receipt. |
 
 ## 7. Residual risks and limits
 
 - The symlinked-component subtest stages under a trusted writable `HOME` (the #302 V5 idiom); where
   the environment cannot stage it, only that subtest skips. The environment-free subtest always
   runs, and M1-M3 red both subtests, so the label has a running guard everywhere.
-- Scope: only the pin call site is labelled. The program-independent pre-packet refusals stay
-  unlabelled by the ruling (plan §5), and three other outcome-unknown returns in the RELEASE path
-  remain unlabelled at these bytes (the census anchors are in §2 item 3); the e2e bytes are
-  untouched because the green `synthetic_goal_cleanup` leg has no stop to assert on.
+- Scope: only the pin call-site refusal gained a label. Other pre-packet failures are outside the
+  ruling (plan §5); the three unlabelled RELEASE outcome-unknown returns in §2 item 3 are still
+  residuals. The green `synthetic_goal_cleanup` leg has no refusal stop to assert on, so its e2e
+  assertions were not changed.
 - Environment: no Resolute (ubuntu-26.04) userland exists on this host — the staged probe rootfs
   named for Resolute reports `VERSION_CODENAME=noble`, as does the host WSL distro — so this record
   claims no Resolute run; every red/green reproduction here is in Noble, and the runner userland
@@ -256,9 +272,52 @@ the delivered-to-clone equality table are in the fix-stage report):
   needs a future leg whose release image is not symlink-free and cannot be produced by the green
   case set.
 
-## 8. Acceptance still pending
+## 8. Acceptance — BINDING run
 
-Delivered, pending the conductor's Bind of `synthetic_goal_cleanup` once on the PR head: the set
-stays green (run `45959717137` on `897363bb` is the green prior-head record) and every
-previously-labelled stop in that log renders byte-identically. Neither the local gates nor the
-Noble-userland rows count as that acceptance.
+The conductor's Bind below is green, its manifest passed, and the three exported label/stop
+strings matched the historical green comparator. Neither run emitted a labelled RELEASE refusal;
+that path is covered by the unit evidence, not by this comparison.
+
+The historical comparator [run 45959717137](https://github.com/wxxb789/symmetry/actions/runs/45959717137)
+checked out `5d27bcb0a792cd05b18ce520bd5df5e50fb2ae30` (tree
+`d4d34e8b96bd58f0718d80ac4844aed77cea1e38`), not `897363bb` directly. The short SHA in the
+preserved comparison below identifies its PR #305 product parent. The checkout is that parent
+plus `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` and
+`scripts/ci/scratch-gh-shim`, absent from the parent and byte-identical to the two scratch inputs
+of the binding run. It is not PR #307 acceptance.
+
+Round 2 corrects the records only. Under the conductor's churn bound, new findings confined to
+record wording go to the conductor's TODO rather than a third revision round; any change to code,
+the refusal, assertion meaning or acceptance still blocks.
+
+## Bind
+
+[Run 45991474220](https://github.com/wxxb789/symmetry/actions/runs/45991474220), attempt 1, resolves
+§8 on PR #307 head `228415a52376548f6a54e6e09764455a6912a7e6`. Setup passed and the sole case set
+`synthetic_goal_cleanup` stayed green. `synthetic-goal-cleanup.json` exported and the manifest
+passed. The evidence ZIP (artifact `15194291171`) matched the API SHA-256
+`dd3aced78268acdcb7162edebe120d5865179dc567a5a2d60c7aae9f58d573d3`.
+
+Against [run 45959717137](https://github.com/wxxb789/symmetry/actions/runs/45959717137) on `897363bb`,
+all three exported label/stop string members (`evidence_label`, `physical_stop.proof_kind`, and
+`physical_stop.receipt_status`) matched byte-for-byte; none differed. Neither JSON member nor log
+contains a labelled RELEASE refusal. This compares the green case, not the new refusal path.
+
+Run head `2027cab23ed827de777b5901eea7bdfba4d9f169` matched all 1,905 PR entries by tree metadata and
+blob SHA-256. Only the two scratch files were added; their bytes match PR #304 Bind 2. Compared with
+that Bind (`f3dbae66`), 1,890 PR entries are unchanged. Only case-set input deltas are listed; the
+other changes are docs and standalone test files outside this case set.
+
+| Case-set input changed since PR #304 Bind 2 | Run `2027cab23` SHA-256 = PR `228415a5` SHA-256 |
+| --- | --- |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `7c486e5415aa24c841016d0a9019d4a46309099f76358adb9af41e021ad4b7d9` |
+| `daemon/internal/platform/helper_v2_protocol.go` | `29c2251101903bdd8d3ef7c4b3696c198c3c66ee81356d607e514e20e251d358` |
+| `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go` | `c2adf63fae19559cce34c77937443f6da16736f940a195e2cca040ead0dd6a2e` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `a7c453cb75958c218bd7a09dac4e56a1f749aef2f008e22886b23ac46307c360` |
+
+**Binding provenance:** The PR head named above has parent `76cb92b12c7b8eac76b24bc75d691c7b2dc7a5f4`
+and the fix-pass-C tree digest in §6. The actual run checkout's parent is that PR head and its
+tree digest is `a9a3ada472dc94352e74c53e97496573b3c0d6a5`. Its file set is the complete PR tree
+plus the two scratch-only paths named in §8. Their SHA-256 values, in workflow/shim order, are
+`8beeadf6d00d73dac74a10a49722c9b767dab20010875938c8af5725e8fb389f` and
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`.

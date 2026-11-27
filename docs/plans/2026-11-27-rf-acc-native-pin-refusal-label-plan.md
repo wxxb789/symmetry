@@ -1,11 +1,10 @@
 # rf-acc-native-pin-refusal-label — implement plan
 
 Contract: `goal-rf-acc-native-pin-refusal-label.md` (GDD state root, outside the repository).
-Dispatch base `d45e3298` (`main`); delivered head `76cb92b1`, parent `07452d16`. Branch: this goal
-worktree; every line anchor below is a dispatch-head `d45e3298` anchor. The accepted plan is the
-contract plus the residual it closes; this file resolves only the choices the ruling leaves open
-(which closed vocabulary code the label uses, what the new row asserts, where the evidence lives) and
-points at the measured record. Clause-by-clause results: evidence record
+Dispatch base `d45e3298` (`main`), branch `refactor/rf-acc-native-pin-refusal-label`. Unless
+specified otherwise, source anchors refer to the dispatch base. The accepted plan is the contract
+plus the residual it closes; this file resolves the open choices (the closed vocabulary code, the
+new assertion, and the evidence boundary). The stage subjects and exact PR Bind are recorded in
 `docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`.
 
 ## 1. Clause census at the dispatch head
@@ -36,9 +35,9 @@ points at the measured record. Clause-by-clause results: evidence record
    arms at `:1025-1052`, and the clone-release arms at `:1102-1171`, plus
    `helper_v2_server.go:1121-1185`. Three other outcome-unknown returns in the same RELEASE path
    stay unlabelled (`:975`, `:998`, `:1032`) and are listed out of scope in §5.
-4. The pin site at `gate_lifecycle_linux.go:928-932` is the one pre-packet refusal that is
-   leg-specific (its input is the leg's own image path; the other pre-packet refusals are
-   program-independent) and unlabelled.
+4. This goal targets the unlabelled image-approval refusal at `gate_lifecycle_linux.go:928-932`.
+   It makes no claim that other pre-packet checks ignore leg inputs: `command.Validate` can reject
+   the executable path, for example (`wire_linux.go:416-425`).
 
 Wrong layer: **`PreparedGate.Release`'s pin call site**, which knows the release context but returns
 the pin's error unwrapped. `pinNativeImage` is the wrong place to label: it is also called for the
@@ -115,22 +114,25 @@ obsoletes.
 
 ## 4. Evidence plan
 
-1. Red first: the new protocol row against the unmodified production bytes (unlabelled refusal).
-2. Delivered bytes: the row green; the arm census and validator rows green; the full platform
-   classifier/census tables unchanged and green (byte-identical renderings for every existing row).
-3. Mutants on a scratch clone (never in this worktree), each restoring the file byte-identically:
-   the wrap deleted (new row red), the sub-step constant value swapped (new row and census row red),
-   the arm constant value swapped (census row red), the new sub-step dropped from `Validate()`
-   (census and validator rows red), the shape table rebound to another sub-step (census row red).
-4. Runner-equivalent demonstration in the WSL Ubuntu-24.04 (Noble) userland — no Resolute userland
-   exists on this host, `VERSION_CODENAME=noble`: the protocol test binary (base production bytes
-   plus the final test bytes) runs red, and every row runs green on the delivered bytes. The
-   platform test binary cannot build against the base production bytes — its census and validator
-   rows name `linuxgate.ReleaseSubStepNativeImage` / `ReleaseArmNativeImagePin`, absent there — so
-   the platform assertions redden through the targeted mutants (M3-M5) instead of a base-red run.
-5. Gates binding the handed-over bytes: `gofmt`/`go vet`/full `go test ./...` from `daemon/` in WSL
-   and on Windows, focused `-race` on the two changed packages in WSL, `comment-cap` and
-   `jscpd-changed` on a scratch-clone commit of the final bytes.
+1. Red first: run the new protocol row with the dispatch-base lifecycle and helper protocol files
+   (unlabelled refusal).
+2. Green on the reviewed code/test snapshot `76cb92b1` (parent `07452d16`): both protocol subtests
+   and the platform detail tables, including the new census and validator rows. The existing
+   rendering expectations in those tables stay unchanged.
+3. Use a disposable scratch copy for each mutant. M1 (wrap removed) and M2 (stage changed to
+   `native_exec`) fail the protocol row; M2 instead fails to **compile** the platform package at
+   `helper_v2_protocol.go:519` (duplicate switch case). M3 (arm renamed) fails the platform census;
+   M4 (stage omitted from `Validate()`) and M5 (arm rebound) fail the census and validator. See
+   the evidence record §4 for mutant digests and observed diagnostics.
+4. Local red/green reproduction in WSL Ubuntu-24.04 (`VERSION_CODENAME=noble`): both protocol
+   subtests ran on each side. No Resolute run was performed; this is not CI runner evidence. In
+   the base override the two undefined names come from the census row alone
+   (`linux_owner_helper_v2_linux_test.go:922`, reviewed snapshot); the validator uses literals
+   (`:1225`) and does not execute on that build failure. M3–M5 supply the runtime platform reds.
+5. Evidence record §6 binds the three local gate subjects and digests. The implement-stage full
+   suites are historical; apply and fix pass C covered the affected Linux packages, not a repeat
+   of the full suites. Windows gates checked its own build, excluding all five Linux/amd64 files.
+   The Linux `daemon` CI job owns head-wide unit coverage, separately from the credentialed Bind.
 6. Closure: the residual moves from `docs/TODO.md` to `docs/archive/CLOSED-TODO.md` with the
    record's pointer.
 
@@ -138,9 +140,9 @@ obsoletes.
 
 - The C helper (`daemon/native/linux-gate/c-gate/**`, `native/linux-gate/**`) and any wire-format or
   packet change: the ruling forbids them and the stage is known on the Go side.
-- Every other unlabelled pre-packet refusal (`command.Validate`, `validateReleaseOwnerPipe`,
-  `monotonicDeadlineNS`, owner-pipe duplication, `encodeGuardedRelease`): program-independent, out
-  of the ruling's scope.
+- Pre-packet failures other than image approval are outside the ruling, including command
+  validation, guard/owner-pipe handling, and encoding (which can reject an oversized command or
+  grant, `wire.go:715-730`).
 - The three other unlabelled outcome-unknown returns in the RELEASE path
   (`gate_lifecycle_linux.go:975`, `:998`, `:1032`; §2 item 3): pre-existing, recorded as residual
   in the evidence record (§7); unchanged here.
