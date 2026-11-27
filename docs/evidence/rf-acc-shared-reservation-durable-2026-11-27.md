@@ -24,6 +24,10 @@ This fix round supersedes the earlier stage-2 and round-2 bytes: the Go blobs
 digest and line anchor in this record that named them, are PARTIAL and SUPERSEDED by the bytes
 above. §5 labels each earlier receipt; §11 re-measures every anchor on the delivered bytes.
 
+The table above lists four data rows naming five of the six changed paths
+(`git diff --name-status ac04f3e2..c9a4bbf9`); the sixth, the native witness test, is not
+byte-pinned here — its delivered digest is in §11 (`98d4771c…`).
+
 The scope is the live call chain of the named witness: `production_linux_v2_native_witness_test.go`
 owns the leg and calls `runProductionLinuxV2StageCrashReplay` → `linuxV2ValidateStageReplayJournal`
 in `production_linux_v2_owner_cli_test.go`, which holds the stop, the predicate and its helpers.
@@ -104,12 +108,16 @@ production file.
   exit. Each of those four refusals has its own one-field row over the *production* tombstone
   (`:1608-1624`), red-capable per §5's M1-M4 mutants; the `removedEmpty` row (`:1625-1628`) walks
   the *sibling* `removed_empty` arm and is not evidence for the never-created conjuncts, and the
-  `unknown` row (`:1629-1632`) pins the default arm. A fifth row, `postCreateClaimedAbsence`
+  `unknown` row (`:1629-1632`) pins the default arm. The M1-M4 single-field rows and the
+  disposition-only `removedEmpty` row are DELIBERATELY INVALID direct predicates — each fails
+  `authority.Validate` at `daemon/internal/authority/cgroup.go:381-384` — and are driven only as
+  negative inputs to the switch, not as valid-proof controls. A fifth row, `postCreateClaimedAbsence`
   (`:1642-1651`), sets `CreateStarted` and `LeafNeverAppeared` together — the authority's own
   accepted "exact never-appeared proof" — asserts `Validate()` accepts it, and only then demands the
-  same target/leaf refusal. It is the sole row pinning that authority-valid shape: the round-2
-  delivered bytes had no such row, and §5's M8 (`||` → `!=` on the first two conjuncts) reddens it
-  alone (exit 1) there.
+  same target/leaf refusal. It and the removed-empty fixture that drives the stage/replay rows
+  (`:1654-1676`, `:1712-1740`) are the VALID controls. It is the sole row pinning that
+  authority-valid shape: the row was absent in round 2, so M8 was green in round 2 and reds only the
+  restored row in round 3.
 - The stage binding: the predicate alone accepted either pre-effect disposition at whichever
   `aborted_no_target` hold reached it, and `linuxV2ExpectedStageReplayRecovery` maps two holds there
   (`reservation_durable`, `helper_bound`). `linuxV2ValidateStageReplayJournal` now takes the held
@@ -130,17 +138,25 @@ production file.
   four directions through the replay validator the leg calls; the old clause's contradiction of the
   producer → the §5 M5 polarity mutant. No contract invariant of this change lacks an executable
   row.
-- Live consumers of the changed conjunct and the new binding, kept apart by the kind of coverage
-  they carry. (a) Observed, pre-fix: the ordinary stage replay's `reservation_durable` leg
-  (`verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`
-  in the scratch Bind `46037316453`, pre-fix blob `9c36f90f…`). (b) Intended live consumers *if
-  reached* on the final head: the ordinary stage replay's `helper_bound` leg (the binding's second
-  accept arm) and the ACK-loss replay's second response for `helper_bound`
+- Live consumers of the changed conjunct and the new binding, kept apart by clause reach and binding
+  reach and by the kind of coverage they carry. The ordinary stage replay's `reservation_durable`
+  leg consumes BOTH: the changed `never_created` conjunct (clause reach) and the new stage binding
+  (binding reach); it is observed green in all three scratch receipts (`46037316453` on the
+  clause-only pre-fix blob `9c36f90f…`; `46041720955` and `46045331565` on bytes that also carry the
+  binding). The ordinary and ACK-loss `helper_bound` legs, *if reached*, consume the BINDING and then
+  the UNCHANGED `removed_empty`/`absent_after_rmdir` arm — a `never_created` proof at `helper_bound`
+  returns at witness `:1449-1451,1517-1520`, before the changed conjunct at `:1530` — so those legs
+  are binding consumers, not clause consumers. (a) Observed: the `reservation_durable` leg above,
+  whose clause observation is round 1 and whose binding observation is rounds 2-3. (b) Intended live
+  consumers *if reached* on the final head: the ordinary stage replay's `helper_bound` leg (the
+  binding's second accept arm) and the ACK-loss replay's second response for `helper_bound`
   (`run_ack_loss_replay_cases ... helper_bound`, `scripts/ci/linux-v2-native-acceptance.sh:3301-3303`,
   whose second response is validated at delivered `daemon/e2e/production_linux_v2_owner_cli_test.go:4689`;
-  `helper_bound` also maps to `aborted_no_target`). (c) New unit controls: the three `daemon/e2e`
-  tests of §5, which run in the `daemon` job's race pass and locally, never in the Bind. (d)
-  Scheduled final-head coverage for (b): the conductor's re-Bind (§9) is its only acceptance.
+  `helper_bound` also maps to `aborted_no_target`, so it reaches the binding before the unchanged
+  sibling clause). No final-head observation is claimed for (b). (c) New unit controls: the three
+  `daemon/e2e` tests of §5, which run in the `daemon` job's race pass and locally, never in the Bind.
+  (d) Scheduled final-head coverage for (a)'s binding and (b): the conductor's protected credentialed
+  dispatch (§9) is its only acceptance.
 - Unchanged: `authority.Validate`, the state producer, the tombstone semantics and json fields, the
   boundary validators, the replay stage list, the acceptance script and the exporter. The `shared`
   arm's credential-gated pi leg (1B1) is untouched, so the gated outcome is recorded exactly as
@@ -149,9 +165,11 @@ production file.
   `never_created`, `!CreateStarted`, `!LeafNeverAppeared` and carries no leaf identity, helper,
   helper exit, launcher or launcher exit, and it must pass `authority.Validate`. The only real
   producer of that shape is `state.Store.AbortNeverCreatedLinuxCgroupReservation` under the fence
-  the boundary validator already requires (`:1877-1879`); the committed rows drive that producer
-  rather than a literal, and the refusal rows use proofs that pass `Validate` (the `removed_empty`
-  and `postCreateClaimedAbsence` rows assert it), so an invalid proof cannot satisfy them.
+  the boundary validator already requires (`:1877-1879`); the accept arm is driven by that production
+  producer rather than a literal, and the one refusal row that must be a valid proof
+  (`postCreateClaimedAbsence`) asserts `Validate()` accepts it before the refusal. The M1-M4 and
+  disposition-only `removedEmpty` rows are deliberately invalid predicates (they fail `Validate` at
+  `daemon/internal/authority/cgroup.go:381-384`), so they cannot satisfy the accept arm.
 - Adversarial satisfaction, binding: without the stage binding an `aborted_no_target` hold could be
   satisfied by the *other* hold's valid disposition. The extraction prefers the clone tombstone, the
   `ValidFor` binding is skipped whenever `ContainmentCgroup` (or its mirror) is absent (`:1448-1467`),
@@ -209,8 +227,9 @@ function returns nil) reddens the three held-stage refusal rows, and M6 (the bin
 reddens the two replay rows — so the wrong-stage refusals come from the binding and not from a
 blanket rejection; in both mutants the two *accept* directions keep running to the next check. M8
 (`abort.CreateStarted || abort.LeafNeverAppeared` → `abort.CreateStarted != abort.LeafNeverAppeared`)
-reddens only `postCreateClaimedAbsence`: the round-2 bytes carried no row over the authority-valid
-`(true,true)` shape, so M8 was green there.
+reddens only the restored `postCreateClaimedAbsence` row: M8 was green in round 2 (the round-2 bytes
+carried no row over the authority-valid `(true,true)` shape) and reds only the restored row in round
+3.
 
 ### Independent reproduction (not this round's receipt)
 
@@ -276,25 +295,31 @@ resolution.
 No. The three new tests live in `daemon/e2e` and run in the `daemon` job's race pass
 (`go test -race -count=1 -timeout 600s -json ./...`, `.github/workflows/ci.yml:1055-1063`) and
 locally; the `shared` Bind does not invoke `./e2e` with these test names. What the Bind *does*
-execute is the fixed clause and the binding's accept direction, through
-`TestProductionLinuxV2StageCrashReplayMatrix`. In the scratch Bind `46037316453` the
-`reservation_durable` leg was OBSERVED passing (`verified
-TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`) — the
-binding's first accept arm. The `helper_bound` accept arm was NOT reached in that run: its stage row
-stops at the retained-journal fixture guard (`linuxV2RequireSafelyReleasedPriorJournal`,
-`production_linux_v2_native_witness_test.go:2099`, reported at `:224`), and that run's log has
-**zero** `verified` rows for any `helper_bound` case, so this arm awaits the conductor's re-Bind
-(§9). The binding's two refusal arms need a journal whose disposition contradicts the held stage; no
-case in the Bind's set produces one, so those rows are attributed to the `daemon` job's race pass
-(and to §5's local rows), not to the Bind. The fix also reloads no fixture, so the Bind needs no new
-step. The arm's later legs and the export/reader tail stay outside this goal's proof, as they were
-before this increment.
+execute is the fixed clause through `TestProductionLinuxV2StageCrashReplayMatrix`, and — from the
+round-2 head onward, the first head that carries `linuxV2ValidateHeldStageAbortDisposition` — that
+leg's binding accept direction as well. Round 1 (`46037316453`, parent `f84332e4`) is the
+POLARITY-only observation: it gated the pre-fix blob `9c36f90f…`, which has the corrected clause but
+not the binding symbol, so its `reservation_durable` pass (`verified
+TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`) demonstrates
+the clause, not the binding. The BINDING was demonstrated from round 2 (`46041720955`, parent
+`db8f6047`) and round 3 (`46045331565`, parent `c9a4bbf9`) onward, where the same row is green on
+bytes that carry the binding and its call. The final head stays PENDING until the conductor's
+protected credentialed dispatch reports (§9); the round-3 scratch Bind is a scratch receipt, not that
+dispatch. The `helper_bound` accept arm was NOT reached in either historical run: its stage row stops
+at the retained-journal fixture guard (`linuxV2RequireSafelyReleasedPriorJournal`,
+`production_linux_v2_native_witness_test.go:2099`, reported at `:224`), and neither the round-1 nor
+the round-2 log carries a `verified` row for any `helper_bound` case, so a repeat of that guard on the
+final head is an expectation until the conductor's Bind reports it (§9). The binding's two refusal
+arms need a journal whose disposition contradicts the held stage; no case in the Bind's set produces
+one, so those rows are attributed to the `daemon` job's race pass (and to §5's local rows), not to the
+Bind. The fix also reloads no fixture, so the Bind needs no new step. The arm's later legs and the
+export/reader tail stay outside this goal's proof, as they were before this increment.
 
 ## 8. Gates
 
 | Gate | Command (working directory) | Exit | Counts |
 | --- | --- | --- | --- |
-| Go rows above | see §5 (`daemon/`, WSL Noble) | 0 each | as tabulated |
+| Go rows above | see §5 (`daemon/`, WSL Noble) | per §5's Exit column | as tabulated: the eight mutant rows exit 1, the rest exit 0 |
 | Full Go suite, Windows (`go1.27.4 windows/amd64`) | `go test -count=1 ./...` (`daemon/`) | 0 | 30 rows: 27 `ok`, 3 `[no test files]`, no `FAIL`; the changed Go files are `//go:build linux && amd64`, so Windows compiles none of them |
 | Full Go suite, WSL Noble as root (`go1.27.0 linux/amd64`) | `go test -count=1 ./...` (`daemon/`) | 1 | 34 rows: 30 `ok` including `daemon/e2e` (2.696s) and `native/linux-gate/protocol` (13.754s), 3 `[no test files]`, 1 `FAIL` — `internal/platform`, 13 rows of `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`. The round-2 second failure (`native/linux-gate/protocol`, missing `linux/capability.h`) did not reproduce in this run |
 | Attribution of the WSL failure (base) | the same package in an extracted `ac04f3e2` `daemon/` tree (its `internal/platform/anchor_shape_table_test.go` sha256 `1f6b070a…` equals the head's) | 1 | identical: 13 rows of the same root-uid message at `anchor_shape_table_test.go:251`. Neither `internal/platform` nor `native/linux-gate/protocol` is inside the six-path changed scope |
@@ -307,21 +332,25 @@ before this increment.
 
 The comment cap and the duplication gate read the *committed* diff, so both ran on a scratch clone of
 this branch carrying the delivered bytes, with the pinned jscpd install symlinked in (no install was
-run). Their gate scope is the six paths of `git diff --name-status ac04f3e2..HEAD` — the owner CLI
+run). Their gate scope is the six paths of `git diff --name-status ac04f3e2..c9a4bbf9` — the owner CLI
 test, the native witness test, the plan, this record, `docs/TODO.md` and `docs/archive/CLOSED-TODO.md`
-— of which §1's table lists five rows and omits the native witness path, whose delivered digest is
-in §11 (`98d4771c…`). The round-3 gates ran on the scratch commit `2809fb63ca55…`, which carries the
-delivered `daemon/e2e/production_linux_v2_owner_cli_test.go` blob (§1 `96306f49…`) and plan blob
-(§1 `ea3f176f…`); the delivered record adds only this sentence to that commit's text, so both gates
-were re-run on its immediate successor commit — the record's final bytes — with the same counts and
-exit status. No earlier round's receipt named a scratch revision for these gates, so such a revision
-is never inferred from a matching base or from content digests — those rows are labelled
-base-plus-digests evidence only. The gate therefore binds the base `ac04f3e2`, that six-path scope,
-the scratch commits above and the §1/§11 content digests; a commit sha cannot
-contain its own hash. The full-suite rows ran on the delivered Go bytes: Windows compiles the changed
-files out entirely, and the WSL runs execute them inside `daemon/e2e` (whose `ok` row appears in
-both). The one WSL failure is a host precondition (a root uid) in a package this range does not
-touch, reproduced at the dispatch base in the same environment.
+— of which §1's table lists four rows naming five paths and omits the native witness path, whose
+delivered digest is in §11 (`98d4771c…`). Every round-3 gate that reads the committed diff ran on a
+scratch clone commit of this branch's delivered bytes, not on the PR commit: the predecessor scratch
+commit `2809fb63ca55…` carried the delivered `daemon/e2e/production_linux_v2_owner_cli_test.go` blob
+(§1 `96306f49…`) and plan blob (§1 `ea3f176f…`) with the round-3 record text *preceding this final
+append*, so it is NOT the final gate. The commands, exit status and counts in the table above are the
+receipt for the record's final bytes; the exact scratch revision that carried those final bytes is the
+PR #309 head, reported in the fix-commit report outside this record — a commit cannot name its own
+hash, and this record does not claim that final-byte revision as verified inside itself. No earlier
+round's receipt named a scratch revision for these gates, so such a revision is never inferred from a
+matching base or from content digests — those rows are labelled base-plus-digests evidence only. The
+gate therefore binds the base `ac04f3e2`, that six-path scope, the predecessor scratch commit
+`2809fb63ca55…` for the Go and plan blobs, and the §1/§11 content digests. The full-suite rows ran on
+the delivered Go bytes: Windows compiles the changed files out entirely, and the WSL runs execute them
+inside `daemon/e2e` (whose `ok` row appears in both). The one WSL failure is a host precondition (a
+root uid) in a package this range does not touch, reproduced at the dispatch base in the same
+environment.
 
 ## 9. Next Bind
 
@@ -342,6 +371,17 @@ gated `9c36f90f…` or `dba2daec…` can bind it.
   and SUPERSEDED for the same reason: it gated the round-2 blob `dba2daec…`. Its section stays as
   the round-2 receipt and as the second observation that the `:224` stop is cleared there, with the
   same `helper_bound` fixture guard as its next stop.
+- The round-3 scratch Bind `46045331565` (scratch head `7865bc17`, sole parent `c9a4bbf9`) is PARTIAL
+  and SUPERSEDED as acceptance: it gated the delivered blob `96306f49…` on scratch bytes and still
+  exits 1. Its `Bind (round 3)` section is the final SCRATCH receipt — the observation that the `:224`
+  stop is cleared and `verified
+  TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0` on the
+  delivered bytes — not the acceptance.
+
+ONLY the conductor's protected credentialed dispatch on the PR head is the acceptance for these
+bytes: every run above is `shared` with the ratified placeholder credential, so none of them
+substitutes for it, and the code bytes those dispatches gate are unchanged by this records-only
+delta.
 
 What the re-Bind must report: the `shared` case-set exit status, the `verified …` sequence and its
 first disagreement, the `reservation_durable` leg's outcome, the credential-gated pi outcome verbatim
@@ -355,14 +395,16 @@ of the fixed rows is in §5; the Bind is the acceptance, not this record.
 ## 10. Residuals and known limits
 
 - The leg is CI-only: nothing here proves the `reservation_durable` leg passes on the delivered
-  bytes. The clause's leg-level clearance is OBSERVED once, in the scratch Bind `46037316453` on the
-  pre-fix bytes (`verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1
-  pass=1 skip=0`), and is PENDING on the delivered bytes until the conductor's re-Bind reports it.
-  The next stop that run hit is the `helper_bound` fixture guard
+  bytes. The clause's leg-level clearance is OBSERVED in all three scratch receipts — round 1
+  (`46037316453`) on the pre-fix bytes for the clause alone, and rounds 2-3 (`46041720955`,
+  `46045331565`) on bytes carrying the binding (`verified
+  TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0` in each) — and on
+  the final head it stays PENDING until the conductor's protected credentialed dispatch reports it.
+  The next stop in the round-2 and round-3 receipts is the `helper_bound` fixture guard
   (`linuxV2RequireSafelyReleasedPriorJournal`, `production_linux_v2_native_witness_test.go:2099`,
   reported at `:224`: "pre-existing RunJournal … is not physically released and safe for a fresh
-  run"), which this round does not touch and which the re-Bind will
-  re-encounter; the ACK-loss matrix and the export/reader tail are unmeasured on any revision here.
+  run"), which this round does not touch and which that dispatch is expected to re-encounter; the
+  ACK-loss matrix and the export/reader tail are unmeasured on any revision here.
 - The binding refuses a wrong-stage disposition; it does not restore history a recovery lost. If a
   future recovery dropped the durable reservation while keeping a clone tombstone of the *other*
   hold's disposition, the binding refuses the pair rather than proving the recovery correct, and the
@@ -397,9 +439,16 @@ This round re-measured every anchor again on the round-3 bytes; the only Go edit
 proof selection in `linuxV2ValidateStageReplayJournal` (the clone re-selection deleted, `:1455-1460`
 kept as validation) and the new `postCreateClaimedAbsence` row (`:1642-1651`).
 
+The round-4 records round changed no Go byte and re-measured the anchors it added or touched on the
+same delivered file (`96306f49…`): the clause/binding-reach anchors `:1448-1451`, `:1517-1520` and
+`:1530`, the invalid-predicate rows `:1608-1632`, the valid controls `:1642-1651`, `:1654-1676` and
+`:1712-1740`, and the extraction `:1495-1506` named in the new `docs/TODO.md` residual. The plan's
+§3 anchors (`scripts/ci/linux-v2-native-acceptance.sh:3298-3300`, `:3301-3303`, owner CLI `:4689`)
+were re-read unchanged.
+
 | File | sha256 (delivered) | Anchors checked |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | §1 `96306f49…` | caller `:1404-1493`, binding call `:1448-1451`, extraction `:1495-1506`, binding `:1508-1525`, predicate `:1527-1542`, clause `:1530`, green baseline `:1594-1596`, clause rows `:1603-1633`, post-create row `:1642-1651`, removed-empty fixture `:1654-1676`, held-stage test `:1678-1710`, replay fixture `:1712-1740`, replay test `:1742-1769`, boundary arm `:1877-1879`; dispatch base `:1467`, `:1477`, `:1617-1620` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | §1 `96306f49…` | caller `:1404-1493`, binding call `:1448-1451`, extraction `:1495-1506`, binding `:1508-1525`, `helper_bound` refusal return `:1517-1520`, predicate `:1527-1542`, clause `:1530`, green baseline `:1594-1596`, clause rows `:1603-1633`, post-create row `:1642-1651`, removed-empty fixture `:1654-1676`, held-stage test `:1678-1710`, replay fixture `:1712-1740`, replay test `:1742-1769`, boundary arm `:1877-1879`; dispatch base `:1467`, `:1477`, `:1617-1620` |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | `98d4771cf6a3efafc45abab7a8c954a07e58b853858979a5435259e2e4c05d7e` | the `:224` subtest invocation that reports both stops, the retained-journal guard message `:2099`, the admitted-fresh call site `:599` |
 | `daemon/internal/authority/cgroup.go` | `74743fc7601c889f0f2c5a26798fcc5585044c41200a0c0d741a89f4fa0fad78` | `never_created` rule `:381-384`, policy comment `:140-141` |
 | `daemon/internal/authority/authority_v2_test.go` | `a0890aa2c5a097fb6c0712853dc94238bce385219fe4ba3df8977c64c66c5029` | positive pre-mkdir check `:231-233`, post-create-intent refusal `:235-237`, accepted never-appeared shape `:239-241`, other-intent `ValidFor` refusal `:242-244` |
@@ -464,3 +513,32 @@ The [acceptance job](https://github.com/wxxb789/symmetry/actions/runs/4604172095
 
 4. **Pi and export (3109, 4550):** `credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.` Full export stopped at `redacted evidence export failed: pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`. The partial ZIP has the same members and sizes as round 1: `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3224 B), `shared/stage-crash-replay-reservation_durable.json` (6644 B), and `shared/unprovisioned-owner-refusal.json` (691 B).
 5. **First failure and manifest:** the first failing witness is the `:224` line above (4265), preceded at 4261 by `Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`. No `shared/manifest.json` was published; the reader started, but its stop and Result were not measured.
+
+## Bind (round 3)
+
+**FINAL SCRATCH receipt, not the protected credentialed dispatch.** [Run 46045331565](https://github.com/wxxb789/symmetry/actions/runs/46045331565) ran `shared` once with the placeholder credential. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46045331565/artifacts/15223010430) (4637 B) has download-verified SHA-256 `12a5c153bbd16b1dab4fd338bdcbcd3ca9810508bf364fcefcb497d58ac4495b`. Runs `46037316453` (`8cee777f`, round 1) and `46041720955` (`c45a05bea0`, round 2) are **PARTIAL/SUPERSEDED** pre-final receipts.
+
+Scratch head `7865bc1706545a977c4c4208ff3d70553eb3b27a` has sole parent `c9a4bbf97d467d09c259ee23e481027ae9840e71` (PR #309). All PR entries match by blob and mode; the two scratch-only additions, including their modes, match round 2. Only PR inputs that changed since round 2 are listed (SHA-256):
+
+| Input | Round-2 PR `db8f6047` | Final PR `c9a4bbf9` | Run `7865bc17` |
+| --- | --- | --- | --- |
+| `production_linux_v2_owner_cli_test.go` | `dba2daec…` | `96306f49…` (§1) | Same as final PR |
+| This record (before this append) | `221153b6…` | `17d8bd5e…` | Same as final PR |
+| Goal plan | `c73df5b3…` | `ea3f176f…` (§1) | Same as final PR |
+
+[Acceptance job](https://github.com/wxxb789/symmetry/actions/runs/46045331565/job/140663396378), raw log lines:
+
+1. **4517:** `Case set shared exited 1`. 24 green witness rows (`run=1 pass=1 skip=0`), same rows and order as round 2.
+2. **3651:** `verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`. The old physical Journal state diagnostic did not recur.
+3. **4227–4231, next stop:**
+
+   ```text
+   witness output: === RUN   TestProductionLinuxV2StageCrashReplayMatrix
+   witness output: === RUN   TestProductionLinuxV2StageCrashReplayMatrix/helper_bound
+   witness output:     production_linux_v2_native_witness_test.go:224: pre-existing RunJournal 9588eb0e-8ab6-4570-9341-494cc59e9218/1 is not physically released and safe for a fresh run: prior RunJournal may still own or require recovery of a process or leaf
+   witness output: --- FAIL: TestProductionLinuxV2StageCrashReplayMatrix/helper_bound (0.50s)
+   witness output: --- FAIL: TestProductionLinuxV2StageCrashReplayMatrix (0.50s)
+   ```
+
+4. **3079:** `credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.` **4514:** `redacted evidence export failed: pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`. The ZIP contains `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3223 B), `shared/stage-crash-replay-reservation_durable.json` (6644 B), and `shared/unprovisioned-owner-refusal.json` (691 B).
+5. **4225:** `Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`. The first failing witness is line 4229 above. The ZIP has no `shared/manifest.json`; the reader started at 2515, but its stop and Result remain unmeasured.

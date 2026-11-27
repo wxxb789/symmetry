@@ -2371,3 +2371,13 @@ The goal's stage 1 and stage 2 are delivered (plan
       if the arm stops later in the replay matrix. The leg is CI-only, so no local run substitutes
       for it (record §5, §7, §10). The authentic pi proof stays with
       `## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn` above.
+
+- [ ] Deferred code tidiness (2026-11-28, round-3 records round; record §4, §11): the no-target
+      proof selector `linuxV2StageReplayNoTargetAbort` deep-clones the reservation proof first and
+      then, when the nested clone proof is present and preferred, overwrites that pointer and
+      discards the first copy (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`). No
+      result or precedence changes: the selected value is identical and the discarded copy
+      participates in no assertion. Deferred because a code change would void the round-3 binding
+      run for the delivered Go blob (`96306f49…`); the fix is to return the preferred clone proof
+      first, else the reservation proof, else nil, cloning only the selected proof. Owner: the next
+      slice that already touches this file.

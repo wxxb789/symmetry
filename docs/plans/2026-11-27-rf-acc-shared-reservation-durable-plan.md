@@ -106,14 +106,19 @@ for a proof the contract forbids.
   `reservation_durable` (only the `never_created` fence shape may satisfy it) and `helper_bound`
   (only the `removed_empty`/`absent_after_rmdir` shape with its helper reap evidence may satisfy
   it). `create_started`, `leaf_bound` and `launcher_bound` recover `unresolved`; `gate_bound` and
-  later recover `released`. Two further live legs consume the changed conjunct and the new binding
-  *if they are reached*: the ordinary stage replay (`run_stage_replay_cases`, whose case list opens
-  with `reservation_durable helper_bound`, `scripts/ci/linux-v2-native-acceptance.sh:3298-3300`,
-  driving `TestProductionLinuxV2StageCrashReplayMatrix` through `linuxV2ValidateStageReplayJournal`),
-  and the ACK-loss replay's second response for `helper_bound` (`run_ack_loss_replay_cases ...
-  helper_bound`, `:3301-3303`, whose second response is validated at delivered
+  later recover `released`. Clause reach and binding reach differ. The ordinary stage replay's
+  `reservation_durable` leg consumes BOTH the changed `never_created` conjunct and the new binding.
+  Two further live legs consume the BINDING, then the UNCHANGED `removed_empty`/`absent_after_rmdir`
+  arm, *if they are reached*: the ordinary stage replay's `helper_bound` leg (`run_stage_replay_cases`,
+  whose case list opens with `reservation_durable helper_bound`,
+  `scripts/ci/linux-v2-native-acceptance.sh:3298-3300`, driving
+  `TestProductionLinuxV2StageCrashReplayMatrix` through `linuxV2ValidateStageReplayJournal`), and the
+  ACK-loss replay's second response for `helper_bound` (`run_ack_loss_replay_cases ... helper_bound`,
+  `:3301-3303`, whose second response is validated at delivered
   `daemon/e2e/production_linux_v2_owner_cli_test.go:4689`; `helper_bound` also maps to
-  `aborted_no_target`, so it reaches the binding's second accept arm). Neither case set produces a
+  `aborted_no_target`, so it reaches the binding's second accept arm). A `never_created` proof at
+  `helper_bound` returns before the changed conjunct, so those two legs are binding consumers, not
+  clause consumers; no final-head observation is claimed for them. Neither case set produces a
   journal whose disposition contradicts its held stage, so both refusal arms remain unit-only.
 - A tombstone that claims the create CAS advanced (`CreateStarted=true`) or a helper/helper exit
   stays refused by the clause; the accepted `CreateStarted=true, LeafNeverAppeared=true` shape is
