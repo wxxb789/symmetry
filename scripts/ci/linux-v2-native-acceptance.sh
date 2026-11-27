@@ -39,6 +39,14 @@ case "$fixture_case_set" in
   codex_containment) native_containment_kind=codex ;;
   claude_containment) native_containment_kind=claude_code ;;
 esac
+# Pi loads the agent-directory APPEND_SYSTEM.md as system-prompt instructions; an admitted goal
+# alone is only its title, so the authenticated legs would otherwise receive no task text.
+authenticated_pi_task_text=''
+if [[ "$fixture_case_set" == shared ]]; then
+  authenticated_pi_task_text='Use the real symmetry_resource_sync tool for the configured GitHub repository, then create and commit one small file. Do not publish.
+
+This leg is fixed-scope: do not explore the repository or run its test suites or gates, and return the required final TaskResult JSON object as your only final answer.'
+fi
 
 evidence_directory="${SYMMETRY_LINUX_V2_NATIVE_EVIDENCE_DIR:-$RUNNER_TEMP/linux-v2-native-evidence-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$fixture_case_set}"
 [[ "$evidence_directory" == /* && "$(realpath -m "$evidence_directory")" == "$evidence_directory" ]] ||
@@ -693,6 +701,9 @@ elif [[ "$native_containment_kind" == claude_code ]]; then
   b_native_credential_directories=("$B_HOME/.claude")
   b_native_credential_files=("$B_HOME/.claude/.credentials.json")
 fi
+if [[ -n "$authenticated_pi_task_text" ]]; then
+  b_native_credential_files+=("$B_HOME/.pi/agent/APPEND_SYSTEM.md")
+fi
 # The installed owner's native preflight requires the fixed-B XDG cache before any release.
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$B_HOME/hooks" \
   "$rootfs$B_HOME/.cache" \
@@ -1100,7 +1111,7 @@ python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \
   "$SYMMETRY_OPENCODE_MODEL" "$SYMMETRY_OPENAI_BASE_URL" "$native_api_key_file" "$pi_repository_id" \
   "$opencode_repository_id" "$pi_durability_repository_id" "$fixture_identity_suffix" \
   "$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$SYNTHETIC_GOAL_CLEANUP_SEEDS" \
-  "$SYNTHETIC_GOAL_CLEANUP_CLONES" <<'PY'
+  "$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<'PY'
 import json
 import pathlib
 import sys
@@ -1109,9 +1120,11 @@ import sys
     fixture_root, a_home, repository,
     clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url, api_key_file,
     pi_repository_id, opencode_repository_id, pi_durability_repository_id, fixture_identity_suffix,
-    synthetic_source, synthetic_seeds, synthetic_clones,
+    synthetic_source, synthetic_seeds, synthetic_clones, authenticated_pi_task_text,
 ) = sys.argv[1:]
 fixture = pathlib.Path(fixture_root)
+# The production decoder accepts one text block; only the shared set runs authenticated Pi legs.
+authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"
 
 def config(kind, profile, model, resource_id, provider_access=None):
     provider_access = kind == "pi" if provider_access is None else provider_access
@@ -1238,7 +1251,13 @@ else:
     (private_home / ".config/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".local/share/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".pi/agent/settings.json").write_text(
-        json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "minimal"}),
+        json.dumps(
+            {
+                "defaultProvider": "openai",
+                "defaultModel": pi_model,
+                "defaultThinkingLevel": authenticated_pi_thinking_level,
+            }
+        ),
         encoding="utf-8",
     )
     (private_home / ".pi/agent/auth.json").write_text(
@@ -1264,6 +1283,10 @@ else:
         ),
         encoding="utf-8",
     )
+    if authenticated_pi_task_text:
+        (private_home / ".pi/agent/APPEND_SYSTEM.md").write_text(
+            authenticated_pi_task_text + "\n", encoding="utf-8"
+        )
     (private_home / ".config/opencode/opencode.json").write_text(
         json.dumps(
             {

@@ -474,44 +474,124 @@ def write_declaration(path: pathlib.Path, document: dict, mode: int = 0o600) -> 
     os.chmod(path, mode)
 
 
-def parse_case_arms(lines: list[str]) -> dict[str, str]:
-    arms: dict[str, str] = {}
+def normalise_case_arm(head: str) -> str:
+    candidate = head.strip().strip("\"'").strip()
+    if candidate.startswith("("):
+        candidate = candidate[1:].strip()
+    if candidate.endswith(")"):
+        candidate = candidate[:-1].strip()
+    return candidate
+
+
+CASE_ARM_NAME = re.compile(r"[A-Za-z0-9_]+(?:\|[A-Za-z0-9_]+)*\Z")
+CASE_ARM_GLOB = frozenset("*?[]{}")
+CASE_ARM_REJECTION = re.compile(r"fail\b")
+
+
+def parse_case_arms(lines: list[str]) -> tuple[dict[str, str], str | None, list[str]]:
+    records: list[tuple[str, str, str]] = []
+    failures: list[str] = []
     pattern = None
     current: list[str] = []
+    head_line = ""
     for line in lines:
         stripped = line.strip()
         if pattern is None:
             if stripped == "esac":
                 break
-            if not re.fullmatch(r"[A-Za-z0-9_|*]+\)", stripped):
+            head, separator, tail = stripped.partition(")")
+            candidate = normalise_case_arm(head) if separator else ""
+            if not separator or not (
+                CASE_ARM_NAME.fullmatch(candidate)
+                or any(char in CASE_ARM_GLOB for char in candidate)
+            ):
+                if stripped:
+                    failures.append(
+                        f"the case-set arm parser could not classify this line: {stripped}"
+                    )
                 continue
-            pattern, _, tail = stripped.partition(")")
-            pattern, current = pattern.strip(), [tail.strip()]
+            head_line = stripped
+            pattern, current = candidate, [tail.strip()]
         else:
             current.append(stripped)
         if current[-1].endswith(";;"):
-            arms[pattern] = "\n".join(current)
+            records.append((pattern, head_line, "\n".join(current)))
             pattern = None
-    return arms
+    arms: dict[str, str] = {}
+    default: str | None = None
+    for index, (candidate, verbatim, body) in enumerate(records):
+        if CASE_ARM_NAME.fullmatch(candidate):
+            arms[candidate] = body
+            continue
+        # A glob arm is the shell's default. Anywhere but last it shadows the arms below it and
+        # silently accepts their input, leaving this guard weaker than the printed case-set list.
+        if index != len(records) - 1:
+            failures.append(
+                "a case-set arm whose pattern is not a plain case-set name must be the block's "
+                f"final arm: {verbatim}"
+            )
+            continue
+        default = body
+    return arms, default, failures
 
 
-def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
+def bash_case_arms(text: str, function: str, header: str) -> tuple[dict[str, str], str | None]:
     lines = text[text.index(f"{function}() {{") :].splitlines()
     index = next(i for i, line in enumerate(lines) if line.strip() == header)
-    return parse_case_arms(lines[index + 1 :])
+    arms, default, _ = parse_case_arms(lines[index + 1 :])
+    return arms, default
 
 
-def acceptance_dispatch_arms(text: str) -> dict[str, str]:
+CASE_SET_SUBJECT = 'case "$fixture_case_set" in'
+
+
+def acceptance_dispatch_arms(text: str) -> tuple[dict[str, str], str | None, list[str]]:
     lines = text.splitlines()
-    index = max(i for i, line in enumerate(lines) if line.strip() == 'case "$fixture_case_set" in')
-    return parse_case_arms(lines[index + 1 :])
+    for index, line in enumerate(lines):
+        if line.strip() != CASE_SET_SUBJECT:
+            continue
+        arms, default, failures = parse_case_arms(lines[index + 1 :])
+        if any("run_native_owner_witness" in body for body in arms.values()):
+            return arms, default, failures
+    raise AssertionError("the acceptance script no longer carries a case-set dispatch block")
+
+
+def acceptance_case_set_arms(source: str) -> tuple[dict[str, str], list[str], list[str]]:
+    arms: dict[str, str] = {}
+    defaults: list[str] = []
+    failures: list[str] = []
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip() != CASE_SET_SUBJECT:
+            continue
+        block_arms, block_default, block_failures = parse_case_arms(lines[index + 1 :])
+        for pattern, body in block_arms.items():
+            arms.setdefault(pattern, body)
+        if block_default is not None:
+            defaults.append(block_default)
+        failures.extend(block_failures)
+    return arms, defaults, failures
+
+
+def case_set_arm_names(arms: dict[str, str]) -> set[str]:
+    return {name for pattern in arms for name in pattern.split("|")}
+
+
+def acceptance_case_set_allowlist(source: str) -> tuple[str, ...]:
+    listed = [
+        line.strip()
+        for line in source.splitlines()
+        if line.strip().startswith("shared|codex_containment|")
+    ]
+    if len(listed) != 1:
+        return ()
+    return tuple(listed[0].removesuffix(") ;;").split("|"))
 
 
 def acceptance_case_set_failures(text: str, exporter) -> list[str]:
-    listed = [line.strip() for line in text.splitlines() if line.strip().startswith("shared|codex_containment|")]
-    if len(listed) != 1:
+    case_sets = set(acceptance_case_set_allowlist(text))
+    if not case_sets:
         return ["the acceptance script must carry exactly one case-set allowlist line"]
-    case_sets = set(listed[0].removesuffix(") ;;").split("|"))
     failures = []
     if case_sets != set(exporter.PI_DURABILITY_CASE_SETS) | {"codex_containment", "claude_containment"}:
         failures.append("the script allowlist and the exporter pi-durability sets diverged")
@@ -520,7 +600,7 @@ def acceptance_case_set_failures(text: str, exporter) -> list[str]:
     targets = [target for allowlist in exporter.MANUAL_CASE_SET_FILES.values() for target in allowlist]
     if len(targets) != len(set(targets)):
         failures.append("case-set witness allowlists are not disjoint")
-    arms = acceptance_dispatch_arms(text)
+    arms, _, _ = acceptance_dispatch_arms(text)
     if {name for pattern in arms for name in pattern.split("|")} != case_sets:
         failures.append("the dispatch arms and the case-set allowlist diverged")
     # The mount refusal retains a claim-only RunJournal no product path retires; its leg must
@@ -2058,11 +2138,11 @@ class ExporterTest(unittest.TestCase):
             acceptance_case_set_failures(ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), load_exporter()),
             [],
         )
-        arms = bash_case_arms(
+        arms, default = bash_case_arms(
             ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), "export_native_evidence", 'case "$fixture_case_set" in'
         )
-        self.assertEqual(set(arms), {"codex_containment", "claude_containment", "*"})
-        self.assertIn("native_kind=pi", arms["*"])
+        self.assertEqual(set(arms), {"codex_containment", "claude_containment"})
+        self.assertIn("native_kind=pi", default)
 
     def test_mutations_dropping_the_mount_case_set_or_rejoining_shared_redden_the_case_set_pins(self) -> None:
         exporter = load_exporter()
@@ -2669,7 +2749,8 @@ CREDENTIAL_GATED_FIXTURE_VARIABLES = (
 
 
 def shared_arm_harness(source: str) -> str:
-    arm = acceptance_dispatch_arms(source)["shared"]
+    arms, _, _ = acceptance_dispatch_arms(source)
+    arm = arms["shared"]
     preamble = [
         "set -Eeuo pipefail",
         "fixture_case_set=shared",
@@ -2702,6 +2783,196 @@ def shared_arm_harness(source: str) -> str:
         "shared)",
     ]
     return "\n".join(preamble) + "\n" + arm + "\nesac\n" + source[source.rindex("\nstop_readback_reader\n") :]
+
+
+CONTROL_CLAIMS_SCRIPT = ACCEPTANCE_SCRIPT.with_name("provision-linux-v2-control-claims.exs")
+CONTROL_PI_PROVIDER_ACTION_DESCRIPTION = re.compile(
+    r'"pi_provider_action", "pi-native", :pi, :pi_provider,\n\s*"(?P<description>[^"]*)"\},'
+)
+FIXTURE_HOME_INVOCATION_MARKER = 'python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \\\n'
+FIXED_B_HOME = "/opt/symmetry-owner-test/fixed-b-home"
+FIXED_B_HOME_TASK_TEXT = f"{FIXED_B_HOME}/.pi/agent/APPEND_SYSTEM.md"
+FIXED_SCOPE_PARAGRAPH = (
+    "This leg is fixed-scope: do not explore the repository or run its test suites or gates, "
+    "and return the required final TaskResult JSON object as your only final answer."
+)
+STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
+STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
+STAGED_PI_HOME_PATH = "b-home/.pi"
+ACCEPTANCE_WORKFLOW = ACCEPTANCE_SCRIPT.parents[2] / ".github/workflows/linux-native-v2-acceptance.yml"
+
+
+def extracted_authenticated_pi_task_block(source: str) -> str:
+    start = source.index("authenticated_pi_task_text=''")
+    return source[start : source.index("\nfi\n", start) + len("\nfi\n")]
+
+
+def extracted_authenticated_pi_install_block(source: str) -> str:
+    start = source.find('if [[ -n "$authenticated_pi_task_text" ]]; then')
+    if start == -1:
+        return ""
+    return source[start : source.index("\nfi\n", start) + len("\nfi\n")]
+
+
+def extracted_fixture_home_invocation(source: str) -> str:
+    start = source.index(FIXTURE_HOME_INVOCATION_MARKER)
+    return source[start : source.index("\nPY\n", start) + len("\nPY\n")]
+
+
+def staging_script(source: str, root: pathlib.Path, case_set: str) -> pathlib.Path:
+    api_key = root / f"{case_set}-api-key"
+    api_key.write_text("sk-fixture-provider-key\n", encoding="utf-8")
+    script = root / f"{case_set}-staging.sh"
+    script.write_text(
+        "set -Eeuo pipefail\n"
+        "fixture_root=$1\n"
+        f"fixture_case_set={case_set}\n"
+        "fixture_identity_suffix=${fixture_case_set//_/-}\n"
+        "A_HOME=/home/a\n"
+        "A_SOURCE=/a/source\n"
+        "B_CLONE_ROOT=/clones\n"
+        "SEED_ROOT=/seeds\n"
+        "DAEMON_SERVICE_STATE_DIR=/state\n"
+        "PI_SHARE=/share\n"
+        "SYMMETRY_PI_MODEL=pi-model\n"
+        "SYMMETRY_OPENCODE_MODEL=opencode-model\n"
+        "SYMMETRY_OPENAI_BASE_URL=https://provider.invalid/v1\n"
+        f"native_api_key_file={api_key}\n"
+        "pi_repository_id=11111111-1111-1111-1111-111111111111\n"
+        "opencode_repository_id=22222222-2222-2222-2222-222222222222\n"
+        "pi_durability_repository_id=33333333-3333-3333-3333-333333333333\n"
+        "SYNTHETIC_GOAL_CLEANUP_SOURCE=/synthetic/source\n"
+        "SYNTHETIC_GOAL_CLEANUP_SEEDS=/synthetic/seeds\n"
+        "SYNTHETIC_GOAL_CLEANUP_CLONES=/synthetic/clones\n"
+        + extracted_authenticated_pi_task_block(source)
+        + extracted_fixture_home_invocation(source)
+        + f"B_HOME={FIXED_B_HOME}\n"
+        'b_native_credential_files=("$B_HOME/.pi/agent/settings.json" '
+        '"$B_HOME/.pi/agent/auth.json" "$B_HOME/.pi/agent/models.json")\n'
+        + extracted_authenticated_pi_install_block(source)
+        + '\nprintf "%s\\n" "${b_native_credential_files[@]}"\n',
+        encoding="utf-8",
+    )
+    return script
+
+
+def staged_home_run(source: str, root: pathlib.Path, case_set: str) -> tuple[subprocess.CompletedProcess, pathlib.Path]:
+    fixture_root = root / f"{case_set}-fixture"
+    fixture_root.mkdir(parents=True)
+    result = subprocess.run(
+        ["bash", str(staging_script(source, root, case_set)), str(fixture_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, fixture_root
+
+
+def staged_thinking_level(fixture_root: pathlib.Path) -> object:
+    settings_file = fixture_root / STAGED_SETTINGS_PATH
+    if not settings_file.exists():
+        return None
+    return json.loads(settings_file.read_text(encoding="utf-8")).get("defaultThinkingLevel")
+
+
+def acceptance_containment_case_sets(source: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"^\s*([a-z_]+)\) native_containment_kind=", source, re.M))
+
+
+def writer_containment_suffixes(source: str) -> tuple[str, ...]:
+    match = re.search(r"containment_kind = \{(?P<keys>[^}]*)\}\.get\(", source)
+    return () if match is None else tuple(re.findall(r'"([^"]+)":', match.group("keys")))
+
+
+def workflow_case_sets(text: str) -> tuple[str, ...]:
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "case_sets=(")
+    names = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped == ")":
+            break
+        names.append(stripped)
+    return tuple(names)
+
+
+def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[str]:
+    allowlist = acceptance_case_set_allowlist(source)
+    if not allowlist:
+        return ["the acceptance script no longer carries one case-set allowlist"]
+    failures = []
+    dispatch_arms, _, _ = acceptance_dispatch_arms(source)
+    dispatched = case_set_arm_names(dispatch_arms)
+    if set(allowlist) != dispatched:
+        failures.append("the case-set allowlist and the script's own dispatch arms diverged")
+    admitted_arms, admitted_defaults, arm_failures = acceptance_case_set_arms(source)
+    admitted = case_set_arm_names(admitted_arms)
+    if dispatched != admitted:
+        failures.append(
+            "a case-set arm outside the dispatch block admits a set the dispatcher does not run"
+        )
+    if sum(bool(CASE_ARM_REJECTION.search(body)) for body in admitted_defaults) != 1:
+        failures.append("the parsed case blocks must carry exactly one rejecting default arm")
+    failures.extend(arm_failures)
+    if set(allowlist) != set(workflow_case_sets(workflow)):
+        failures.append("the case-set allowlist and the workflow case-set matrix diverged")
+    containment = {name.replace("_", "-") for name in acceptance_containment_case_sets(source)}
+    if containment != set(writer_containment_suffixes(source)):
+        failures.append("the containment case sets and the writer's containment kinds diverged")
+    return failures
+
+
+def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
+    failures: list[str] = []
+    description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
+    if description is None:
+        failures.append("the Control claim fixture no longer carries the pi_provider_action description")
+    expected = None if description is None else f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n"
+
+    case_sets = acceptance_case_set_allowlist(source)
+    containment_sets = acceptance_containment_case_sets(source)
+    if not case_sets:
+        failures.append("the acceptance script no longer carries one case-set allowlist")
+    runs = {case_set: staged_home_run(source, root, case_set) for case_set in case_sets}
+    for case_set in case_sets:
+        result, fixture_root = runs[case_set]
+        if result.returncode != 0:
+            failures.append(f"the fixture staging script for {case_set} exited {result.returncode}")
+            continue
+        listed = FIXED_B_HOME_TASK_TEXT in result.stdout.splitlines()
+        if case_set == "shared":
+            staged_file = fixture_root / STAGED_TASK_TEXT_PATH
+            staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
+            if expected is not None and staged != expected:
+                failures.append("the shared case set does not stage the exact authenticated Pi task text")
+            level = staged_thinking_level(fixture_root)
+            if level != "off":
+                failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
+            if not listed:
+                failures.append(f"the {case_set} case set's fixed B home install list omits the staged task text")
+        elif case_set in containment_sets:
+            # A containment guest writes its own kind directory and no Pi home, so its only
+            # observable of a leaked task-text guard is the install list.
+            if (fixture_root / STAGED_PI_HOME_PATH).exists():
+                failures.append(f"the {case_set} case set is not the containment fixture: it staged a Pi home")
+            if listed:
+                failures.append(
+                    f"the {case_set} case set's fixed B home install list stages the authenticated Pi task "
+                    "text without a Pi home"
+                )
+        else:
+            if (fixture_root / STAGED_TASK_TEXT_PATH).exists():
+                failures.append(f"the {case_set} case set stages the authenticated Pi task text")
+            if listed:
+                failures.append(
+                    f"the {case_set} case set's fixed B home install list stages the authenticated Pi task text"
+                )
+            level = staged_thinking_level(fixture_root)
+            if level != "minimal":
+                failures.append(
+                    f"the {case_set} case set stages the authenticated thinking level {level!r}"
+                )
+    return failures
 
 
 class CredentialGatedFixtureTest(unittest.TestCase):
@@ -2902,6 +3173,346 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                         self.assertIn("this case set is not passed", result.stderr)
                     else:
                         self.assertEqual(calls[-1], "stage-replay")
+
+    def test_authenticated_pi_task_staging_rows(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(authenticated_pi_task_failures(source, claims, self.root), [])
+
+    def test_case_set_coverage_is_derived_from_the_script_and_the_workflow(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        workflow = ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(acceptance_case_set_derivation_failures(source, workflow), [])
+
+    def test_mutations_of_the_case_set_lists_redden_the_derivation_checks(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        workflow = ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
+        mutations = (
+            (
+                "allowlist-extra-set",
+                source.replace(
+                    "|synthetic_goal_cleanup) ;;", "|synthetic_goal_cleanup|review_probe) ;;", 1
+                ),
+                workflow,
+                (
+                    "the case-set allowlist and the script's own dispatch arms diverged",
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
+                    "the case-set allowlist and the workflow case-set matrix diverged",
+                ),
+            ),
+            (
+                "allowlist-standalone-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  review_probe) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
+                ),
+            ),
+            (
+                "allowlist-parenthesised-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  (review_probe) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
+                ),
+            ),
+            (
+                "allowlist-quoted-parenthesised-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    '  ("review_probe") ;;\n  *) fail \'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET',
+                    1,
+                ),
+                workflow,
+                ('the case-set arm parser could not classify this line: ("review_probe") ;;',),
+            ),
+            (
+                "allowlist-wildcard-shadow-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  (*) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm whose pattern is not a plain case-set name must be the "
+                    "block's final arm: (*) ;;",
+                ),
+            ),
+            (
+                "workflow-extra-set",
+                source,
+                workflow.replace(
+                    "            stale_journal_subject\n",
+                    "            stale_journal_subject\n            x_probe\n",
+                    1,
+                ),
+                ("the case-set allowlist and the workflow case-set matrix diverged",),
+            ),
+            (
+                "containment-arm-dropped",
+                source.replace("  codex_containment) native_containment_kind=codex ;;\n", "", 1),
+                workflow,
+                ("the containment case sets and the writer's containment kinds diverged",),
+            ),
+        )
+        for name, mutant_source, mutant_workflow, expected in mutations:
+            with self.subTest(mutation=name):
+                self.assertNotEqual(
+                    (mutant_source, mutant_workflow),
+                    (source, workflow),
+                    "the mutation must change an input",
+                )
+                self.assertEqual(
+                    acceptance_case_set_derivation_failures(mutant_source, mutant_workflow),
+                    list(expected),
+                    name,
+                )
+
+    def test_mutations_of_the_authenticated_pi_task_staging_redden_the_rows(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
+        mutations = (
+            (
+                "unconditional-staging",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then\n  authenticated_pi_task_text=',
+                    "if true; then\n  authenticated_pi_task_text=",
+                    1,
+                ),
+                claims,
+                (
+                    *(
+                        f"the {case_set} case set's fixed B home install list stages the "
+                        "authenticated Pi task text without a Pi home"
+                        for case_set in acceptance_containment_case_sets(source)
+                    ),
+                    *(
+                        row
+                        for case_set in acceptance_case_set_allowlist(source)
+                        if case_set != "shared" and case_set not in acceptance_containment_case_sets(source)
+                        for row in (
+                            f"the {case_set} case set stages the authenticated Pi task text",
+                            f"the {case_set} case set's fixed B home install list stages the authenticated "
+                            "Pi task text",
+                        )
+                    ),
+                ),
+            ),
+            (
+                "raised-thinking-level",
+                source.replace(
+                    'authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"',
+                    'authenticated_pi_thinking_level = "minimal"',
+                    1,
+                ),
+                claims,
+                ("the staged pi home no longer sets the thinking level off: 'minimal'",),
+            ),
+            (
+                "negative-writer-unconditional",
+                source.replace("    if authenticated_pi_task_text:\n", "    if True:\n", 1),
+                claims,
+                (
+                    "the stage_replay_create_started case set stages the authenticated Pi task text",
+                    "the stage_replay_leaf_bound case set stages the authenticated Pi task text",
+                    "the stage_replay_launcher_bound case set stages the authenticated Pi task text",
+                    "the ack_loss_launcher_bound case set stages the authenticated Pi task text",
+                    "the stale_leaf case set stages the authenticated Pi task text",
+                    "the migration case set stages the authenticated Pi task text",
+                    "the alternate_mount_refusal case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key case set stages the authenticated Pi task text",
+                    "the stale_journal_run_key_legacy case set stages the authenticated Pi task text",
+                    "the stale_journal_fence case set stages the authenticated Pi task text",
+                    "the stale_journal_subject case set stages the authenticated Pi task text",
+                    "the synthetic_goal_cleanup case set stages the authenticated Pi task text",
+                ),
+            ),
+            (
+                "migration-leak",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then',
+                    'if [[ "$fixture_case_set" == shared || "$fixture_case_set" == migration ]]; then',
+                    1,
+                ),
+                claims,
+                (
+                    "the migration case set stages the authenticated Pi task text",
+                    "the migration case set's fixed B home install list stages the authenticated Pi task text",
+                ),
+            ),
+            (
+                "newly-covered-set-leak",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then',
+                    'if [[ "$fixture_case_set" == shared || "$fixture_case_set" == synthetic_goal_cleanup ]]; then',
+                    1,
+                ),
+                claims,
+                (
+                    "the synthetic_goal_cleanup case set stages the authenticated Pi task text",
+                    "the synthetic_goal_cleanup case set's fixed B home install list stages the "
+                    "authenticated Pi task text",
+                ),
+            ),
+            (
+                "containment-guard-leak",
+                source.replace(
+                    'if [[ "$fixture_case_set" == shared ]]; then',
+                    'if [[ "$fixture_case_set" == shared || "$fixture_case_set" == codex_containment ]]; then',
+                    1,
+                ),
+                claims,
+                (
+                    "the codex_containment case set's fixed B home install list stages the "
+                    "authenticated Pi task text without a Pi home",
+                ),
+            ),
+            (
+                "containment-branch-loss",
+                source.replace(
+                    'containment_kind = {"codex-containment": "codex", "claude-containment": "claude_code"}.get(',
+                    'containment_kind = {"claude-containment": "claude_code"}.get(',
+                    1,
+                ),
+                claims,
+                ("the codex_containment case set is not the containment fixture: it staged a Pi home",),
+            ),
+            (
+                "unconditional-off-thinking-level",
+                source.replace(
+                    'authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"',
+                    'authenticated_pi_thinking_level = "off"',
+                    1,
+                ),
+                claims,
+                (
+                    "the stage_replay_create_started case set stages the authenticated thinking level 'off'",
+                    "the stage_replay_leaf_bound case set stages the authenticated thinking level 'off'",
+                    "the stage_replay_launcher_bound case set stages the authenticated thinking level 'off'",
+                    "the ack_loss_launcher_bound case set stages the authenticated thinking level 'off'",
+                    "the stale_leaf case set stages the authenticated thinking level 'off'",
+                    "the migration case set stages the authenticated thinking level 'off'",
+                    "the alternate_mount_refusal case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_run_key case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_run_key_legacy case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_fence case set stages the authenticated thinking level 'off'",
+                    "the stale_journal_subject case set stages the authenticated thinking level 'off'",
+                    "the synthetic_goal_cleanup case set stages the authenticated thinking level 'off'",
+                ),
+            ),
+            (
+                "reworded-task-text",
+                source.replace("for the configured GitHub repository", "for the configured resource", 1),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "deleted-fixed-scope-paragraph",
+                source.replace(f"\n\n{FIXED_SCOPE_PARAGRAPH}", "", 1),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "blank-staging-argument",
+                source.replace(
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "no-fixture-write",
+                source.replace("    if authenticated_pi_task_text:\n", "    if False:\n", 1),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "misplaced-install-target",
+                source.replace(
+                    'b_native_credential_files+=("$B_HOME/.pi/agent/APPEND_SYSTEM.md")',
+                    'b_native_credential_files+=("$B_HOME/.pi/agent/APPEND_SYSTEM.txt")',
+                    1,
+                ),
+                claims,
+                ("the shared case set's fixed B home install list omits the staged task text",),
+            ),
+            (
+                "removed-install-row",
+                source.replace(extracted_authenticated_pi_install_block(source), "", 1),
+                claims,
+                ("the shared case set's fixed B home install list omits the staged task text",),
+            ),
+            (
+                "dropped-admitted-description",
+                source,
+                claims.replace(
+                    "Use the real symmetry_resource_sync tool for the configured GitHub repository, "
+                    "then create and commit one small file. Do not publish.",
+                    "Use the configured provider tool, then create and commit one small file.",
+                    1,
+                ),
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "removed-control-claim-row",
+                source,
+                claims.replace(
+                    '"pi_provider_action", "pi-native", :pi, :pi_provider,',
+                    '"_removed_", "pi-native", :pi, :pi_provider,',
+                    1,
+                ),
+                ("the Control claim fixture no longer carries the pi_provider_action description",),
+            ),
+            (
+                "dropped-staging-argument",
+                source.replace(
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                (
+                    "the fixture staging script for shared exited 1",
+                    "the fixture staging script for codex_containment exited 1",
+                    "the fixture staging script for claude_containment exited 1",
+                    "the fixture staging script for stage_replay_create_started exited 1",
+                    "the fixture staging script for stage_replay_leaf_bound exited 1",
+                    "the fixture staging script for stage_replay_launcher_bound exited 1",
+                    "the fixture staging script for ack_loss_launcher_bound exited 1",
+                    "the fixture staging script for stale_leaf exited 1",
+                    "the fixture staging script for migration exited 1",
+                    "the fixture staging script for alternate_mount_refusal exited 1",
+                    "the fixture staging script for stale_journal_run_key exited 1",
+                    "the fixture staging script for stale_journal_run_key_legacy exited 1",
+                    "the fixture staging script for stale_journal_fence exited 1",
+                    "the fixture staging script for stale_journal_subject exited 1",
+                    "the fixture staging script for synthetic_goal_cleanup exited 1",
+                ),
+            ),
+        )
+        for name, mutant_source, mutant_claims, expected in mutations:
+            with self.subTest(mutation=name):
+                self.assertNotEqual(
+                    (mutant_source, mutant_claims),
+                    (source, claims),
+                    "the mutation must change the fixture",
+                )
+                root = self.root / name
+                root.mkdir()
+                self.assertEqual(
+                    authenticated_pi_task_failures(mutant_source, mutant_claims, root), list(expected), name
+                )
 
 
 if __name__ == "__main__":
