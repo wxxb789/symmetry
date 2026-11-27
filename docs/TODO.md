@@ -2321,6 +2321,12 @@ The seed residual item and this goal's fix are recorded in
       clone-removal proof` stop is gone and the set reaches launcher removal, the A-side cleanup and
       journal retirement, or record the next failing line verbatim here. Owner: conductor.
 
+- [ ] The witness call site at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:574` is
+      exercised only inside the credentialed `synthetic_goal_cleanup` case set: deleting that line
+      reddens no locally runnable test (the predicates it calls are committed-tested). Oracle gap,
+      recorded in the evidence record §7; an env-gated probe was ruled out because it would not run
+      in CI either. Owner: conductor.
+
 - Production observation (decision note, 2026-11-27, goal `rf-acc-synthetic-cleanup-root-removal`):
       an install-accepted clone root whose default ACL mask grants write produces a checkout whose
       directories and files are group-writable, which the exact root-cleanup checks refuse. Today

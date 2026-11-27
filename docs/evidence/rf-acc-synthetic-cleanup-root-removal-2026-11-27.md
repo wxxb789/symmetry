@@ -30,7 +30,8 @@ lets Git and its own shell create entries under `umask 022`. When the parent dir
 default ACL, the kernel takes the new entry's group bits from the default **mask**, not from the
 umask-reduced mode: with the Bind 2 fixture's `d:u:$B_UID:rwx,d:m::rwx` defaults
 (`scripts/ci/linux-v2-native-acceptance.sh:600-601`), `binding-…`, `run-…` and `generation-1` land
-at mode `0770` and files opened with mode `0644` land at `0660` (§4 rows).
+at mode `0770` and files created with mode `0666` (Git's and the setup shell's request) land at
+`0660` (§4 rows; a `0644` request lands at `0640` in both shapes — §5.1 re-measurement).
 
 The witness then calls the authenticated anchor at
 `daemon/e2e/production_linux_v2_cleanup_witness_test.go:879` (`:882` is the failure line). Inside
@@ -48,7 +49,8 @@ The launcher core re-checks the same properties (`daemon/internal/launchercore/m
 `RunCloneCleanup:137`, `verifyCleanupDirectoryFD:243`, `:253`, `cleanupTargetDescriptor:259`,
 `removeCloneTargetTree:381`, `verifyCleanupRootNamed:467`, `openCleanupRelativeDirectory:523`,
 `:564`, `removePinnedCloneTarget:618`, walker `validateEntry:1548`, `:1554`, `:1558`), and the
-removal walk additionally refuses every group-writable file (`0660` in the Bind 2 shape).
+removal walk additionally refuses every group-writable file, which the Bind 2 shape's Git- and
+shell-created `0660` files (`0666` requests under the `rwx` mask, §5.1) already are.
 
 ### 2.2 The refusal is swallowed into a status, and no removal happens
 
@@ -115,7 +117,7 @@ a production shape.
 
 Fixture: clones `52001:52001 750` with `default:user:52001:rwx`, `default:mask::rwx`; created
 `binding-ompbbbbbbbb`/`run-omprrrrrrrr`/`generation-1` = `52001:52001 770`; `.git/config` and
-`candidate.txt` (mode `0644` opens) = `660`; `pack-omp.pack` (`chmod 0444`) = `444`.
+`candidate.txt` (mode `0666` shell redirects) = `660`; `pack-omp.pack` (`chmod 0444`) = `444`.
 
 ```
 PROBE stat clones           mode=040750 uid=52001 gid=52001 dev=2096
@@ -136,7 +138,7 @@ The two refusal strings are exactly the checks of §2.1; the probe exits 0 by as
 ## 5. Delivered-shape rows (log `1f6c3e83…`, exit 0)
 
 Fixture: the delivered `setfacl -m "u:52000:r-x,m::r-x,d:u:52000:r-x,d:m::r-x"` defaults; created
-dirs `52001:52001 750`, `0644` opens land at `640`, `chmod 0444` at `444`, hook `chmod 0755` at
+dirs `52001:52001 750`, `0666` opens land at `640`, `chmod 0444` at `444`, hook `chmod 0755` at
 `755`.
 
 ```
@@ -160,6 +162,22 @@ entry-policy rows from §4 still refuse group-writable dirs/files, set-ID/sticky
 owners and cross-device entries — the delivered shape passes the walk without relaxing it. The
 preflight row proves the delivered fixture still satisfies the installed clone-root contract
 (A `r-x`, B `rwx`, no untrusted writer).
+
+### 5.1 Mask-to-mode re-measurement (fix round r1, log `a7d8b090…`, exit 0)
+
+The arithmetic behind every mode row above and in §4, re-measured on the target platform (kernel
+`6.18.58.1-microsoft-standard-WSL2`; B-owned `0750` clone root carrying each default set; the
+creations run as B under `umask 077`/`022`) with the appendix probe (§12, sha256
+`382cfe8dbff029dc63dcad4e3a00ac54ad764506404d14491bb670ad408fbdbf`):
+
+| Creation | Red shape (`d:m::rwx`) | Delivered shape (`d:m::r-x`) |
+| --- | --- | --- |
+| `os.mkdir(0o770)` under `umask 077` (the bootstrap's `Mkdirat`) | `0770` | `0750` |
+| shell redirect / `git init` `.git/config` / `os.open(0o666\|0o664)` | `0660` | `0640` |
+| `os.open(0o644)` | `0640` | `0640` |
+
+`default:other::---` in both shapes strips world read, so no row lands `0644`: the `0660` rows are
+`0666`/`0664`-request creations and a `0644` request gives `0640` in both shapes.
 
 ## 6. Committed pins, red/green in the resolute chroot (lesson 160)
 
@@ -191,6 +209,12 @@ delivered bytes.
 | per-component refusal inverted (`refusal != ""` → `refusal == ""`) at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:1724` | witness copy `d7317ba8280a87816ed6b430da08598e2362f71f3063493b2f5fc3781bb70337` | `TestLinuxV2CleanupShapeWalkRows` exit 1, 3 failures (`clean-tree`, `ancestor-refusal`, `open-error`) |
 | walk treats the borrowed root FD as owned (`current, owned := rootFD, false` → `rootFD, true`) at `daemon/e2e/production_linux_v2_cleanup_witness_test.go:1706` | witness copy `825b46af2060d3a51f0b0202f0ce70a0ad5c43ab655fee0279845748a568bb0c` | `TestLinuxV2CleanupShapeWalkRows` exit 1, 2 failures (`ancestor-refusal`, `open-error`: `open "binding-omp" … bad file descriptor`) |
 
+Oracle gap (fix round r1): the witness call site at
+`daemon/e2e/production_linux_v2_cleanup_witness_test.go:574` runs only inside the credentialed
+`synthetic_goal_cleanup` case set, so deleting that line reddens no locally runnable test; the
+predicates it calls are committed-tested (the rows above), the call itself is covered only by the
+conductor's Bind. Carried in `docs/TODO.md`.
+
 ## 8. Local gates (Windows and WSL, from the delivered worktree)
 
 | Platform and command | Exit | Observation |
@@ -204,6 +228,7 @@ delivered bytes.
 | WSL Go: `go test -count=1 ./e2e` | 0 | package ok (env-gated witnesses skip; the committed shape rows run) |
 | WSL Go: `go test -count=1 -run '^TestLinuxV2CleanupShapeRefusalRows$' ./e2e` | 0 | 9 rows pass |
 | WSL Go: `go test -count=1 -run '^TestLinuxV2CleanupShapeWalkRows$' ./e2e` | 0 | 4 rows pass (clean tree, root refusal, ancestor refusal, open error) |
+| Fix round r1 (docs only), same code bytes (script `60d63a8b…`, python `e1d3d68a…`, witness `8cea4985…`): WSL `python3 -B scripts/ci/test-linux-v2-evidence.py`; WSL `go test -count=1 -run '^TestLinuxV2CleanupShapeRefusalRows$\|^TestLinuxV2CleanupShapeWalkRows$' ./e2e` | 0 / 0 | 57 tests OK; the 9 refusal and 4 walk rows pass |
 
 Head-wide suites (the daemon race suite and the credentialed case set) are CI's and the conductor's,
 not claimed here.
@@ -219,13 +244,17 @@ probes cannot establish either result.
 
 ## 10. Committed-blob gates
 
-The scratch clone holds `d4e455f1` plus the delivered paths; these checks read this record itself,
-so the resulting scratch commit and exit codes are recorded in the PR body receipt. No gate in §8
-substitutes for them.
+The scratch clone holds `d4e455f1` plus the delivered paths, with the shared jscpd install
+symlinked per brief-rules; the checks run there against this record's delivered bytes (fix round
+r1, exit codes as run):
 
-- `python -B scripts/ci/jscpd-changed.py --repo "$scratch_clone" --base d4e455f1 --head HEAD`
-- `python -B scripts/ci/check-record-cleanliness.py --repo "$scratch_clone" --base d4e455f1 --head HEAD`
-- `python -B "$comment_cap" "$scratch_clone" d4e455f1`
+| Command | Exit | Observation |
+| --- | ---: | --- |
+| `python -B scripts/ci/jscpd-changed.py --base d4e455f1 --head HEAD` | 0 | 7 changed files, 1792 scanned sources, 1245 clones in the corpus, none new; the gate notices `docs/archive/CLOSED-TODO.md` is outside its scan scope |
+| `python -B scripts/ci/check-record-cleanliness.py --base d4e455f1 --head HEAD` | 0 | 1 changed record passes the root-only check |
+| `python -B "$comment_cap" "$scratch_clone" d4e455f1` | 0 | no over-cap comment block among the added lines |
+
+No gate in §8 substitutes for them.
 
 ## 11. Residuals
 
@@ -239,3 +268,56 @@ substitutes for them.
   today, and this increment's owned scope is the `synthetic_goal_cleanup` arm only.
 - The anchor's status-blind client error (`linux_owner_anchor_linux.go:81`) stays; the witness-side
   shape assertion is the attribution available without a production protocol change.
+
+## 12. Fix-round r1 appendix — mask-matrix probe (verbatim)
+
+Scratch probe behind §5.1, sha256
+`382cfe8dbff029dc63dcad4e3a00ac54ad764506404d14491bb670ad408fbdbf`, run as
+`bash probe-mask-matrix.sh <scratch>` in the target WSL distro as root; its log `a7d8b090…` (19
+lines, exit 0) is the table's source. It creates a B-owned `0750` clone root with each default-ACL
+set and makes the entries through the same calls the bootstrap, Git and the setup shell use
+(`os.mkdir(0o770)` under `umask 077`; redirects and `os.open` under `umask 022`).
+
+```bash
+#!/usr/bin/env bash
+# r1 re-measurement: B-owned clone root, two default-ACL shapes, bootstrap/worker creation modes.
+set -eu
+W=${1:?usage: probe-mask-matrix.sh <work-dir>}
+A=52000
+B=52001
+rm -rf "$W"
+mkdir -p "$W"
+cat > "$W/create.py" <<'PY'
+import os, sys
+base = sys.argv[1]
+os.umask(0o077)
+os.mkdir(os.path.join(base, "bootstrap-dir"), 0o770)
+os.umask(0o022)
+for name, mode in (("open0644.txt", 0o644), ("open0666.txt", 0o666), ("open0664.txt", 0o664)):
+    os.close(os.open(os.path.join(base, name), os.O_CREAT | os.O_WRONLY, mode))
+PY
+chmod 0755 "$W/create.py"
+mkdir "$W/red" "$W/green"
+chown "$B:$B" "$W/red" "$W/green"
+chmod 0750 "$W/red" "$W/green"
+setfacl -m "u:$A:r-x,m::r-x,d:u:$A:r-x,d:u:$B:rwx,d:m::rwx" "$W/red"
+setfacl -m "u:$A:r-x,m::r-x,d:u:$A:r-x,d:m::r-x" "$W/green"
+as_b() { setpriv --reuid="$B" --regid="$B" --clear-groups bash -c "$1"; }
+for d in red green; do
+  as_b "umask 022; printf 'shell\n' > '$W/$d/sh-redirect.txt'; printf 'candidate\n' > '$W/$d/candidate.txt'; mkdir '$W/$d/gitinit'"
+  as_b "umask 022; git init -q '$W/$d/gitinit'"
+  as_b "python3 '$W/create.py' '$W/$d'"
+done
+for d in red green; do
+  printf 'MASK-MATRIX %s default-mask %s\n' "$d" "$(getfacl -cpn "$W/$d" | sed -n 's/^default:mask:://p')"
+  printf 'MASK-MATRIX %s clone-root %s\n' "$d" "$(stat -c %a "$W/$d")"
+  printf 'MASK-MATRIX %s os.mkdir-0770-under-umask-077 %s\n' "$d" "$(stat -c %a "$W/$d/bootstrap-dir")"
+  printf 'MASK-MATRIX %s shell-redirect %s\n' "$d" "$(stat -c %a "$W/$d/sh-redirect.txt")"
+  printf 'MASK-MATRIX %s candidate.txt %s\n' "$d" "$(stat -c %a "$W/$d/candidate.txt")"
+  printf 'MASK-MATRIX %s git-init-.git-config %s\n' "$d" "$(stat -c %a "$W/$d/gitinit/.git/config")"
+  printf 'MASK-MATRIX %s open-0644 %s\n' "$d" "$(stat -c %a "$W/$d/open0644.txt")"
+  printf 'MASK-MATRIX %s open-0666 %s\n' "$d" "$(stat -c %a "$W/$d/open0666.txt")"
+  printf 'MASK-MATRIX %s open-0664 %s\n' "$d" "$(stat -c %a "$W/$d/open0664.txt")"
+done
+printf 'MASK-MATRIX kernel %s\n' "$(uname -r)"
+```

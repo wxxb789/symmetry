@@ -5715,8 +5715,9 @@ section, whose pointer sentence names this one.
       `umask(0o077)` (`daemon/internal/clonebootstrap/filesystem_linux_amd64.go:216`, `:244`,
       `:365`), and the fixture's writable default ACL mask
       (`scripts/ci/linux-v2-native-acceptance.sh:600-601` before this fix) supplied the group bits:
-      the pinned target and its ancestors were `0770`, the `0644`-mode B files `0660`. The anchor's
-      first target check refused (`daemon/native/linux-gate/protocol/clone_cleanup_linux.go:274`,
+      the pinned target and its ancestors were `0770`, the B files created through `0666` opens
+      `0660`. The anchor's first target check refused
+      (`daemon/native/linux-gate/protocol/clone_cleanup_linux.go:274`,
       `:320`, `:332`), the RunKey walk behind it too (`:358`, `:399`, `:410`), and the launcher core
       re-checks the same predicates (`daemon/internal/launchercore/main_linux_amd64.go:243`, `:253`,
       `:259`, `:1548`, `:1554`, `:1558`). The anchor maps any worker error to the status

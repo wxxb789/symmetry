@@ -15,7 +15,7 @@ evidence record `docs/evidence/rf-acc-synthetic-cleanup-root-removal-2026-11-27.
 | Change 1: never weaken containment, the exact-proof requirement or the RELEASE resolution | RELEASE and Begin are green; cleanup checks unchanged | §3 keeps every check; the fix is stricter (B-created entries lose write) |
 | Change 2: fix on the named side | Fixture line `scripts/ci/linux-v2-native-acceptance.sh:600-601` (`d:u:$B_UID:rwx,d:m::rwx` defaults on the synthetic clone root) | §3: one scoped ACL change, one setup-time guard, one Python test extension, one witness-side named assertion |
 | Acceptance: Bind on the PR head; the `:882` stop gone or the next stop recorded verbatim | Unmeasurable locally (needs the installed owner, guest and Control) | Evidence §8 states the expected next observation; the conductor's Bind supplies it |
-| Owned files | — | The script's `synthetic_goal_cleanup` provisioning and guard blocks, `scripts/ci/test-linux-v2-evidence.py`, the witness file, this plan, the evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` |
+| Owned files | — | The script's `synthetic_goal_cleanup` provisioning and guard blocks, `scripts/ci/test-linux-v2-evidence.py` (owned under the conductor's 2026-11-27 scope amendment, review STD-A02: its guard-test harness for the owned script arm — the delivered script against the base harness reddens `SyntheticCleanupGuardTest`, so the edit is coupled), the witness file, this plan, the evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` |
 | Invariants: gates bind the handed-over bytes, comments ≤ 2 lines, a red mutant per new branch, ACL-aware permission assertions | — | Evidence §5–§7: subject hashes, five mutants, the guard run red/green in the resolute chroot, ACL reads through `getfacl`/`faccessat` |
 
 ## 2. Root cause (Stage 1, summary)
@@ -25,8 +25,9 @@ The B clone bootstrap creates the checkout layout with `Mkdirat(…, 0o770)` und
 present on the clone root replaces that intent: the kernel derives each new entry's group bits from
 the default mask, so the `d:m::rwx` mask at
 `scripts/ci/linux-v2-native-acceptance.sh:600-601` (Bind 2 shape) yields `binding-…`, `run-…` and
-`generation-1` at mode `0770`, and files opened with mode `0644` land at `0660`. The authenticated
-root cleanup refuses exactly that shape: `verifyCleanupPathFD(targetFD, …)`
+`generation-1` at mode `0770`, and files created with mode `0666` (Git, the setup shell) land at
+`0660`. The authenticated root cleanup refuses exactly that shape:
+`verifyCleanupPathFD(targetFD, …)`
 (`daemon/native/linux-gate/protocol/clone_cleanup_linux.go:320`, `:332`, first refusing call at
 `:274`) and, behind it, the RunKey walk `openCleanupRelativeDirectory`
 (`:358`, `:399`), the launcher core's `verifyCleanupDirectoryFD`/`cleanupTargetDescriptor`
