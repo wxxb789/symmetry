@@ -397,8 +397,6 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# The fixture writes B's provider key, so it decides the credential mode: the ratified scratch
-# placeholder cannot produce an authentic provider turn, and any other value changes nothing.
 detect_placeholder_provider_credential() {
   if [[ "$SYMMETRY_OPENAI_API_KEY" == 'sk-scratch-dummy' ]]; then
     placeholder_provider_credential=1
@@ -2413,7 +2411,6 @@ PY
   rm -f -- "$run_metadata"
 }
 
-# One tab-separated identity line per owner-witness case: config, request environment, test, receipt flag.
 owner_witness_case_identity() {
   case "$1" in
     pi_provider_action)
@@ -2549,8 +2546,6 @@ PY
   fi
 }
 
-# A placeholder-credential run cannot execute an authentic provider turn, so the pi legs that need
-# one record this named, unproven outcome instead of aborting the case set.
 record_credential_gated_leg() {
   local case_name=$1
   local test_name=$2
@@ -2572,7 +2567,12 @@ separator = sys.argv.index("--")
 cases = sys.argv[3:separator]
 tests = sys.argv[separator + 1:]
 legs = [
-    {"case": case, "test": test, "outcome": "credential_gated_" + case}
+    {
+        "case": case,
+        "test": test,
+        "outcome": "credential_gated_" + case,
+        "test_result": "failed" if case == "pi_provider_action" else "not_run",
+    }
     for case, test in sorted(zip(cases, tests))
 ]
 declaration.write_text(
@@ -2581,6 +2581,7 @@ declaration.write_text(
             "version": 1,
             "mode": "placeholder_provider_credential",
             "credential_environment_variable": "SYMMETRY_OPENAI_API_KEY",
+            "harness": "pi",
             "source_tree_digest": sys.argv[2],
             "legs": legs,
         },
@@ -2594,8 +2595,6 @@ declaration.chmod(0o600)
 PY
 }
 
-# The pi stop text stays measurable only if this leg runs last: its retained RunJournal would
-# fence every later production witness through the shared Store's fresh-run guard.
 run_credential_gated_pi_provider_leg() {
   local event_file=$1
   local case_name=pi_provider_action
@@ -3277,10 +3276,8 @@ case "$fixture_case_set" in
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/fifo \
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/oversized
 
-    # The pi legs that need an authentic provider turn cannot be proven under the placeholder; they
-    # are recorded as named credential-gated outcomes so the reader and the export stay measurable.
     if (( placeholder_provider_credential )); then
-      printf 'credential-gated: pi_provider_action is deferred to the shared arm tail so its retained RunJournal cannot fence the remaining legs.\n' >&2
+      run_credential_gated_pi_provider_leg "$v2_pi_events"
     else
       run_native_owner_witness pi_provider_action "$v2_pi_events"
     fi
@@ -3292,6 +3289,8 @@ case "$fixture_case_set" in
         "$(owner_witness_case_test_name helper_sigkill_detached_child)"
       record_credential_gated_leg daemon_sigkill_helper_survives_detached_child \
         "$(owner_witness_case_test_name daemon_sigkill_helper_survives_detached_child)"
+      # The retained Pi RunJournal can fence later witnesses before the arm reaches its tail.
+      write_credential_gated_declaration
     else
       run_native_owner_witness helper_sigkill_detached_child "$v2_crash_events"
       run_native_owner_witness daemon_sigkill_helper_survives_detached_child "$v2_daemon_crash_events"
@@ -3316,9 +3315,6 @@ case "$fixture_case_set" in
       TestOpenCodeQualifiedStartNamespacePeerDenials/changed_start_identity \
       TestOpenCodeQualifiedStartNamespacePeerDenials/wrong_user_namespace \
       TestOpenCodeQualifiedNonDumpablePeerDeniedBeforeHTTP
-    if (( placeholder_provider_credential )); then
-      run_credential_gated_pi_provider_leg "$v2_pi_events"
-    fi
     ;;
   stage_replay_create_started)
     run_stage_replay_case "$v2_stage_replay_events" create_started
@@ -3363,7 +3359,6 @@ stop_readback_reader
 machine_run_as "$A_USER" "$A_USER" /usr/bin/rmdir "$OWNER_TEST_LEAF"
 
 if (( ${#credential_gated_cases[@]} > 0 )); then
-  write_credential_gated_declaration
   printf 'Linux amd64 A/B case set %s completed with %s credential-gated authentic-provider legs (%s). The authentic provider turn is NOT proven for them, so this case set is not passed; the exported evidence names every outcome.\n' \
     "$fixture_case_set" "${#credential_gated_cases[@]}" "${credential_gated_cases[*]}" >&2
   exit 1

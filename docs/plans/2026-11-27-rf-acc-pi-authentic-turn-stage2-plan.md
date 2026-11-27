@@ -14,8 +14,9 @@ and the daemon stop-text format.
 - **Slice 2 (ruling 1B1).** In the `shared` arm of `scripts/ci/linux-v2-native-acceptance.sh`, the
   fixture decides the provider credential mode from the exact bytes it writes into B's
   `auth.json`. Under the ratified placeholder it records a named credential-gated outcome for each
-  pi leg that needs an authentic provider turn and CONTINUES, so the set reaches
-  `stop_readback_reader` and the redacted export; the run never reports itself passed.
+  Pi leg that needs an authentic provider turn and continues to the remaining checks. Those
+  checks can still stop the set before `stop_readback_reader` or a complete redacted export;
+  the run never reports itself passed.
 - **Slice 3 (ruling 2C1).** `daemon/internal/harness/pi/rpc.go` appends a bounded projection of
   provider `errorMessage` to the `ErrUnexpectedAssistantStop` text; stop classification and every
   fail-closed decision are unchanged.
@@ -48,14 +49,11 @@ any other value — including any real secret — leaves every path below byte-i
 
 ### 2.3 Gated outcome mechanism per leg
 
-- `pi_provider_action` still RUNS, but it runs at the tail of the `shared` arm. Reason: its
-  aborted run leaves an unreleased `RunJournal` in the shared `<STATE_DIR>` StateDir, and
-  `newLinuxV2NativeFixture` refuses any fresh production witness while a prior journal is not
-  physically released (`daemon/e2e/production_linux_v2_native_witness_test.go:2087-2100`; the
-  same guard is why `alternate_mount_refusal` owns a case set, `docs/TODO.md`). Running it last
-  keeps the contract's gated pi leg measurable while no later leg can be poisoned. Nothing else
-  depends on the leg's position: each leg has its own Control claim, request, event file and
-  result row.
+- `pi_provider_action` runs at its original position, before the Pi peer-negative check. Its
+  gated runner records the outcome once the exact Go test failure is verified. Deferring the
+  run hid the outcome when replay aborted; Bind 46020141750 demonstrated that failure mode.
+  A retained `RunJournal` in `<STATE_DIR>` can still fence later production witnesses through
+  `newLinuxV2NativeFixture`; there is no exception to the physical-release guard.
 - `helper_sigkill_detached_child` and `daemon_sigkill_helper_survives_detached_child` are NOT
   run: their witnesses additionally need the detached child born from the model's commit, so a
   placeholder run cannot exercise them at all, and their aborted journals would poison the state
@@ -70,40 +68,43 @@ any other value — including any real secret — leaves every path below byte-i
 
 The fixture exits non-zero whenever at least one leg was credential-gated: the set's "passed"
 line, the workflow's per-set manifest requirement and the exporter's passed-run completeness check
-(`:1878-1881`) are all gated on status 0, so the only honest terminal state is a failed set whose
-manifest still lands (`status: "failed"`, `missing_allowlisted_files` naming what was not
-produced, `credential_gated` naming what was not proven). The Bind's "named stop is gone"
-therefore reads as: the set completes, the export lands, the reader's Result row runs, and the
-unproven legs are named.
+are all gated on status 0. A failed manifest can land only if all other required checks hold;
+its `credential_gated` index names what was not proven. If a later wall stops the set, the
+declaration can be a partial export member; the exporter still refuses to emit a manifest if a
+required durability witness is missing. The next Bind reports the case-set exit, the named Pi
+outcome in log and export, the partial or full member list, the reader Result's presence or
+absence, and the first unexpected failure.
 
 ### 2.5 The named-outcome declaration and its exported shape
 
 Fixture side (`$fixture_root/credential-gated-legs.json`, mode 0600): the fixture writes version 1,
 mode `placeholder_provider_credential`, the credential variable name `SYMMETRY_OPENAI_API_KEY`,
-the fixture's `source_tree_digest` and these leg identities, after recording all three:
+`harness: "pi"`, and the fixture's `source_tree_digest`. It writes after the two crash-leg
+records and before replay, with one `case`/`test`/`outcome`/`test_result` row per leg:
 
 ```json
-{"version":1,"mode":"placeholder_provider_credential",
- "credential_environment_variable":"SYMMETRY_OPENAI_API_KEY","source_tree_digest":"<source_tree_digest>",
- "legs":[{"case":"daemon_sigkill_helper_survives_detached_child","test":"TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild","outcome":"credential_gated_daemon_sigkill_helper_survives_detached_child"},
-         {"case":"helper_sigkill_detached_child","test":"TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild","outcome":"credential_gated_helper_sigkill_detached_child"},
-         {"case":"pi_provider_action","test":"TestProductionLinuxV2PiNativeProviderAction","outcome":"credential_gated_pi_provider_action"}]}
+{"case":"pi_provider_action","test":"TestProductionLinuxV2PiNativeProviderAction",
+ "outcome":"credential_gated_pi_provider_action","test_result":"failed"}
 ```
+
+Both crash legs record `test_result: "not_run"`.
 
 Exporter side: new manual-only option `--credential-gated-declaration <absolute path>`. When it
 is present the exporter requires manual `shared`, `failed`, the Pi pins, the exact declaration
 schema and leg set (no duplicates), and equality with `--source-tree-digest`. A present provider
 action witness must match the declared test, harness and source tree and record the boolean false
-for `provider_action_succeeded`; the unrun crash legs must not have documents. The exporter
-publishes the declaration and its manifest index without treating those artifacts as staged-Pi
-proof. Every other witness keeps its existing check. Without the option the exporter behaves
-as before, including in the credentialed `main` dispatch.
+for `provider_action_succeeded` without a contradictory success outcome. The unrun crash legs
+must not have documents. All three Control provider receipt sources are forbidden, as are
+pre-existing output destinations for the three receipts or three gated witnesses. Neither a
+declaration nor a failure witness is staged-Pi proof. Every other witness keeps its existing
+check. Without the option the exporter behaves as before, including in a credentialed dispatch.
 
 ### 2.6 The event gate expresses "credential-gated"
 
 The gated runner selects the exact `./e2e` package at the event gate. For the named test,
 `--credential-gated TEST` requires one `run`, one fail for the test itself, no pass or skip,
-and one matching package fail. A child fail may accompany, but cannot replace, the parent's fail.
+and one matching package fail. The parent run precedes its fail, and the package fail closes
+the selected stream. A child fail may accompany, but cannot replace, the parent's fail.
 The only accepted message is `credential-gated TEST: run=1 pass=0 skip=0`. Without the flag the
 original `run=1 pass=1 skip=0` gate remains.
 
@@ -124,13 +125,13 @@ this suffix. A missing, non-string or blank error field does not change the stop
   does not wire the Control receipt, so the witness could still fail later at receipt readback.
   The shape gate rejects a synthetic pass stream, but the live classification is unproven, not a
   typed credential refusal or a proof that the provider refused the request.
-- Placeholder + an earlier leg fails for its own reason: the set aborts before the gated tail leg;
-  the export keeps today's refusal semantics (no declaration is written, because not every gated
-  leg was recorded — the declaration is written only when all three are).
+- Placeholder + an earlier leg fails for its own reason: a failure before all three gated records
+  prevents the declaration. Later aborts preserve it as partial evidence without bypassing the
+  exporter refusal.
 - Placeholder + a later real-credential `shared` wall: with a real key nothing changes, so the
   gated declaration never appears in a credentialed run.
-- The three pi legs under a real credential keep their position and code path: the deferral, the
-  skips and the gated mode exist only inside `if (( placeholder_provider_credential ))`.
+- The three Pi legs under a real credential keep their position and code path. The skips and
+  gated mode exist only inside `if (( placeholder_provider_credential ))`.
 
 ## 4. Tests and evidence plan
 
@@ -138,7 +139,7 @@ this suffix. A missing, non-string or blank error field does not change the stop
 | --- | --- | --- |
 | gate `--credential-gated` (completed failure, incomplete or foreign events) | `scripts/ci/test-linux-v2-go-events.py` rows | `Check Linux v2 fixture contracts` (CI `daemon` job) and locally |
 | exporter declaration (accepted schema, passed-run refusal, wrong case set, wrong leg set, wrong outcome, non-strict file) | `scripts/ci/test-linux-v2-evidence.py` rows | same |
-| fixture gated mode/shape (mode detection, named outcome, skip, deferral, gated-mode wiring, declaration write) | `scripts/ci/test-linux-v2-evidence.py` extracted-block harness rows | same (Python logic; no userland-dependent property) |
+| production credential staging, gated position, abort before reader stop, private declaration write and exporter argument | `scripts/ci/test-linux-v2-evidence.py` extracted-block harness rows | same; permissions checked separately in Resolute userland |
 | daemon bounded/redacted stop text | validator rows in `daemon/internal/harness/pi/rpc_test.go`; the record names the exact overlays | `daemon` job and locally |
 
 Evidence plan: run every row red-first where it is practical (new daemon rows on the pre-change

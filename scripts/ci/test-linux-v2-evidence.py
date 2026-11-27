@@ -460,8 +460,12 @@ def credential_gated_declaration() -> dict:
         "version": 1,
         "mode": "placeholder_provider_credential",
         "credential_environment_variable": "SYMMETRY_OPENAI_API_KEY",
+        "harness": "pi",
         "source_tree_digest": PI_PINS["tree_digest"],
-        "legs": [{"case": case, "test": test, "outcome": outcome} for case, test, outcome, _ in CREDENTIAL_GATED_LEGS],
+        "legs": [
+            {"case": case, "test": test, "outcome": outcome, "test_result": result}
+            for (case, test, outcome, _), result in zip(CREDENTIAL_GATED_LEGS, ("not_run", "not_run", "failed"))
+        ],
     }
 
 
@@ -2092,7 +2096,6 @@ class ExporterTest(unittest.TestCase):
                 source / "ack-loss-replay" / f"TestProductionLinuxV2AckLossReplayMatrix_{stage}.json",
                 pi_durability_witness(),
             )
-        # The gated pi leg's own document is a failure artifact: it binds no staged pi executable.
         self.write_json(
             source / "pi_provider_action" / "TestProductionLinuxV2PiNativeProviderAction.json",
             {
@@ -2180,6 +2183,19 @@ class ExporterTest(unittest.TestCase):
         self.assertIn("credential-gated-legs.json", {entry["file"] for entry in manifest["files"]})
         self.assertTrue((output / "pi-native-provider-action.json").exists())
 
+    def test_partial_export_keeps_the_declaration_without_waiving_durability(self) -> None:
+        source, receipts = self.credential_gated_source()
+        (source / "ack-loss-replay" / "TestProductionLinuxV2AckLossReplayMatrix_checkout_ready.json").unlink()
+        (source / "pi_provider_action" / "TestProductionLinuxV2PiNativeProviderAction.json").unlink()
+        output = self.private_dir("partial-output")
+        declaration = self.root / "credential-gated-legs.json"
+        write_declaration(declaration, credential_gated_declaration())
+        result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("pi durability witness is unavailable: ack-loss-replay-checkout_ready.json", result.stderr)
+        self.assertFalse((output / "manifest.json").exists())
+        self.assertEqual((output / declaration.name).read_bytes(), declaration.read_bytes())
+
     def test_credential_gated_declaration_refuses_wrong_source(self) -> None:
         source, receipts = self.credential_gated_source()
         declaration = self.root / "wrong-source.json"
@@ -2233,6 +2249,57 @@ class ExporterTest(unittest.TestCase):
                 self.assertFalse((output / "manifest.json").exists())
                 crash.unlink()
 
+    def test_credential_gated_export_refuses_positive_owner_outcomes(self) -> None:
+        source, receipts = self.credential_gated_source()
+        declaration = self.root / "credential-gated-legs.json"
+        write_declaration(declaration, credential_gated_declaration())
+        provider = source / "pi_provider_action" / "TestProductionLinuxV2PiNativeProviderAction.json"
+        failure = json.loads(provider.read_text(encoding="utf-8"))
+        for index, positive in enumerate((
+            {"owner_witness_outcome": "completed"},
+            {"owner_witness_response": {"outcome": "completed"}},
+            {"owner_witness_response": {"provider_action": {"outcome": "succeeded"}}},
+        )):
+            with self.subTest(positive=positive):
+                self.write_json(provider, {**failure, **positive})
+                output = self.private_dir(f"positive-{index}")
+                result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("pi-native-provider-action.json contradicts the declared pi provider failure", result.stderr)
+                self.assertFalse((output / "pi-native-provider-action.json").exists())
+                self.assertFalse((output / "manifest.json").exists())
+
+    def test_credential_gated_export_refuses_source_provider_receipts(self) -> None:
+        source, receipts = self.credential_gated_source()
+        declaration = self.root / "credential-gated-legs.json"
+        write_declaration(declaration, credential_gated_declaration())
+        for name, target in load_exporter().MANUAL_RECEIPTS:
+            with self.subTest(target=target):
+                receipt = receipts / name
+                self.write_json(receipt, {"outcome": "succeeded", "run_id": "stale-example"})
+                output = self.private_dir(f"source-{target}")
+                result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"Control provider receipt was not produced by the credential-gated case set: {target}", result.stderr)
+                self.assertFalse((output / target).exists())
+                self.assertFalse((output / "manifest.json").exists())
+                receipt.unlink()
+
+    def test_credential_gated_export_refuses_prefilled_receipt_and_witness_targets(self) -> None:
+        source, receipts = self.credential_gated_source()
+        (source / "pi_provider_action" / "TestProductionLinuxV2PiNativeProviderAction.json").unlink()
+        declaration = self.root / "credential-gated-legs.json"
+        write_declaration(declaration, credential_gated_declaration())
+        receipt_targets = {target for _, target in load_exporter().MANUAL_RECEIPTS}
+        for target in sorted(receipt_targets | CREDENTIAL_GATED_TARGETS):
+            with self.subTest(target=target):
+                output = self.private_dir(f"prefilled-{target}")
+                self.write_json(output / target, {"outcome": "succeeded", "run_id": "stale-example"})
+                result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(f"credential-gated evidence destination already exists: {target}", result.stderr)
+                self.assertFalse((output / "manifest.json").exists())
+
     def test_credential_gated_declaration_refuses_a_passed_run_or_another_case_set(self) -> None:
         source, receipts = self.credential_gated_source()
         declaration = self.root / "refusal-declaration.json"
@@ -2262,6 +2329,15 @@ class ExporterTest(unittest.TestCase):
         def wrong_test(document: dict) -> None:
             document["legs"][0]["test"] = "TestSomethingElse"
 
+        def skipped_pi(document: dict) -> None:
+            document["legs"][2]["test_result"] = "not_run"
+
+        def failed_crash(document: dict) -> None:
+            document["legs"][0]["test_result"] = "failed"
+
+        def missing_test_result(document: dict) -> None:
+            del document["legs"][2]["test_result"]
+
         def extra_leg_field(document: dict) -> None:
             document["legs"][0]["note"] = "extra"
 
@@ -2284,9 +2360,15 @@ class ExporterTest(unittest.TestCase):
             ("missing leg", missing_leg, "must name exactly the pi authentic-provider legs"),
             ("wrong outcome", wrong_outcome, "do not match the exact pi authentic-provider legs"),
             ("wrong test", wrong_test, "do not match the exact pi authentic-provider legs"),
+            ("unrun provider action", skipped_pi, "does not bind the exact failed and unrun tests"),
+            ("failed crash leg", failed_crash, "does not bind the exact failed and unrun tests"),
+            ("missing test result", missing_test_result, "leg has unexpected or missing fields"),
             ("extra leg field", extra_leg_field, "leg has unexpected or missing fields"),
             ("duplicate leg", duplicate_leg, "do not match the exact pi authentic-provider legs"),
             ("wrong version", wrong_version, "does not match its fixed shape"),
+            ("bool version", lambda doc: doc.update(version=True), "does not match its fixed shape"),
+            ("float version", lambda doc: doc.update(version=1.0), "does not match its fixed shape"),
+            ("wrong harness", lambda doc: doc.update(harness="opencode"), "must bind the pi harness"),
             ("wrong mode", wrong_mode, "does not match its fixed shape"),
             ("wrong variable", wrong_variable, "does not match its fixed shape"),
             ("extra field", extra_field, "unexpected or missing fields"),
@@ -2309,13 +2391,15 @@ class ExporterTest(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("credential-gated declaration is unavailable", result.stderr)
-        with self.subTest(name="non-private declaration file"):
-            declaration = self.root / "shape-public.json"
-            write_declaration(declaration, credential_gated_declaration(), mode=0o644)
-            output = self.private_dir("shape-public-output")
-            result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("allowlisted source must be a bounded regular file", result.stderr)
+
+    def test_credential_gated_declaration_refuses_non_private_mode(self) -> None:
+        source, receipts = self.credential_gated_source()
+        declaration = self.root / "shape-public.json"
+        write_declaration(declaration, credential_gated_declaration(), mode=0o644)
+        output = self.private_dir("shape-public-output")
+        result = self.run_credential_gated_gate(source, receipts, output, declaration=declaration)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("allowlisted source must be a bounded regular file", result.stderr)
 
     def test_credential_gated_helpers_match_the_exporter_constants(self) -> None:
         exporter = load_exporter()
@@ -2591,6 +2675,7 @@ def shared_arm_harness(source: str) -> str:
         "fixture_case_set=shared",
         "call_log=$2",
         "placeholder_provider_credential=$1",
+        "replay_status=$3",
         "A_USER=a",
         "OWNER_TEST_LEAF=leaf",
         "credential_gated_cases=()",
@@ -2601,7 +2686,7 @@ def shared_arm_harness(source: str) -> str:
         'run_go_test() { printf "go:%s\\n" "$1" >> "$call_log"; }',
         'run_unexpected_cgroup_procs_fd_witness() { printf "owner-fd-census\\n" >> "$call_log"; }',
         'run_native_owner_witness() { printf "owner:%s\\n" "$1" >> "$call_log"; }',
-        'run_stage_replay_cases() { printf "stage-replay\\n" >> "$call_log"; }',
+        'run_stage_replay_cases() { printf "stage-replay\\n" >> "$call_log"; return "$replay_status"; }',
         'run_ack_loss_replay_cases() { printf "ack-loss\\n" >> "$call_log"; }',
         'run_helper_exit_after_release_before_native_register_witness() { printf "helper-exit\\n" >> "$call_log"; }',
         'run_helper_response_loss_witnesses() { printf "response-loss\\n" >> "$call_log"; }',
@@ -2635,15 +2720,15 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         )
 
     def test_mode_detection_matches_only_the_ratified_placeholder(self) -> None:
-        detection = extracted_bash_function(
-            ACCEPTANCE_SCRIPT.read_text(encoding="utf-8"), "detect_placeholder_provider_credential"
-        )
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        start = source.index("detect_placeholder_provider_credential() {\n")
+        end = source.index('printf \'%s\' "$GH_TOKEN" > "$control_github_token_file"', start)
         body = (
             "set -Eeuo pipefail\n"
             "placeholder_provider_credential=0\n"
-            'SYMMETRY_OPENAI_API_KEY="$1"\n'
-            + detection
-            + "\ndetect_placeholder_provider_credential\n"
+            'SYMMETRY_OPENAI_API_KEY=$1 native_api_key_file=$2 native_containment_kind=\n'
+            + source[start:end]
+            + '\n'
             'printf "%s" "$placeholder_provider_credential"\n'
         )
         for value, expected in (
@@ -2653,14 +2738,44 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             ("", "0"),
         ):
             with self.subTest(value=value):
-                result = self.run_script("detect.sh", body, value)
+                staged_key = self.root / "staged-key"
+                result = self.run_script("detect.sh", body, value, str(staged_key))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, expected)
+                self.assertEqual(staged_key.read_text(encoding="utf-8"), value)
+
+    def test_export_passes_only_the_existing_declaration_to_the_exporter(self) -> None:
+        source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
+        body = (
+            'set -Eeuo pipefail\nfixture_root=$1 rootfs=$1/rootfs evidence_directory=$1/output\n'
+            'repo=$2 source_tree_digest=$3 fixture_case_set=shared GITHUB_SHA=fixture-commit\n'
+            'evidence_secret_values_file=$1/scan\n'
+            'sudo() { printf "%s\\n" "$@"; }\n'
+            + extracted_bash_function(source, "export_native_evidence")
+            + '\nexport_native_evidence 42\n'
+        )
+        declaration = self.root / "credential-gated-legs.json"
+        for declared in (False, True):
+            with self.subTest(declared=declared):
+                if declared:
+                    write_declaration(declaration, credential_gated_declaration())
+                repo = ACCEPTANCE_SCRIPT.parents[2]
+                result = self.run_script("export.sh", body, str(self.root), str(repo), PI_PINS["tree_digest"])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = result.stdout.splitlines()
+                self.assertEqual(arguments[:6], [
+                    "python3", str(repo / "scripts/ci/export-linux-v2-redacted-evidence.py"),
+                    "manual", str(self.root / "output"), "fixture-commit", "failed",
+                ])
+                self.assertEqual(arguments.count("--credential-gated-declaration"), int(declared))
+                if declared:
+                    self.assertEqual(arguments[arguments.index("--credential-gated-declaration") + 1], str(declaration))
 
     def test_declaration_helper_records_the_named_outcomes(self) -> None:
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
         body = (
             "set -Eeuo pipefail\n"
+            "umask 022\n"
             "fixture_root=$1\n"
             "source_tree_digest=$2\n"
             "credential_gated_cases=()\n"
@@ -2743,12 +2858,12 @@ class CredentialGatedFixtureTest(unittest.TestCase):
 
     def test_shared_arm_gates_only_the_provider_legs(self) -> None:
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
-        for mode in ("0", "1"):
-            with self.subTest(placeholder=mode):
+        for mode, replay_status in (("0", "0"), ("1", "0"), ("1", "42")):
+            with self.subTest(placeholder=mode, replay_status=replay_status):
                 call_log = self.root / f"calls-{mode}.txt"
                 call_log.write_text("", encoding="utf-8")
                 result = self.run_script(
-                    "arm.sh", shared_arm_harness(source), mode, str(call_log)
+                    "arm.sh", shared_arm_harness(source), mode, str(call_log), replay_status
                 )
                 calls = call_log.read_text(encoding="utf-8").splitlines()
                 if mode == "0":
@@ -2756,6 +2871,7 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(calls[-2:], ["stop-reader", "machine:/usr/bin/rmdir"])
                     self.assertNotIn("gated-pi-run:v2_pi_events", calls)
+                    self.assertNotIn("write-declaration", calls)
                     positions = [
                         calls.index(entry)
                         for entry in (
@@ -2768,20 +2884,24 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     ]
                     self.assertEqual(positions, sorted(positions))
                 else:
-                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.returncode, int(replay_status) or 1, result.stderr)
                     self.assertNotIn("owner:pi_provider_action", calls)
                     self.assertNotIn("owner:helper_sigkill_detached_child", calls)
                     self.assertNotIn("owner:daemon_sigkill_helper_survives_detached_child", calls)
-                    self.assertEqual(
-                        sorted(entry.removeprefix("record:") for entry in calls if entry.startswith("record:")),
-                        sorted(
-                            f"{case} {test}"
-                            for case, test, _, _ in CREDENTIAL_GATED_LEGS
-                            if case != "pi_provider_action"
-                        ),
-                    )
-                    self.assertEqual(calls[-4:], ["gated-pi-run:v2_pi_events", "stop-reader", "machine:/usr/bin/rmdir", "write-declaration"])
-                    self.assertIn("deferred to the shared arm tail", result.stderr)
+                    first = calls.index("go:v2_marker_reader_events") + 1
+                    self.assertEqual(calls[first:calls.index("stage-replay") + 1], [
+                        "gated-pi-run:v2_pi_events",
+                        "go:v2_peer_negative_pi_events",
+                        "record:helper_sigkill_detached_child TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild",
+                        "record:daemon_sigkill_helper_survives_detached_child TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild",
+                        "write-declaration",
+                        "stage-replay",
+                    ])
+                    if replay_status == "0":
+                        self.assertEqual(calls[-2:], ["stop-reader", "machine:/usr/bin/rmdir"])
+                        self.assertIn("this case set is not passed", result.stderr)
+                    else:
+                        self.assertEqual(calls[-1], "stage-replay")
 
 
 if __name__ == "__main__":

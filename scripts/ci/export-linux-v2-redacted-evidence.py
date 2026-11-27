@@ -354,8 +354,6 @@ PI_VEHICLE_INDEPENDENT_WITNESSES = {
     "opencode-native-health.json",
     "unprovisioned-owner-refusal.json",
 }
-# The fixture records this declaration only when the ratified placeholder provider credential was
-# staged into B; the named legs cannot run an authentic provider turn, so they are not proofs.
 CREDENTIAL_GATED_DECLARATION_TARGET = "credential-gated-legs.json"
 CREDENTIAL_GATED_MODE = "placeholder_provider_credential"
 CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE = "SYMMETRY_OPENAI_API_KEY"
@@ -1511,7 +1509,6 @@ def validate_pi_durability_witnesses(
 ) -> None:
     if not credential_gated_targets <= MANUAL_CASE_SET_FILES[case_set]:
         fail("credential-gated declaration names a witness outside its case set")
-    # A declared credential-gated witness is a recorded unproven outcome, never a staged-pi proof.
     expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES - credential_gated_targets
     for target in sorted(expected):
         document = documents.get(target)
@@ -1535,14 +1532,17 @@ def validate_pi_durability_witnesses(
 
 
 def validate_credential_gated_declaration(document: dict, source_tree_digest: str) -> tuple[str, ...]:
-    if set(document) != {"version", "mode", "credential_environment_variable", "source_tree_digest", "legs"}:
+    if set(document) != {"version", "mode", "credential_environment_variable", "harness", "source_tree_digest", "legs"}:
         fail("credential-gated declaration has unexpected or missing fields")
     if (
-        document["version"] != 1
+        type(document["version"]) is not int
+        or document["version"] != 1
         or document["mode"] != CREDENTIAL_GATED_MODE
         or document["credential_environment_variable"] != CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE
     ):
         fail("credential-gated declaration version, mode or credential variable does not match its fixed shape")
+    if document["harness"] != "pi":
+        fail("credential-gated declaration must bind the pi harness")
     if document["source_tree_digest"] != source_tree_digest:
         fail("credential-gated declaration does not bind --source-tree-digest")
     legs = document["legs"]
@@ -1550,14 +1550,40 @@ def validate_credential_gated_declaration(document: dict, source_tree_digest: st
         fail("credential-gated declaration must name exactly the pi authentic-provider legs")
     recorded = []
     for leg in legs:
-        if not isinstance(leg, dict) or set(leg) != {"case", "test", "outcome"}:
+        if not isinstance(leg, dict) or set(leg) != {"case", "test", "outcome", "test_result"}:
             fail("credential-gated declaration leg has unexpected or missing fields")
-        if not all(isinstance(leg[field], str) for field in ("case", "test", "outcome")):
+        if not all(isinstance(value, str) for value in leg.values()):
             fail("credential-gated declaration leg fields must be strings")
+        if leg["test_result"] != ("failed" if leg["case"] == "pi_provider_action" else "not_run"):
+            fail("credential-gated declaration does not bind the exact failed and unrun tests")
         recorded.append((leg["case"], leg["test"], leg["outcome"]))
     if sorted(recorded) != sorted((case, test, outcome) for case, test, outcome, _ in CREDENTIAL_GATED_LEGS):
         fail("credential-gated declaration legs do not match the exact pi authentic-provider legs")
     return tuple(sorted(case for case, _, _ in recorded))
+
+
+def validate_credential_gated_witness(
+    document: dict, target: str, case: str, test: str, source_tree_digest: str,
+) -> None:
+    if case != "pi_provider_action":
+        fail(f"{target} was not run in the credential-gated case set")
+    subject = document.get("subject")
+    if (
+        document.get("harness") != "pi"
+        or document.get("case") != test
+        or not isinstance(subject, dict)
+        or subject.get("tree_digest") != source_tree_digest
+        or document.get("provider_action_succeeded") is not False
+    ):
+        fail(f"{target} does not bind the declared pi provider failure")
+    response = document.get("owner_witness_response")
+    provider_action = response.get("provider_action") if isinstance(response, dict) else None
+    if (
+        document.get("owner_witness_outcome") == "completed"
+        or (isinstance(response, dict) and response.get("outcome") == "completed")
+        or (isinstance(provider_action, dict) and provider_action.get("outcome") == "succeeded")
+    ):
+        fail(f"{target} contradicts the declared pi provider failure")
 
 
 def main() -> int:
@@ -1684,6 +1710,7 @@ def main() -> int:
 
     credential_gated_cases: tuple[str, ...] = ()
     credential_gated_targets = {}
+    credential_gated_receipts = set()
     if arguments.credential_gated_declaration is not None:
         try:
             declaration_data, declaration = read_regular(
@@ -1693,6 +1720,10 @@ def main() -> int:
             fail("credential-gated declaration is unavailable")
         credential_gated_cases = validate_credential_gated_declaration(declaration, arguments.source_tree_digest)
         credential_gated_targets = {target: (case, test) for case, test, _, target in CREDENTIAL_GATED_LEGS}
+        credential_gated_receipts = {target for _, target in MANUAL_RECEIPTS}
+        for child in output.iterdir():
+            if child.name in credential_gated_receipts or child.name in credential_gated_targets:
+                fail(f"credential-gated evidence destination already exists: {child.name}")
 
     copied = []
     missing = []
@@ -1705,6 +1736,9 @@ def main() -> int:
             fail("unsafe allowlist entry")
         destination = output / target
         try:
+            if target in credential_gated_receipts:
+                source.lstat()
+                fail(f"Control provider receipt was not produced by the credential-gated case set: {target}")
             if arguments.mode == "legacy":
                 document = read_json_regular(source)
                 projected = project_legacy_document(document)
@@ -1729,17 +1763,7 @@ def main() -> int:
                 data, document = read_regular(source, secret_values)
                 if target in credential_gated_targets:
                     case, test = credential_gated_targets[target]
-                    if case != "pi_provider_action":
-                        fail(f"{target} was not run in the credential-gated case set")
-                    subject = document.get("subject")
-                    if (
-                        document.get("harness") != "pi"
-                        or document.get("case") != test
-                        or not isinstance(subject, dict)
-                        or subject.get("tree_digest") != arguments.source_tree_digest
-                        or document.get("provider_action_succeeded") is not False
-                    ):
-                        fail(f"{target} does not bind the declared pi provider failure")
+                    validate_credential_gated_witness(document, target, case, test, arguments.source_tree_digest)
                 if native_kind is not None:
                     published_documents[target] = document
         except FileNotFoundError:

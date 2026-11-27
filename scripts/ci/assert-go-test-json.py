@@ -66,6 +66,9 @@ def main() -> int:
                 selected_package = args.package is None or event.get("Package") == args.package
                 if action == "fail":
                     failures += 1
+                if gated and selected_package and package_failures:
+                    unexpected_gated_events += 1
+                    continue
                 if gated and action in ("run", "pass", "skip", "fail"):
                     if not selected_package:
                         unexpected_gated_events += 1
@@ -79,6 +82,8 @@ def main() -> int:
                     if action == "fail":
                         if name in gated_failures:
                             gated_failures[name] += 1
+                            if counts[name]["run"] != 1:
+                                unexpected_gated_events += 1
                         elif not isinstance(name, str) or first_matching_target(name, gated) is None:
                             unexpected_gated_events += 1
                 if selected_package and name in counts and action in ("run", "pass", "skip"):
