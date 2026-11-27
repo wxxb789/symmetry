@@ -363,28 +363,33 @@ done
 printf 'MASK-MATRIX kernel %s\n' "$(uname -r)"
 ```
 
-## Bind
+## Bind 2
 
-[Run 45956915653](https://github.com/wxxb789/symmetry/actions/runs/45956915653), attempt 1, resolves
-§9 on PR #305 head `dd20a4855f54185221eee4753cc3931d252c34de`. The scratch run was green with only
-`synthetic_goal_cleanup` selected. Setup passed; the whole 2,616-line log has zero matches for the
-old `:882` root-proof refusal, `:506` seed EACCES, or `:499` stage-none refusal (including each
-frame and diagnostic string separately). Log 2456 reads
+[Run 45959717137](https://github.com/wxxb789/symmetry/actions/runs/45959717137), attempt 1, is
+**BINDING** on PR #305 head `897363bba56fc3aa8f2bccab2e8b14cad03d06f2` and resolves §9. It supersedes
+[the first Bind](https://github.com/wxxb789/symmetry/actions/runs/45956915653) on `dd20a485`.
+
+Setup passed for `synthetic_goal_cleanup`, the only case set. The live clone-root guards accepted
+`B:B 0750` and the exact access/default ACL with a non-writable default mask. All three historical
+stops (`:882` root proof, `:506` seed EACCES and `:499` stage none) have zero matches in the
+2,607-line log, including each frame and diagnostic checked separately. Log 2447 reads
 `verified TestProductionLinuxV2CloneCleanupAuthenticatedScratch: run=1 pass=1 skip=0`.
 
-The witness reached its final assertions: the exact B target was absent with zero links, the
-sibling and independent checkout survived, A cleanup preserved the promotion ref, and the
-RunJournal was retired. `synthetic-goal-cleanup.json` exported and the manifest passed.
-The ZIP `linux-v2-native-evidence-45956915653-1` (artifact `15179636508`) matched the API's
-SHA-256 `89aff407c289e629ffc0bd20afe4ea21f9be450e4a157ed3e8d82ffbe8fb190d`. This is a
-test-scoped installed cleanup witness, not App end-to-end or Goal/Control acceptance.
+The final assertions passed: the pinned B target had zero links and no pathname, the sibling and
+independent checkout remained intact, A removed its seed/base/scratch without losing the promotion
+ref, and the RunJournal was retired. `synthetic-goal-cleanup.json` exported and the manifest passed.
+Artifact `15179869761` (`linux-v2-native-evidence-45959717137-1`) matched the API ZIP SHA-256
+`cb07bfb082b06cb01b1ef1cf55752374e28c8cae94d446e1544ec356e648df67`.
 
-All 1,902 PR-tracked tree entries matched run head `219d91ba775d63b18535312b2e2adc65754d999d`
-by path, mode, object type and object ID. Independent SHA-256 checks matched all 22 selected
-inputs. Only the two inputs below changed since PR #304 Bind 2; the other 20 input hashes and
-the two scratch-only files (workflow and shim) are unchanged from that run.
+The standalone Go predicate/walk tests and the negative rows in `scripts/ci/test-linux-v2-evidence.py`
+belong to the `daemon` job in `.github/workflows/ci.yml`, not the acceptance guest; see “Not covered
+by this Bind” in `305-binding-run-2.md` for the individual rows and CI results.
 
-| Input changed since PR #304 Bind 2 | Run `219d91ba` SHA-256 = PR `dd20a485` SHA-256 |
+Run head `5d27bcb0a792cd05b18ce520bd5df5e50fb2ae30` matched all 1,902 PR entries by tree metadata
+and blob SHA-256. These are the only executed input deltas from Bind 1; the Python harness and four
+docs also changed, while the other tracked blobs and both scratch-only files did not.
+
+| Input changed since Bind 1 | Run `5d27bcb0` SHA-256 = PR `897363bb` SHA-256 |
 | --- | --- |
-| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `8cea49859f3bec47e3fc25c27586c3f70fc04a411e1f54fb5f80b2afcd188f7f` |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `60d63a8b0dd1a7d0fb72c920d68ab6a82f841d654e0f4dc2525ad85dd0cbba2d` |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `7c486e5415aa24c841016d0a9019d4a46309099f76358adb9af41e021ad4b7d9` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `a7c453cb75958c218bd7a09dac4e56a1f749aef2f008e22886b23ac46307c360` |
