@@ -85,24 +85,45 @@ class GoEventGateTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_credential_gated_mode_requires_the_exact_unproven_counts(self) -> None:
-        run = {"Action": "run", "Test": "TestWitness"}
-        failed = {"Action": "fail", "Test": "TestWitness"}
-        package_failed = {"Action": "fail"}
-        passed = {"Action": "pass", "Test": "TestWitness"}
-        for name, events, want_success in (
-            ("expected failure", [run, failed, package_failed], True),
-            ("subtest failure", [run, {"Action": "fail", "Test": "TestWitness/child"}, package_failed], True),
-            ("pass", [run, passed], False),
-            ("missing run", [failed, package_failed], False),
-            ("missing fail event", [run], False),
-            ("skip", [run, failed, {"Action": "skip", "Test": "TestWitness"}], False),
-            ("foreign named failure", [run, failed, {"Action": "fail", "Test": "TestOther"}], False),
+        package = "example/selected"
+        run = {"Action": "run", "Package": package, "Test": "TestWitness"}
+        fail = {**run, "Action": "fail"}
+        child = {**run, "Test": "TestWitness/child"}
+        package_fail = {"Action": "fail", "Package": package}
+        for name, events, want in (
+            ("expected failure", [run, fail, package_fail], 0),
+            ("subtest failure", [run, child, {**child, "Action": "fail"}, fail, package_fail], 0),
+            ("missing parent fail", [run, child, {**child, "Action": "fail"}, package_fail], 1),
+            ("missing package terminal", [run, fail], 1),
+            ("contradictory package pass", [run, fail, {**package_fail, "Action": "pass"}, package_fail], 1),
+            ("duplicate package fail", [run, fail, package_fail, package_fail], 1),
+            ("duplicate parent fail", [run, fail, fail, package_fail], 1),
+            ("pass", [run, {**run, "Action": "pass"}, fail, package_fail], 1),
+            ("missing run", [fail, package_fail], 1),
+            ("skip", [run, {**child, "Action": "skip"}, fail, package_fail], 1),
+            ("foreign named failure", [run, {**fail, "Test": "TestOther"}, fail, package_fail], 1),
+            ("foreign package terminal", [run, fail, {**package_fail, "Package": "example/foreign"}], 1),
+            ("foreign child fail", [run, {**child, "Action": "fail", "Package": "example/foreign"}, fail, package_fail], 1),
+            ("foreign run", [run, {**run, "Package": "example/foreign"}, fail, package_fail], 1),
+            ("unattributed parent fail", [run, {"Action": "fail", "Test": "TestWitness"}, fail, package_fail], 1),
         ):
             with self.subTest(name=name):
-                result = self.run_gate(events, "--credential-gated", "TestWitness", "TestWitness")
-                self.assertEqual(result.returncode == 0, want_success, result.stderr)
-                if want_success:
+                result = self.run_gate(events, "--package", package, "--credential-gated", "TestWitness", "TestWitness")
+                self.assertEqual(result.returncode, want, result.stderr)
+                if want == 0:
                     self.assertIn("credential-gated TestWitness: run=1 pass=0 skip=0", result.stdout)
+                else:
+                    self.assertNotIn("credential-gated", result.stdout)
+
+    def test_credential_gated_mode_requires_a_package(self) -> None:
+        events = [
+            {"Action": "run", "Package": "example/selected", "Test": "TestWitness"},
+            {"Action": "fail", "Package": "example/selected", "Test": "TestWitness"},
+            {"Action": "fail", "Package": "example/selected"},
+        ]
+        result = self.run_gate(events, "--credential-gated", "TestWitness", "TestWitness")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("requires --package", result.stderr)
 
     def test_credential_gated_mode_never_relaxes_the_default_gate(self) -> None:
         events = [{"Action": "run", "Test": "TestWitness"}, {"Action": "fail", "Test": "TestWitness"}]

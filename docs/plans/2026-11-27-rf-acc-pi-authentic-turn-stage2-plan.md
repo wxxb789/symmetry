@@ -16,7 +16,7 @@ and the daemon stop-text format.
   `auth.json`. Under the ratified placeholder it records a named credential-gated outcome for each
   pi leg that needs an authentic provider turn and CONTINUES, so the set reaches
   `stop_readback_reader` and the redacted export; the run never reports itself passed.
-- **Slice 3 (ruling 2C1).** `daemon/internal/harness/pi/rpc.go` appends one bounded, redacted
+- **Slice 3 (ruling 2C1).** `daemon/internal/harness/pi/rpc.go` appends a bounded projection of
   provider `errorMessage` to the `ErrUnexpectedAssistantStop` text; stop classification and every
   fail-closed decision are unchanged.
 - Committed tests for every new arm, a new exported allowlisted file for the named outcomes, and
@@ -49,7 +49,7 @@ any other value — including any real secret — leaves every path below byte-i
 ### 2.3 Gated outcome mechanism per leg
 
 - `pi_provider_action` still RUNS, but it runs at the tail of the `shared` arm. Reason: its
-  aborted run leaves an unreleased `RunJournal` in the shared `/var/lib/symmetry-v2` StateDir, and
+  aborted run leaves an unreleased `RunJournal` in the shared `<STATE_DIR>` StateDir, and
   `newLinuxV2NativeFixture` refuses any fresh production witness while a prior journal is not
   physically released (`daemon/e2e/production_linux_v2_native_witness_test.go:2087-2100`; the
   same guard is why `alternate_mount_refusal` owns a case set, `docs/TODO.md`). Running it last
@@ -78,63 +78,52 @@ unproven legs are named.
 
 ### 2.5 The named-outcome declaration and its exported shape
 
-Fixture side (`$fixture_root/credential-gated-legs.json`, mode 0600, written only in placeholder
-mode, only after every gated leg was recorded):
+Fixture side (`$fixture_root/credential-gated-legs.json`, mode 0600): the fixture writes version 1,
+mode `placeholder_provider_credential`, the credential variable name `SYMMETRY_OPENAI_API_KEY`,
+the fixture's `source_tree_digest` and these leg identities, after recording all three:
 
 ```json
 {"version":1,"mode":"placeholder_provider_credential",
- "credential_environment_variable":"SYMMETRY_OPENAI_API_KEY",
+ "credential_environment_variable":"SYMMETRY_OPENAI_API_KEY","source_tree_digest":"<source_tree_digest>",
  "legs":[{"case":"daemon_sigkill_helper_survives_detached_child","test":"TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild","outcome":"credential_gated_daemon_sigkill_helper_survives_detached_child"},
          {"case":"helper_sigkill_detached_child","test":"TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild","outcome":"credential_gated_helper_sigkill_detached_child"},
          {"case":"pi_provider_action","test":"TestProductionLinuxV2PiNativeProviderAction","outcome":"credential_gated_pi_provider_action"}]}
 ```
 
 Exporter side: new manual-only option `--credential-gated-declaration <absolute path>`. When it
-is present the exporter (a) refuses any run status other than `failed` and any case set other than
-`shared`; (b) requires the exact schema above (exact keys, exact three legs, exact test names,
-`outcome == "credential_gated_" + case`, sorted, no duplicates); (c) publishes it as
-`credential-gated-legs.json`; (d) adds the `credential_gated` manifest object (mode, declaration
-target, case names); and
-(e) exempts exactly those three witnesses from the pi-durability binding, because a gated leg's
-document is a failure artifact, not a staged-pi proof — every other required witness keeps the
-unchanged check. Without the option the exporter behaves byte-identically, so the real-credential
-run and the A3 `main` dispatch are untouched.
+is present the exporter requires manual `shared`, `failed`, the Pi pins, the exact declaration
+schema and leg set (no duplicates), and equality with `--source-tree-digest`. A present provider
+action witness must match the declared test, harness and source tree and record the boolean false
+for `provider_action_succeeded`; the unrun crash legs must not have documents. The exporter
+publishes the declaration and its manifest index without treating those artifacts as staged-Pi
+proof. Every other witness keeps its existing check. Without the option the exporter behaves
+as before, including in the credentialed `main` dispatch.
 
 ### 2.6 The event gate expresses "credential-gated"
 
-`assert-go-test-json.py` gains `--credential-gated TEST`: for that one named test the gate
-requires `run=1`, `skip=0`, `pass=0`, and that every test-named `fail` event is that test or its
-subtest, instead of the strict `run=1 pass=1 skip=0`. It prints
-`credential-gated TEST: run=1 pass=0 skip=0` and exits 0 only on those counts. Every other
-expected test keeps the strict rule; a gated leg that PASSES fails this gate (a placeholder
-credential cannot produce an authentic turn, so a pass is an inconsistency, not a green). The
-fixture calls it only through the new `production-credential-gated` go-test mode; without the flag
-the gate is byte-identical. This is the visible, named format change the ruling allows; no check
-is relaxed.
+The gated runner selects the exact `./e2e` package at the event gate. For the named test,
+`--credential-gated TEST` requires one `run`, one fail for the test itself, no pass or skip,
+and one matching package fail. A child fail may accompany, but cannot replace, the parent's fail.
+The only accepted message is `credential-gated TEST: run=1 pass=0 skip=0`. Without the flag the
+original `run=1 pass=1 skip=0` gate remains.
 
 ### 2.7 Daemon stop text (slice 3)
 
-`normalAssistantStop` keeps its classification and appends at most one bounded provider error when
-the retained final assistant message carries a usable `errorMessage`:
-
-- cap: 200 bytes after whitespace normalization (control characters and newlines become single
-  spaces, so the witness line stays one line inside the fixture's 400-byte line bound), truncated
-  on a UTF-8 boundary with a trailing `…`;
-- redaction: runs matching `sk-…`, `gho_…`, `ghp_…`, `github_pat_…`, `xoxb-…`, `Bearer …` or a
-  bare 32+-character hex/base64 blob become `<redacted>`;
-- a message without `errorMessage`, or with a non-string one, keeps today's exact text
-  (`pi rpc final assistant message did not stop normally: "error"`);
-- format: `pi rpc final assistant message did not stop normally: "error": provider error: 401:
-  {"message":"Authentication Error, …"}` — the stop reason stays verbatim and the provider text is
-  only appended.
+`normalAssistantStop` keeps its sentinel and quoted reason. A nonempty string `errorMessage`
+yields `HTTP 401; [details redacted]` for a leading `401: `, likewise for exact ASCII prefixes
+400–599; otherwise it yields only `[details redacted]`. The longest diagnostic is 28 bytes
+(46 with `: provider error: `), all ASCII; no arbitrary body or header can reach a sink through
+this suffix. A missing, non-string or blank error field does not change the stop text.
 
 ## 3. Edge cases the contract demands
 
 - Real credential: no gated path, no declaration, no extra exit; logs, exports and the workflow's
   passed-run checks are as today.
-- Placeholder + a gated leg that does not behave as expected (test absent, skipped, passed, or the
-  go test exits without the gated counts): the gate fails, the fixture treats it as a hard wall,
-  and the set aborts with the existing failure reporting.
+- Placeholder + an absent, skipped or incomplete failure stream: the gate refuses it. This is
+  not a live check for a provider unexpectedly accepting the placeholder: the gated invocation
+  does not wire the Control receipt, so the witness could still fail later at receipt readback.
+  The shape gate rejects a synthetic pass stream, but the live classification is unproven, not a
+  typed credential refusal or a proof that the provider refused the request.
 - Placeholder + an earlier leg fails for its own reason: the set aborts before the gated tail leg;
   the export keeps today's refusal semantics (no declaration is written, because not every gated
   leg was recorded — the declaration is written only when all three are).
@@ -147,10 +136,10 @@ the retained final assistant message carries a usable `errorMessage`:
 
 | New behaviour | Committed red-capable test | Runs where |
 | --- | --- | --- |
-| gate `--credential-gated` (accepted counts, absent test, skip, pass, foreign fail) | `scripts/ci/test-linux-v2-go-events.py` rows | `linux-v2 scripts` step (CI, ubuntu-26.04) and locally |
+| gate `--credential-gated` (completed failure, incomplete or foreign events) | `scripts/ci/test-linux-v2-go-events.py` rows | `Check Linux v2 fixture contracts` (CI `daemon` job) and locally |
 | exporter declaration (accepted schema, passed-run refusal, wrong case set, wrong leg set, wrong outcome, non-strict file) | `scripts/ci/test-linux-v2-evidence.py` rows | same |
 | fixture gated mode/shape (mode detection, named outcome, skip, deferral, gated-mode wiring, declaration write) | `scripts/ci/test-linux-v2-evidence.py` extracted-block harness rows | same (Python logic; no userland-dependent property) |
-| daemon bounded/redacted stop text | `daemon/internal/harness/pi/rpc_test.go` rows (red on pre-change bytes; redaction-removal mutant reddens a named row) | `daemon` job and locally |
+| daemon bounded/redacted stop text | validator rows in `daemon/internal/harness/pi/rpc_test.go`; the record names the exact overlays | `daemon` job and locally |
 
 Evidence plan: run every row red-first where it is practical (new daemon rows on the pre-change
 bytes; the shell harness pins redden when the gated arm is deleted or swapped), capture the exact

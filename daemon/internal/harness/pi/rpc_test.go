@@ -361,22 +361,27 @@ func TestValidatorRejectsDuplicateSettledTrailingEventAndBadFinalAssistant(t *te
 func TestValidatorReportsProviderStopError(t *testing.T) {
 	const stopError = "pi rpc final assistant message did not stop normally"
 	const providerError = ": provider error: "
+	const redacted = "[details redacted]"
 	const unauthorized = `401: {"message":"Authentication Error, Invalid API key provided.","type":"token_not_found_in_db","param":"key","code":"401"}`
-	capPrefix := strings.Repeat("a ", 99) + "b"
 	for _, test := range []struct {
 		name, reason, errorField, wantSuffix string
 	}{
-		{"provider_401", "error", `,"errorMessage":` + strconvQuote(unauthorized), providerError + unauthorized},
-		{
-			"redacts_token_shapes", "aborted",
-			`,"errorMessage":` + strconvQuote("\t rejected\r\n\u2003\x00 sk-livekeymaterial12345, gho_test12345678, ghp_test12345678, github_pat_test_12345678, xoxb-test-token12345, Bearer\t\u00a0abcdefgh, abcdefghijklmnop+/=_-0123456789ABCDE\x7f"),
-			providerError + "rejected <redacted>, <redacted>, <redacted>, <redacted>, <redacted>, <redacted> <redacted>",
-		},
-		{
-			"caps_at_utf8_boundary", "error",
-			`,"errorMessage":` + strconvQuote(" \t"+capPrefix+strings.Repeat("界\n\u0085\x00\u2003", 500)),
-			providerError + capPrefix + "…",
-		},
+		{"provider_401", "error", `,"errorMessage":` + strconvQuote(unauthorized), providerError + "HTTP 401; " + redacted},
+		{"redacts_lowercase_bearer", "error", `,"errorMessage":"401: authorization: bearer Toy987654321abcdef"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_basic", "error", `,"errorMessage":"401: Authorization: Basic dG95OnBhc3M="`, providerError + "HTTP 401; " + redacted},
+		{"redacts_api_key_header", "error", `,"errorMessage":"401: invalid x-api-key: toy-1234.secret-5678"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_api_key_field", "error", `,"errorMessage":"401: api_key=toy-1234.secret-5678 rejected"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_short_key", "error", `,"errorMessage":"401: invalid key \"abcdefghijklmnopqrst\" (short)"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_token", "error", `,"errorMessage":"401: token toy-1234.secret-5678 not found"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_long_bearer", "error", `,"errorMessage":"401: bearer abcdefghijklmnopqrstuvwxyz012345"`, providerError + "HTTP 401; " + redacted},
+		{"redacts_assignments", "error", `,"errorMessage":"503: token=toy-1234 key=secret-5678"`, providerError + "HTTP 503; " + redacted},
+		{"redacts_legacy_shapes", "aborted", `,"errorMessage":"rejected sk-livekeymaterial12345 gho_test12345678 ghp_test12345678 github_pat_test_12345678 xoxb-test-token12345 Bearer abcdefgh abcdefghijklmnop+/=_-0123456789ABCDE"`, providerError + redacted},
+		{"does_not_scan_for_status", "error", `,"errorMessage":"transport failure: reflected 401: arbitrary"`, providerError + redacted},
+		{"rejects_short_prefix", "error", `,"errorMessage":"4"`, providerError + redacted},
+		{"rejects_non_decimal_prefix", "error", `,"errorMessage":"4xy: arbitrary"`, providerError + redacted},
+		{"rejects_unsplit_prefix", "error", `,"errorMessage":"401:arbitrary"`, providerError + redacted},
+		{"rejects_non_error_status", "error", `,"errorMessage":"200: arbitrary"`, providerError + redacted},
+		{"bounded_single_line", "error", `,"errorMessage":` + strconvQuote("401: "+strings.Repeat("界\n\u0085\x00\u2003", 500)), providerError + "HTTP 401; " + redacted},
 		{"missing_error", "error", "", ""},
 		{"empty_error", "error", `,"errorMessage":""`, ""},
 		{"whitespace_error", "error", `,"errorMessage":" \n\t "`, ""},

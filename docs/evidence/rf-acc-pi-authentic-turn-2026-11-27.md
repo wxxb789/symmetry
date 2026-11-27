@@ -7,33 +7,28 @@ Goal `rf-acc-pi-authentic-turn` (contract under the GDD contracts root, ruled by
 (stage 1) and `docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md` (this stage). Stage-1
 root cause, reused here and not re-measured: the fixture-staged placeholder credential, the
 provider's HTTP 401, and pi's `stopReason:"error"` message
-(`docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md` §2-§4). Every `file:line` citation in this
-record binds the delivered revision whose digests §1 lists; the record's own bytes are uncommitted
-in the goal worktree, and the gates in §8 ran on a scratch-clone commit of them.
-The apply stage of 2026-11-27 (accepted simplify findings F1-F6, PD3, PD4) is part of that
-revision: §1's digests and every citation below were recomputed on the apply-stage bytes, and the
-§8 gates were re-run on a fresh scratch-clone commit of them.
+(`docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md` §2–§4). This record supersedes the
+apply-stage gate receipt for the files changed in review round 1. The source digests below bind
+the repaired bytes; the external handoff receipt binds the scratch commit including this record.
 
 ## 1. Delivered bytes
 
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `16bb278fb862291877f64a04ed550ca3425a87b6840c7532cc0b51f526d95b03` | `detect_placeholder_provider_credential` decides the mode from the exact bytes the fixture writes into B; the `shared` arm records `credential_gated_*` outcomes for the two detached-child legs and defers `pi_provider_action` to the arm tail; `run_go_test` gains the `production-credential-gated` mode; the declaration writer and the gated tail leg; the gated run exits 1 after the reader; `owner_witness_case_identity` holds one spelling per case of its config, request environment, test name and receipt flag, read by the case arm, the gated runner and the gated records |
-| `scripts/ci/assert-go-test-json.py` | `fc1c31f36d0d664b31ec03864b851551d27f03caf0f47932cd0a5226557865ff` | new `--credential-gated TEST`: for that one test `run=1 skip=0 pass=0` with its own fail events is accepted and printed as `credential-gated`, never as `verified`; every other test keeps the strict rule; the gated-failure attribution and the skip refusal share one target-matching helper |
-| `scripts/ci/export-linux-v2-redacted-evidence.py` | `6beed74bec359ece503864507c4de571627709e811f65003d507c8accf1ef9a2` | new manual-only `--credential-gated-declaration`: exact-schema validation, published as `credential-gated-legs.json`, `manifest.credential_gated`, and the three named witnesses exempted from the pi-durability binding; refused for a passed run or any other case set; the exact-legs triple comparison is the only outcome check (the dead per-leg loop is gone) |
-| `daemon/internal/harness/pi/rpc.go` | `c9aa9935efc1582cabc386ee06f31face776b20f1fba4d4cd3e9eb41ab646293` | `normalAssistantStop` appends one 200-byte, whitespace-normalized, credential-redacted provider `errorMessage`; classification and every fail-closed decision unchanged |
-| `daemon/internal/harness/pi/rpc_test.go` | `558fc3d1e17d7aba110bcd0859e4d991ee70d23cecc051192178ad1fd226fee2` | `TestValidatorReportsProviderStopError`: the exact 401 text, seven credential shapes redacted, UTF-8 cap, ten unchanged-shape rows, bare sentinel, normal stop |
-| `scripts/ci/test-linux-v2-evidence.py` | `1896253f839c12a1ff07231c981715ccb2e4ef148609a0071ccc00373e78a030` | exporter declaration rows, the constants pin against the fixture, and the `CredentialGatedFixtureTest` block harnesses (mode detection, declaration, `shared`-arm wiring, and the recorded gated `(case, test)` pairs; the harness reads the mode from `$1`) |
-| `scripts/ci/test-linux-v2-go-events.py` | `8d133db9e2225ffd9ab390120fc6af37b4813617ca2a69518ce2fa2032d8821d` | the gate's `--credential-gated` acceptance/rejection rows and the default-gate strictness row |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `066d4062239f02e47a142bd83cddae8790624bf7a7eeb3a5a4cc252941fa8` | The fixture owns placeholder detection and gated leg ordering, passes the exact Go package to the event gate, and writes the source digest into the declaration. |
+| `scripts/ci/assert-go-test-json.py` | `c249020da047104508dc9a43aee859979290097c1a6fa46a4664aba79e4f838e` | Gated tests require exact test and package failure terminals; the ordinary exact-pass gate is unchanged. |
+| `scripts/ci/export-linux-v2-redacted-evidence.py` | `e5274c43e2d36195971359e5fd89790711d2b1e05e6983fc0edd9a0038ecfa08` | The declaration binds the source tree. Published gated evidence must match the Pi provider failure identity; crash-leg documents are forbidden in gated mode. |
+| `daemon/internal/harness/pi/rpc.go` | `d785c8c34d32af0c265b6933262b320133bc006a39b0a05e8ae91507b488e58f` | The suffix carries only a fixed marker and an optional three-digit status. The sentinel and stop reason are unchanged. |
+| `daemon/internal/harness/pi/rpc_test.go` | `fe8cd7f9c1a3d35bd2dd40cf472e33084d3b4c9c6422167addb50556484ecae0` | Validator rows pin the measured 401, reflected credential probes, bounded output and unchanged stop shapes. |
+| `scripts/ci/test-linux-v2-evidence.py` | `11fcbed87b4b963568e51a50a908a42ac912fa174039d0d17c6362915742fb78` | The fixture tests cover both shared-arm modes, its real tail and gated runner logic. Exporter rows pin subject and failure identity. |
+| `scripts/ci/test-linux-v2-go-events.py` | `1ff5ece7ee62035029fe204294d72f5316f9242c7fdc5278c61a632d651c48ef` | Completed gated streams, incomplete and foreign events, and unchanged default strictness. |
 | `docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md`, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the accepted stage-2 plan; the stage-1 items move to the archive and the credentialed-proof residual stays open |
 
 The pre-apply digest for `scripts/ci/test-linux-v2-evidence.py`,
 `e32973b02a11ef0fba296c0d6da519de1a91b524101d1af1a9b7810def71d2e8`, bound pre-normalization bytes:
 the conductor converted 2665 CRLF pairs to LF before committing `829c93bd` (the file's `text=auto`
 attribute had let the `eol=lf` step pass it through), so it bound no committed revision; the row
-above binds the committed LF bytes as delivered. The other six script rows were byte-correct before
-the apply pass and are recomputed above where the pass touched them; the two daemon rows are
-byte-identical.
+above binds the round-1 LF bytes.
 
 ## 2. Slice 2 (1B1): the placeholder mode and the named outcomes
 
@@ -81,81 +76,80 @@ result row).
   `credential-gated TestProductionLinuxV2PiNativeProviderAction: run=1 pass=0 skip=0`, never
   `verified … pass=1`; the empty-column form does not exist.
 - Exported evidence: `credential-gated-legs.json` (the fixture declaration, mode 0600) with the
-  mode, the credential variable NAME, and the three `case`/`test`/`outcome` rows; the manifest's
+  mode, the credential variable name, the fixture's source-tree digest, and the three
+  `case`/`test`/`outcome` rows; the manifest's
   `credential_gated` object; and `missing_allowlisted_files` naming the two unrun crash witnesses
   and the three Control provider receipts that a placeholder run cannot produce. A gated run can
-  never export `status: "passed"` (refused at `export-linux-v2-redacted-evidence.py:1582-1586`),
-  and the case set never prints its passed line.
+  never export `status: "passed"`, and the case set never prints its success line. With the
+  declaration, a stale document from either unrun crash leg cannot be published. If present, the
+  provider-action document must identify Pi, the exact test and source tree, and report a boolean
+  false for `provider_action_succeeded`; a matching filename or a success-shaped document is
+  not enough. This is a failure artifact, not proof of the staged executable or a live turn.
 
 ### 2.4 The real-credential path is unchanged
 
-Every new branch sits behind `(( placeholder_provider_credential ))`, which is 0 for any value
-other than the ratified placeholder. In that case the arm runs the three legs at their original
-positions with the original go-test mode, no declaration is written, `export_native_evidence`
-passes no new argument, and the exporter's new blocks are inert (the new option is `None`, the new
-manifest key is only added for a non-empty case list, and the durability call passes the default
-empty exemption set). The A3 `main` dispatch therefore exercises the dispatch-base behaviour.
+With a non-placeholder credential the fixture runs all three legs in their original positions
+with the original go-test mode. It writes no declaration, so the exporter uses the original
+completeness and Pi witness binding. The projected daemon stop diagnostic in §3 applies to any
+Pi error stop, including a failure in the later credentialed `main` dispatch.
 
 ## 3. Slice 3 (2C1): the bounded, redacted provider stop
 
-`normalAssistantStop` (`rpc.go:860-869`) still rejects any `stopReason` other than `stop` with
-`ErrUnexpectedAssistantStop` wrapping and appends one field when the retained message carries a
-usable `errorMessage`:
+`normalAssistantStop` still rejects a non-normal stop with `ErrUnexpectedAssistantStop` and keeps
+the existing quoted stop reason. For a nonempty string `errorMessage`, the only copied bytes are
+three ASCII digits from an exact leading HTTP error prefix (400–599 followed by `: `). All other
+bytes are dropped, not scrubbed. The largest diagnostic is 28 ASCII bytes, 46 with the appended
+label. A usable message without that prefix gets only `[details redacted]`; malformed or empty
+fields leave the old text intact. The status is a hint from the provider, not an independently
+verified HTTP result. No response body, header, error class or arbitrary token survives; this
+deliberately loses the ability to diagnose a specific auth failure or transport cause from text.
 
-- cap: 200 bytes (`maxStopErrorMessageBytes`) after normalization, truncated on a UTF-8 boundary
-  with a trailing `…`; whitespace runs and control characters become single spaces, so the witness
-  line stays one line inside the fixture's 400-byte bound;
-- redaction before truncation: one alternation covers `Bearer <8+>`, a bare 32+ run of
-  `[A-Za-z0-9+/=_-]`, `sk-`, `gho_`, `ghp_`, `github_pat_` and `xox[baprs]-` shapes, each replaced
-  by `<redacted>`;
-- a message without a non-empty string `errorMessage` keeps today's exact text.
-
-Measured, from the delivered test row (`rpc_test.go` `TestValidatorReportsProviderStopError`):
+Exact expectation in `TestValidatorReportsProviderStopError/provider_401`:
 
 ```text
-pi rpc final assistant message did not stop normally: "error": provider error: 401: {"message":"Authentication Error, Invalid API key provided.","type":"token_not_found_in_db","param":"key","code":"401"}
+pi rpc final assistant message did not stop normally: "error": provider error: HTTP 401; [details redacted]
 ```
 
-That is exactly the row the stage-1 record measured from pi (`errorMessage` with the same 401 text).
-The conductor's amendment A1 removes the earlier "the Bind reports the pi stop text WITH the
-bounded error" acceptance: the Bind cannot carry a guest log line, so it reports the green-leg
-count, the credential-gated outcome verbatim from the log and the redacted export, whether the
-export landed and whether the reader's Result row ran, and the bounded provider error is proven by
-this red-first row in `rpc_test.go`, not by a guest log line.
+The new contribution is already bounded at its origin, before it goes to any consumer:
 
-Rows actually run: (1) RED on the pre-change bytes — `go test ./internal/harness/pi/ -run
-'^TestValidatorReportsProviderStopError$' -count=1` failed on provider_401, redacts_token_shapes and
-caps_at_utf8_boundary with the old text; (2) GREEN after the change — `go test
-./internal/harness/pi/ -count=1` → `ok`, exit 0; (3) redaction-removal mutant — deleting
-`message = stopErrorCredentials.ReplaceAllString(message, "<redacted>")` reddened exactly the
-`redacts_token_shapes` row (the token-shaped values appear verbatim in the failure diff) while every
-other row stayed green; the mutant was then restored and the package re-run green.
+- Pi carries the same suffix in local `TaskResult.Summary` and the error returned by `WaitTurn`,
+  without emitting a semantic `task_result` event on this path
+  (`daemon/internal/harness/pi/adapter.go`). The unchanged quoted reason is separately bounded
+  by the RPC record limit and Go's escaping; it is not part of the 46-byte limit.
+- The daemon copies the same bounded suffix into terminal payload `summary` and (on the wait
+  error path) `error`, including the persisted native-usage terminal-recovery payload and the
+  RunJournal's terminal-transition/outbox data. Replays use that payload; JSON escaping does not
+  introduce any provider bytes. See `daemon/internal/app/goal_delivery.go`,
+  `daemon/internal/app/native_run.go` and `daemon/internal/app/outbox.go`.
+- Control can durably store those same fields in run failure, task failure and transition history
+  (`control/lib/symmetry_control/orchestration/transitions.ex`). Each copy carries at most the
+  same 46-byte diagnostic. The witness CLI wraps the same bounded error in its stderr; the e2e
+  copies it into private Go events and the fixture can print its filtered tail, not upload the
+  raw captures as evidence. The wrapper prefixes are not provider text.
+
+Amendment A1 keeps this text out of the Bind acceptance report: the validator row supplies the
+proof, not a guest log line.
 
 ## 4. Measured rows (command → exit code)
 
 | Command (working directory) | Exit | Note |
 | --- | --- | --- |
-| `go test ./internal/harness/pi/ -run '^TestValidatorReportsProviderStopError$' -count=1` (pre-change `rpc.go`, `daemon/`) | 1 | the red-first row: 3 subtests fail with the old stop text |
-| `go test ./internal/harness/pi/ -count=1` (delivered, `daemon/`) | 0 | `ok … 2.953s` |
-| same, with the redaction line deleted (mutant, restored afterwards) | 1 | only `redacts_token_shapes` fails |
-| `gofmt -l internal/harness/pi` (`daemon/`) | 0 | empty |
-| `go vet ./...` (`daemon/`) | 0 | empty output |
-| `python3 scripts/ci/test-linux-v2-go-events.py` (root, Windows and WSL Noble) | 0 | 9 tests; the three new `--credential-gated` rows included |
-| `python3 scripts/ci/test-linux-v2-evidence.py` (WSL Noble) | 0 | 64 tests; the three fixture-harness rows and four exporter rows included |
-| `python3 scripts/ci/test-linux-v2-{source-subject,host-prerequisite-probe,owner-request-keys}.py` (WSL Noble) | 0 each | 7 / 17 / 10 tests |
-| `sudo python3 scripts/ci/test-linux-v2-control-receipt.py` (WSL Noble) | 0 | 9 tests |
-| `go test ./... -count=1` (`daemon/`, Windows) | 0 | every package `ok` (139.42 s wall) |
-| `go test ./... -count=1` (`daemon/`, WSL Noble) | 1 | only `internal/platform` fails, on 13 pre-existing root-only `wire harness requires an unprivileged A process: uid=0 …` refusals; `internal/harness/pi` (`ok`, 1.740 s), `internal/state`, `internal/workspace` and `native/linux-gate/protocol` are green |
-| `go list -deps ./internal/platform` (WSL) | 0 | `harness/pi` occurrences: 0 — the failing package's build closure is unchanged by this increment |
-| `go vet ./...` (`daemon/`, WSL Noble) | 0 | Linux compile check of the changed package and its consumers |
+| `go test ./internal/harness/pi/... -count=1` (`daemon/`) | 0 | Windows and WSL Noble |
+| `go test ./internal/app -run '^(TestNativeTerminalPayload\|Test.*OutputSettlement)' -count=1` (`daemon/`) | 0 | Windows, targeted terminal-payload consumers |
+| `gofmt` + byte comparison (two changed Go files) | 0 | no diff |
+| `go vet ./internal/harness/pi/... ./internal/app`; `go vet ./internal/harness/pi/...` | 0 each | Windows and Noble respectively |
+| `python3 scripts/ci/test-linux-v2-go-events.py` | 0 | 10 tests, WSL Noble |
+| `python3 scripts/ci/test-linux-v2-evidence.py` | 0 | 67 tests, WSL Noble |
+| `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | WSL Noble |
 
 ## 5. Red-capable rows and mutants (inputs actually run)
 
 | Row | Input actually run | Result |
 | --- | --- | --- |
-| 401 stop text | pre-change `rpc.go` + the new row | red: old text lacks `provider error:` |
-| credential redaction | mutant removing the `ReplaceAllString` line | red: `sk-`/`gho_`/`ghp_`/`github_pat_`/`xoxb-`/`Bearer`/32+-run values appear verbatim |
-| gate gated mode | event streams: expected failure with its package fail; subtest failure; pass; missing run; missing fail; skip; foreign named fail | 0 / 0 / 1 / 1 / 1 / 1 / 1 — and only the accepted pair prints the `credential-gated` line |
+| 401 diagnostic and credential probes (R1/R2) | Windows `go test -overlay … ./internal/harness/pi -run '^TestValidatorReportsProviderStopError$' -count=1`: pre-change `rpc.go` from `637f810a`; separately, final `rpc.go` with the projection call replaced by `message` | Each overlay exits 1: old output lacks the suffix; bypass output includes free text, including the case-variant Bearer, Basic, header, `api_key=`, short quoted value, `token` and long Bearer rows, plus `token=`/`key=` and oversized multiline detail. The unoverlaid row exits 0. |
+| Go event identity (R3) | Noble shadow: remove the required `--package` argument guard, foreign-package rejection, contradictory package terminal rejection and exact fail counts | Test script 1 → 0 on restored source. Red rows: missing package option, child-only fail, missing/duplicate package fail, contradictory package pass, duplicate parent fail, foreign package terminal/child fail/run and unattributed parent fail. |
+| Fixture flow (R4/R5) | Noble shadow: insert a stray named `record_credential_gated_leg` in the real arm, delete the tail's writer call and remove gated status tolerance | Exit 1: mode 0 reports a nonempty record list, mode 1 omits `write-declaration`, and the gated runner returns 1 (`Required native Go witness exited with status 1`) instead of 0. In a separate overlay deleting the tail `exit 1` and the real runner's record call, the mode-1 test sees status 0 and the runner test loses its named result (exit 1). Restored tests exit 0. |
+| Export identity (R7) | Noble shadow: bypass the native-Pi requirement and all gated witness identity checks; in a separate shadow run leave everything intact except the declaration/tree equality check | Each test invocation exits 1. Without the guards the exporter returns 0 instead of 1 for the missing pin, wrong harness/case/subject, true or numeric-zero success flag, either skipped crash document, and (separately) the mismatched declaration digest. Restored tests exit 0. |
 | gate default strictness | the same failing stream without `--credential-gated` | exit 1, no `credential-gated` text |
 | exporter declaration | the exact declaration; extra field; version 2; wrong mode; wrong variable; missing leg; wrong outcome; wrong test; leg extra field; duplicate leg; a passed run; `--case-set stale_leaf`; missing file; mode-0644 file | exit 0 for the exact document (manifest `credential_gated` + published declaration), exit 1 with the named refusal for every other input |
 | exporter exemption | the same witness root WITHOUT the declaration | exit 1, `pi durability witness is unavailable: pi-daemon-sigkill-helper-survives.json` — the exemption is declaration-driven, not presence-driven; mutant M3 (the `credential_gated_targets` argument removed from the pi-durability call, scratch clone only) reddens `ExporterTest.test_credential_gated_declaration_publishes_named_unproven_legs` with that same line |
@@ -165,60 +159,55 @@ other row stayed green; the mutant was then restored and the package re-run gree
 
 ## 6. Which userland each property needs (standing rule)
 
-The new rows are Go unit rows, Python file/logic rows and bash-logic rows. No new assertion's
-outcome depends on the runner's coreutils, POSIX ACL handling or the runner's POSIX `test`
-semantics: the
-permission-shaped check that is new is the exporter reading the fixture declaration as a bounded
-regular mode-0600 file, exercised by the mode-0644 refusal row, which is plain `stat`/`open`
-semantics on any Linux userland (run on WSL Ubuntu-24.04, `VERSION_CODENAME=noble`, and by the
-existing CI job on the runner image). No `sudo`-stubbed ACL row was added, so this increment needs
-no Resolute-userland RED/GREEN demonstration beyond the standing rule's Go/shell-logic carve-out in
-the owner rulings of 2026-11-27. The Windows-local evidence suite still fails wholesale on
-`os.getuid`-dependent rows exactly as the stage-1 record documents for the base bytes; the suite is
-run in WSL for every gate here.
+The Go projection logic ran on Windows and Ubuntu 24.04 WSL (`VERSION_CODENAME=noble`); the Go
+red-first overlays ran on Windows. The shell ordering/status and Python JSON logic rows ran on
+that Noble userland. The exporter suite needs Linux UID/mode support for its existing private
+file checks; none of the new digests, event identities or shell branches depends on the runner's
+ACL handling, `/usr/bin/test`, or apt. No Resolute or hosted acceptance run is claimed here.
 
 ## 7. Does the conductor's Bind execute it?
 
-The Bind's `shared` run on the PR head executes: the mode detection, the two gated records, the
-deferred gated `pi_provider_action` run and its gate row, the declaration write, the gated exit 1,
-and the exporter's declaration path with `credential-gated-legs.json` in the uploaded artifact.
-The Bind does NOT execute: the declaration refusals (they need a hostile/mismatched declaration),
-the mode-match negative rows or the arm harness rows — those live only in
-`Check Linux v2 fixture contracts` (`daemon` job, `python3 ../scripts/ci/test-linux-v2-{go-events,evidence}.py`).
+The reviewed head was `19ec0b6ce5e46d11a1afa229fb1fa834510d2746` (baseline for this fix);
+the superseded two document-gate counts came from `77fd2886`. The round-1 source digests are in
+§1. The conductor has not yet run the Bind on the final PR head.
+
+The `shared` Bind exercises the placeholder arm, named test and package failure terminals,
+status tolerance, reader-before-declaration ordering, nonzero exit, and the declaration's source
+binding. If the provider witness file exists it also exercises the failure identity check; the
+two absent crash files exercise its normal no-document path. The validator table is not run by
+the Bind; it lives in the Go tests in the `daemon` job. No Bind row injects missing/foreign test
+events, a synthetic pass, a stray real-arm gated record, a false/stale declaration, or a stale or
+success-shaped witness. These assertions and the extracted arm/runner checks run in **Check Linux
+v2 fixture contracts** (`daemon` job, the two Python suites in §4). The real arm is for the
+owner-approved credentialed dispatch, not the placeholder Bind.
+
+A4: F6's pair pin still stubs `run_credential_gated_pi_provider_leg` in the extracted arm; it
+does not pin the real runner's call site. The separate runner test extracts that function and
+`run_go_test` and uses the real event gate, but stubs `sudo`/guest execution, request preparation
+and cleanup. Neither harness exercises a live guest, relay, receipt or Control readback.
 
 ## 8. Gates
 
 | Command (working directory) | Exit | Scope |
 | --- | --- | --- |
-| `go test ./... -count=1` (`daemon/`, Windows, delivered bytes) | 0 | full daemon suite, 20 packages `ok` |
-| `go test ./... -count=1` (`daemon/`, WSL Noble, delivered bytes) | 1 | only `internal/platform`'s pre-existing root-only refusals (13 occurrences, the same class the stage-1 record measured at the base bytes); every other package `ok`, including `internal/harness/pi` |
-| `go vet ./...` (`daemon/`, WSL Noble) | 0 | Linux compile check |
-| the six `scripts/ci/test-linux-v2-*.py` suites (§4) | 0 each | fixture contracts and the new rows, re-run on the apply-stage bytes: evidence 64, go-events 9, source-subject 7, host-prerequisite-probe 17, owner-request-keys 10, control-receipt 9 (`sudo`), all WSL Noble |
-| `python scripts/ci/jscpd-changed.py --base 0a2f15efb1fd3928e88be27666e7ec9f738df0a2 --head HEAD` (apply-stage scratch-clone commit `7dc118a84af24f31e12b8671b793efe38d682310`) | 0 | 16 changed file(s), 1798 scanned source(s), 1245 clone(s), 0 tolerated among the added lines, none new; it notices that `daemon/e2e/production_linux_v2_owner_cli_test.go` and `docs/archive/CLOSED-TODO.md` carry added lines outside the configured scope, so clones inside them are not checked |
-| `python …/comment-cap.py <scratch clone>` (committed diff of the scratch clone) | 0 | zero doc comments; the one added comment is a 1-line lookup invariant, under the two-line hazard cap |
-| `python scripts/ci/check-record-cleanliness.py --base 0a2f15ef… --head HEAD` (scratch clone) | 0 | 2 changed record(s) pass the root-only check (this record and the merged owner-loss record) |
-| `python scripts/ci/check-citation-existence.py --base 0a2f15ef… --head HEAD` (scratch clone) | 0 | 1 changed document passes the path and symbol check (729 path citations, with three pre-existing `CLOSED-TODO.md` ignore-rule notes) |
+| `python scripts/ci/check-record-cleanliness.py` (dispatch base → reviewed head in §7) | 0 | 3 changed records, including the newly merged sibling record |
+| `python scripts/ci/check-citation-existence.py` (same range) | 0 | 1 changed audited document, 736 path citations, 3 archive ignore-rule notes |
 
-Apply stage (2026-11-27): F1-F6 and PD3/PD4 land on the bytes §1 lists; the gate rows above were
-re-run on the scratch-clone commit `7dc118a84af24f31e12b8671b793efe38d682310` of them and
-reproduced on the final revision, except the three daemon rows, whose subject bytes (`rpc.go`,
-`rpc_test.go`) the pass did not touch.
-Supplementary consumers of the touched files: `test-ci-structure-extraction.py` 72 tests OK
-(3 skipped) and `test-go-test-json-gate.py` 28 OK on Windows; the latter's
-`CaptureTests.test_missing_command_executable_fails_closed` fails in WSL (`1 != 127`) on the
-pre-apply bytes as well — a WSL artifact of that runner's missing-executable path, not this
-increment.
+The apply-stage counts of 2 and 729 are superseded; they were recorded before the origin/main
+merge and were not reproduced on the reviewed head. The follow-on scratch commit of the round-1
+bytes is the subject of the final document and duplication gate receipt in the handoff, not those
+older counts. No full Go suite is claimed for this round.
 
 ## 9. Contract-clause matrix
 
 | Clause | Green command (exit) | Evidence row | Red-first / baseline |
 | --- | --- | --- | --- |
-| 1B1: the fixture recognises the placeholder and records a NAMED outcome for the pi provider leg | `python3 scripts/ci/test-linux-v2-evidence.py CredentialGatedFixtureTest` (0) | §5 mode detection + declaration + arm wiring; §2.1-§2.3 | the mode-detection row reddens if the comparison is swapped or removed; the arm row reddens if a gated branch is deleted |
+| 1B1: the fixture recognises the placeholder and records a NAMED outcome for the pi provider leg | `CredentialGatedFixtureTest` (0) | §2.1–§2.3, §5 | the real-arm stray record mutant fails §5 |
 | 1B1: the case set CONTINUES, the export and `stop_readback_reader` become measurable | `python3 scripts/ci/test-linux-v2-evidence.py ExporterTest.test_credential_gated_declaration_publishes_named_unproven_legs` (0) | §2.2-§2.3, §5 exporter rows | without the declaration the same root refuses, naming `pi-daemon-sigkill-helper-survives.json` (the dispatch-base behaviour) |
 | 1B1: never greener — the gate cannot count it as a pass; a reviewer can tell | `python3 scripts/ci/test-linux-v2-go-events.py` (0); exporter refusal rows (0) | §2.3, §5 gate + refusal rows | gated+pass and gated+skip both exit 1; a passed run with a declaration is refused |
 | 1B1: with a real credential BYTE-IDENTICAL behaviour | `python3 scripts/ci/test-linux-v2-evidence.py` (0); the arm harness mode 0 | §2.4, §5 arm row | the arm harness runs the base order with no gated call for any non-placeholder value |
-| 2C1: bounded, redacted provider error appended; classification unchanged | `go test ./internal/harness/pi/ -count=1` (0) | §3 exact text; §4-§5 rows | RED on the pre-change bytes; the redaction-removal mutant reddens `redacts_token_shapes`; every row asserts `errors.Is(…, ErrUnexpectedAssistantStop)` |
-| Invariants: credentials B-only and never echoed | — (no new secret path) | the declaration names the variable, never a value; the exporter's credential scan runs on it like on every source | the mode detection compares in-fixture; no new log line prints the key |
+| 2C1: bounded provider diagnostic; classification unchanged | Go rows in §4 (0) | §3 and §5 | the raw-projection bypass and old-RPC overlays fail the named validator rows |
+| Invariants: credentials B-only and never echoed | §4 Go and exporter tests (0) | the declaration names the variable only; the new failure-text path carries a bounded status hint and fixed marker, never the body or headers | §3 lists the durable sinks and the intentional diagnostic loss |
 | Bind acceptance (amendment A1): the green legs run, the credential-gated outcome is read verbatim from the log and the redacted export, the export lands, the reader's Result row runs, and the bounded provider error is proven by its red-first unit row | conductor's `shared` Bind (owner gate) | `rpc_test.go` `TestValidatorReportsProviderStopError`; §2.3, §5 | this increment cannot run the Bind; the fixture-side rows above are the pre-Bind proof; the Bind is the acceptance |
 
 ## 10. Residuals and known limits
@@ -227,19 +216,18 @@ increment.
   Control provider receipts; the declaration and the manifest name them unproven. The owner-approved
   A3 `main` dispatch is their proof path (ruling 3A3; runbook
   `refactor/pi-authentic-turn-dispatch-runbook.md`), grouped per ruling 6G1.
-- Under the placeholder, a genuine defect in the three provider legs would also be recorded as
-  `credential_gated_*` rather than aborting the set; the leg still runs (for
-  `pi_provider_action`), its stop text stays in the retained `$RUNNER_TEMP` event file and the
-  guest's private-rootfs `owner-witness.stderr` (neither is uploaded; amendment A1 makes the
-  `rpc_test.go` row the bounded error's proof), and nothing is claimed as passed, but the
-  distinction between "unproven for lack of a credential" and "broken" needs the credentialed run.
+- Test and package failure do not prove a typed credential refusal; another error in the same
+  test can satisfy the gate, including receipt readback failure after a successful provider
+  turn. If that path recorded provider success, the exporter refuses the conflicting document.
+  The source binding does not identify a particular attempt on the same tree, and a gated
+  provider document may be absent. No export can mark those legs passed; an authentic turn
+  and receipt still require the credentialed run.
 - The `shared` set's non-provider legs (stage-replay, ack-loss, response-loss, receipt-persist,
   pid-reuse, legacy replay, OpenCode health) have no green `shared` baseline in the merged history;
   the gated run is their first complete `shared` execution, and its result is the Bind's to record.
 
 ## 11. Retained artifacts
 
-None in the repository beyond the delivered files above. The probe and mutant outputs quoted in §3
-and §5 are the commands' own output; the scratch clone used by §8 (jscpd, comment cap, record and
-citation gates) and the fixture-harness temp directories are outside the repository, and the
-apply-stage clone is kept outside the repository for re-checks after the gates.
+No raw event stream or credential is retained in the repository. §5 names the source overlays;
+the final gate receipt records the scratch revision without putting a self-referential commit
+hash in this file.

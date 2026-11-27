@@ -9,9 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/wxxb789/symmetry/daemon/internal/harness/linejson"
@@ -19,11 +17,6 @@ import (
 )
 
 const defaultMaxRecordBytes = 1 << 20
-const maxStopErrorMessageBytes = 200
-
-// Match full credential-shaped values before truncation can expose a partial token.
-var stopErrorCredentials = regexp.MustCompile(`Bearer[ ]+[^ ]{8,}|[A-Za-z0-9+/=_-]{32,}|` +
-	`sk-[A-Za-z0-9_-]{8,}|gho_[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,}`)
 
 var (
 	ErrRecordTooLarge          = errors.New("pi rpc record exceeds limit")
@@ -862,36 +855,22 @@ func normalAssistantStop(raw json.RawMessage) error {
 	if !ok || !nonEmptyString(stopReason, &reason) || reason != "stop" {
 		var message string
 		if nonEmptyString(object["errorMessage"], &message) {
-			return fmt.Errorf("%w: %q: provider error: %s", ErrUnexpectedAssistantStop, reason, sanitizeStopErrorMessage(message))
+			return fmt.Errorf("%w: %q: provider error: %s", ErrUnexpectedAssistantStop, reason, projectStopErrorMessage(message))
 		}
 		return fmt.Errorf("%w: %q", ErrUnexpectedAssistantStop, reason)
 	}
 	return nil
 }
 
-func sanitizeStopErrorMessage(message string) string {
-	space := true
-	message = strings.Map(func(r rune) rune {
-		if unicode.IsSpace(r) || unicode.IsControl(r) {
-			if space {
-				return -1
-			}
-			space = true
-			return ' '
-		}
-		space = false
-		return r
-	}, message)
-	message = strings.TrimSuffix(message, " ")
-	message = stopErrorCredentials.ReplaceAllString(message, "<redacted>")
-	if len(message) <= maxStopErrorMessageBytes {
-		return message
+func projectStopErrorMessage(message string) string {
+	const marker = "[details redacted]"
+	// This summary can be persisted by Control; no provider body or header is safe to copy.
+	if len(message) >= 5 && message[0] >= '4' && message[0] <= '5' &&
+		message[1] >= '0' && message[1] <= '9' && message[2] >= '0' && message[2] <= '9' &&
+		message[3:5] == ": " {
+		return "HTTP " + message[:3] + "; " + marker
 	}
-	end := maxStopErrorMessageBytes
-	for !utf8.RuneStart(message[end]) {
-		end--
-	}
-	return message[:end] + "…"
+	return marker
 }
 
 func (validator *Validator) fail(err error) error {

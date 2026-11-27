@@ -2087,7 +2087,7 @@ run_go_test() {
   local -a event_gate=(python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file")
   local gate_message='Required native Go witness did not produce exact run/pass/skip=0 events'
   if [[ "$test_mode" == production-credential-gated ]]; then
-    event_gate+=(--credential-gated "${expected_tests[0]}")
+    event_gate+=(--package github.com/wxxb789/symmetry/daemon/e2e --credential-gated "${expected_tests[0]}")
     gate_message='Required credential-gated native Go witness did not produce its exact placeholder-credential event shape'
   fi
   if ! "${event_gate[@]}" "${expected_tests[@]}"; then
@@ -2562,14 +2562,14 @@ record_credential_gated_leg() {
 
 write_credential_gated_declaration() {
   local declaration="$fixture_root/credential-gated-legs.json"
-  python3 - "$declaration" "${credential_gated_cases[@]}" -- "${credential_gated_tests[@]}" <<'PY'
+  python3 - "$declaration" "$source_tree_digest" "${credential_gated_cases[@]}" -- "${credential_gated_tests[@]}" <<'PY'
 import json
 import pathlib
 import sys
 
 declaration = pathlib.Path(sys.argv[1])
 separator = sys.argv.index("--")
-cases = sys.argv[2:separator]
+cases = sys.argv[3:separator]
 tests = sys.argv[separator + 1:]
 legs = [
     {"case": case, "test": test, "outcome": "credential_gated_" + case}
@@ -2581,6 +2581,7 @@ declaration.write_text(
             "version": 1,
             "mode": "placeholder_provider_credential",
             "credential_environment_variable": "SYMMETRY_OPENAI_API_KEY",
+            "source_tree_digest": sys.argv[2],
             "legs": legs,
         },
         separators=(",", ":"),
