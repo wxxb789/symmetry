@@ -2372,12 +2372,26 @@ The goal's stage 1 and stage 2 are delivered (plan
       for it (record §5, §7, §10). The authentic pi proof stays with
       `## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn` above.
 
-- [ ] Deferred code tidiness (2026-11-28, round-3 records round; record §4, §11): the no-target
-      proof selector `linuxV2StageReplayNoTargetAbort` deep-clones the reservation proof first and
-      then, when the nested clone proof is present and preferred, overwrites that pointer and
-      discards the first copy (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`). No
-      result or precedence changes: the selected value is identical and the discarded copy
-      participates in no assertion. Deferred because a code change would void the round-3 binding
-      run for the delivered Go blob (`96306f49…`); the fix is to return the preferred clone proof
-      first, else the reservation proof, else nil, cloning only the selected proof. Owner: the next
-      slice that already touches this file.
+## rf-acc-shared-helper-bound-journal: the fresh-run guard on the retained tombstone (2026-11-28)
+
+The goal's stage 1 and stage 2 are delivered (plan
+`docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md`, record
+`docs/evidence/rf-acc-shared-helper-bound-journal-2026-11-28.md`). The closed part moved to
+`docs/archive/CLOSED-TODO.md`.
+
+- [ ] The conductor's `shared` Bind on the PR head (the contract's acceptance): report the case-set
+      exit, the `verified …` sequence and its first disagreement, the `helper_bound` leg's outcome
+      (expected: no `:224` guard stop, because the guard now retires the retained
+      `reservation_durable` tombstone), the `reservation_durable` row's continued green, the
+      credential-gated pi outcome verbatim in the log, its declaration member and the export status,
+      the reader Result, and the first unexpected failure if the arm stops later in the replay
+      matrix. The leg is CI-only, so no local run substitutes for it (record §2, §7, §10). The
+      authentic pi proof stays with `## rf-acc-pi-authentic-turn: the credentialed proof of the
+      authentic turn` above.
+
+- [ ] Deferred retirement arms (2026-11-28, record §4, §10): the guard still refuses the two daemon
+      arms no case-set leg leaves in the shared StateDir — a bare `LinuxCloneAbortProof` row and a
+      legacy v1 `ContainmentAuthority` + StopReceipt row
+      (`daemon/internal/state/linux_cgroup_journal.go:457-462`). Either stops a leg with the
+      existing ownership message instead of passing silently. If a future leg reaches one, mirror
+      that arm with its own red-capable row, as this slice did for the abort and pre-gate arms.

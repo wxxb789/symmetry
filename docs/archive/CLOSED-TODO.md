@@ -5855,3 +5855,41 @@ Stage 1 and stage 2 of goal `rf-acc-shared-reservation-durable` are delivered: p
       `TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape` drives that production tombstone
       (red on the reverted clause, green on the fix; record §5). No production file changed and the
       pi leg's credential-gated recording (1B1) is untouched.
+
+## rf-acc-shared-reservation-durable: the shared Bind on the PR head (2026-11-27)
+
+- [x] Deferred code tidiness (2026-11-28, round-3 records round; the item's own record §4 and §11;
+      closed 2026-11-28 by branch `refactor/rf-acc-shared-helper-bound-journal`, record §4.1): the
+      no-target proof selector `linuxV2StageReplayNoTargetAbort`
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`) deep-cloned the reservation
+      proof first and then overwrote that pointer when the nested clone proof was preferred,
+      discarding the first copy. It now returns the preferred clone proof first, else the
+      reservation proof, else nil, cloning only the selected proof. The precedence and every result
+      are unchanged, and the reordered-selector mutant in the superseding goal's record §5 reddens
+      the clone-vs-reservation mismatch row alone. The slice that took it is the next one that
+      touched this file, as the item's owner clause required.
+
+## rf-acc-shared-helper-bound-journal: the fresh-run guard on the retained tombstone (2026-11-28)
+
+Stage 1 and stage 2 of goal `rf-acc-shared-helper-bound-journal` are delivered: plan
+`docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md`, record
+`docs/evidence/rf-acc-shared-helper-bound-journal-2026-11-28.md`, branch
+`refactor/rf-acc-shared-helper-bound-journal` on dispatch base `3d377582`. What stays open is the
+conductor's `shared` Bind on the PR head and the two deferred retirement arms
+([`## rf-acc-shared-helper-bound-journal: the fresh-run guard on the retained tombstone`](../TODO.md#rf-acc-shared-helper-bound-journal-the-fresh-run-guard-on-the-retained-tombstone-2026-11-28)).
+
+- [x] Rule the `helper_bound` guard wall (contract stage 1 and 2). The wall is long-standing, not
+      new: `git show 41e64851` (#9, 2026-10-13) already carries both the witness guard and the
+      daemon arm it contradicts — `linuxV2ForeignJournalIsSafelyRetired`'s
+      `ContainmentCgroup.AbortProof` arm (`daemon/internal/state/linux_cgroup_journal.go:453-456`) —
+      and `git log -S` shows neither side changed since; the wall became observable only because
+      #309 made the `reservation_durable` leg pass and retain its pre-effect tombstone. The wrong
+      layer is the witness's expectation
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606` at the dispatch base): it
+      demanded a v2 StopReceipt-backed leaf release for a pre-effect abort that can never carry one.
+      The guard now dispatches on the daemon's own retirement shapes. The superseding goal's
+      `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` drives the production tombstone producers and
+      asserts the daemon's own `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journals,
+      and its `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` pins eight refusal rows, each
+      red alone under its own mutant (goal record §5). No production file, fixture, pipeline or
+      workflow changed, and the pi leg's credential-gated recording (1B1) is untouched.

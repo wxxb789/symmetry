@@ -1493,16 +1493,16 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, stage strin
 }
 
 func linuxV2StageReplayNoTargetAbort(journal state.RunJournal) *authority.LinuxCgroupReservationAbortProof {
-	var abort *authority.LinuxCgroupReservationAbortProof
-	if journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof != nil {
-		copy := journal.ContainmentCgroup.AbortProof.Clone()
-		abort = &copy
-	}
+	// The nested clone proof is the preferred selector, so only the selected proof is cloned.
 	if cloneAbort := journal.LinuxCloneAbortProof; cloneAbort != nil && cloneAbort.CgroupAbortProof != nil {
 		copy := cloneAbort.CgroupAbortProof.Clone()
-		abort = &copy
+		return &copy
 	}
-	return abort
+	if journal.ContainmentCgroup != nil && journal.ContainmentCgroup.AbortProof != nil {
+		copy := journal.ContainmentCgroup.AbortProof.Clone()
+		return &copy
+	}
+	return nil
 }
 
 func linuxV2ValidateHeldStageAbortDisposition(stage string, abort *authority.LinuxCgroupReservationAbortProof) error {
@@ -1541,19 +1541,34 @@ func linuxV2ValidatePreEffectAbortTombstone(abort authority.LinuxCgroupReservati
 	return nil
 }
 
-func linuxV2PreMkdirAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {
+func linuxV2PriorTombstoneStore(t *testing.T, directory string) *state.Store {
 	t.Helper()
-	store, err := state.New(t.TempDir())
+	store, err := state.New(directory)
 	if err != nil {
-		t.Fatalf("open a state store for the pre-mkdir tombstone: %v", err)
+		t.Fatalf("open a state store for the prior-journal fixture: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := store.Close(); err != nil {
-			t.Errorf("close the pre-mkdir tombstone store: %v", err)
+			t.Errorf("close the prior-journal fixture store: %v", err)
 		}
 	})
+	return store
+}
+
+type linuxV2PriorJournalFixtures struct {
+	store     *state.Store
+	directory string
+}
+
+func linuxV2NewPriorJournalFixtures(t *testing.T) linuxV2PriorJournalFixtures {
+	t.Helper()
+	directory := t.TempDir()
+	return linuxV2PriorJournalFixtures{store: linuxV2PriorTombstoneStore(t, directory), directory: directory}
+}
+
+func linuxV2PriorTombstoneReservation() state.LinuxCgroupReservation {
 	mirror := linuxV2JournalOwner(12)
-	reservation := state.LinuxCgroupReservation{
+	return state.LinuxCgroupReservation{
 		Version: state.LinuxCgroupReservationVersion, LaunchToken: strings.Repeat("3", authority.TokenBytes*2),
 		Secret: strings.Repeat("4", authority.SecretBytes*2), PipeToken: strings.Repeat("5", authority.TokenBytes*2),
 		JobID: strings.Repeat("6", authority.TokenBytes*2), OwnerUID: 1000,
@@ -1565,27 +1580,147 @@ func linuxV2PreMkdirAbortTombstone(t *testing.T) authority.LinuxCgroupReservatio
 		LeafName: strings.Repeat("7", authority.TokenBytes*2),
 		Anchor:   linuxV2JournalOwner(11), Mirror: &mirror,
 	}
-	journal := state.RunJournal{
-		RunID: "stage-replay-pre-mkdir-tombstone", Generation: 1, RuntimeKey: "local", RuntimeID: "runtime-1",
+}
+
+func linuxV2PriorTombstoneJournal(runID string) state.RunJournal {
+	return state.RunJournal{
+		RunID: runID, Generation: 1, RuntimeKey: "local", RuntimeID: "runtime-1",
 		ClaimedRuntimeEpoch: 1, ClaimID: "claim-1", LeaseToken: "lease-1", LeaseExpiresAt: time.Now().UTC().Add(time.Hour),
 		LocalState: "running", WorkspaceBindingKey: "binding-1",
 		Work: protocol.Work{Goal: "implement", AgentProfile: "pi", Workspace: "isolated", Input: json.RawMessage(`{}`)},
 	}
-	if err := store.SaveJournal(journal); err != nil {
+}
+
+func linuxV2NeverCreatedTombstoneJournal(t *testing.T, fixtures linuxV2PriorJournalFixtures) state.RunJournal {
+	t.Helper()
+	journal := linuxV2PriorTombstoneJournal("stage-replay-pre-mkdir-tombstone")
+	if err := fixtures.store.SaveJournal(journal); err != nil {
 		t.Fatalf("save the pre-mkdir stage-replay journal: %v", err)
 	}
-	key := journal.Key()
-	if _, err := store.ReserveLinuxCgroup(key, journal.Fence(), reservation, nil); err != nil {
+	reservation := linuxV2PriorTombstoneReservation()
+	if _, err := fixtures.store.ReserveLinuxCgroup(journal.Key(), journal.Fence(), reservation, nil); err != nil {
 		t.Fatalf("reserve the never-created cgroup: %v", err)
 	}
-	aborted, err := store.AbortNeverCreatedLinuxCgroupReservation(key, journal.Fence(), reservation)
+	aborted, err := fixtures.store.AbortNeverCreatedLinuxCgroupReservation(journal.Key(), journal.Fence(), reservation)
 	if err != nil {
 		t.Fatalf("abort the never-created cgroup reservation: %v", err)
 	}
 	if aborted.ContainmentCgroup == nil || aborted.ContainmentCgroup.AbortProof == nil {
 		t.Fatal("the never-created abort persisted no pre-mkdir tombstone")
 	}
-	return aborted.ContainmentCgroup.AbortProof.Clone()
+	return aborted
+}
+
+func linuxV2RemovedEmptyTombstoneJournal(t *testing.T, fixtures linuxV2PriorJournalFixtures) state.RunJournal {
+	t.Helper()
+	journal := linuxV2PriorTombstoneJournal("stage-replay-removed-empty-tombstone")
+	if err := fixtures.store.SaveJournal(journal); err != nil {
+		t.Fatalf("save the removed-empty stage-replay journal: %v", err)
+	}
+	reservation := linuxV2PriorTombstoneReservation()
+	if _, err := fixtures.store.ReserveLinuxCgroup(journal.Key(), journal.Fence(), reservation, nil); err != nil {
+		t.Fatalf("reserve the removed-empty cgroup: %v", err)
+	}
+	started, err := fixtures.store.MarkLinuxCgroupCreateStarted(journal.Key(), journal.Fence(), reservation, nil)
+	if err != nil {
+		t.Fatalf("commit the removed-empty creation intent: %v", err)
+	}
+	reservation = started.ContainmentCgroup.Clone()
+	leaf := authority.LinuxCgroupIdentity{
+		Version: authority.LinuxCgroupIdentityVersion, Parent: reservation.Parent, LeafName: reservation.LeafName,
+		LeafDevice: 12, LeafInode: 4101,
+	}
+	bound, err := fixtures.store.BindLinuxCgroupLeaf(journal.Key(), reservation, leaf)
+	if err != nil {
+		t.Fatalf("bind the removed-empty leaf: %v", err)
+	}
+	reservation = bound.ContainmentCgroup.Clone()
+	proof := authority.LinuxCgroupReservationAbortProof{
+		Version: authority.LinuxCgroupAbortProofVersion, LaunchToken: reservation.LaunchToken,
+		Parent: reservation.Parent, LeafName: reservation.LeafName, CreateStarted: true,
+		LeafDisposition: authority.LinuxCgroupAbortLeafRemovedEmpty, LeafIdentity: &leaf,
+		OwnerUID: reservation.OwnerUID, Anchor: reservation.Anchor, Mirror: *reservation.Mirror,
+		Witness: reservation.Anchor, CreatorFenced: true, NoProducerCanAct: true, ParentUnchanged: true,
+		LeafEmpty: true, LeafAbsent: true, RmdirSucceeded: true,
+	}
+	aborted, err := fixtures.store.AbortLinuxCgroupReservation(journal.Key(), reservation, proof)
+	if err != nil {
+		t.Fatalf("abort the removed-empty cgroup reservation: %v", err)
+	}
+	if aborted.ContainmentCgroup == nil || aborted.ContainmentCgroup.AbortProof == nil {
+		t.Fatal("the removed-empty abort persisted no leaf tombstone")
+	}
+	return aborted
+}
+
+func linuxV2WritePriorJournalFile(t *testing.T, directory string, journal state.RunJournal) {
+	t.Helper()
+	runs := filepath.Join(directory, "runs")
+	if err := os.MkdirAll(runs, 0o700); err != nil {
+		t.Fatalf("create the prior-journal runs directory: %v", err)
+	}
+	key := journal.Key()
+	name := "journal-" + linuxWitnessHashBytes([]byte(key.RunID+"\x00"+strconv.FormatInt(key.Generation, 10))) + ".json"
+	raw, err := json.Marshal(journal)
+	if err != nil {
+		t.Fatalf("encode the prior journal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runs, name), raw, 0o600); err != nil {
+		t.Fatalf("write the prior journal: %v", err)
+	}
+}
+
+func linuxV2PreGateReleaseTombstoneJournal(t *testing.T, fixtures linuxV2PriorJournalFixtures) state.RunJournal {
+	t.Helper()
+	journal := linuxV2PriorTombstoneJournal("stage-replay-pre-gate-release")
+	reservation := linuxV2PriorTombstoneReservation()
+	helper, launcher := linuxV2JournalOwner(21), linuxV2JournalOwner(31)
+	leaf := authority.LinuxCgroupIdentity{
+		Version: authority.LinuxCgroupIdentityVersion, Parent: reservation.Parent, LeafName: reservation.LeafName,
+		LeafDevice: 12, LeafInode: 4101,
+	}
+	authenticator, err := linuxgate.SignGateNeverProducedAuthenticator(reservation.Secret, reservation.LaunchToken, launcher)
+	if err != nil {
+		t.Fatalf("sign the never-produced gate outcome for the pre-gate fixture: %v", err)
+	}
+	exit := authority.LinuxCgroupExitProof{
+		Version: authority.LinuxCgroupIdentityVersion, Process: launcher, Witness: helper, Waited: true, Reaped: true,
+	}
+	proof := authority.LinuxCgroupPreGateReleaseProof{
+		Version: authority.SupervisorHandoffVersionV2,
+		Receipt: authority.LinuxCgroupPreGateStopReceipt{
+			Version: authority.LinuxCgroupIdentityVersion, LaunchToken: reservation.LaunchToken,
+			CgroupIdentity: leaf, OwnerUID: reservation.OwnerUID, LauncherUID: reservation.LauncherUID,
+			Anchor: reservation.Anchor, Helper: helper, Launcher: launcher, Mirror: *reservation.Mirror,
+			Proof: authority.LinuxCgroupPreGateStopProof{
+				Version: authority.LinuxCgroupIdentityVersion, Kind: authority.LinuxCgroupStopProofHelper,
+				Issuer: helper, Reaper: helper, PinnedLeafFD: true, CgroupKillAcknowledged: true,
+				CgroupPopulatedZero: true, NoMigrationObserved: true, ProducerFenced: true,
+				DescendantsReaped: true, LauncherExit: exit,
+				GateOutcome: authority.LinuxCgroupGateProductionResult{
+					Version: authority.LinuxCgroupIdentityVersion, LaunchToken: reservation.LaunchToken,
+					Launcher: launcher, Outcome: authority.LinuxCgroupGateOutcomeNeverCreated, Authenticator: authenticator,
+				},
+			},
+		},
+		LeafDisposition: authority.LinuxCgroupLeafRemoved,
+	}
+	if err := proof.Validate(); err != nil {
+		t.Fatalf("the pre-gate release fixture is not a valid authority proof: %v", err)
+	}
+	journal.ContainmentCgroupPreGateReleaseProof = &proof
+	// SaveJournal refuses a pre-gate tombstone it did not clear, so the fixture is imported as the
+	// daemon's own on-disk journal file, the exact form the shared StateDir holds after that clear.
+	linuxV2WritePriorJournalFile(t, fixtures.directory, journal)
+	if _, err := fixtures.store.LoadJournal(journal.Key()); err != nil {
+		t.Fatalf("the production Store refused to load the pre-gate prior journal: %v", err)
+	}
+	return journal
+}
+
+func linuxV2PreMkdirAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {
+	t.Helper()
+	return linuxV2NeverCreatedTombstoneJournal(t, linuxV2NewPriorJournalFixtures(t)).ContainmentCgroup.AbortProof.Clone()
 }
 
 func TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape(t *testing.T) {
@@ -1763,6 +1898,107 @@ func TestLinuxV2StageReplayJournalBindsTheAbortDispositionToTheHeldStage(t *test
 			_, found, err := linuxV2ValidateStageReplayJournal(fixture, test.stage, response)
 			if err == nil || !found || err.Error() != test.want {
 				t.Fatalf("held-stage replay journal error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2RetiredPriorJournalAllowsAFreshRun(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		build func(*testing.T, linuxV2PriorJournalFixtures) state.RunJournal
+	}{
+		{name: "never-created fence tombstone", build: linuxV2NeverCreatedTombstoneJournal},
+		{name: "removed-empty leaf tombstone", build: linuxV2RemovedEmptyTombstoneJournal},
+		{name: "pre-gate never-created release tombstone", build: linuxV2PreGateReleaseTombstoneJournal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixtures := linuxV2NewPriorJournalFixtures(t)
+			journal := test.build(t, fixtures)
+			if err := fixtures.store.CheckLinuxV2NativeAdmissionBeforeClaim(time.Now().UTC(), nil); err != nil {
+				t.Fatalf("the daemon's own admission scan refused its own retired prior journal: %v", err)
+			}
+			prior, err := linuxV2SnapshotStoreJournals(fixtures.directory)
+			if err != nil || len(prior) != 1 {
+				t.Fatalf("snapshot the retired prior journal: rows=%d error=%v", len(prior), err)
+			}
+			if err := linuxV2RequireSafelyReleasedPriorJournal(config.Config{}, prior[journal.Key()]); err != nil {
+				t.Fatalf("retired prior RunJournal was refused as an owner: %v", err)
+			}
+		})
+	}
+}
+
+func TestLinuxV2PriorJournalRetirementRefusesActiveOwners(t *testing.T) {
+	t.Parallel()
+	fixtures := linuxV2NewPriorJournalFixtures(t)
+	neverCreated := linuxV2NeverCreatedTombstoneJournal(t, fixtures)
+	preGate := linuxV2PreGateReleaseTombstoneJournal(t, fixtures)
+	const abortRefusal = "prior RunJournal's abort tombstone is not an exact fenced pre-effect retirement"
+	const preGateRefusal = "prior RunJournal's pre-gate release tombstone is not an exact never-created retirement"
+	for _, test := range []struct {
+		name   string
+		base   state.RunJournal
+		want   string
+		mutate func(*state.RunJournal)
+	}{
+		{name: "process marker on the fence tombstone", base: neverCreated, want: linuxV2PriorJournalOwnershipRefusal,
+			mutate: func(journal *state.RunJournal) {
+				journal.RunContainmentState.PID = 4101
+				journal.RunContainmentState.ProcessIdentity = "creation-identity-4101"
+			}},
+		{name: "clone abort proof with no reservation", base: neverCreated, want: abortRefusal,
+			mutate: func(journal *state.RunJournal) {
+				abort := journal.ContainmentCgroup.AbortProof.Clone()
+				journal.ContainmentCgroup = nil
+				journal.LinuxCloneAbortProof = &authority.LinuxCloneAbortProof{
+					Version: authority.LinuxCloneVersion, CgroupAbortProof: &abort,
+				}
+			}},
+		{name: "clone tombstone that differs from its reservation", base: neverCreated, want: abortRefusal,
+			mutate: func(journal *state.RunJournal) {
+				abort := journal.ContainmentCgroup.AbortProof.Clone()
+				abort.LeafName = strings.Repeat("8", authority.TokenBytes*2)
+				journal.LinuxCloneAbortProof = &authority.LinuxCloneAbortProof{
+					Version: authority.LinuxCloneVersion, CgroupAbortProof: &abort,
+				}
+			}},
+		{name: "reservation that no longer validates", base: neverCreated, want: abortRefusal,
+			mutate: func(journal *state.RunJournal) {
+				reservation := journal.ContainmentCgroup.Clone()
+				reservation.LauncherUID = 5
+				journal.ContainmentCgroup = &reservation
+			}},
+		{name: "release proof beside the fence tombstone", base: neverCreated, want: abortRefusal,
+			mutate: func(journal *state.RunJournal) {
+				journal.ContainmentCgroupReleaseProof = &authority.SupervisorHandoffReleaseProof{}
+			}},
+		{name: "pre-gate proof beside the fence tombstone", base: neverCreated, want: abortRefusal,
+			mutate: func(journal *state.RunJournal) {
+				journal.ContainmentCgroupPreGateReleaseProof = &authority.LinuxCgroupPreGateReleaseProof{}
+			}},
+		{name: "release proof beside the pre-gate tombstone", base: preGate, want: preGateRefusal,
+			mutate: func(journal *state.RunJournal) {
+				journal.ContainmentCgroupReleaseProof = &authority.SupervisorHandoffReleaseProof{}
+			}},
+		{name: "pre-gate proof without its removal disposition", base: preGate, want: preGateRefusal,
+			mutate: func(journal *state.RunJournal) {
+				proof := journal.ContainmentCgroupPreGateReleaseProof.Clone()
+				proof.LeafDisposition = ""
+				journal.ContainmentCgroupPreGateReleaseProof = &proof
+			}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			journal := test.base
+			test.mutate(&journal)
+			snapshot := linuxV2StoreJournalSnapshot{
+				owner: linuxV2StoreJournalOwnerStateFromJournal(journal), journal: journal,
+			}
+			err := linuxV2RequireSafelyReleasedPriorJournal(config.Config{}, snapshot)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("prior RunJournal admission = %v, want a refusal naming %q", err, test.want)
 			}
 		})
 	}
@@ -2582,12 +2818,24 @@ func TestLinuxV2PriorJournalRequiresPhysicalReleaseNotTerminalTransition(t *test
 	}
 }
 
+const linuxV2PriorJournalOwnershipRefusal = "prior RunJournal may still own or require recovery of a process or leaf"
+
 func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linuxV2StoreJournalSnapshot) error {
 	journal := snapshot.journal
-	if !snapshot.owner.isStoppedRetained() || journal.HasProcessDetails() || journal.HasPendingContainment() ||
-		journal.ContainmentUnproven || journal.ContainmentCgroup != nil || journal.ContainmentAuthority != nil ||
-		journal.ContainmentHandoff != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
-		return errors.New("prior RunJournal may still own or require recovery of a process or leaf")
+	if journal.HasProcessDetails() || journal.HasPendingContainment() || journal.ContainmentUnproven ||
+		journal.ContainmentAuthority != nil || journal.ContainmentHandoff != nil {
+		return errors.New(linuxV2PriorJournalOwnershipRefusal)
+	}
+	// Mirrors state.linuxV2ForeignJournalIsSafelyRetired's two tombstone arms; without them this
+	// fixture precondition refuses a fresh run the daemon's own admission scan admits.
+	if abort := linuxV2StageReplayNoTargetAbort(journal); abort != nil {
+		return linuxV2RequireRetiredPriorAbortTombstone(journal, *abort)
+	}
+	if proof := journal.ContainmentCgroupPreGateReleaseProof; proof != nil {
+		return linuxV2RequireRetiredPriorPreGateTombstone(journal, *proof)
+	}
+	if !snapshot.owner.isStoppedRetained() || journal.ContainmentCgroup != nil {
+		return errors.New(linuxV2PriorJournalOwnershipRefusal)
 	}
 	proof := journal.ContainmentCgroupReleaseProof
 	if proof == nil || proof.Validate() != nil || proof.Version != authority.SupervisorHandoffVersionV2 ||
@@ -2601,6 +2849,23 @@ func linuxV2RequireSafelyReleasedPriorJournal(value config.Config, snapshot linu
 			return fmt.Errorf("inspect prior RunJournal's exact released cgroup leaf: %w", err)
 		}
 		return errors.New("prior RunJournal's exact cgroup leaf still exists")
+	}
+	return nil
+}
+
+func linuxV2RequireRetiredPriorAbortTombstone(journal state.RunJournal, abort authority.LinuxCgroupReservationAbortProof) error {
+	reservation := journal.ContainmentCgroup
+	if reservation == nil || reservation.AbortProof == nil || !reservation.AbortProof.Equal(abort) ||
+		reservation.Validate() != nil ||
+		journal.ContainmentCgroupReleaseProof != nil || journal.ContainmentCgroupPreGateReleaseProof != nil {
+		return errors.New("prior RunJournal's abort tombstone is not an exact fenced pre-effect retirement")
+	}
+	return nil
+}
+
+func linuxV2RequireRetiredPriorPreGateTombstone(journal state.RunJournal, proof authority.LinuxCgroupPreGateReleaseProof) error {
+	if proof.Validate() != nil || journal.ContainmentCgroupReleaseProof != nil {
+		return errors.New("prior RunJournal's pre-gate release tombstone is not an exact never-created retirement")
 	}
 	return nil
 }
