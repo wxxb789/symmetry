@@ -2509,3 +2509,107 @@ func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout(t *testing.
 		t.Fatalf("recovery context remaining = %s, want its full configured %s cleanup timeout", recoveryRemaining, cleanup)
 	}
 }
+
+type linuxV2NativeWitnessOwnerLossAnchorStub struct {
+	identity platform.LinuxOwnerAnchorIdentity
+	helper   func() *platform.LinuxOwnerAnchorHelper
+	lookups  int
+}
+
+func (stub *linuxV2NativeWitnessOwnerLossAnchorStub) Discover(context.Context) (platform.LinuxOwnerAnchorIdentity, error) {
+	return stub.identity, nil
+}
+
+func (stub *linuxV2NativeWitnessOwnerLossAnchorStub) LookupHelper(context.Context, platform.LinuxOwnerAnchorGrant) (*platform.LinuxOwnerAnchorHelper, error) {
+	stub.lookups++
+	return stub.helper(), nil
+}
+
+func linuxV2NativeWitnessOwnerLossTerminalFixture(
+	t *testing.T,
+	held authority.LinuxCgroupProcessIdentity,
+	exited authority.LinuxCgroupProcessIdentity,
+) (state.RunJournal, *daemon, *linuxV2NativeWitnessOwnerLossAnchorStub) {
+	t.Helper()
+	heldIdentity := held
+	reservation := testAppLinuxV2Reservation()
+	reservation.CreateStarted = true
+	reservation.Helper = &heldIdentity
+	leaf := testAppLinuxV2Leaf(reservation)
+	reservation.LeafIdentity = &leaf
+	if err := reservation.Validate(); err != nil {
+		t.Fatalf("owner-loss terminal fixture reservation is structurally invalid: %v", err)
+	}
+	journal := state.RunJournal{
+		RunID: "owner-loss-terminal-run", Generation: 3,
+		RuntimeID: "runtime-owner-loss-terminal", ClaimedRuntimeEpoch: 1,
+		ClaimID: "claim-owner-loss-terminal", LeaseToken: "lease-owner-loss-terminal",
+		RunContainmentState: state.RunContainmentState{
+			ContainmentCgroup:    &reservation,
+			ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2},
+		},
+	}
+	grant := linuxV2GrantFromJournal(journal.Key(), linuxV2FenceFromJournal(journal), reservation)
+	if err := grant.Validate(); err != nil {
+		t.Fatalf("owner-loss terminal fixture grant is structurally invalid: %v", err)
+	}
+	exit := testAppLinuxV2Exit(exited, reservation.Anchor)
+	if err := exit.Validate(); err != nil {
+		t.Fatalf("owner-loss terminal fixture helper exit is structurally invalid: %v", err)
+	}
+	stub := &linuxV2NativeWitnessOwnerLossAnchorStub{
+		identity: platform.LinuxOwnerAnchorIdentity{Process: reservation.Anchor, Parent: reservation.Parent, OwnerUID: reservation.OwnerUID},
+	}
+	stub.helper = func() *platform.LinuxOwnerAnchorHelper {
+		proof := exit
+		return &platform.LinuxOwnerAnchorHelper{PID: exited.PID, Identity: exited.Identity, HelperExit: &proof}
+	}
+	original := linuxV2NativeWitnessOwnerLossAnchor
+	linuxV2NativeWitnessOwnerLossAnchor = func(*linuxV2OwnerResources) linuxV2NativeWitnessAnchor { return stub }
+	t.Cleanup(func() { linuxV2NativeWitnessOwnerLossAnchor = original })
+	return journal, &daemon{linuxV2Owner: &linuxV2OwnerResources{}}, stub
+}
+
+func TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTerminalHelperExit(t *testing.T) {
+	held := testAppLinuxV2Helper()
+	journal, recovery, stub := linuxV2NativeWitnessOwnerLossTerminalFixture(t, held, held)
+	start := time.Now()
+	snapshot := captureLinuxV2NativeWitnessOwnerLoss(context.Background(), recovery, journal, "native_release")
+	elapsed := time.Since(start)
+	if stub.lookups != 1 {
+		t.Fatalf("terminal helper_exited capture dials = %d, want the single terminal classification", stub.lookups)
+	}
+	if elapsed > linuxV2NativeWitnessOwnerLossStopWait/8 {
+		t.Fatalf("terminal helper_exited capture elapsed = %s, want a return well inside the %s bound", elapsed, linuxV2NativeWitnessOwnerLossStopWait)
+	}
+	if snapshot.Captured || snapshot.OwnerLost || snapshot.ReleaseAuthorized || snapshot.StopProof != nil {
+		t.Fatalf("terminal helper_exited capture = %#v, want the unchanged uncaptured snapshot", snapshot)
+	}
+	if snapshot.Version != 1 || snapshot.Stage != "native_release" ||
+		snapshot.Helper.PID != held.PID || snapshot.Helper.Identity != held.Identity {
+		t.Fatalf("terminal helper_exited capture shape = %#v, want the exact held helper at version 1", snapshot)
+	}
+	if snapshot.Error != "anchor returned no live exact held helper for the owner-loss snapshot" {
+		t.Fatalf("terminal helper_exited capture error = %q, want the unchanged unheld-helper message", snapshot.Error)
+	}
+}
+
+func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit(t *testing.T) {
+	held := testAppLinuxV2Helper()
+	foreign := authority.LinuxCgroupProcessIdentity{PID: 99, Identity: "linux:v2:foreign-helper"}
+	journal, recovery, stub := linuxV2NativeWitnessOwnerLossTerminalFixture(t, held, foreign)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*linuxV2NativeWitnessOwnerLossPollInterval)
+	defer cancel()
+	snapshot := captureLinuxV2NativeWitnessOwnerLoss(ctx, recovery, journal, "native_release")
+	if stub.lookups < 2 {
+		t.Fatalf("foreign helper_exited capture dials = %d, want the poll to continue past one classification", stub.lookups)
+	}
+	if snapshot.Captured || snapshot.OwnerLost || snapshot.StopProof != nil ||
+		!strings.Contains(snapshot.Error, "no live exact held helper") {
+		t.Fatalf("foreign helper_exited capture = %#v, want the unchanged uncaptured snapshot with its reason", snapshot)
+	}
+	if snapshot.Version != 1 || snapshot.Stage != "native_release" ||
+		snapshot.Helper.PID != held.PID || snapshot.Helper.Identity != held.Identity {
+		t.Fatalf("foreign helper_exited capture shape = %#v, want the exact held helper at version 1", snapshot)
+	}
+}

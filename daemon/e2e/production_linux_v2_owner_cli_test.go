@@ -1199,6 +1199,33 @@ func linuxV2RequireTargetContainedBeforeRecovery(targetPIDFD *os.File, timeout t
 	return nil
 }
 
+type linuxV2StageReplayPreRecoveryPins struct {
+	targetPIDFD *os.File
+	helperPIDFD *os.File
+}
+
+func linuxV2WaitStageReplayPreRecovery(
+	stage string,
+	snapshotRequired bool,
+	pins linuxV2StageReplayPreRecoveryPins,
+	waitTargetContained func(*os.File, time.Duration) error,
+	waitHelperExited func(int, time.Duration) error,
+) error {
+	switch {
+	case !snapshotRequired:
+		// Unproven owner-loss stops self-kill the helper within linuxOwnerHelperV2StopTimeout,
+		// so the fixture waits strictly past that bound before the recovery can race it.
+		if err := waitHelperExited(int(pins.helperPIDFD.Fd()), linuxV2OwnerLossStopWait); err != nil {
+			return fmt.Errorf("A helper did not exit with owner loss after the stage-replay kill: %w", err)
+		}
+	case stage == "native_release":
+		if err := waitTargetContained(pins.targetPIDFD, linuxV2OwnerLossStopWait); err != nil {
+			return fmt.Errorf("stage %s: the native target was not contained before recovery: %w", stage, err)
+		}
+	}
+	return nil
+}
+
 func linuxV2RequireOwnerLossSnapshotBeforeRecovery(
 	snapshot *linuxV2OwnerWitnessOwnerLoss,
 	stage string,
@@ -2028,16 +2055,10 @@ func runProductionLinuxV2StageCrashReplayCase(
 		}
 	}
 	if helperPIDFD != nil {
-		if ownerLossSnapshotRequired {
-			if stage == "native_release" {
-				if err := linuxV2RequireTargetContainedBeforeRecovery(targetPIDFD, linuxV2OwnerLossStopWait); err != nil {
-					t.Fatalf("stage %s: the native target was not contained before recovery: %v", stage, err)
-				}
-			}
-		} else if err := linuxV2WaitPIDFDExited(int(helperPIDFD.Fd()), linuxV2OwnerLossStopWait); err != nil {
-			// Unproven owner-loss stops self-kill the helper within linuxOwnerHelperV2StopTimeout,
-			// so the fixture waits strictly past that bound before the recovery can race it.
-			t.Fatalf("A helper did not exit with owner loss after the stage-replay kill: %v", err)
+		if err := linuxV2WaitStageReplayPreRecovery(stage, ownerLossSnapshotRequired,
+			linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD},
+			linuxV2RequireTargetContainedBeforeRecovery, linuxV2WaitPIDFDExited); err != nil {
+			t.Fatal(err)
 		}
 	}
 	if testCase.afterStageProcessKilled != nil {
@@ -2581,6 +2602,111 @@ func TestLinuxV2StageReplayOwnerLossSnapshotRequired(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if got := linuxV2StageReplayOwnerLossSnapshotRequired(test.stage, test.marker, test.journal); got != test.want {
 				t.Fatalf("owner-loss snapshot-required predicate = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLinuxV2StageReplayPreRecoveryWaitArms(t *testing.T) {
+	released := linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "released"}
+	receiptAuthority := state.RunJournal{RunContainmentState: state.RunContainmentState{
+		ContainmentAuthority: &authority.Supervisor{Version: authority.SupervisorVersionV2, StopReceipt: &authority.StopReceipt{Version: authority.SupervisorVersionV2}},
+	}}
+	targetPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait target pin: %v", err)
+	}
+	defer targetPIDFD.Close()
+	helperPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait helper pin: %v", err)
+	}
+	defer helperPIDFD.Close()
+	for _, test := range []struct {
+		name    string
+		stage   string
+		marker  linuxV2OwnerWitnessStageMarker
+		journal state.RunJournal
+		want    []string
+	}{
+		{name: "released native_release hold takes the snapshot arm containment wait", stage: "native_release", marker: released, want: []string{"target_containment"}},
+		{name: "stop-receipt durable hold keeps no pre-recovery wait", stage: "stop_receipt_durable", journal: receiptAuthority},
+		{name: "not-released native_release hold keeps the unproven helper-exit wait", stage: "native_release", marker: linuxV2OwnerWitnessStageMarker{Stage: "native_release", NativeReleaseState: "not_released"}, want: []string{"helper_exit"}},
+		{name: "helper-bound hold keeps the unproven helper-exit wait", stage: "helper_bound", want: []string{"helper_exit"}},
+		{name: "launcher-bound hold with a released marker keeps the unproven helper-exit wait", stage: "launcher_bound", marker: released, want: []string{"helper_exit"}},
+		{name: "gate-bound hold with a durable receipt keeps the unproven helper-exit wait", stage: "gate_bound", journal: receiptAuthority, want: []string{"helper_exit"}},
+		{name: "lease-armed hold keeps the unproven helper-exit wait", stage: "lease_armed", marker: released, journal: receiptAuthority, want: []string{"helper_exit"}},
+		{name: "checkout-ready hold keeps the unproven helper-exit wait", stage: "checkout_ready", journal: receiptAuthority, want: []string{"helper_exit"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			required := linuxV2StageReplayOwnerLossSnapshotRequired(test.stage, test.marker, test.journal)
+			var arms []string
+			waitTargetContained := func(file *os.File, timeout time.Duration) error {
+				if file != targetPIDFD || timeout != linuxV2OwnerLossStopWait {
+					t.Fatalf("snapshot arm containment wait = pin %p bound %s, want the pinned target and the stage-replay bound", file, timeout)
+				}
+				arms = append(arms, "target_containment")
+				return nil
+			}
+			waitHelperExited := func(pidfd int, timeout time.Duration) error {
+				if pidfd != int(helperPIDFD.Fd()) || timeout != linuxV2OwnerLossStopWait {
+					t.Fatalf("unproven arm helper-exit wait = pidfd %d bound %s, want the pinned helper and the stage-replay bound", pidfd, timeout)
+				}
+				arms = append(arms, "helper_exit")
+				return nil
+			}
+			err := linuxV2WaitStageReplayPreRecovery(test.stage, required,
+				linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD},
+				waitTargetContained, waitHelperExited)
+			if err != nil {
+				t.Fatalf("pre-recovery wait arm error = %v", err)
+			}
+			if got, want := strings.Join(arms, ","), strings.Join(test.want, ","); got != want {
+				t.Fatalf("stage %s pre-recovery wait arms = %q, want %q (snapshot required = %t)", test.stage, got, want, required)
+			}
+		})
+	}
+}
+
+func TestLinuxV2StageReplayPreRecoveryWaitFailurePropagates(t *testing.T) {
+	sentinel := errors.New("pre-recovery wait sentinel")
+	targetPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait target pin: %v", err)
+	}
+	defer targetPIDFD.Close()
+	helperPIDFD, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open pre-recovery wait helper pin: %v", err)
+	}
+	defer helperPIDFD.Close()
+	for _, test := range []struct {
+		name     string
+		stage    string
+		required bool
+		want     string
+	}{
+		{name: "unproven helper-exit arm", stage: "helper_bound", want: "helper_exit"},
+		{name: "released native_release containment arm", stage: "native_release", required: true, want: "target_containment"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var arms []string
+			waitTargetContained := func(*os.File, time.Duration) error {
+				arms = append(arms, "target_containment")
+				return sentinel
+			}
+			waitHelperExited := func(int, time.Duration) error {
+				arms = append(arms, "helper_exit")
+				return sentinel
+			}
+			err := linuxV2WaitStageReplayPreRecovery(test.stage, test.required,
+				linuxV2StageReplayPreRecoveryPins{targetPIDFD: targetPIDFD, helperPIDFD: helperPIDFD},
+				waitTargetContained, waitHelperExited)
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("pre-recovery wait error = %v, want the %s arm failure wrapped", err, test.want)
+			}
+			if len(arms) != 1 || arms[0] != test.want {
+				t.Fatalf("pre-recovery wait arms = %v, want only the %s arm", arms, test.want)
 			}
 		})
 	}

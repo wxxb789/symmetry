@@ -2903,6 +2903,16 @@ func validateLinuxV2NativeWitnessOwnerLoss(snapshot *linuxV2NativeWitnessOwnerLo
 	return nil
 }
 
+type linuxV2NativeWitnessAnchor interface {
+	Discover(context.Context) (platform.LinuxOwnerAnchorIdentity, error)
+	LookupHelper(context.Context, platform.LinuxOwnerAnchorGrant) (*platform.LinuxOwnerAnchorHelper, error)
+}
+
+// This seam is a variable so the terminal helper_exited row can drive the capture without a live A anchor.
+var linuxV2NativeWitnessOwnerLossAnchor = func(owner *linuxV2OwnerResources) linuxV2NativeWitnessAnchor {
+	return owner.anchor
+}
+
 func captureLinuxV2NativeWitnessOwnerLoss(
 	ctx context.Context,
 	recovery *daemon,
@@ -2926,21 +2936,29 @@ func captureLinuxV2NativeWitnessOwnerLoss(
 		snapshot.Error = "owner-loss snapshot needs the exact recovery anchor"
 		return snapshot
 	}
-	anchor, err := owner.anchor.Discover(ctx)
-	if err != nil || !anchor.Process.Equal(reservation.Anchor) || !anchor.Parent.Equal(reservation.Parent) ||
-		anchor.OwnerUID != reservation.OwnerUID {
+	ownerLossAnchor := linuxV2NativeWitnessOwnerLossAnchor(owner)
+	identity, err := ownerLossAnchor.Discover(ctx)
+	if err != nil || !identity.Process.Equal(reservation.Anchor) || !identity.Parent.Equal(reservation.Parent) ||
+		identity.OwnerUID != reservation.OwnerUID {
 		snapshot.Error = "owner-loss snapshot anchor differs from the durable reservation"
 		return snapshot
 	}
 	deadline := time.Now().Add(linuxV2NativeWitnessOwnerLossStopWait)
 	var lastErr error
 	for {
-		helper, lookupErr := owner.anchor.LookupHelper(ctx, grant)
+		helper, lookupErr := ownerLossAnchor.LookupHelper(ctx, grant)
 		if lookupErr != nil {
 			lastErr = lookupErr
 		} else if helper.Control == nil || helper.PID != reservation.Helper.PID || helper.Identity != reservation.Helper.Identity {
+			// The anchor's terminal helper_exited carries no control, and the owner-loss latch plus
+			// the helper's own cached stop proof live only inside the gone helper, so the exact exit ends the poll.
+			exited := helper.Control == nil && helper.PID == reservation.Helper.PID && helper.Identity == reservation.Helper.Identity
 			lastErr = errors.New("anchor returned no live exact held helper for the owner-loss snapshot")
 			_ = helper.Close()
+			if exited {
+				snapshot.Error = lastErr.Error()
+				return snapshot
+			}
 		} else {
 			status, statusErr := helper.Control.Status(ctx)
 			_ = helper.Close()
