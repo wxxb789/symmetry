@@ -2336,3 +2336,23 @@ The seed residual item and this goal's fix are recorded in
       conductor wants a production hardening: reject a writable default mask in the install
       preflight, set the created modes explicitly in the clone bootstrap, or make the cleanup mode
       checks ACL-aware. Evidence: record §2.3 and §11.
+
+## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn (2026-11-27)
+
+Stage 1 (root cause) and stage 2 (slices 1B1 and 2C1 of the owner rulings, 2026-11-27) of goal
+`rf-acc-pi-authentic-turn` are delivered: records `docs/evidence/rf-acc-pi-authentic-turn-2026-11-26.md`
+and `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`, plans
+`docs/plans/2026-11-26-rf-acc-pi-authentic-turn-plan.md` and
+`docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md`. The stage-1 items are closed in
+`docs/archive/CLOSED-TODO.md`; what stays open is the proof that only a real credential can give.
+
+- [ ] Credentialed proof of the authentic pi turn and of the two detached-child crash legs.
+      Owner: conductor and owner. Under the ratified placeholder credential the `shared` wall now
+      completes with the three authentic-provider legs named `credential_gated_*` and never
+      reported as passed (the fixture, the exported `credential-gated-legs.json` declaration and
+      the manifest's `credential_gated`/`missing_allowlisted_files` rows all say so), so
+      `stop_readback_reader` and the redacted export become measurable again; the only path that
+      can prove the real turn is the owner-approved `main` dispatch (ruling A3; runbook
+      `refactor/pi-authentic-turn-dispatch-runbook.md`), grouped per ruling 6G1. Expected on that
+      run: no `credential_gated` manifest entry, all three Control provider receipts, and a green
+      `TestProductionLinuxV2PiNativeProviderAction` row.

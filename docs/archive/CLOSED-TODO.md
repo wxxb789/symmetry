@@ -5806,3 +5806,33 @@ section, whose pointer sentence names this one.
       them are in record §4. Delivered; the conductor's Bind on the PR head is the acceptance that
       the green `synthetic_goal_cleanup` set stays green with byte-identical labelled stops (record
       §5; the re-Bind item stays in `docs/TODO.md`).
+
+## rf-acc-pi-authentic-turn: placeholder handling and dispatch rulings (2026-11-27)
+
+Moved from `docs/TODO.md`, section `## rf-acc-pi-authentic-turn: stage-1 root cause and the pending
+ruling (2026-11-26)`; the residual that stays open is the credentialed proof
+([`## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn`](../TODO.md#rf-acc-pi-authentic-turn-the-credentialed-proof-of-the-authentic-turn-2026-11-27)).
+
+- [x] Rule the goal's `DECISION_NEEDED` (stage-1 record §7). The owner's rulings of 2026-11-27
+      accepted 1B1 (placeholder recognition with a named credential-gated outcome, set continues),
+      2C1 (bounded redacted provider error), 3A3 (the credentialed path stays a `main` dispatch)
+      and 6G1 (batch credentialed dispatches). Delivered by stage 2 (`docs/plans/2026-11-27-rf-acc-pi-authentic-turn-stage2-plan.md`,
+      record `docs/evidence/rf-acc-pi-authentic-turn-2026-11-27.md`): the fixture decides the mode
+      from the bytes it writes into B, the two detached-child legs are recorded
+      `credential_gated_*`, and `pi_provider_action` runs in its original `shared` position behind a
+      gate row that reads `credential-gated … run=1 pass=0 skip=0`, the declaration
+      `credential-gated-legs.json` can be exported even if a later witness aborts. A complete
+      export indexes it in `manifest.credential_gated`; a missing durability witness still
+      prevents the manifest, and a gated run is never counted as passed.
+
+## rf-acc-pi-authentic-turn: bounded provider error diagnostic (2026-11-27)
+
+- [x] Diagnosability: the final-message check now appends one bounded, redacted provider
+      `errorMessage` projection (`daemon/internal/harness/pi/rpc.go`): optional leading HTTP
+      status digits plus `[details redacted]`, at most 28 ASCII bytes (46 with the label).
+      `TestValidatorReportsProviderStopError` pins the 401, reflected credential strings and
+      oversized multiline input; the raw-message bypass overlay is recorded in §5 of the stage-2
+      evidence. Classification and fail-closed decisions are unchanged.
+
+The validator rows prove the projection; the owner-approved A3 `main` dispatch remains the
+proof path for an authentic provider turn.

@@ -354,6 +354,29 @@ PI_VEHICLE_INDEPENDENT_WITNESSES = {
     "opencode-native-health.json",
     "unprovisioned-owner-refusal.json",
 }
+CREDENTIAL_GATED_DECLARATION_TARGET = "credential-gated-legs.json"
+CREDENTIAL_GATED_MODE = "placeholder_provider_credential"
+CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE = "SYMMETRY_OPENAI_API_KEY"
+CREDENTIAL_GATED_LEGS = (
+    (
+        "daemon_sigkill_helper_survives_detached_child",
+        "TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild",
+        "credential_gated_daemon_sigkill_helper_survives_detached_child",
+        "pi-daemon-sigkill-helper-survives.json",
+    ),
+    (
+        "helper_sigkill_detached_child",
+        "TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild",
+        "credential_gated_helper_sigkill_detached_child",
+        "pi-helper-sigkill-detached-child.json",
+    ),
+    (
+        "pi_provider_action",
+        "TestProductionLinuxV2PiNativeProviderAction",
+        "credential_gated_pi_provider_action",
+        "pi-native-provider-action.json",
+    ),
+)
 CLEANUP_VEHICLE_WITNESS = "synthetic-goal-cleanup.json"
 FORBIDDEN_KEYS = (
     "lease_token",
@@ -1482,8 +1505,11 @@ def validate_pi_durability_witnesses(
     binary_sha256: str,
     version_line: str,
     source_tree_digest: str,
+    credential_gated_targets: frozenset = frozenset(),
 ) -> None:
-    expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES
+    if not credential_gated_targets <= MANUAL_CASE_SET_FILES[case_set]:
+        fail("credential-gated declaration names a witness outside its case set")
+    expected = MANUAL_CASE_SET_FILES[case_set] - PI_VEHICLE_INDEPENDENT_WITNESSES - credential_gated_targets
     for target in sorted(expected):
         document = documents.get(target)
         if document is None:
@@ -1505,6 +1531,61 @@ def validate_pi_durability_witnesses(
             fail(f"{target} pi durability witness does not bind --source-tree-digest")
 
 
+def validate_credential_gated_declaration(document: dict, source_tree_digest: str) -> tuple[str, ...]:
+    if set(document) != {"version", "mode", "credential_environment_variable", "harness", "source_tree_digest", "legs"}:
+        fail("credential-gated declaration has unexpected or missing fields")
+    if (
+        type(document["version"]) is not int
+        or document["version"] != 1
+        or document["mode"] != CREDENTIAL_GATED_MODE
+        or document["credential_environment_variable"] != CREDENTIAL_GATED_CREDENTIAL_ENVIRONMENT_VARIABLE
+    ):
+        fail("credential-gated declaration version, mode or credential variable does not match its fixed shape")
+    if document["harness"] != "pi":
+        fail("credential-gated declaration must bind the pi harness")
+    if document["source_tree_digest"] != source_tree_digest:
+        fail("credential-gated declaration does not bind --source-tree-digest")
+    legs = document["legs"]
+    if not isinstance(legs, list) or len(legs) != len(CREDENTIAL_GATED_LEGS):
+        fail("credential-gated declaration must name exactly the pi authentic-provider legs")
+    recorded = []
+    for leg in legs:
+        if not isinstance(leg, dict) or set(leg) != {"case", "test", "outcome", "test_result"}:
+            fail("credential-gated declaration leg has unexpected or missing fields")
+        if not all(isinstance(value, str) for value in leg.values()):
+            fail("credential-gated declaration leg fields must be strings")
+        if leg["test_result"] != ("failed" if leg["case"] == "pi_provider_action" else "not_run"):
+            fail("credential-gated declaration does not bind the exact failed and unrun tests")
+        recorded.append((leg["case"], leg["test"], leg["outcome"]))
+    if sorted(recorded) != sorted((case, test, outcome) for case, test, outcome, _ in CREDENTIAL_GATED_LEGS):
+        fail("credential-gated declaration legs do not match the exact pi authentic-provider legs")
+    return tuple(sorted(case for case, _, _ in recorded))
+
+
+def validate_credential_gated_witness(
+    document: dict, target: str, case: str, test: str, source_tree_digest: str,
+) -> None:
+    if case != "pi_provider_action":
+        fail(f"{target} was not run in the credential-gated case set")
+    subject = document.get("subject")
+    if (
+        document.get("harness") != "pi"
+        or document.get("case") != test
+        or not isinstance(subject, dict)
+        or subject.get("tree_digest") != source_tree_digest
+        or document.get("provider_action_succeeded") is not False
+    ):
+        fail(f"{target} does not bind the declared pi provider failure")
+    response = document.get("owner_witness_response")
+    provider_action = response.get("provider_action") if isinstance(response, dict) else None
+    if (
+        document.get("owner_witness_outcome") == "completed"
+        or (isinstance(response, dict) and response.get("outcome") == "completed")
+        or (isinstance(provider_action, dict) and provider_action.get("outcome") == "succeeded")
+    ):
+        fail(f"{target} contradicts the declared pi provider failure")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("manual", "compose", "legacy"))
@@ -1523,7 +1604,16 @@ def main() -> int:
     parser.add_argument("--native-archive-sha256")
     parser.add_argument("--native-version-line")
     parser.add_argument("--source-tree-digest")
+    parser.add_argument("--credential-gated-declaration")
     arguments = parser.parse_args()
+
+    if arguments.credential_gated_declaration is not None:
+        if arguments.mode != "manual" or arguments.case_set != "shared":
+            fail("a credential-gated declaration is only defined for the manual shared case set")
+        if arguments.run_status != "failed":
+            fail("a credential-gated case set can never be exported as a passed run")
+        if arguments.native_kind != "pi":
+            fail("a credential-gated declaration requires --native-kind pi")
 
     native_kind = arguments.native_kind
     native_binary = arguments.native_binary
@@ -1618,6 +1708,23 @@ def main() -> int:
         expected.extend((witness_root / name / "witness-evidence.json", f"{name}.json") for name in LEGACY_WITNESSES)
         require_no_excluded_witness_file((witness_root,), tuple(source for source, _ in expected))
 
+    credential_gated_cases: tuple[str, ...] = ()
+    credential_gated_targets = {}
+    credential_gated_receipts = set()
+    if arguments.credential_gated_declaration is not None:
+        try:
+            declaration_data, declaration = read_regular(
+                pathlib.Path(arguments.credential_gated_declaration), secret_values
+            )
+        except FileNotFoundError:
+            fail("credential-gated declaration is unavailable")
+        credential_gated_cases = validate_credential_gated_declaration(declaration, arguments.source_tree_digest)
+        credential_gated_targets = {target: (case, test) for case, test, _, target in CREDENTIAL_GATED_LEGS}
+        credential_gated_receipts = {target for _, target in MANUAL_RECEIPTS}
+        for child in output.iterdir():
+            if child.name in credential_gated_receipts or child.name in credential_gated_targets:
+                fail(f"credential-gated evidence destination already exists: {child.name}")
+
     copied = []
     missing = []
     incomplete_files = []
@@ -1629,6 +1736,9 @@ def main() -> int:
             fail("unsafe allowlist entry")
         destination = output / target
         try:
+            if target in credential_gated_receipts:
+                source.lstat()
+                fail(f"Control provider receipt was not produced by the credential-gated case set: {target}")
             if arguments.mode == "legacy":
                 document = read_json_regular(source)
                 projected = project_legacy_document(document)
@@ -1651,6 +1761,9 @@ def main() -> int:
                 validate_compose_refusal(document, "pi" if target == "rootless-compose-pi.json" else "opencode")
             else:
                 data, document = read_regular(source, secret_values)
+                if target in credential_gated_targets:
+                    case, test = credential_gated_targets[target]
+                    validate_credential_gated_witness(document, target, case, test, arguments.source_tree_digest)
                 if native_kind is not None:
                     published_documents[target] = document
         except FileNotFoundError:
@@ -1661,6 +1774,20 @@ def main() -> int:
                 fail("evidence destination already exists")
             atomic_write(output, target, data, runner_uid, runner_gid)
         copied.append({"file": target, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+    if credential_gated_cases:
+        destination = output / CREDENTIAL_GATED_DECLARATION_TARGET
+        if destination.exists() or destination.is_symlink():
+            fail("evidence destination already exists")
+        atomic_write(output, CREDENTIAL_GATED_DECLARATION_TARGET, declaration_data, runner_uid, runner_gid)
+        copied.append(
+            {
+                "file": CREDENTIAL_GATED_DECLARATION_TARGET,
+                "bytes": len(declaration_data),
+                "sha256": hashlib.sha256(declaration_data).hexdigest(),
+            }
+        )
+        expected_destinations.add(CREDENTIAL_GATED_DECLARATION_TARGET)
 
     if native_kind in CONTAINMENT_KINDS:
         document = published_documents.get(CONTAINMENT_KINDS[native_kind][1])
@@ -1696,6 +1823,7 @@ def main() -> int:
             native_binary_sha256,
             native_version_line,
             arguments.source_tree_digest,
+            frozenset(credential_gated_targets),
         )
 
     # A failed witness run is the one case whose daemon-side stall the uploaded
@@ -1765,6 +1893,12 @@ def main() -> int:
         "files": copied,
         "missing_allowlisted_files": missing,
     }
+    if credential_gated_cases:
+        manifest["credential_gated"] = {
+            "mode": CREDENTIAL_GATED_MODE,
+            "declaration": CREDENTIAL_GATED_DECLARATION_TARGET,
+            "legs": list(credential_gated_cases),
+        }
     if native_kind is not None:
         manifest["native_binary"] = {
             "kind": native_kind,

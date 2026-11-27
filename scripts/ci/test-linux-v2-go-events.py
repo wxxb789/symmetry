@@ -84,6 +84,63 @@ class GoEventGateTests(unittest.TestCase):
             result = citest.run_gate(SCRIPT, str(path), "TestWitness")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_credential_gated_mode_requires_the_exact_unproven_counts(self) -> None:
+        package = "example/selected"
+        run = {"Action": "run", "Package": package, "Test": "TestWitness"}
+        fail = {**run, "Action": "fail"}
+        child = {**run, "Test": "TestWitness/child"}
+        package_fail = {"Action": "fail", "Package": package}
+        for name, events, want in (
+            ("expected failure", [run, fail, package_fail], 0),
+            ("subtest failure", [run, child, {**child, "Action": "fail"}, fail, package_fail], 0),
+            ("missing parent fail", [run, child, {**child, "Action": "fail"}, package_fail], 1),
+            ("missing package terminal", [run, fail], 1),
+            ("parent fail before run", [fail, run, package_fail], 1),
+            ("package fail before parent fail", [run, package_fail, fail], 1),
+            ("unrelated selected test after package fail", [run, fail, package_fail, {**run, "Test": "TestOther"}], 1),
+            ("selected package output after package fail", [run, fail, package_fail, {**package_fail, "Action": "output"}], 1),
+            ("contradictory package pass", [run, fail, {**package_fail, "Action": "pass"}, package_fail], 1),
+            ("duplicate package fail", [run, fail, package_fail, package_fail], 1),
+            ("duplicate parent fail", [run, fail, fail, package_fail], 1),
+            ("pass", [run, {**run, "Action": "pass"}, fail, package_fail], 1),
+            ("missing run", [fail, package_fail], 1),
+            ("skip", [run, {**child, "Action": "skip"}, fail, package_fail], 1),
+            ("foreign named failure", [run, {**fail, "Test": "TestOther"}, fail, package_fail], 1),
+            ("foreign package terminal", [run, fail, {**package_fail, "Package": "example/foreign"}], 1),
+            ("foreign child fail", [run, {**child, "Action": "fail", "Package": "example/foreign"}, fail, package_fail], 1),
+            ("foreign run", [run, {**run, "Package": "example/foreign"}, fail, package_fail], 1),
+            ("unattributed parent fail", [run, {"Action": "fail", "Test": "TestWitness"}, fail, package_fail], 1),
+        ):
+            with self.subTest(name=name):
+                result = self.run_gate(events, "--package", package, "--credential-gated", "TestWitness", "TestWitness")
+                self.assertEqual(result.returncode, want, result.stderr)
+                if want == 0:
+                    self.assertIn("credential-gated TestWitness: run=1 pass=0 skip=0", result.stdout)
+                else:
+                    self.assertNotIn("credential-gated", result.stdout)
+
+    def test_credential_gated_mode_requires_a_package(self) -> None:
+        events = [
+            {"Action": "run", "Package": "example/selected", "Test": "TestWitness"},
+            {"Action": "fail", "Package": "example/selected", "Test": "TestWitness"},
+            {"Action": "fail", "Package": "example/selected"},
+        ]
+        result = self.run_gate(events, "--credential-gated", "TestWitness", "TestWitness")
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("requires --package", result.stderr)
+
+    def test_credential_gated_mode_never_relaxes_the_default_gate(self) -> None:
+        events = [{"Action": "run", "Test": "TestWitness"}, {"Action": "fail", "Test": "TestWitness"}]
+        result = self.run_gate(events, "TestWitness")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("credential-gated", result.stdout)
+
+    def test_credential_gated_mode_refuses_unnamed_targets(self) -> None:
+        events = [{"Action": "run", "Test": "TestWitness"}, {"Action": "fail", "Test": "TestWitness"}]
+        result = self.run_gate(events, "--credential-gated", "TestOther", "TestWitness")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be expected test names", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

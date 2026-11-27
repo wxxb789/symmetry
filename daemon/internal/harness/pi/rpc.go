@@ -853,9 +853,24 @@ func normalAssistantStop(raw json.RawMessage) error {
 	stopReason, ok := object["stopReason"]
 	var reason string
 	if !ok || !nonEmptyString(stopReason, &reason) || reason != "stop" {
+		var message string
+		if nonEmptyString(object["errorMessage"], &message) {
+			return fmt.Errorf("%w: %q: provider error: %s", ErrUnexpectedAssistantStop, reason, projectStopErrorMessage(message))
+		}
 		return fmt.Errorf("%w: %q", ErrUnexpectedAssistantStop, reason)
 	}
 	return nil
+}
+
+func projectStopErrorMessage(message string) string {
+	const marker = "[details redacted]"
+	// This summary can be persisted by Control; no provider body or header is safe to copy.
+	if len(message) >= 5 && message[0] >= '4' && message[0] <= '5' &&
+		message[1] >= '0' && message[1] <= '9' && message[2] >= '0' && message[2] <= '9' &&
+		message[3:5] == ": " {
+		return "HTTP " + message[:3] + "; " + marker
+	}
+	return marker
 }
 
 func (validator *Validator) fail(err error) error {

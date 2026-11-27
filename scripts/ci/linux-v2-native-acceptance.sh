@@ -92,6 +92,9 @@ guest_unit_attempted=0
 guest_control_group=
 guest_cgroup_identity=
 machine_run_count=0
+placeholder_provider_credential=0
+credential_gated_cases=()
+credential_gated_tests=()
 evidence_secret_values_file="$fixture_root/evidence-secret-values"
 printf '%s\0' "$GH_TOKEN" "$SYMMETRY_OPENAI_API_KEY" \
   "$SYMMETRY_OPERATOR_TOKEN" "$SYMMETRY_ENROLLMENT_TOKEN" "${GITHUB_TOKEN:-}" \
@@ -294,12 +297,17 @@ export_native_evidence() {
     )
   fi
   local export_status=0
+  local -a credential_gated_args=()
+  if [[ -f "$fixture_root/credential-gated-legs.json" ]]; then
+    credential_gated_args=(--credential-gated-declaration "$fixture_root/credential-gated-legs.json")
+  fi
   sudo python3 "$repo/scripts/ci/export-linux-v2-redacted-evidence.py" \
     manual "$evidence_directory" "$GITHUB_SHA" "$run_status" \
     --witness-root "$witness_root" --receipt-root "$receipt_root" \
     --case-set "$fixture_case_set" \
     --secret-values-file "$evidence_secret_values_file" \
     --runner-uid "$(id -u)" --runner-gid "$(id -g)" \
+    "${credential_gated_args[@]}" \
     "${native_manifest_args[@]}" || export_status=$?
   if (( export_status != 0 )) && [[ -n "$native_witness_document" ]]; then
     # The exporter reports only the first violated field; the witness document names the stop.
@@ -389,7 +397,14 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+detect_placeholder_provider_credential() {
+  if [[ "$SYMMETRY_OPENAI_API_KEY" == 'sk-scratch-dummy' ]]; then
+    placeholder_provider_credential=1
+  fi
+}
+
 if [[ -z "$native_containment_kind" ]]; then
+  detect_placeholder_provider_credential
   printf '%s' "$SYMMETRY_OPENAI_API_KEY" > "$native_api_key_file"
   chmod 0600 "$native_api_key_file"
 fi
@@ -1897,12 +1912,14 @@ run_go_test() {
   local -a expected_tests=("$@")
   (( ${#expected_tests[@]} > 0 )) || fail 'each exact Go witness invocation requires named test events'
   case "$test_mode" in
-    pi-baseline|opencode-baseline|scratch|owner-fd-scratch|cleanup-root|cleanup-mounts-root|production|stage-replay|negative|synthetic-cleanup|peer-negative|legacy-v1|marker-reader) ;;
+    pi-baseline|opencode-baseline|scratch|owner-fd-scratch|cleanup-root|cleanup-mounts-root|production|production-credential-gated|stage-replay|negative|synthetic-cleanup|peer-negative|legacy-v1|marker-reader) ;;
     *) fail "unknown Linux v2 acceptance Go test mode: $test_mode" ;;
   esac
-  if [[ "$test_mode" == production ]]; then
+  if [[ "$test_mode" == production || "$test_mode" == production-credential-gated ]]; then
     [[ -n "$request_environment" && -n "$request_path" && -n "$output_directory" ]] ||
       fail 'each production owner witness requires its exact request and private output directory'
+    [[ "$test_mode" != production-credential-gated || "${#expected_tests[@]}" == 1 ]] ||
+      fail 'a credential-gated production witness requires exactly one named test'
   elif [[ "$test_mode" == stage-replay || "$test_mode" == negative ]]; then
     [[ -z "$request_environment" && -z "$request_path" && -n "$output_directory" ]] ||
       fail 'bundle-based witnesses require their root and private output directory, not a single request'
@@ -1946,7 +1963,7 @@ run_go_test() {
   # The bundle-based witnesses stand in for the installed daemon, whose units set UMask=0077;
   # without it the clone seed's new A-owned refs are B-accessible and its own revalidation refuses.
   case "$test_mode" in
-    stage-replay|negative|production) command+=(--property=UMask=0077) ;;
+    stage-replay|negative|production|production-credential-gated) command+=(--property=UMask=0077) ;;
   esac
   case "$test_mode" in
     pi-baseline)
@@ -1989,7 +2006,7 @@ run_go_test() {
     cleanup-mounts-root)
       command+=(--setenv=SYMMETRY_LINUX_OWNER_TEST_MOUNTS=1)
       ;;
-    production)
+    production|production-credential-gated)
       machine_run_as "$A_USER" "$A_USER" /usr/bin/mkdir -m 0700 -p "$output_directory"
       command+=(
         --setenv="SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_HOOK_MARKER_ROOT=$NATIVE_HOOK_MARKER_ROOT"
@@ -2065,15 +2082,21 @@ run_go_test() {
   esac
   command+=(-- "$A_HOME/.ci-go/bin/go" test -count=1 -timeout 900s -json "$go_package" -run "$test_pattern")
   "${command[@]}" >"$event_file" 2>&1 || status=$?
-  if ! python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file" "${expected_tests[@]}"; then
-    printf 'Required native Go witness did not produce exact run/pass/skip=0 events (go test exit=%s).\n' "$status" >&2
+  local -a event_gate=(python3 "$repo/scripts/ci/assert-go-test-json.py" "$event_file")
+  local gate_message='Required native Go witness did not produce exact run/pass/skip=0 events'
+  if [[ "$test_mode" == production-credential-gated ]]; then
+    event_gate+=(--package github.com/wxxb789/symmetry/daemon/e2e --credential-gated "${expected_tests[0]}")
+    gate_message='Required credential-gated native Go witness did not produce its exact placeholder-credential event shape'
+  fi
+  if ! "${event_gate[@]}" "${expected_tests[@]}"; then
+    printf '%s (go test exit=%s).\n' "$gate_message" "$status" >&2
     # The JSON gate reports counts only; the non-JSON lines name the invocation failure.
     grep --invert-match --extended-regexp '^\{' "$event_file" | head -n 5 | print_filtered_output_lines || true
     print_witness_output_lines "$event_file" "${expected_tests[@]}"
     print_witness_failure_context "$output_directory" "${expected_tests[@]}"
     return 1
   fi
-  if (( status != 0 )); then
+  if (( status != 0 )) && [[ "$test_mode" != production-credential-gated ]]; then
     printf 'Required native Go witness exited with status %s.\n' "$status" >&2
     print_witness_output_lines "$event_file" "${expected_tests[@]}"
     print_witness_failure_context "$output_directory" "${expected_tests[@]}"
@@ -2388,49 +2411,52 @@ PY
   rm -f -- "$run_metadata"
 }
 
+owner_witness_case_identity() {
+  case "$1" in
+    pi_provider_action)
+      printf '%s\t%s\t%s\t%s\n' pi-provider-action.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST TestProductionLinuxV2PiNativeProviderAction 1
+      ;;
+    opencode_native_health)
+      printf '%s\t%s\t%s\t%s\n' opencode-health.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_REQUEST TestProductionLinuxV2OpenCodeNativeHealth 0
+      ;;
+    helper_sigkill_detached_child)
+      printf '%s\t%s\t%s\t%s\n' pi-helper-crash.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_CRASH_REQUEST TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild 1
+      ;;
+    daemon_sigkill_helper_survives_detached_child)
+      printf '%s\t%s\t%s\t%s\n' pi-daemon-crash.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_REQUEST TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild 1
+      ;;
+    codex_containment)
+      printf '%s\t%s\t%s\t%s\n' codex-containment.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST TestProductionLinuxV2CodexNativeContainment 0
+      ;;
+    claude_containment)
+      printf '%s\t%s\t%s\t%s\n' claude-containment.json \
+        SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST TestProductionLinuxV2ClaudeNativeContainment 0
+      ;;
+    *)
+      fail "unknown production Linux v2 owner witness case: $1"
+      ;;
+  esac
+}
+
+owner_witness_case_test_name() {
+  owner_witness_case_identity "$1" | cut -f3
+}
+
 run_native_owner_witness() {
   local case_name=$1
   local event_file=$2
   local config_file
   local request_environment
   local test_name
-  local provider_receipt_required=0
-  case "$case_name" in
-    pi_provider_action)
-      config_file=pi-provider-action.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_REQUEST
-      test_name=TestProductionLinuxV2PiNativeProviderAction
-      provider_receipt_required=1
-      ;;
-    opencode_native_health)
-      config_file=opencode-health.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_OPENCODE_REQUEST
-      test_name=TestProductionLinuxV2OpenCodeNativeHealth
-      ;;
-    helper_sigkill_detached_child)
-      config_file=pi-helper-crash.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_CRASH_REQUEST
-      test_name=TestProductionLinuxV2HelperSIGKILLAnchorReapsDetachedChild
-      provider_receipt_required=1
-      ;;
-    daemon_sigkill_helper_survives_detached_child)
-      config_file=pi-daemon-crash.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_PI_DAEMON_CRASH_REQUEST
-      test_name=TestProductionLinuxV2DaemonSIGKILLHelperSurvivesDetachedChild
-      provider_receipt_required=1
-      ;;
-    codex_containment)
-      config_file=codex-containment.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CODEX_REQUEST
-      test_name=TestProductionLinuxV2CodexNativeContainment
-      ;;
-    claude_containment)
-      config_file=claude-containment.json
-      request_environment=SYMMETRY_PRODUCTION_LINUX_V2_NATIVE_CLAUDE_REQUEST
-      test_name=TestProductionLinuxV2ClaudeNativeContainment
-      ;;
-    *) fail "unknown production Linux v2 owner witness case: $case_name" ;;
-  esac
+  local provider_receipt_required
+  local identity
+  identity=$(owner_witness_case_identity "$case_name")
+  IFS=$'\t' read -r config_file request_environment test_name provider_receipt_required <<<"$identity"
 
   local config_source="$fixture_root/$config_file"
   local guest_request="$OWNER_REQUEST_ROOT/$case_name.json"
@@ -2518,6 +2544,76 @@ PY
   if (( status != 0 )); then
     return "$status"
   fi
+}
+
+record_credential_gated_leg() {
+  local case_name=$1
+  local test_name=$2
+  credential_gated_cases+=("$case_name")
+  credential_gated_tests+=("$test_name")
+  printf 'credential-gated: %s (%s) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.\n' \
+    "$case_name" "credential_gated_${case_name}" >&2
+}
+
+write_credential_gated_declaration() {
+  local declaration="$fixture_root/credential-gated-legs.json"
+  python3 - "$declaration" "$source_tree_digest" "${credential_gated_cases[@]}" -- "${credential_gated_tests[@]}" <<'PY'
+import json
+import pathlib
+import sys
+
+declaration = pathlib.Path(sys.argv[1])
+separator = sys.argv.index("--")
+cases = sys.argv[3:separator]
+tests = sys.argv[separator + 1:]
+legs = [
+    {
+        "case": case,
+        "test": test,
+        "outcome": "credential_gated_" + case,
+        "test_result": "failed" if case == "pi_provider_action" else "not_run",
+    }
+    for case, test in sorted(zip(cases, tests))
+]
+declaration.write_text(
+    json.dumps(
+        {
+            "version": 1,
+            "mode": "placeholder_provider_credential",
+            "credential_environment_variable": "SYMMETRY_OPENAI_API_KEY",
+            "harness": "pi",
+            "source_tree_digest": sys.argv[2],
+            "legs": legs,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+declaration.chmod(0o600)
+PY
+}
+
+run_credential_gated_pi_provider_leg() {
+  local event_file=$1
+  local case_name=pi_provider_action
+  local config_file
+  local request_environment
+  local test_name
+  local identity
+  identity=$(owner_witness_case_identity "$case_name")
+  IFS=$'\t' read -r config_file request_environment test_name _ <<<"$identity"
+  local guest_request="$OWNER_REQUEST_ROOT/$case_name.json"
+  local output_directory="$A_HOME/ci-fixture/witness-output/$case_name"
+  prepare_owner_request "$case_name" "$case_name" "$fixture_root/$config_file" \
+    "$OWNER_BARRIER_ROOT/$case_name" "$guest_request"
+  if ! run_go_test "$event_file" ./e2e "^${test_name}$" production-credential-gated \
+    "$request_environment" "$guest_request" "$output_directory" -- "$test_name"; then
+    fail "the credential-gated $case_name leg did not produce the expected placeholder-credential stop"
+  fi
+  machine_run /usr/bin/rm -f -- "$guest_request"
+  record_credential_gated_leg "$case_name" "$test_name"
 }
 
 run_stage_replay_leg() {
@@ -3180,12 +3276,25 @@ case "$fixture_case_set" in
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/fifo \
       TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries/oversized
 
-    run_native_owner_witness pi_provider_action "$v2_pi_events"
+    if (( placeholder_provider_credential )); then
+      run_credential_gated_pi_provider_leg "$v2_pi_events"
+    else
+      run_native_owner_witness pi_provider_action "$v2_pi_events"
+    fi
     run_go_test "$v2_peer_negative_pi_events" ./internal/harness/pi \
       '^TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction$' peer-negative \
       '' '' '' -- TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction
-    run_native_owner_witness helper_sigkill_detached_child "$v2_crash_events"
-    run_native_owner_witness daemon_sigkill_helper_survives_detached_child "$v2_daemon_crash_events"
+    if (( placeholder_provider_credential )); then
+      record_credential_gated_leg helper_sigkill_detached_child \
+        "$(owner_witness_case_test_name helper_sigkill_detached_child)"
+      record_credential_gated_leg daemon_sigkill_helper_survives_detached_child \
+        "$(owner_witness_case_test_name daemon_sigkill_helper_survives_detached_child)"
+      # The retained Pi RunJournal can fence later witnesses before the arm reaches its tail.
+      write_credential_gated_declaration
+    else
+      run_native_owner_witness helper_sigkill_detached_child "$v2_crash_events"
+      run_native_owner_witness daemon_sigkill_helper_survives_detached_child "$v2_daemon_crash_events"
+    fi
     run_stage_replay_cases "$v2_stage_replay_events" \
       reservation_durable helper_bound gate_bound handoff_prepared handoff_committed lease_armed \
       checkout_ready native_release stop_receipt_durable leaf_removed journal_cleared
@@ -3248,6 +3357,12 @@ case "$fixture_case_set" in
 esac
 stop_readback_reader
 machine_run_as "$A_USER" "$A_USER" /usr/bin/rmdir "$OWNER_TEST_LEAF"
+
+if (( ${#credential_gated_cases[@]} > 0 )); then
+  printf 'Linux amd64 A/B case set %s completed with %s credential-gated authentic-provider legs (%s). The authentic provider turn is NOT proven for them, so this case set is not passed; the exported evidence names every outcome.\n' \
+    "$fixture_case_set" "${#credential_gated_cases[@]}" "${credential_gated_cases[*]}" >&2
+  exit 1
+fi
 
 printf 'Linux amd64 A/B case set %s completed; verifying guest/Control teardown and exporting allowlisted evidence. This witness does not establish Goal acceptance or promote native capabilities.\n' \
   "$fixture_case_set"
