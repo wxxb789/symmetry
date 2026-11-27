@@ -187,7 +187,7 @@ Not weakened:
   refusal rows, M1);
 - the leg-level validators that check each leg's *own* journal
   (`linuxV2ValidateStageReplayJournal` `:1404-1493`, `linuxV2ValidateStageJournalBoundary`,
-  `linuxV2VerifyNoTargetCloneAbort` `:2007-2034`) are untouched, so the replay matrix's per-leg
+  `linuxV2VerifyNoTargetCloneAbort` `:2071-2098`) are untouched, so the replay matrix's per-leg
   coverage is unchanged; and
 - the acceptance script, the workflow, the exporter and every production package are byte-identical
   to the dispatch base (§1), so the `shared` arm and its credential-gated pi leg (1B1) are untouched.
@@ -263,8 +263,10 @@ the arms the dispatcher mirrors, with the probe-backed note above. F1–F3 are r
 plan-accuracy fixes: the archived closeout's row count (`docs/archive/CLOSED-TODO.md`), the plan's
 red-capable test name, and ten wrong line ranges re-measured on the delivered bytes — the nine the
 review named (eight in the plan, one in this record) plus the claim-only test's stale anchor, which
-the same sweep found; the two pre-fix guard anchors that keep dispatch-base numbers are now labelled
-as such (§11).
+the same sweep found; nine were corrected here (the eight plan ranges the review named and the
+claim-only sibling) and this record's own range stayed stale until the docs-only follow-up that
+closed the panel's round-1 audit (§11); the two pre-fix guard anchors that keep dispatch-base numbers
+are now labelled as such (§11).
 The pre-fix bytes (`6ddddb8c…` for the Go file, `52f5e13c…` for the plan) and every receipt bound to
 them are PARTIAL and SUPERSEDED by §1, §5 and §8.
 
@@ -373,8 +375,10 @@ read the *committed* diff, so both rounds ran them on a scratch clone carrying t
 bytes of every changed file, base `3d377582` (the fix round's run carries §1's `213afc1c…` and
 `da798121…`); the record's own §8 text follows that clone commit, so those numbers bind the
 changed-file scope and the content digests rather than a revision that cannot name itself — the next
-commit that touches this record is the deliverable's own. The sanitize sweep's one document-level
-finding was the apply round's: `docs/archive/CLOSED-TODO.md` already refused `--check --root-only` at
+commit that touches this record is the deliverable's own, and the docs-only follow-up that closed the
+panel's round-1 audit (§4.3) touches this record only, so the changed-file scope and those content
+digests are unchanged. The sanitize sweep's one document-level finding was the apply round's:
+`docs/archive/CLOSED-TODO.md` already refused `--check --root-only` at
 the dispatch base (five drive/UNC/POSIX-mount spellings plus thirteen host-shaped regression specimens
 quoted in the sanitizer's own closed record), so those spellings were rendered with this step's
 sanctioned `<HOST-PATH>`/`<TMP>` tokens, keeping each sentence's shape and counts and losing only the
@@ -442,9 +446,11 @@ of the fixed rows is §5's; the Bind is the acceptance, not this record.
 Every line anchor this record cites was re-read on the delivered bytes after the last edit and is
 cited with that file's sha256; digests already in §1 are referenced there, not repeated. The fix
 round's sweep re-measured every `:start-end` citation of this record and the plan against the
-delivered files, printing each resolved citation's first and last line; it corrected ten wrong ranges
-(F3 and the claim-only sibling, §4.3), and each corrected range now starts at the symbol, list or
-comment the sentence around it names.
+delivered files, printing each resolved citation's first and last line, and corrected nine wrong
+ranges (the eight plan ranges the review named and the claim-only sibling, §4.3); it left this
+record's §4 range stale, which the panel's round-1 audit found and the docs-only follow-up commit
+closed after re-reading every anchor of both documents on these bytes. Each corrected range now starts
+at the symbol, list or comment the sentence around it names.
 
 | File | sha256 (delivered) | Anchors checked |
 | --- | --- | --- |
