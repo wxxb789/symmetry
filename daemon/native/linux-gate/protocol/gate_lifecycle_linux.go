@@ -635,6 +635,7 @@ const (
 	ReleaseSubStepGateAuthorize  = "gate_authorize"
 	ReleaseSubStepCloneBootstrap = "clone_bootstrap"
 	ReleaseSubStepCloneCheckout  = "clone_checkout"
+	ReleaseSubStepNativeImage    = "native_image"
 	ReleaseSubStepNativeExec     = "native_exec"
 	ReleaseSubStepRegister       = "register"
 )
@@ -658,6 +659,7 @@ const (
 	ReleaseArmCheckoutAckEncode       = "checkout_ack_encode"
 	ReleaseArmCheckoutAckSend         = "checkout_ack_send"
 
+	ReleaseArmNativeImagePin    = "image_pin"
 	ReleaseArmNativeAwaitResult = "await_result"
 	ReleaseArmNativeErrno       = "exec_errno"
 	ReleaseArmNativeNoAttempt   = "no_exec_attempt"
@@ -736,6 +738,8 @@ func LookupReleaseArmShape(arm string) (ReleaseArmShape, bool) {
 	case ReleaseArmCheckoutReceiptMismatch, ReleaseArmCheckoutCallback,
 		ReleaseArmCheckoutAckEncode, ReleaseArmCheckoutAckSend:
 		return ReleaseArmShape{SubStep: ReleaseSubStepCloneCheckout}, true
+	case ReleaseArmNativeImagePin:
+		return ReleaseArmShape{SubStep: ReleaseSubStepNativeImage}, true
 	case ReleaseArmNativeAwaitResult:
 		return ReleaseArmShape{SubStep: ReleaseSubStepNativeExec, WaitClass: true}, true
 	case ReleaseArmNativeCloneProof:
@@ -929,7 +933,8 @@ func (gate *PreparedGate) Release(ctx context.Context, leafFD int, command Nativ
 	if err != nil {
 		_ = bootstrapImage.close()
 		gate.mu.Unlock()
-		return fmt.Errorf("pin A-approved native executable before RELEASE: %w", err)
+		return NewReleaseSubStepError(ReleaseSubStepNativeImage, ReleaseArmNativeImagePin, 0,
+			fmt.Errorf("pin A-approved native executable before RELEASE: %w", err))
 	}
 	imagePinsTransferred := false
 	defer func() {

@@ -5735,3 +5735,31 @@ section, whose pointer sentence names this one.
       See record §4–§6 for the production-check probes and the guard, and the mutant table in §7.
       Delivered, pending the conductor's Bind on the fixed head (§9); the green `## Bind` entry
       records the prior head, not acceptance of these bytes.
+
+## rf-acc-native-pin-refusal-label: the native-image pin refusal is labelled at RELEASE (2026-11-27)
+
+- [x] An unapproved native-image path was reported without a named stage (moved from `docs/TODO.md`,
+      section `## rf-acc-native-pin-refusal-label: residuals (2026-11-27)`; the class was recorded
+      as the `:499 … (release_outcome_unknown; stage=none)` stop of run `45775969711` on
+      `ff0975a7`). Root cause and fix (goal `rf-acc-native-pin-refusal-label`, 2026-11-27, base
+      `d45e3298`; plan `docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`, record
+      `docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`): `PreparedGate.Release` pinned
+      `command.Path` before it built the release packet and returned the pin's refusal untyped
+      (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:928-932` at the dispatch head), so
+      `linuxOwnerHelperV2ReleaseErrorDetailFor`
+      (`daemon/internal/platform/helper_v2_protocol.go:591`) found no `ReleaseSubStepError` in the
+      chain and left `Stage = "none"`. The refusal and its predicates stay byte-identical; the pin
+      call site now wraps it in the closed Go-side helper-detail vocabulary — new sub-step
+      `native_image`, new arm `image_pin` (`gate_lifecycle_linux.go:638`, `:662`, shape table
+      `:741-742`, the wrap itself at `:936-937`) — and the helper's closed-vocabulary validator
+      accepts the sub-step (`helper_v2_protocol.go:516-519`), so the class renders
+      `release_outcome_unknown; stage=native_image arm=image_pin` instead of `stage=none`. Every
+      existing sub-step, arm, shape and rendered string is unchanged (record §3 keeps the census and
+      record §4's mutants bind it). New committed rows: the `PreparedGate.Release`-level
+      `TestPreparedGateReleaseLabelsTheNativeImagePinRefusal`
+      (`daemon/native/linux-gate/protocol/release_pin_label_linux_test.go`; two inputs — the
+      recorded symlinked-component class and an image with no A-controlled parent) and the arm
+      census plus validator rows in `linux_owner_helper_v2_linux_test.go`; the mutants that redden
+      them are in record §4. Delivered; the conductor's Bind on the PR head is the acceptance that
+      the green `synthetic_goal_cleanup` set stays green with byte-identical labelled stops (record
+      §5; the re-Bind item stays in `docs/TODO.md`).

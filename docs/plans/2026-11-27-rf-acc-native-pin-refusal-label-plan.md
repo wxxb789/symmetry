@@ -1,0 +1,139 @@
+# rf-acc-native-pin-refusal-label — implement plan
+
+Contract: `goal-rf-acc-native-pin-refusal-label.md` (GDD state root, outside the repository).
+Dispatch base and current HEAD: `d45e3298` (`main`). Branch: this goal worktree. The accepted plan is
+the contract plus the residual it closes; this file resolves only the choices the ruling leaves open
+(which closed vocabulary code the label uses, what the new row asserts, where the evidence lives) and
+points at the measured record. Clause-by-clause results: evidence record
+`docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`.
+
+## 1. Clause census at the dispatch head
+
+| Contract clause | Tree state at `d45e3298` | This increment |
+| --- | --- | --- |
+| The refusal stays exactly as it is (pin, predicates, refusal) | `pinNativeImage` (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) refuses symlinked components, non-canonical paths and non-approvable nodes; untouched | No production predicate, message or wrap inside the pin changes |
+| The label is supplied at the `PreparedGate.Release` call site (`gate_lifecycle_linux.go:928-932`) | The site returns a bare `fmt.Errorf("pin A-approved native executable before RELEASE: %w", err)`; `linuxOwnerHelperV2ReleaseErrorDetailFor` (`daemon/internal/platform/helper_v2_protocol.go:591`) finds no `ReleaseSubStepError` and leaves `Stage = "none"` (`:592`) | §3: one `NewReleaseSubStepError` wrap at that site; the message text is preserved verbatim by `ReleaseSubStepError.Error()` |
+| Go-side change only; no C helper or wire-format change | `daemon/native/linux-gate/**` untouched; the detail JSON is Go-to-Go (daemon ↔ helper) | §3 touches only owned Go files |
+| Every currently-labelled stop renders byte-identically; no existing assertion relaxed | Pinned by the literal renderings in `TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm` (`daemon/internal/platform/linux_owner_helper_v2_linux_test.go:901`) and the classifier table (`:715`) | §3 adds rows and one `Validate()` accepted value; no existing row, literal or check changes |
+| The new row is a `PreparedGate.Release`-level row that reddens when the labelling is removed or dropped to `stage=none` | The pin probe (`native_image_pin_linux_test.go`) calls `pinNativeImage` directly and asserts the opposite (no `ReleaseSubStepError`) — it cannot cover the call site | §3: `TestPreparedGateReleaseLabelsTheNativeImagePinRefusal`; §4 mutants |
+| Owned files | — | The two protocol production files, the protocol package's tests, the helper protocol file and its tests, this plan, the evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` |
+| Acceptance: the conductor's Bind keeps `synthetic_goal_cleanup` green and the record names the new row and its mutant | Not locally runnable (installed owner, guest, Control) | §4 and the record name the rows and mutants; the Bind stays the conductor's |
+
+## 2. Stage 1 — where the label is lost (trace)
+
+1. The C gate sends nothing for this failure class: `PreparedGate.Release` pins `command.Path`
+   before it builds or sends the release packet (`gate_lifecycle_linux.go:928`, before
+   `encodeGuardedRelease` at `:964` and `sendPacketWithRights` at `:987`). No wire or C helper
+   vocabulary is involved.
+2. The Go renderer cannot invent a stage: `linuxOwnerHelperV2ReleaseErrorDetailFor`
+   (`daemon/internal/platform/helper_v2_protocol.go:591`) classifies only through
+   `errors.As(err, &subStep)` (`:593-600`), and its default is `linuxOwnerHelperV2ReleaseErrorDetail{Stage: "none"}`
+   (`:592`). An untyped error renders `stage=none` (`String()`, `:486-509`).
+3. Every other release failure site already labels at its own call site with the closed
+   `gate_lifecycle_linux.go:635-639` sub-step vocabulary and `:645-669` arm vocabulary: the clone
+   bootstrap verify at `:918`, the pre-send gate identity at `:944`, the post-send exec-status arms
+   at `:1025-1052` and `:1102-1171`, plus `helper_v2_server.go:1121-1185`.
+4. The pin site at `:928-932` is the one pre-packet refusal that is leg-specific (its input is the
+   leg's own image path; the other pre-packet refusals are program-independent) and unlabelled.
+
+Wrong layer: **`PreparedGate.Release`'s pin call site**, which knows the release context but returns
+the pin's error unwrapped. `pinNativeImage` is the wrong place to label: it is also called for the
+fixed clone bootstrap (`proc_identity_linux.go:227` inside `verifyInstalledCloneBootstrap`), whose
+failure is already labelled `clone_bootstrap`/`installed_bootstrap` at `gate_lifecycle_linux.go:918`
+with an outer wrap, and `NewReleaseSubStepError` never re-labels an already-labelled error
+(`:833-857`), so an inner label would misname either caller.
+
+## 3. The change
+
+### 3.1 Label choice (the ruling's open choice)
+
+The pre-packet pin refusal occurs before anything is sent and before the gate identity check
+(`:944`). Candidate labels, all expressible in the existing closed vocabularies:
+
+- **(a) chosen — a new sub-step `native_image` with one arm `image_pin`.**
+  `stage=native_image arm=image_pin` names the failing stage truthfully: the release never started,
+  and the step that failed is the pinning/approval of the native image. It mirrors the C side's own
+  name for the same logical step (`ReleaseGuestStageNativeImage = "native_image"`,
+  `gate_lifecycle_linux.go:687`), so an operator sees one step name for image preparation on both
+  sides. Cost: one new sub-step token in the Go-side closed vocabulary, so
+  `LinuxOwnerHelperV2ReleaseErrorDetail.Validate()` (`helper_v2_protocol.go:516-519`) accepts it.
+  Additive only; existing tokens, arms and rendered strings are unchanged, so no currently-labelled
+  stop can change bytes.
+- **(b) rejected — reuse `native_exec` with a new arm.** `stage=native_exec arm=image_pin` needs no
+  `Validate()` change but names a stage that never ran: the exec-status channel arms of
+  `native_exec` (`await_result`, `exec_errno`, `no_exec_attempt`, `native_process`, `exec_readback`,
+  `clone_exec_proof`) all describe post-send observations, and the pin refusal is pre-send.
+- **(c) rejected — reuse `gate_authorize`.** Its arms are the gate/anchor identity checks
+  (`missing_gate_identity`, `anchor_authorize`, `gate_identity`); the image pin is not a gate
+  identity check, and routing it there would misdirect the next leg.
+- **(d) rejected — return `DECISION_NEEDED` and change the C helper or the wire format.** The ruling
+  forbids it and it is unnecessary: the detail vocabulary is Go-side.
+
+Errno stays `0`: the refusal is a policy refusal (path shape, node shape), not a named syscall
+failure, and the existing pre-packet wraps (`installed_bootstrap`, `gate_identity`) carry no errno
+either. The arm/wait/read/guest shapes of the new arm are all false, so the detail carries only the
+stage and the arm.
+
+### 3.2 Edits
+
+- `daemon/native/linux-gate/protocol/gate_lifecycle_linux.go`
+  - sub-step vocabulary (`:635-639`): `ReleaseSubStepNativeImage = "native_image"`;
+  - arm vocabulary (`:645-669`): `ReleaseArmNativeImagePin = "image_pin"`;
+  - shape table (`LookupReleaseArmShape`, `:726-748`): the arm binds to `ReleaseSubStepNativeImage`
+    with no wait class, no clone read and no guest stage;
+  - the pin call site (`:928-932`): wrap the failure in
+    `NewReleaseSubStepError(ReleaseSubStepNativeImage, ReleaseArmNativeImagePin, 0, fmt.Errorf(...))`,
+    keeping the existing message and `%w`.
+- `daemon/internal/platform/helper_v2_protocol.go`: `Validate()`'s stage switch (`:516-519`) accepts
+  `linuxgate.ReleaseSubStepNativeImage`.
+- `daemon/native/linux-gate/protocol/release_pin_label_linux_test.go` (new):
+  `TestPreparedGateReleaseLabelsTheNativeImagePinRefusal` builds a `PreparedGate{state: gatePrepared,
+  config: …}` with the package's own scratch pipes (`newScratchNativePipes`) and owner-pipe guard
+  (`newScratchReleaseGuard`), calls the real `Release`, and asserts the returned error carries
+  `stage=native_image arm=image_pin` with the pin's own detail intact. Two inputs: a planted
+  symlinked parent component in a trusted staging tree (the recorded stop's class; skip-guarded base
+  by the existing `trustedNativeImagePinBase` idiom) and an image with no A-controlled parent
+  (environment-independent). Expectations are literals, never derived from the constants, so a
+  swapped constant value reddens here too.
+- `daemon/internal/platform/linux_owner_helper_v2_linux_test.go`: the arm census
+  (`TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm`) gains the literal rendering
+  `stage=native_image arm=image_pin`; the closed-vocabulary validator table gains the accepted shape
+  `{Stage: "native_image", Arm: "image_pin"}`. Both tables keep every existing row unchanged.
+
+### 3.3 Simplification review
+
+No abstraction is added: one closed-vocabulary constant pair, one table row and one wrap at the
+site that owns the context. The alternative (b)/(c) reuses make the diagnostic less truthful, not
+smaller in any load-bearing way. Nothing is deleted: the trace shows no dead code this change
+obsoletes.
+
+## 4. Evidence plan
+
+1. Red first: the new protocol row against the unmodified production bytes (unlabelled refusal).
+2. Delivered bytes: the row green; the arm census and validator rows green; the full platform
+   classifier/census tables unchanged and green (byte-identical renderings for every existing row).
+3. Mutants on a scratch clone (never in this worktree), each restoring the file byte-identically:
+   the wrap deleted (new row red), the sub-step constant value swapped (new row and census row red),
+   the arm constant value swapped (census row red), the new sub-step dropped from `Validate()`
+   (census and validator rows red), the shape table rebound to another sub-step (census row red).
+4. Runner-mirroring demonstration: the two new/extended test binaries built for the resolute chroot
+   replica (`VERSION_CODENAME=resolute`), run red on the base production bytes with the new test
+   bytes and green on the delivered bytes.
+5. Gates binding the handed-over bytes: `gofmt`/`go vet`/full `go test ./...` from `daemon/` in WSL
+   and on Windows, focused `-race` on the two changed packages in WSL, `comment-cap` and
+   `jscpd-changed` on a scratch-clone commit of the final bytes.
+6. Closure: the residual moves from `docs/TODO.md` to `docs/archive/CLOSED-TODO.md` with the
+   record's pointer.
+
+## 5. Out of scope
+
+- The C helper (`daemon/native/linux-gate/c-gate/**`, `native/linux-gate/**`) and any wire-format or
+  packet change: the ruling forbids them and the stage is known on the Go side.
+- Every other unlabelled pre-packet refusal (`command.Validate`, `validateReleaseOwnerPipe`,
+  `monotonicDeadlineNS`, owner-pipe duplication, `encodeGuardedRelease`): program-independent, out
+  of the ruling's scope.
+- `daemon/e2e/**` assertion changes: after #302 the `synthetic_goal_cleanup` leg releases a resolved
+  symlink-free image, so no stop exists in the green set to assert a label on; the e2e bytes stay
+  untouched and the Bind re-run is the conductor's.
+- The pin's own predicates, messages and the `assertUnlabelledNativeImagePinRefusal` rows: the label
+  is added at the call site, so the pin-level probe's "unlabelled at the pin" assertion stays true.
