@@ -2247,33 +2247,23 @@ acceptance met) (goal `rf-acc-shared-journal-release`, branch
 The pi `provider_action` leg's clone-reserve residual this goal unmasks stays under
 `## rf-acc-containment-goal-admission: residuals (2026-11-26)`.
 
-## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)
+## rf-acc-native-pin-refusal-label: residuals (2026-11-27)
 
-The conductor's Bind (run `45791682543` on `90157ff4`, one `synthetic_goal_cleanup` run,
-`total_count=1`) confirms the bound fix: the `:499 … release_outcome_unknown; stage=none` stop is
-gone and the worker is released as `/usr/bin/dash`. The re-Bind on the final comment-stripped bytes
-(Bind 2, run `45803728792` on `5f744370`, one run, `total_count=1`) reproduces the identical stop,
-so the acceptance stays bound on the final bytes (record §Bind 2). The next stop and this goal's
-residual follow.
+The unapproved-native-image residual closed: the pin refusal is labelled at its `PreparedGate.Release`
+call site (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:936-937`, stage `native_image`
+arm `image_pin`), so the helper renders `release_outcome_unknown; stage=native_image arm=image_pin`
+instead of `stage=none`. The refusal and its predicates are untouched, every previously rendered
+detail string is byte-identical, and the new `PreparedGate.Release`-level row
+(`daemon/native/linux-gate/protocol/release_pin_label_linux_test.go`) reddens when the wrap is
+deleted or its vocabulary value is swapped. Goal `rf-acc-native-pin-refusal-label`, base
+`d45e3298`; the closed item is archived under
+[the pin-label closure](archive/CLOSED-TODO.md#rf-acc-native-pin-refusal-label-the-native-image-pin-refusal-is-labelled-at-release-2026-11-27);
+plan `docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`, record
+`docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`.
 
-The labelled `clone_checkout` stop from run `45803728792` on `5f744370` moved to
-[the seed fixture closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-seed-the-fixture-serves-the-seed-chain-to-b-2026-11-26).
-The conductor's re-Bind remains open under the seed residuals below.
-
-- [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
-      `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
-      (`daemon/native/linux-gate/protocol/proc_identity_linux.go:74`) returns unlabelled refusals,
-      so `linuxOwnerHelperV2ReleaseErrorDetailFor`
-      (`daemon/internal/platform/helper_v2_protocol.go:591`) renders `stage=none` and a new leg
-      whose release image is not symlink-free would stop with the same cryptic class. The refusal
-      is correct and load-bearing; the witness's own resolution check refuses a non-canonical image
-      before the release, and the pin probe
-      (`daemon/native/linux-gate/protocol/native_image_pin_linux_test.go`) pins the pin's refusal
-      shapes. A labelling change lands at the `PreparedGate.Release` call site
-      (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:928-932`), which the pin probe
-      does not exercise (it calls `pinNativeImage` directly), so it needs its own
-      `PreparedGate.Release`-level row; labelling is a production change (helper detail vocabulary)
-      needing its own ruling (PR #302 round-1 ruling V1, 2026-11-26). Owner: conductor.
+- [ ] Re-Bind the PR head: the `synthetic_goal_cleanup` set stays green (its leg releases a resolved
+      symlink-free image, so the new label adds no stop to it) and every previously-labelled stop in
+      that log renders byte-identically. Owner: conductor.
 
 ## rf-acc-pi-provider-admission: residuals (2026-11-26)
 

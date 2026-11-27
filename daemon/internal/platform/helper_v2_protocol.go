@@ -515,7 +515,8 @@ func (detail *LinuxOwnerHelperV2ReleaseErrorDetail) Validate() error {
 	}
 	switch detail.Stage {
 	case linuxOwnerHelperV2ReleaseStageNone, linuxgate.ReleaseSubStepGateAuthorize, linuxgate.ReleaseSubStepCloneBootstrap,
-		linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseSubStepRegister:
+		linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseSubStepNativeImage,
+		linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseSubStepRegister:
 	default:
 		return fmt.Errorf("Linux owner helper release error detail has an unknown sub-step %q", detail.Stage)
 	}

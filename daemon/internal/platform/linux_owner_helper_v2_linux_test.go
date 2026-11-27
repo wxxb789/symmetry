@@ -919,6 +919,7 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailNamesEveryArm(t *testing.T) {
 		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutCallback, "stage=clone_checkout arm=checkout_callback"},
 		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutAckEncode, "stage=clone_checkout arm=checkout_ack_encode"},
 		{linuxgate.ReleaseSubStepCloneCheckout, linuxgate.ReleaseArmCheckoutAckSend, "stage=clone_checkout arm=checkout_ack_send"},
+		{linuxgate.ReleaseSubStepNativeImage, linuxgate.ReleaseArmNativeImagePin, "stage=native_image arm=image_pin"},
 		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeAwaitResult, "stage=native_exec arm=await_result wait_class=other"},
 		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeErrno, "stage=native_exec arm=exec_errno"},
 		{linuxgate.ReleaseSubStepNativeExec, linuxgate.ReleaseArmNativeNoAttempt, "stage=native_exec arm=no_exec_attempt"},
@@ -1218,6 +1219,10 @@ func TestLinuxOwnerHelperV2ReleaseErrorDetailValidatesClosedVocabulary(t *testin
 			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{
 				Stage: "native_exec", Arm: "clone_exec_proof", WaitClass: "other", GuestStage: "exec", Errno: 1,
 			},
+		},
+		{
+			name:   "native image pin",
+			detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "native_image", Arm: "image_pin"},
 		},
 		{name: "reason only", detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "none", Reason: "stop_requested"}},
 		{name: "free-form stage", detail: &LinuxOwnerHelperV2ReleaseErrorDetail{Stage: "/tmp/native exec"}, wantErr: true},
