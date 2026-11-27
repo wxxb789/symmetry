@@ -483,8 +483,9 @@ def normalise_case_arm(head: str) -> str:
     return candidate
 
 
-def parse_case_arms(lines: list[str]) -> dict[str, str]:
+def parse_case_arms(lines: list[str]) -> tuple[dict[str, str], list[str]]:
     arms: dict[str, str] = {}
+    unclassified: list[str] = []
     pattern = None
     current: list[str] = []
     for line in lines:
@@ -493,24 +494,25 @@ def parse_case_arms(lines: list[str]) -> dict[str, str]:
             if stripped == "esac":
                 break
             head, separator, tail = stripped.partition(")")
-            if not separator:
+            candidate = normalise_case_arm(head) if separator else ""
+            if not re.fullmatch(r"[A-Za-z0-9_|*]+", candidate):
+                if stripped:
+                    unclassified.append(stripped)
                 continue
-            head = normalise_case_arm(head)
-            if not re.fullmatch(r"[A-Za-z0-9_|*]+", head):
-                continue
-            pattern, current = head, [tail.strip()]
+            pattern, current = candidate, [tail.strip()]
         else:
             current.append(stripped)
         if current[-1].endswith(";;"):
             arms[pattern] = "\n".join(current)
             pattern = None
-    return arms
+    return arms, unclassified
 
 
 def bash_case_arms(text: str, function: str, header: str) -> dict[str, str]:
     lines = text[text.index(f"{function}() {{") :].splitlines()
     index = next(i for i, line in enumerate(lines) if line.strip() == header)
-    return parse_case_arms(lines[index + 1 :])
+    arms, _ = parse_case_arms(lines[index + 1 :])
+    return arms
 
 
 CASE_SET_SUBJECT = 'case "$fixture_case_set" in'
@@ -521,21 +523,24 @@ def acceptance_dispatch_arms(text: str) -> dict[str, str]:
     for index, line in enumerate(lines):
         if line.strip() != CASE_SET_SUBJECT:
             continue
-        arms = parse_case_arms(lines[index + 1 :])
+        arms, _ = parse_case_arms(lines[index + 1 :])
         if any("run_native_owner_witness" in body for body in arms.values()):
             return arms
     raise AssertionError("the acceptance script no longer carries a case-set dispatch block")
 
 
-def acceptance_case_set_arms(source: str) -> dict[str, str]:
+def acceptance_case_set_arms(source: str) -> tuple[dict[str, str], list[str]]:
     arms: dict[str, str] = {}
+    unclassified: list[str] = []
     lines = source.splitlines()
     for index, line in enumerate(lines):
         if line.strip() != CASE_SET_SUBJECT:
             continue
-        for pattern, body in parse_case_arms(lines[index + 1 :]).items():
+        block_arms, block_unclassified = parse_case_arms(lines[index + 1 :])
+        for pattern, body in block_arms.items():
             arms.setdefault(pattern, body)
-    return arms
+        unclassified.extend(block_unclassified)
+    return arms, unclassified
 
 
 def case_set_arm_names(arms: dict[str, str]) -> set[str]:
@@ -2868,11 +2873,16 @@ def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[
     dispatched = case_set_arm_names(acceptance_dispatch_arms(source))
     if set(allowlist) != dispatched:
         failures.append("the case-set allowlist and the script's own dispatch arms diverged")
-    admitted = case_set_arm_names(acceptance_case_set_arms(source))
+    admitted_arms, unclassified = acceptance_case_set_arms(source)
+    admitted = case_set_arm_names(admitted_arms)
     if dispatched != admitted:
         failures.append(
             "a case-set arm outside the dispatch block admits a set the dispatcher does not run"
         )
+    failures.extend(
+        f"the case-set arm parser could not classify this line: {line}"
+        for line in unclassified
+    )
     if set(allowlist) != set(workflow_case_sets(workflow)):
         failures.append("the case-set allowlist and the workflow case-set matrix diverged")
     containment = {name.replace("_", "-") for name in acceptance_containment_case_sets(source)}
@@ -3182,6 +3192,16 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 (
                     "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
                 ),
+            ),
+            (
+                "allowlist-quoted-parenthesised-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    '  ("review_probe") ;;\n  *) fail \'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET',
+                    1,
+                ),
+                workflow,
+                ('the case-set arm parser could not classify this line: ("review_probe") ;;',),
             ),
             (
                 "workflow-extra-set",
