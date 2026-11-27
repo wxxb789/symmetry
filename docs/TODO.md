@@ -2443,3 +2443,21 @@ Record: `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
       while its sibling `errorMessage` goes through `projectStopErrorMessage`, so an oversized reason is
       bounded only by the decoder's `defaultMaxRecordBytes` (`:19`, applied at `:212`). Product-side, out
       of this fixture chain's scope. Owner: the next slice that touches `daemon/internal/harness/pi/rpc.go`.
+- [ ] Frozen arm-parser guard residual 1 — two arms on one physical line are not split. Insert
+      `  shared) ;; review_probe) ;;` just before the validator's rejecting default, all other lines
+      intact. The real Bash validator accepts `review_probe`, while `parse_case_arms`
+      (`scripts/ci/test-linux-v2-evidence.py:491-535`) reads only the first `)` as the arm header and
+      folds the trailing `;;` into the `shared` body, so the derivation and the exporter each return
+      `[]` (exits `0/0/0/0`). Non-blocking: the conductor froze the round-7 arm-parser guard, and this
+      variant is absent from the unchanged delivered shell, whose pristine validator rejects
+      `review_probe`. Reference: `findings/310-opus-review-7.md` ("Two bounded break attempts",
+      attempt 1). Owner: the next slice that touches the arm parser.
+- [ ] Frozen arm-parser guard residual 2 — the rejecting default's body need only *contain* `fail`.
+      Change the validator's final `*) fail 'set SYMMETRY…' ;;` to `*) true || fail 'set SYMMETRY…' ;;`,
+      message unchanged. Bash then accepts `review_probe` (the `fail` never runs), while
+      `CASE_ARM_REJECTION` and the exactly-one-rejecting-default count
+      (`scripts/ci/test-linux-v2-evidence.py:488,2914`) still see one body containing `fail`; the
+      derivation and the exporter each return `[]` (exits `0/0/0/0`). Non-blocking, same conductor
+      freeze; a future guard would require the exact unconditional rejecting body or run the actual
+      validator for a negative control. Reference: `findings/310-opus-review-7.md`, attempt 2. Owner:
+      the next slice that touches the arm parser.

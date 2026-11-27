@@ -192,10 +192,11 @@ keep `minimal`, their pre-r1 value. The second B home, `CLONE_TEST_B_HOME`
 (`scripts/ci/linux-v2-native-acceptance.sh:538`), serves the clone/launcher scratch legs and stages
 no Pi home at all (`:721,989-993`), so the Pi staging home stays the single Pi staging site. One
 writer serves every pi case set; the placeholder-credential legs never reach the decoder, and the
-two placeholder runs observed no authenticated row — §7: 22 green event-gate rows in run 46046284991
-and 24 in run 46049816624, no authenticated row observed in either. Those two runs are observations
-of their own subjects; this increment establishes no comparison between them. That is not a claim
-about a credentialed Bind: the authenticated rows stay unobserved.
+three scratch Binds observed no authenticated row — §7: 22 green event-gate rows in round 1
+(46046284991), 24 in round 2 (46049816624) and 24 in the final scratch round 3 (46060908762), no
+authenticated row observed in any. Each run is an observation of its own subject; this increment
+establishes no comparison between them. That is not a claim about a credentialed Bind: the
+authenticated rows stay unobserved.
 
 Recorded consequence, not hidden: the model is *told* the task by the fixture rather than inferring
 it from the Control goal. That is the relationship the WorkItem route had before `#303` and the one
@@ -305,16 +306,16 @@ hard-coded at `:2623`); the two crash legs are only registered by `record_creden
 Python row that runs in the `daemon` job on the PR head (§8). What the Bind does establish, on the
 head it gated, is where `shared` stops.
 
-Two scratch Binds ran; neither is the protected credentialed dispatch, and neither produced a green
-`shared` row:
+Three scratch Binds ran; none is the protected credentialed dispatch, and none produced a green
+`shared` row. Rounds 1 and 2 are PARTIAL/SUPERSEDED; round 3 is the FINAL scratch receipt:
 
-1. Round 1 ([run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991)) on PR
-   head `dd9da52f` exited 1 with **22** green event-gate rows and one red:
+1. Round 1 (PARTIAL/SUPERSEDED, [run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991))
+   on PR head `dd9da52f` exited 1 with **22** green event-gate rows and one red:
    `TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable` was `pass:0`, reported as
    `pre-create abort tombstone reports a target or leaf creation` (the section below quotes it in
    full); that subtest was the first non-gated failure.
-2. Round 2 ([run 46049816624](https://github.com/wxxb789/symmetry/actions/runs/46049816624)) on the
-   merge head `f6dfea80` is summarised below, not quoted verbatim: both Bind sections condense
+2. Round 2 (PARTIAL/SUPERSEDED, [run 46049816624](https://github.com/wxxb789/symmetry/actions/runs/46049816624))
+   on the merge head `f6dfea80` is summarised below, not quoted verbatim: both Bind sections condense
    their receipt files, so a later change to a receipt file is not visible here.
    `shared` exits 1 again, but the
    round-1 red is gone: **24** green event-gate rows, including
@@ -324,31 +325,57 @@ Two scratch Binds ran; neither is the protected credentialed dispatch, and neith
    hold (line 4265): `pre-existing RunJournal
    cf7ad503-93e5-4b19-9f85-5dec44c855f3/1 is not physically released and safe for a fresh run:
    prior RunJournal may still own or require recovery of a process or leaf`; the first non-gated
-   failure is that `helper_bound` row (line 4261). §7 therefore no longer predicts Bind rows: the
-   round-2 section is the observed truth for that head, and its next stop is a Go replay refusal,
-   not the authenticated turn.
-3. The authenticated Pi leg's progress and first failure were **not observed** in either run: the
-   placeholder reached checkout readiness and completed no provider action, the two gated crash legs
-   did not run, and the run declares `credential-gated: pi_provider_action
+   failure is that `helper_bound` row (line 4261).
+3. Round 3 (FINAL scratch receipt, [run 46060908762](https://github.com/wxxb789/symmetry/actions/runs/46060908762))
+   on PR head `8b7fc347` exited 1 with **24** green event-gate rows, the same set as round 2,
+   including `verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1
+   pass=1 skip=0` (log line 3688). The next replay leg, `helper_bound`, again ran and was refused
+   *before* reaching its hold (line 4266): `pre-existing RunJournal
+   690b6635-edb6-4536-93eb-a6c002e93177/1 is not physically released and safe for a fresh run:
+   prior RunJournal may still own or require recovery of a process or leaf` — the refusal the run
+   log prints at `production_linux_v2_native_witness_test.go:224` — and the first non-gated failure
+   is that `helper_bound` row (line 4262). §7 therefore does not predict Bind rows: each section is
+   the observed truth for its own head, and the next stop there is a Go replay refusal, not the
+   authenticated turn.
+4. The authenticated Pi leg's progress and first failing line were **not observed** in any of the
+   three runs: the placeholder reached checkout readiness — round 3 records
+   `clone.checkout_ready:true` and `installed_owner_verified:true` — and completed no provider
+   action (`provider_action_succeeded:false`), both provider-dependent crash legs were `not_run`,
+   and the run declares `credential-gated: pi_provider_action
    (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider
    credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.`
-   (line 3109). The `subject_hash` rejection of §3.2 and §9 is a local `off1` capture observation
-   and is not a protected-run stop.
-4. No `shared/manifest.json` was published in either run — the export fails on the missing ack-loss
-   witness — so the Bind has no manifest status to report, and §9's credential-row outcomes stay
-   unproven.
+   (line 3109 in rounds 1-2, line 3110 in round 3). The `subject_hash` rejection of §3.2 and §9 is a
+   local `off1` capture observation and is not a protected-run stop; no authenticated failure line
+   exists to quote.
+5. No `shared/manifest.json` was published in any run — the export fails on the missing ack-loss
+   witness (`redacted evidence export failed: pi durability witness is unavailable:
+   ack-loss-replay-checkout_ready.json`, line 4550 in round 2 and line 4551 in round 3) — so the
+   Bind has no manifest status to report, and §9's credential-row outcomes stay unproven. The
+   round-3 partial export holds four members only: `shared/credential-gated-legs.json` (807 B),
+   `shared/pi-native-provider-action.json` (3,224 B),
+   `shared/stage-crash-replay-reservation_durable.json` (6,644 B) and
+   `shared/unprovisioned-owner-refusal.json` (691 B).
 
-This round changes only the Python pin, the plan, the record and `docs/TODO.md`: the acceptance
-script and every Go byte stay as they were. That is not outcome invariance. The fixture hashes the
-full committed tree (`scripts/ci/source_subject.py:127-141,209-230`, `index_mode_digest`), passes
-that commit and digest into Control provisioning and writes it into the exported credential-gated
-declaration (`scripts/ci/linux-v2-native-acceptance.sh:26-29,1094-1102,2583-2610`,
+The delivered round changes only the Python pin, the plan, the record and `docs/TODO.md`: the
+acceptance script and every Go byte stay as they were. That is not outcome invariance. The fixture
+hashes the full committed tree (`scripts/ci/source_subject.py:127-141,209-230`, `index_mode_digest`),
+passes that commit and digest into Control provisioning and writes it into the exported
+credential-gated declaration (`scripts/ci/linux-v2-native-acceptance.sh:26-29,1094-1102,2583-2610`,
 `write_credential_gated_declaration`), so this round's changed docs and test file are inputs to that
-digest. Run 46049816624 therefore establishes the **observed** behaviour at its own hashed subject,
-the scratch commit `30f450a584f405409d3a4b3e71c13a26e590dc40`, whose sole parent is the PR head
-`f6dfea80`; that receipt is observed for that subject only, and the run is neither outcome
+digest. Run 46060908762 therefore establishes the **observed** behaviour at its own hashed subject,
+the scratch commit `d9752b3d878e844430714f851aa8a8c6a3a3d294`, whose sole parent is the PR head
+`8b7fc347`; that receipt is observed for that subject only, and the run is neither outcome
 invariance nor evidence equivalence for this head, which needs its own Bind. The authenticated
 outcome remains the owner's credentialed cadence.
+
+Acceptance status. The conductor's placeholder Bind — contract Acceptance 1, which runs `shared`
+once on the PR head and reaches the credential-gated named outcome for the turn — is **MET** (the
+three rounds above). Contract Acceptance 2 — the pi provider row passes in a credentialed run, or
+the record names the next verbatim stop — is **UNPROVEN**: no credentialed dispatch has run on this
+head, so the credential-gated pi row (its first half) is not proven, and the record holds only the
+local `off1` decoder observation (§3.2), not a protected-run verbatim stop. It stays unproven
+pending the owner's carrier ruling (§9) and an owner-approved credentialed dispatch; only that
+protected dispatch can satisfy it.
 
 ## 8. Gates
 
@@ -434,7 +461,7 @@ file and the record. The acceptance script is byte-identical to the round-5 byte
 plan is unchanged from round 3 (`bf561a3adb9e…`), and the two measurement rows stay the round-2 ones
 named in the table. This round re-measured no arm.
 
-Fix r7 receipt (this round): the same code- and doc-scoped rows re-ran on the round-7 §1 bytes — the
+Fix r7 receipt (round 7): the same code- and doc-scoped rows re-ran on the round-7 §1 bytes — the
 test file whose arm map now holds plain case-set names only, whose parser rejects any glob arm that
 is not its block's final arm and requires exactly one rejecting default arm across the parsed case
 blocks, carrying its seventh case-set-list mutant, and the record with the round-7 corrections (the
@@ -443,6 +470,13 @@ this receipt) — so the fix-r6 receipt is superseded for the test file and the 
 script is byte-identical to the round-5 bytes (`a971ab56…`), the plan is unchanged from round 3
 (`bf561a3adb9e…`), and the two measurement rows stay the round-2 ones named in the table. This round
 re-measured no arm.
+
+Fix r8 receipt (records round, this round): this round changes no code byte — its delta
+(`git diff --name-status HEAD~1..HEAD`) lists only markdown, `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`
+and `docs/TODO.md` — so the round-3 Bind (`## Bind (round 3)`) **stays binding for the code bytes**,
+whose test-file digest `35680566c944…` and acceptance-script digest `a971ab561de05…` are unchanged
+§1/§5 blobs (rule 128). The doc-scoped rows below re-ran on this round's records-only bytes; the
+round-2 measurement rows stay the binding ones and no arm was re-measured.
 
 CI observation, not a gate of this increment: on the reviewed head `dd9da52f` the `compose` job
 (`.github/workflows/ci.yml:1793-1812`) failed in 41 s inside its smoke step, at the Control image's
@@ -550,7 +584,7 @@ occurrences of the key.
 
 ## Bind (round 1)
 
-**ROUND 1 / SCRATCH / ACT SUPERSEDED — not the protected credentialed dispatch.** [Run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991), attempt 1, ran only `shared` with the ratified placeholder credential. The head-filtered Actions census was `total_count=1`. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46046284991/artifacts/15222292091) is 4,449 bytes; downloaded SHA-256 `0c70c0d6f54aa9cf045ca1f4cedb630677c2c511314748b05061b0789dc318b0` matches the Actions digest.
+**ROUND 1 / SCRATCH / PARTIAL / SUPERSEDED — not the protected credentialed dispatch; the protected credentialed dispatch is the only acceptance.** [Run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991), attempt 1, ran only `shared` with the ratified placeholder credential. The head-filtered Actions census was `total_count=1`. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46046284991/artifacts/15222292091) is 4,449 bytes; downloaded SHA-256 `0c70c0d6f54aa9cf045ca1f4cedb630677c2c511314748b05061b0789dc318b0` matches the Actions digest.
 
 **§1 cross-reference correction (round 3, requalified in rounds 4, 5 and 6).** The "§1 bytes" in this receipt
 are the round-1 `dd9da52f` blobs, not the §1 table above, which carries the round-6 bytes. At
@@ -582,7 +616,7 @@ Observations from the [acceptance log](https://github.com/wxxb789/symmetry/actio
 
 ## Bind (round 2)
 
-**FINAL SCRATCH receipt, not the protected credentialed dispatch.** [Run 46049816624](https://github.com/wxxb789/symmetry/actions/runs/46049816624), attempt 1, ran only `shared` with the placeholder credential (head-filtered census: one run). Round 1 ([run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991) on PR head `dd9da52f`) is **ACT SUPERSEDED**. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46049816624/artifacts/15224460938) is 4,632 B; downloaded SHA-256 `d0737a3ee54620a4357978c39bbaa588618242bf49e85fba6153917c9182e942` matches Actions.
+**ROUND 2 / SCRATCH / PARTIAL / SUPERSEDED — not the protected credentialed dispatch; superseded by the round-3 FINAL scratch receipt below.** [Run 46049816624](https://github.com/wxxb789/symmetry/actions/runs/46049816624), attempt 1, ran only `shared` with the placeholder credential (head-filtered census: one run). Round 1 ([run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991) on PR head `dd9da52f`) is **PARTIAL/SUPERSEDED**. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46049816624/artifacts/15224460938) is 4,632 B; downloaded SHA-256 `d0737a3ee54620a4357978c39bbaa588618242bf49e85fba6153917c9182e942` matches Actions.
 
 The run's sole parent is PR head `f6dfea806ab0826810dfb76d8038eb54d9223d8a`, the merge of fix `e754b6da` and main `3d377582` (landed #309). All PR paths match by blob and mode; the two scratch-only additions are unchanged from round 1. Only changed input rows are repeated below (SHA-256 prefixes); the updated and added documentation also matches the PR tree.
 
@@ -600,3 +634,21 @@ The run's sole parent is PR head `f6dfea806ab0826810dfb76d8038eb54d9223d8a`, the
 3. **Authenticated Pi progress and first failure: not observed.** The placeholder reached checkout readiness (`clone.checkout_ready:true`) but not a successful provider action; the two gated crash legs did not run. The protected workflow query returned zero dispatches at `f6dfea80` before and after the scratch run. The whole scratch log has no canonical-hash rejection. The local `off1` decoder measurement (§3.2 and round 1) still names `subject_hash`: the payload at RPC line 189 copied `subject.tree_digest`, and the local test's line 40 says `pi task result must be one complete JSON object: convert task-result generated DTO: subject_hash does not match canonical subject`. That is not a protected-run first failure.
 4. **3109:** `credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.` **4550:** `redacted evidence export failed: pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`. Partial ZIP: `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3,224 B), `shared/stage-crash-replay-reservation_durable.json` (6,644 B), and `shared/unprovisioned-owner-refusal.json` (691 B).
 5. No `shared/manifest.json`, so no manifest status. **4261**, first non-gated failure: `Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`.
+
+## Bind (round 3)
+
+**FINAL SCRATCH receipt — not the protected credentialed dispatch.** [Run 46060908762](https://github.com/wxxb789/symmetry/actions/runs/46060908762) ran `shared` once with the placeholder credential. Rounds 1 (`46046284991`) and 2 (`46049816624`) are **PARTIAL/SUPERSEDED**. The [native evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46060908762/artifacts/15229212219) is 4,627 B; downloaded SHA-256 `b7468252bb2c1943c163cfaa94a33ccdb3651d89acbecf0e0f66d9a822d8330a` matches Actions.
+
+The run commit has PR head `8b7fc347bcd01de18e86511a6e7779457a56ef15` as its sole parent and adds only the same workflow and shim as round 2. Every PR path matches by blob and mode, including the three docs revised since round 2. Only the changed non-doc input is listed below (SHA-256); the other rows in the round-2 table are unchanged.
+
+| Input | Round 2 `f6dfea80` | PR `8b7fc347` | Run `d9752b3d878e844430714f851aa8a8c6a3a3d294` |
+| --- | --- | --- | --- |
+| `scripts/ci/test-linux-v2-evidence.py` | `0b5f3dcd189032f5f89556db822728e4b1956940378e54b30ea19e1ba2bb62b6` | `35680566c94474aec13136537017dac1707e729f9221a343a3eda3734901604f` | Equals PR |
+
+[Acceptance job 140714973612](https://github.com/wxxb789/symmetry/actions/runs/46060908762/job/140714973612), raw log lines:
+
+1. **4554:** `Case set shared exited 1`. **24** green event-gate rows, the same set as round 2.
+2. **3688:** `verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`.
+3. The next witness, `helper_bound`, ran but was refused before reaching its hold. **4266:** `witness output:     production_linux_v2_native_witness_test.go:224: pre-existing RunJournal 690b6635-edb6-4536-93eb-a6c002e93177/1 is not physically released and safe for a fresh run: prior RunJournal may still own or require recovery of a process or leaf`.
+4. **Authenticated Pi progress and first failing line: not observed.** The placeholder provider leg reached `clone.checkout_ready:true` and `installed_owner_verified:true` but did not complete a provider action, as expected (`provider_action_succeeded:false`). Both provider-dependent crash legs were `not_run`. The exact-head protected workflow query returned zero dispatches; the scratch log contains no authenticated failure line.
+5. **3110:** `credential-gated: pi_provider_action (credential_gated_pi_provider_action) is NOT proven: the ratified placeholder provider credential cannot produce an authentic Pi provider turn, so this leg is not counted as passed.` **4551:** `redacted evidence export failed: pi durability witness is unavailable: ack-loss-replay-checkout_ready.json`. The partial ZIP contains `shared/credential-gated-legs.json` (807 B), `shared/pi-native-provider-action.json` (3,224 B), `shared/stage-crash-replay-reservation_durable.json` (6,644 B), and `shared/unprovisioned-owner-refusal.json` (691 B); no `shared/manifest.json` was published, so there is no manifest status. The first non-gated failure, **4262**, is `Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0`.
