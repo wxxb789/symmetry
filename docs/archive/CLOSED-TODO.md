@@ -5890,6 +5890,7 @@ conductor's `shared` Bind on the PR head and the three deferred retirement arms
       The guard now dispatches on the daemon's own retirement shapes. The superseding goal's
       `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` drives the production tombstone producers and
       asserts the daemon's own `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journals,
-      and its `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` pins eight refusal rows, each
-      red alone under its own mutant (goal record §5). No production file, fixture, pipeline or
-      workflow changed, and the pi leg's credential-gated recording (1B1) is untouched.
+      and its `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` pins ten refusal rows, each
+      red under its own mutant (two share the goal record §5 M11 term). No production file,
+      fixture, pipeline or workflow changed, and the pi leg's credential-gated recording (1B1) is
+      untouched.

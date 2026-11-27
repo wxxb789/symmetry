@@ -1999,15 +1999,15 @@ func TestLinuxV2PriorJournalRetirementRefusesActiveOwners(t *testing.T) {
 		want   string
 		mutate func(*state.RunJournal)
 	}{
-		{name: "process authority on the fence tombstone", base: neverCreated, want: linuxV2PriorJournalOwnershipRefusal,
+		{name: "process authority on the fence tombstone", base: neverCreated, want: "prior RunJournal may still own or require recovery of a process or leaf",
 			mutate: func(journal *state.RunJournal) {
 				journal.ContainmentAuthority = &authority.Supervisor{Version: authority.SupervisorVersionV2}
 			}},
-		{name: "launch handoff fence on the fence tombstone", base: neverCreated, want: linuxV2PriorJournalOwnershipRefusal,
+		{name: "launch handoff fence on the fence tombstone", base: neverCreated, want: "prior RunJournal may still own or require recovery of a process or leaf",
 			mutate: func(journal *state.RunJournal) {
 				journal.ContainmentHandoff = &authority.SupervisorHandoff{}
 			}},
-		{name: "process marker on the fence tombstone", base: neverCreated, want: linuxV2PriorJournalOwnershipRefusal,
+		{name: "process marker on the fence tombstone", base: neverCreated, want: "prior RunJournal may still own or require recovery of a process or leaf",
 			mutate: func(journal *state.RunJournal) {
 				journal.RunContainmentState.PID = 4101
 				journal.RunContainmentState.ProcessIdentity = "creation-identity-4101"
@@ -2020,7 +2020,7 @@ func TestLinuxV2PriorJournalRetirementRefusesActiveOwners(t *testing.T) {
 					Version: authority.LinuxCloneVersion, CgroupAbortProof: &abort,
 				}
 			}},
-		{name: "clone tombstone that differs from its reservation", base: neverCreated, want: abortRefusal,
+		{name: "clone tombstone that differs from its reservation (guard stricter than the daemon)", base: neverCreated, want: abortRefusal,
 			mutate: func(journal *state.RunJournal) {
 				abort := journal.ContainmentCgroup.AbortProof.Clone()
 				abort.LeafName = strings.Repeat("8", authority.TokenBytes*2)
