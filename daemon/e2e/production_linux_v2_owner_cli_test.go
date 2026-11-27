@@ -1457,10 +1457,6 @@ func linuxV2ValidateStageReplayJournal(fixture linuxV2NativeFixture, stage strin
 					cloneAbort.Intent.Generation != fixture.request.RunKey.Generation || cloneAbort.Intent.ResourceID != fixture.request.Subject.ResourceID {
 					return file, found, errors.New("no-target clone tombstone changed the exact RunKey/Subject")
 				}
-				if cloneAbort.CgroupAbortProof != nil {
-					copy := cloneAbort.CgroupAbortProof.Clone()
-					abort = &copy
-				}
 			}
 			if abort == nil || abort.Validate() != nil || !abort.CreatorFenced || !abort.NoProducerCanAct {
 				return file, found, errors.New("no-target tombstone lacks its exact creator-fenced abort proof")
@@ -1643,6 +1639,16 @@ func TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape(t *testing.T) {
 			}
 		})
 	}
+	t.Run("postCreateClaimedAbsence", func(t *testing.T) {
+		postCreate := tombstone
+		postCreate.CreateStarted, postCreate.LeafNeverAppeared = true, true
+		if err := postCreate.Validate(); err != nil {
+			t.Fatalf("the authority refused its own accepted never-appeared proof: %v", err)
+		}
+		if err := linuxV2ValidatePreEffectAbortTombstone(postCreate); err == nil || err.Error() != targetOrLeaf {
+			t.Fatalf("a create-started tombstone was not refused with the target/leaf-creation message: %v", err)
+		}
+	})
 }
 
 func linuxV2RemovedEmptyAbortTombstone(t *testing.T) authority.LinuxCgroupReservationAbortProof {

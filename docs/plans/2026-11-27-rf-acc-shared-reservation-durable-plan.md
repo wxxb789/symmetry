@@ -41,7 +41,7 @@ dead assertion that reddens any journal reaching it.
 
 ### 1.2 The `reservation_durable` boundary requires the pre-mkdir shape
 
-`linuxV2ValidateStageJournalBoundary` (dispatch base `:1617-1620`; delivered `:1871-1874`) refuses the held marker unless
+`linuxV2ValidateStageJournalBoundary` (dispatch base `:1617-1620`; delivered `:1877-1879`) refuses the held marker unless
 `reservation.CreateStarted == false`, no leaf identity and no helper. Recovery then takes
 `linux_owner_recovery_linux.go:139-146` (`!reservation.CreateStarted` →
 `abortNeverCreatedLinuxV2Reservation`) and persists the fence-inferred pre-mkdir tombstone whose
@@ -106,10 +106,19 @@ for a proof the contract forbids.
   `reservation_durable` (only the `never_created` fence shape may satisfy it) and `helper_bound`
   (only the `removed_empty`/`absent_after_rmdir` shape with its helper reap evidence may satisfy
   it). `create_started`, `leaf_bound` and `launcher_bound` recover `unresolved`; `gate_bound` and
-  later recover `released`. No other leg consumes the changed conjunct or the new binding.
+  later recover `released`. Two further live legs consume the changed conjunct and the new binding
+  *if they are reached*: the ordinary stage replay (`run_stage_replay_cases`, whose case list opens
+  with `reservation_durable helper_bound`, `scripts/ci/linux-v2-native-acceptance.sh:3298-3300`,
+  driving `TestProductionLinuxV2StageCrashReplayMatrix` through `linuxV2ValidateStageReplayJournal`),
+  and the ACK-loss replay's second response for `helper_bound` (`run_ack_loss_replay_cases ...
+  helper_bound`, `:3301-3303`, whose second response is validated at delivered
+  `daemon/e2e/production_linux_v2_owner_cli_test.go:4689`; `helper_bound` also maps to
+  `aborted_no_target`, so it reaches the binding's second accept arm). Neither case set produces a
+  journal whose disposition contradicts its held stage, so both refusal arms remain unit-only.
 - A tombstone that claims the create CAS advanced (`CreateStarted=true`) or a helper/helper exit
   stays refused by the clause; the accepted `CreateStarted=true, LeafNeverAppeared=true` shape is
-  not the pre-mkdir fence and is refused here too. A valid `removed_empty` proof is refused at
+  not the pre-mkdir fence and is refused here too, and that authority-valid shape has its own
+  witness row (`postCreateClaimedAbsence`). A valid `removed_empty` proof is refused at
   `reservation_durable` and a valid pre-mkdir proof at `helper_bound`, each with its own message.
 - The leg's remaining assertions (clone-abort proof, RunKey/Subject binding, `ValidFor` against the
   durable reservation) are unchanged; the fix removes the only stop the leg was observed to raise
@@ -120,7 +129,7 @@ for a proof the contract forbids.
 | New behaviour | Committed red-capable test | Runs where |
 | --- | --- | --- |
 | The pre-mkdir tombstone the state producer writes for a never-created reservation satisfies the stage-replay clause | `TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape` in `daemon/e2e`, driving `state.Store.AbortNeverCreatedLinuxCgroupReservation` | `daemon` job race pass (`go test -race ./...`), local WSL |
-| The clause still refuses a target/leaf-creation tombstone (`CreateStarted`, helper, helper exit, claimed absence: one field per row) | same test, red rows over a mutated copy | same |
+| The clause still refuses a target/leaf-creation tombstone (`CreateStarted`, helper, helper exit, claimed absence: one field per row) and the authority-valid post-create `(CreateStarted=true, LeafNeverAppeared=true)` proof (`postCreateClaimedAbsence`, `Validate()` asserted first) | same test, red rows over a mutated copy; M8 reddens the post-create row alone | same |
 | Each hold presents only its own valid disposition, and no other hold may present a no-target tombstone | `TestLinuxV2HeldStageBindsThePreEffectAbortDisposition` (predicate) and `TestLinuxV2StageReplayJournalBindsTheAbortDispositionToTheHeldStage` (the replay validator the leg calls) | same |
 | The old clause text rejects that same production tombstone | scratch-clone revert of the one token, same test | local WSL, recorded; not committed |
 
