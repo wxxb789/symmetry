@@ -229,35 +229,33 @@ Both sets passed and preserved the live owner-loss snapshot. The run did not emi
 wall time; the configured budget is not a measurement. The archival Bind below is verbatim.
 The conductor must re-bind the fixed head; this run does not cover the fix-round bytes.
 
-## Bind
+## Bind 2
 
-[Run 45972088295](https://github.com/wxxb789/symmetry/actions/runs/45972088295), attempt 1:
-`claude_containment` and `codex_containment` both passed, including their
-`StageCrashReplayMatrix/native_release_claude` and `native_release_codex` legs. Both export
-manifests passed with no missing members. The scratch branch and run worktree were removed;
-GitHub reported `total_count=1` for the run head before and after cleanup.
+**BINDING on `5ccf14bd6ab292b1bbcbd0cfa53f1e77d160be73`:**
+[Run 45985272938](https://github.com/wxxb789/symmetry/actions/runs/45985272938), attempt 1.
+Run 45972088295 remains the pre-fix binding on `fb728c79` (§9); the archival Bind is in the
+`5ccf14bd` revision of this record. Bind 2 now covers the fixed matrix discussed in §5.
 
-Both exports recorded `captured`, `owner_lost`, and `release_authorized` as `true`, no `error`
-field, and a `helper` stop proof issued by the held helper. The run did not emit capture elapsed
-wall time: 40 s is the configured capture bound, not a Bind measurement. The live-helper
-snapshots do not exercise the terminal-exit return asserted separately in §3.
+Both containment sets were green: ten verified rows each, including
+`TestProductionLinuxV2StageCrashReplayMatrix/native_release_claude` and
+`TestProductionLinuxV2StageCrashReplayMatrix/native_release_codex`. Both export manifests were
+`passed` with no missing allowlisted files. On each replay, the exported `owner_loss` snapshot
+has `captured`, `owner_lost`, and `release_authorized` true, omits `error`, and names
+the held helper as issuer and reaper of the `helper` stop proof (Claude PID 7240; Codex PID 7266).
+This verifies the live-helper path, not §3's terminal-exit path or a measured capture duration.
 
-| Artifact | ID | Downloaded ZIP SHA-256 (matched GitHub digest) |
-| --- | ---: | --- |
-| Native evidence | 15185288278 | `58a8f129929b94132f110a66e22d6cc90e68e003f3d8692147df1d375690f766` |
-| Host prerequisite | 15185995701 | `402b9cff92ec219a80d149744fc37ffabd2a4b8c8a573ffb8b955ef1735d3475` |
+The run commit `0b88140f2555f90e4a6bdc90ef8e6b0cdbe5cdd1` is a direct child of `5ccf14bd`.
+It adds only the scratch workflow and gh shim, with the same bytes as the first Bind. GitHub
+reported `total_count=1` from run creation through deletion of the branch and scratch worktree.
 
-Run head `25b820bd221cc969a8dea82e22d257dba459f930` has PR head
-`fb728c798006e17a5e93eeca0db670ba588cb70b` as its parent. The tree diff adds only the two
-scratch-only inputs below; every other repository input is byte-identical.
+Run-head vs PR-head SHA-256 deltas from the pre-fix equality table (the other rows are unchanged):
 
 | Executed input | Run head | PR head |
 | --- | --- | --- |
-| Production witness and e2e caller (`linux_owner_witness_linux.go`, `production_linux_v2_owner_cli_test.go`) | §1 delivered digests | same |
-| E2e witness fixture and native acceptance script | §7 `production_linux_v2_native_witness_test.go` and `linux-v2-native-acceptance.sh` digests | same |
-| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | same |
-| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | same |
-| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | same |
-| `.github/actions/contracts-build/action.yml` | `5c49e6cea58e0b0516238378d9dcc0abd6b0382784e351d89a55f057d29f6767` | same |
-| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `3eaada89cf74e116282fe74cfd1fbda8c418197c09f6c29785cd6533060d7f04` | absent |
-| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `9607c6196f70ca61c35db3a378e76032a13bf76c555f02426b499619924f8953` | same |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `751eaf4d5e4d29852b4fa23e4cec2be85a5b524ad5705f40e3cd2fc322a749a7` | same |
+
+Downloaded ZIPs matched GitHub's SHA-256 digests:
+
+- Native evidence `15191567837`: `8c39c1c18b89e48b4f2043f271e3e2ee61a4590af030503d5a6a44e9da514120`.
+- Host prerequisite `15191282020`: `0f6cf23d19895d2b14c626b9ee7e04381b0be5757cb9f233789c2ab75880fac1`.
