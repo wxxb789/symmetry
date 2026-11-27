@@ -402,9 +402,9 @@ section at the end of this file was moved on 2026-11-24 from branch
       rendered 83 host-path substitutions over the 26 files, so every host location, scratch roots
       included, became a deterministic `path-sha256:` token while product routes stay literal.
       Host-shaped specimen paths quoted inside reviewer prose were not spared: six of the 83
-      substitutions tokenized the `//etc/passwd` and `\\dir\\file.go` specimens in
+      substitutions tokenized the `<HOST-PATH>/etc/passwd` and `<HOST-PATH>\\dir\\file.go` specimens in
       `docs/evaluations/model-routing/0008b-go-bounded-regression-mixed.json` (line 627) and its
-      `.review.json` (line 6), and the `C:\\dir\\file` specimen in
+      `.review.json` (line 6), and the `<HOST-PATH>\\dir\\file` specimen in
       `docs/evaluations/model-routing/0008b-go-bounded-regression-strong.json` (line 487) and its
       `.review.json` (line 6); their pre-render spellings remain recoverable from git history at
       the base commit (`b33188b`). One tool fix was required and ships with a
@@ -1049,7 +1049,7 @@ section at the end of this file was moved on 2026-11-24 from branch
       `exec.Command` sites spawn configured harness CLIs, never a shell by that name). On this
       host PowerShell 7.7.0 exists but only as the Microsoft Store app-execution alias
       (`pwsh -NoProfile -Command "Write-Output ok"` exits 0 from cmd/bash; the running
-      process is `C:\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe`),
+      process is `<HOST-PATH>\Program Files\WindowsApps\Microsoft.PowerShell_7.7.0.0_x64__8wekyb3d8bbwe\pwsh.exe`),
       which Erlang cannot resolve: it is a 0-byte reparse point (`dir` shows 0 bytes;
       `fsutil reparsepoint query` reports tag `0x8000001b`, `IO_REPARSE_TAG_APPEXECLINK`), so
       `File.exists?/1` is false, `File.stat/1` reports `{:error, :eio}`,
@@ -1413,7 +1413,7 @@ section at the end of this file was moved on 2026-11-24 from branch
       backstop-path run on Windows (the round-2 review's: wait cap shortened 300 -> 20 s and no
       release written) fails with the cap-branch witness at 19.1 s; the full
       suite passes (`Ran 57 tests in 2017.722s`, `OK (skipped=2)`, exit 0). WSL Linux (Ubuntu-24.04,
-      python3, `/mnt/q` worktree): the same test on the `killpg` path passes
+      python3, `<HOST-PATH>` worktree): the same test on the `killpg` path passes
       (`Ran 1 test in 12.740s`, `OK`).
       Residual: a descendant created after the kill enumerates the tree (`taskkill /T`) or after
       the process group was signalled (`killpg`) is still reported as a survivor - correctly, with
@@ -2322,7 +2322,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       `docs/evaluations/model-routing/0008a-controls.json` (14 disposable-root
       strings), `docs/evaluations/model-routing/0008a-audit.json` (3), and
       `docs/evidence/goal-0008a-auditable-acceptance-workflow-2026-11-15.md` line
-      58 (`EVIDENCE_ROOT='C:/Users/...'`). The 0008b change renders its own new
+      58 (`EVIDENCE_ROOT='<HOST-PATH>'`). The 0008b change renders its own new
       records with that helper and records the rendering in the record
       (`record_rendering` in `0008b-controls.json`); audit finding P3-3. Keep each
       record's quoted digest consistent when the older records are re-published.
@@ -3760,7 +3760,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (`(?<=\\[nrtbf])|(?<=\\[u][0-9A-Fa-f]{4})`, next to the family's own negative set) — so a
       location behind a recorded escape is a match in every family, `_root_patterns` stops
       spelling its own copy of the same atom, and the round-5 reproduction
-      (`printf '%s' '{"out":"ok\n/home/runner/work/x failed"}' | … --check --root-only`, exit 0
+      (`printf '%s' '{"out":"ok\n<HOST-PATH>/runner/work/x failed"}' | … --check --root-only`, exit 0
       before) now exits 1. (`_COLON_POSIX_PATH` is the one family without the shared atom: its
       `(?<=:)` decides between an absolute path and a URL authority from the very next
       character, which no negative set can do.) The text's own JSON structure then decides the
@@ -3791,25 +3791,25 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       the path up to the escape and leaves the escape's own spelling behind. The r2 rule closes
       that first version's fail-open side, extended by round 3's union decision: a raw
       single-backslash spelling inside a valid literal decodes its separators into control
-      characters (`{"note":"see C:\repo\tmp"}`), so the decoded value carries no location — and
+      characters (`{"note":"see <HOST-PATH>\repo\tmp"}`), so the decoded value carries no location — and
       the Windows-shaped families (drive, UNC and slash-UNC, root-relative, `file:` URL) then
       run over the literal's recorded bytes, where **every match the scan reads contributes the parts of its
       span that no decoded claim and no rendered token's own text covers**, and those parts are
       unioned with the claims (overlapping or touching spans become one token) — **a raw match
       is never discarded because a decoded span overlaps it**, which is what the review's P1
-      table found the r2 filter doing: `{"p":"C:/Users` + the newline escape + `repo"}` left
+      table found the r2 filter doing: `{"p":"<HOST-PATH>` + the newline escape + `repo"}` left
       its segment names literal after one render and `--check --root-only` refused the tool's
       own render (exit 1). A match with no escaped backslash pair is a raw spelling through all
-      its parts, so that shape renders whole (`C:/Users` + the newline escape + `op` + the
+      its parts, so that shape renders whole (`<HOST-PATH>` + the newline escape + `op` + the
       carriage-return escape + `repo`), and the escape and text behind a forward-slash spelling
-      are absorbed with it (`//server/share/run` + the newline escape + `FAILED`) —
+      are absorbed with it (`<HOST-PATH>/share/run` + the newline escape + `FAILED`) —
       over-redaction, the fail-closed direction, the consequence round 3 accepted. A match
       carrying an escaped backslash pair is a producer mix, and the decoded reading's render
       governs its one-escape tails: its uncovered parts with a backslash beyond their opening
       escape character render whole (`C:` + the escaped pair + `Users` + the newline escape +
       `op` + the carriage-return escape + `repo` renders whole), while the entry's own properly
       escaped reproduction keeps the escape and `FAILED` outside the token and the mixed
-      spelling `C:\\a\repo` keeps `\repo` outside. A raw match whose span carries no backslash
+      spelling `<HOST-PATH>\\a\repo` keeps `\repo` outside. A raw match whose span carries no backslash
       is left to the decoded reading (the raw look exists for the single-backslash spellings; a
       recorded DEL byte, which only the raw tail admits, is the discriminating shape). The scan
       no longer uses `finditer` — a location whose tail swallowed the next location's first
@@ -3891,7 +3891,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       (round 3's P2 pin: the number of `_rebuild_with_groups` calls for 1,000 and 8,000 matches
       is the same in a literal and in prose, so the count cannot grow with the matches); "a raw
       location inside an earlier match is still rendered" (round 4's P2 pin: the two review
-      shapes whose second raw location begins inside the first match's span - `C:\f` + `C:\t` +
+      shapes whose second raw location begins inside the first match's span - `<HOST-PATH>\f` + `<HOST-PATH>\t` +
       `srv` + the escaped pair + `xfile` + the trailing colon, and the space-continued
       `\r`-then-`\n` run - each assert the exact one-token render, the digest of the union
       span's recorded bytes and the fixpoint, so the restart-at-match-end mutation fails them);
@@ -3907,7 +3907,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       escape-followed one, both UNC dialects with a raw separator, the raw root-relative and
       `file:` URL spellings, the forward-slash spelling, and a mixed literal carrying one
       escaped and one raw location — plus round 3's six: the forward-slash prefix continued by
-      raw separators (`{"p":"C:/Users` + the newline escape + `op` + the carriage-return escape
+      raw separators (`{"p":"<HOST-PATH>` + the newline escape + `op` + the carriage-return escape
       + `repo"}`, the review's own J1 shape), its JSONL variant, the escaped-pair prefix
       continued by raw segments, the odd-run raw suffix (the guard fix's shape), the
       key-carrying path, and the backslash-run split (the alignment shape, whose render is one
@@ -3924,8 +3924,8 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       token in both scopes, `--check --root-only` accepts the output with and without the
       `--root`, and a second render is byte-identical — the round-5 P2 publish flow). The raw
       module keeps the pattern, quoted, URL, space-continuation and CLI battery, and its own
-      pins: "a host path after a raw escape spelling is caught" (`ok\t/tmp/run` and `ok` + the
-      `u0020` escape + `/tmp/symmetry-run`, both scopes: the two `leading_boundary` escape arms
+      pins: "a host path after a raw escape spelling is caught" (`ok\t<TMP>/run` and `ok` + the
+      `u0020` escape + `<TMP>/symmetry-run`, both scopes: the two `leading_boundary` escape arms
       no JSON-reading pin needs, because a decoded control character is a boundary by itself),
       and the round-6 M9b pin `test_a_group_ending_at_a_claims_end_binds_its_whole_raw_span` (a
       merged group ending exactly at a rendered root token's end binds its whole raw span; the
@@ -3967,10 +3967,10 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       - Round-4 named mutations, measured for this round against the delivered suites (the raw
         module passes on each, because each edits the literal-only path): resuming the raw
         look's scan at each match's end (the review's M6, `start = match.end()`) fails exactly
-        the new P2 pin's two cases (`C:\f` + `C:\t` + `srv` + the escaped pair + `xfile` + the
+        the new P2 pin's two cases (`<HOST-PATH>\f` + `<HOST-PATH>\t` + `srv` + the escaped pair + `xfile` + the
         trailing colon, and the space-continued `\r`-then-`\n` run); removing the rendered
         tokens' own text from the raw look's `covered` set (the review's M11) fails exactly the
-        glued-token case's two subtests (`C:\temp\run` + `path-sha256:` + 64 `a`s, both
+        glued-token case's two subtests (`<HOST-PATH>\temp\run` + `path-sha256:` + 64 `a`s, both
         scopes); and the round-3 bytes' scan (the pre-round-4 `start = match.start() + 1` loop,
         `sha256:75e01391…`, the round's own delivered sanitizer) fails the new scaling pin
         outright — the same counting pin over the same `json.dumps` listing measured 12,004,895
@@ -4101,7 +4101,7 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       Performance, measured at the delivered bytes (minimum of five in-process runs, one module
       per process, this host; fixtures named with each number). Round 4 (the linear raw look):
       the review's UNC-listing fixture — `json.dumps({"stdout": "\n".join(...N
-      `\\srv\share\dirN` paths...)})` — renders 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines in
+      `<HOST-PATH>\\srv\share\dirN` paths...)})` — renders 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines in
       0.053 s / 0.150 s / 0.272 s / 0.597 s / 0.986 s root-only (base tool 0.004 s / 0.009 s /
       0.025 s / 0.036 s / 0.067 s; the r5 round re-measured this fixture's five-size series
       and the fixtures below keep the r4 round's numbers), where the round-3 bytes took
@@ -5875,7 +5875,7 @@ Stage 1 and stage 2 of goal `rf-acc-shared-helper-bound-journal` are delivered: 
 `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md`, record
 `docs/evidence/rf-acc-shared-helper-bound-journal-2026-11-28.md`, branch
 `refactor/rf-acc-shared-helper-bound-journal` on dispatch base `3d377582`. What stays open is the
-conductor's `shared` Bind on the PR head and the two deferred retirement arms
+conductor's `shared` Bind on the PR head and the three deferred retirement arms
 ([`## rf-acc-shared-helper-bound-journal: the fresh-run guard on the retained tombstone`](../TODO.md#rf-acc-shared-helper-bound-journal-the-fresh-run-guard-on-the-retained-tombstone-2026-11-28)).
 
 - [x] Rule the `helper_bound` guard wall (contract stage 1 and 2). The wall is long-standing, not

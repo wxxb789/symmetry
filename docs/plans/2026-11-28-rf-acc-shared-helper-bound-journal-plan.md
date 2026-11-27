@@ -38,7 +38,7 @@ That leg's retained shape is fixed by its own validators: recovery is `aborted_n
 release proof, no process details and no authority, plus `linuxV2ValidateHeldStageAbortDisposition`
 (`:1508-1525`) binding `reservation_durable` to the `never_created` fence shape. #309's producer is
 `state.Store.AbortNeverCreatedLinuxCgroupReservation`
-(`daemon/internal/state/linux_cgroup_journal.go:903-916`), whose policy is stated at `:898-902`: the
+(`daemon/internal/state/linux_cgroup_journal.go:903-928`), whose policy is stated at `:898-902`: the
 tombstone "remains until journal deletion so an unknown write can be replayed with the same proof".
 Retention is designed behaviour, not a leak.
 
@@ -48,8 +48,8 @@ Three bytes decide the question; two of them agree with each other:
 
 | Layer | Byte | Verdict on the tombstone |
 | --- | --- | --- |
-| Daemon State admission | `linuxV2ForeignJournalIsSafelyRetired`, `daemon/internal/state/linux_cgroup_journal.go:432-465`, abort arm `:452-456` | **retired**: `noActiveMarkers && no release/pre-gate proof && reservation.Validate() == nil` — a fresh run may proceed beside it |
-| Daemon State vocabulary | `HasPendingContainment`, `daemon/internal/state/run_journal.go:101-107` | not a pending owner: the reservation term is `ContainmentCgroup != nil && AbortProof == nil` |
+| Daemon State admission | `linuxV2ForeignJournalIsSafelyRetired`, `daemon/internal/state/linux_cgroup_journal.go:432-464`, abort arm `:453-456` | **retired**: `noActiveMarkers && no release/pre-gate proof && reservation.Validate() == nil` — a fresh run may proceed beside it |
+| Daemon State vocabulary | `HasPendingContainment`, `daemon/internal/state/run_journal.go:104-107` | not a pending owner: the reservation term is `ContainmentCgroup != nil && AbortProof == nil` |
 | Witness freshness guard | `linuxV2RequireSafelyReleasedPriorJournal`, `daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606` | **refuses**: `journal.ContainmentCgroup != nil` (`:2587-2590`) plus the v2 StopReceipt release demand (`:2592-2598`) |
 
 The guard asks the daemon's own question — "can a prior RunJournal still own a process or leaf?" —
@@ -61,8 +61,8 @@ expectation, **`daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606`**, c
 
 No production daemon/platform defect is claimed, so no `DECISION_NEEDED`: the authority
 (`LinuxCgroupReservation.Validate` → `linuxCgroupReservationAbortMatches`,
-`daemon/internal/state/linux_cgroup_journal.go:50-74`, `:157-176`, `:1094-1131`), the producer
-(`:903-916`) and the admission scan (`:432-465`) agree; only the fixture's copy of the rule is
+`daemon/internal/state/linux_cgroup_journal.go:50-79`, `:157-172`, `:1094-1130`), the producer
+(`:903-928`) and the admission scan (`:432-464`) agree; only the fixture's copy of the rule is
 stale.
 
 ### 1.3 New or long-standing
@@ -133,13 +133,20 @@ dispatcher in the daemon's own arm order, with its physical-release arm unchange
 4. the unchanged release arm: v2 `StopReceipt`, disposition ∈ {removed, absent_after_receipt} and the
    exact leaf-absence `Lstat`.
 
-Mirrored arms are arms 2 and 3 of `linuxV2ForeignJournalIsSafelyRetired` (`:448-456`, abort at
-`:453-456`) plus the existing release arm (`:442-447`). Two further production arms are deliberately
-**not** mirrored, because no leg of any case set can leave that shape in the shared StateDir:
+Mirrored arms are the release arm (`:442-447`), the pre-gate arm (`:448-452`) and the reservation
+abort arm (`:453-456`) of `linuxV2ForeignJournalIsSafelyRetired`, the abort arm additionally in the
+clone-proof-equal shape that `linuxCloneAbortHistoryMatches`
+(`daemon/internal/state/linux_clone_validation.go:396-401`) and the shared arm's own legs require.
+Three further production arms are deliberately **not** mirrored:
 
+- the clone-reuse-retired arm (`:435-441`): its shape needs a `LinuxCloneReuseGrant` retired before
+  native start with no cgroup reservation, written only by the reuse-abort path
+  (`daemon/internal/state/linux_clone_journal.go:517-518`); the shared arm's case sets drive no
+  clone-reuse flow, but unlike the two arms below that exclusion is not derived from a producer
+  constraint, so this arm stays a named residual;
 - the `LinuxCloneAbortProof`-only arm (`:457-459`): a cgroup-backed clone abort requires the
   reservation tombstone beside it (`linuxCloneAbortHistoryMatches`,
-  `daemon/internal/state/linux_clone_validation.go:388-408`), and the bare legacy shape is produced
+  `daemon/internal/state/linux_clone_validation.go:388-409`), and the bare legacy shape is produced
   only by the v1-era paths;
 - the legacy v1 `ContainmentAuthority` + StopReceipt arm (`:460-462`): the only v1 leg
   (`run_legacy_v1_replay_witness`, `scripts/ci/linux-v2-native-acceptance.sh:3212-3216`) drives
@@ -176,7 +183,7 @@ Not weakened, and why:
 - Acceptance, pre-gate: a pre-gate release tombstone with the never-created gate outcome is accepted;
   it is a literal, because the platform is the only issuer of the opaque pre-gate release
   (`platform.LinuxCgroupV2Release.SnapshotPreGate`, unexported fields) and its shape is pinned by
-  the state package's own receipt fixture (`linux_cgroup_v2_test.go:268-292`); the authenticator is
+  the state package's own receipt fixture (`linux_cgroup_v2_test.go:254-329`); the authenticator is
   produced by the exported `linuxgate.SignGateNeverProducedAuthenticator`, as that fixture does.
 - Refusal, individually reddenable: a clone-only proof with no reservation; a reservation whose
   stored proof differs from the extracted one; a reservation that no longer validates (one field
@@ -216,9 +223,10 @@ conductor's `shared` Bind is the acceptance and the record names what it must re
   and rejected: it widens the production package surface for a fixture precondition, and the
   contract's owned-file scope is the witness and its helpers; the mirror is instead pinned by the
   equivalence rows above so a future drift reddens a named test.
-- The production arms deliberately not mirrored (bare clone abort, legacy v1 stop receipt): no leg of
-  any case set leaves those shapes in the shared StateDir (§2). If a future leg does, it stops with
-  the existing ownership message and the arm is a named residual, not a silent acceptance.
+- The production arms deliberately not mirrored (clone-reuse retired, bare clone abort, legacy v1 stop
+  receipt): no leg of any case set leaves those shapes in the shared StateDir (§2). If a future leg
+  does, it stops with the existing ownership message and the arm is a named residual, not a silent
+  acceptance.
 - The acceptance script, the workflow, the exporter and the replay stage lists: unchanged; the fix
   needs no fixture or pipeline change, and a script edit would require runner-userland red/green
   proof before the PR opens.

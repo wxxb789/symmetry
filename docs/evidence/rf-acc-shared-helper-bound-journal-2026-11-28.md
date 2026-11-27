@@ -13,8 +13,8 @@ receipts bind the base, the changed-file scope and the content digests (§8).
 
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `812593b9afbb865bff6e9dcf39ac03068b6019db3c2a2957eccb3c20bdf888a8` | The fresh-run guard dispatches on the daemon's own retirement shapes (fenced abort tombstone, pre-gate leaf release) before its unchanged v2-StopReceipt release arm; two production-driven tombstone fixtures, one on-disk pre-gate fixture, one acceptance test and one refusal test; and the deferred no-target selector tidiness item taken here (§4.1). |
-| `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md` | `816a0cdeb0e60f1c3fe2f149eaf374a227a8c2fd744f94eec391d43c84292f06` | Stage-1 answers, the accepted fix, the arms deliberately not mirrored, the selector tidiness item taken here, the tests and the evidence plan. |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `6ddddb8c3f6726580adbedb5a4cbf08838599af2e7f8ad99fe99405cb87603e2` | The fresh-run guard dispatches on the daemon's own retirement shapes (fenced abort tombstone, pre-gate leaf release) before its unchanged v2-StopReceipt release arm; three production-driven tombstone fixtures (never-created, removed-empty, and the clone-abort tombstone beside its reservation that the shared arm's own legs leave), one on-disk pre-gate fixture, one acceptance test and one refusal test; the deferred no-target selector tidiness item taken here (§4.1); and the simplify-apply round (§4.2) that refreshed these bytes. |
+| `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md` | `52f5e13cdba24d4c231aba53b227d81e9a1aef50ceb43ddde8c0ee5c2439d123` | Stage-1 answers, the accepted fix, the arms deliberately not mirrored (three, §2), the selector tidiness item taken here, the tests and the evidence plan. |
 | `docs/evidence/rf-acc-shared-helper-bound-journal-2026-11-28.md` | this record | Stage-1 answers, the fix, the receipts. |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | The closed stage-1/2 items and the open Bind/residual entries. |
 
@@ -70,7 +70,7 @@ Three bytes decide it; two of them agree with each other:
 | Layer | Byte | Verdict on the retained pre-effect tombstone |
 | --- | --- | --- |
 | Daemon State admission | `daemon/internal/state/linux_cgroup_journal.go:432-464`, abort arm `:453-456`, pre-gate arm `:448-452` | **retired**: `noActiveMarkers` and no release/pre-gate proof and `reservation.Validate()` — a fresh run may proceed beside it |
-| Daemon State vocabulary | `daemon/internal/state/run_journal.go:101-107`, `HasPendingContainment` | not a pending owner: the reservation term is `ContainmentCgroup != nil && AbortProof == nil` |
+| Daemon State vocabulary | `daemon/internal/state/run_journal.go:104-107`, `HasPendingContainment` | not a pending owner: the reservation term is `ContainmentCgroup != nil && AbortProof == nil` |
 | Witness fresh-run guard | `daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606` (dispatch base) | **refuses**: `journal.ContainmentCgroup != nil` at `:2587-2590` plus the v2 StopReceipt release demand at `:2592-2598` |
 
 The guard asks the daemon's own question — can a prior RunJournal still own a process or leaf? — and
@@ -98,7 +98,7 @@ and no handoff (`linuxV2ValidateStageReplayJournal` `:1404-1493`, `aborted_no_ta
 and binds the `never_created` disposition to that hold
 (`linuxV2ValidateHeldStageAbortDisposition` `:1508-1525`). Its producer is
 `state.Store.AbortNeverCreatedLinuxCgroupReservation`
-(`daemon/internal/state/linux_cgroup_journal.go:903-916`), whose policy comment at `:898-902` states
+(`daemon/internal/state/linux_cgroup_journal.go:903-928`), whose policy comment at `:898-902` states
 the tombstone "remains until journal deletion so an unknown write can be replayed with the same
 proof". Retention is designed behaviour, not a leak.
 
@@ -127,39 +127,47 @@ contract forbids.
 ## 4. Contract clause 3 — the fix, and what it does not weaken
 
 `linuxV2RequireSafelyReleasedPriorJournal`
-(`daemon/e2e/production_linux_v2_owner_cli_test.go:2823-2854`) is now a dispatcher in the daemon's
+(`daemon/e2e/production_linux_v2_owner_cli_test.go:2887-2917`) is now a dispatcher in the daemon's
 own arm order, with its physical-release arm byte-identical:
 
-1. owner-marker refusal at `:2825-2828` — `HasProcessDetails`, `HasPendingContainment`,
-   `ContainmentUnproven`, `ContainmentAuthority`, `ContainmentHandoff` — one literal message
-   (`linuxV2PriorJournalOwnershipRefusal` `:2821`);
-2. fenced abort tombstone at `:2831-2833` → `linuxV2RequireRetiredPriorAbortTombstone`
-   (`:2856-2864`): `ContainmentCgroup` present with a proof equal to the extracted one,
-   `reservation.Validate()` (which itself runs `linuxCgroupReservationAbortMatches`,
-   `daemon/internal/state/linux_cgroup_journal.go:1094-1131`, through `validateProofs` `:157-176`),
-   and no release and no pre-gate proof beside it;
-3. pre-gate release tombstone at `:2834-2836` → `linuxV2RequireRetiredPriorPreGateTombstone`
-   (`:2866-2871`): `proof.Validate()` and no release proof beside it. `Validate()` implies the
+1. owner-marker refusal at `:2889` — `HasProcessDetails`, `HasPendingContainment`,
+   `ContainmentUnproven` — one literal message (`linuxV2PriorJournalOwnershipRefusal` `:2885`). The
+   apply round (§4.2) dropped the two conjuncts `ContainmentAuthority != nil` and
+   `ContainmentHandoff != nil`, which `HasPendingContainment`
+   (`daemon/internal/state/run_journal.go:104-107`) already ORs; the two refusal rows added with that
+   deletion keep the refusal guarantee pinned (M11, §5);
+2. fenced abort tombstone at `:2894-2896` → `linuxV2RequireRetiredPriorAbortTombstone`
+   (`:2919-2927`): `ContainmentCgroup` present with a proof equal to the extracted one — the
+   preferred clone proof when the journal carries one, which is the shared StateDir's own shape
+   (acceptance row 4) — `reservation.Validate()` (which itself runs
+   `linuxCgroupReservationAbortMatches`, `daemon/internal/state/linux_cgroup_journal.go:1094-1130`,
+   through `validateProofs` `:157-172`), and no release and no pre-gate proof beside it;
+3. pre-gate release tombstone at `:2897-2899` → `linuxV2RequireRetiredPriorPreGateTombstone`
+   (`:2929-2934`): `proof.Validate()` and no release proof beside it. `Validate()` implies the
    version and the `GateOutcome == never_created` conjuncts the daemon spells out at
    `linux_cgroup_journal.go:448-452`, and the dispatcher's earlier terms already exclude a live
    reservation and every active marker;
-4. the unchanged release arm `:2837-2854`: v2 `StopReceipt`, disposition ∈ {removed,
+4. the unchanged release arm `:2900-2915`: v2 `StopReceipt`, disposition ∈ {removed,
    absent_after_receipt} and the exact leaf-absence `Lstat`.
 
-Two further daemon arms are deliberately **not** mirrored, because no leg of any case set leaves that
-shape in the shared StateDir:
+Three further daemon arms are deliberately **not** mirrored:
 
+- the clone-reuse-retired arm (`linux_cgroup_journal.go:435-441`): its shape needs a
+  `LinuxCloneReuseGrant` retired before native start with no cgroup reservation, written only by the
+  reuse-abort path (`daemon/internal/state/linux_clone_journal.go:517-518`); the shared arm's case
+  sets drive no clone-reuse flow, but unlike the two arms below that exclusion is not derived from a
+  producer constraint, so the apply round (§4.2) added this arm to the inventory and to the residual;
 - the `LinuxCloneAbortProof`-only arm (`linux_cgroup_journal.go:457-459`): a cgroup-backed clone
   abort requires the reservation tombstone beside it (`linuxCloneAbortHistoryMatches`,
-  `daemon/internal/state/linux_clone_validation.go:388-408`), and the bare legacy shape is a
+  `daemon/internal/state/linux_clone_validation.go:388-409`), and the bare legacy shape is a
   pre-v2-era row;
 - the legacy v1 `ContainmentAuthority` + StopReceipt arm (`linux_cgroup_journal.go:460-462`): the
   only v1 leg (`run_legacy_v1_replay_witness`, `scripts/ci/linux-v2-native-acceptance.sh:3212-3217`)
   drives `TestProductionLinuxV2LegacyV1ReplayNoV2Receipt`, whose `runLinuxStopResponseLostCase` uses
   its own witness state root, not the shared StateDir.
 
-Both stay refused with the existing ownership message, so a row of either shape stalls the arm with
-the same diagnostic as before rather than passing silently; §10 names them.
+All three stay refused with the existing ownership message, so a row of any of those shapes stalls the
+arm with the same diagnostic as before rather than passing silently; §10 names them.
 
 Not weakened:
 
@@ -176,23 +184,27 @@ Not weakened:
 
 ### 4.1 The fixtures, and why the pre-gate one is a file
 
-`linuxV2NeverCreatedTombstoneJournal` (`:1594-1612`) and `linuxV2RemovedEmptyTombstoneJournal`
-(`:1614-1654`) drive the production CAS chain — `SaveJournal`, `ReserveLinuxCgroup`, then
-`AbortNeverCreatedLinuxCgroupReservation`, or `MarkLinuxCgroupCreateStarted` → `BindLinuxCgroupLeaf`
-→ `AbortLinuxCgroupReservation` with a `removed_empty` proof — so each accepted shape is written by
-the daemon's own producer, not by a literal. `linuxV2PreMkdirAbortTombstone` (`:1721-1724`) now
-delegates to the first builder, so #309's three tests keep the identical producer path.
+`linuxV2NeverCreatedTombstoneJournal` (`:1596-1614`), `linuxV2RemovedEmptyTombstoneJournal`
+(`:1616-1653`) and `linuxV2CloneTombstoneJournal` (`:1717-1781`) drive the production CAS chain —
+`SaveJournal`, `ReserveLinuxCgroup`, then `AbortNeverCreatedLinuxCgroupReservation`, or
+`MarkLinuxCgroupCreateStarted` → `BindLinuxCgroupLeaf` → `AbortLinuxCgroupReservation` with a
+`removed_empty` proof; the clone fixture additionally drives `ReserveLinuxCloneIntent` →
+`FenceLinuxCloneBeforeCheckout` → `CompleteLinuxCloneAbort` over the same tombstone — so each accepted
+shape is written by the daemon's own producer, not by a literal. `linuxV2PreMkdirAbortTombstone`
+(`:1783-1786`) now delegates to the first builder, so #309's three tests keep the identical producer
+path.
 
-`linuxV2PreGateReleaseTombstoneJournal` (`:1673-1719`) is a literal, because the platform is the only
+`linuxV2PreGateReleaseTombstoneJournal` (`:1672-1715`) is a literal, because the platform is the only
 issuer of the opaque pre-gate release (`platform.LinuxCgroupV2Release.SnapshotPreGate`, unexported
 fields) and the Store refuses to import that tombstone outside its dedicated clear
 (`daemon/internal/state/run_journal.go:275`, `:343`); the fixture is therefore written as the
-daemon's own on-disk journal file (`linuxV2WritePriorJournalFile` `:1656-1671`, the same
-name↔key derivation the Store enforces at `daemon/internal/state/run_journal.go:544-555`) and then
+daemon's own on-disk journal file (`linuxV2WritePriorJournalFile` `:1655-1670`, the same
+name↔key derivation the Store enforces at `daemon/internal/state/run_journal.go:544-556`) and then
 re-read through the production Store (`LoadJournal`) so its `validateJournal` pass is production
 evidence, not the fixture's claim. Its receipt shape is the state package's own pre-gate fixture
-(`daemon/internal/state/linux_cgroup_v2_test.go:268-292`), with the authenticator produced by
-`linuxgate.SignGateNeverProducedAuthenticator`.
+(`daemon/internal/state/linux_cgroup_v2_test.go:254-329`), with the authenticator produced by
+`linuxgate.SignGateNeverProducedAuthenticator`. The held-stage fixture now writes through the same
+`linuxV2WritePriorJournalFile` (apply round, §4.2), so one writer derives the name for both.
 
 `linuxV2StageReplayNoTargetAbort` (`:1495-1506`) also takes the deferred tidiness item #309 left in
 `docs/TODO.md` with "the next slice that already touches this file" as its owner, which this slice
@@ -204,45 +216,76 @@ precedence note beside the selector records why the clone proof wins, and §5's 
 mutant reddens the clone-vs-reservation mismatch row alone — the row that exists because the
 preference is load-bearing.
 
+### 4.2 The simplify-apply round (2026-11-28)
+
+Seven accepted tidy-up findings plus one record-accuracy defect were applied to the delivered bytes
+after the simplify review; the fourth finding (hoisting the two refusal messages to package consts)
+was skipped, because a literal shared between producer and assertion makes that message pin hollow.
+What changed:
+
+- the guard's first condition lost the two conjuncts `HasPendingContainment` already covers, and the
+  refusal test gained one row per dropped conjunct (`process authority on the fence tombstone`,
+  `launch handoff fence on the fence tombstone`) so the surviving term is pinned by M11 (§5);
+- `linuxV2CloneTombstoneJournal` and acceptance row 4 (`clone abort tombstone beside its
+  reservation`) pin the accept direction of the shape the shared StateDir's own journal has: a
+  reservation tombstone beside a clone-abort proof that equals it. M12 is the counterfactual (§5);
+- `linuxV2PriorLeafIdentity` (`:1580-1585`) replaced three hand-written four-line leaf literals; the
+  single-caller store helper was inlined into `linuxV2NewPriorJournalFixtures` (`:1549-1562`); the
+  held-stage fixture calls `linuxV2WritePriorJournalFile` instead of its own write block; and the
+  acceptance loop's snapshot lookup now names a missing key instead of asserting through a zero
+  snapshot;
+- the record inventory of unmirrored daemon arms now names three arms instead of two (§4, §10,
+  `docs/TODO.md`): the clone-reuse-retired arm (`linux_cgroup_journal.go:435-441`) was missing from
+  the earlier count.
+
+All of it is inside the fixture's own file: no production package, no script, no workflow and no
+leg-level validator changed, and the pre-apply digests (`812593b9…` for the Go file) and every receipt
+bound to them are PARTIAL and SUPERSEDED by §1, §5 and §8.
+
 ## 5. Red/green controls (command → exit code)
 
 All rows ran in WSL `Ubuntu-24.04` (Noble, GNU coreutils; `go1.27.0 linux/amd64`) from the `daemon/`
-directory of the delivered worktree, on the *delivered* bytes. The mutant rows ran in a scratch copy
-of `daemon/` with one string replaced in the delivered file; each mutant's own sha256 is in the
-table, the delivered file's digest is §1's `812593b9…`, and `cp` of the delivered file restored it
-between runs (the restored row re-measures to the delivered digest and exit 0).
+directory of the delivered worktree, on the *delivered* bytes `6ddddb8c…` (§1). The mutant rows ran in
+a scratch copy of `daemon/` with one string replaced in the delivered file; each mutant's own sha256
+is in the table, and the copy was re-created from the delivered file between runs (the restored row
+re-measures to the delivered digest and exits 0). The pre-apply rows, measured on `812593b9…`, are
+PARTIAL and SUPERSEDED by this table.
 
 Command for every row below:
 `go test ./e2e -run 'TestLinuxV2(RetiredPriorJournalAllowsAFreshRun|PriorJournalRetirementRefusesActiveOwners)' -count=1`
 
 | Row | sha256 (mutant) | Exit | Observed red row / message |
 | --- | --- | --- | --- |
-| Green, delivered bytes | §1 `812593b9…` | 0 | 3 acceptance rows and 8 refusal rows PASS; each acceptance row also asserts the daemon's own `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journal |
-| Red M1, dispatcher drops the process marker | `f3c5cbbf8a9e3c36543ff40ef700760c9b8482d053a12c16e70483dfddf1f293` | 1 | `process_marker_on_the_fence_tombstone`: `prior RunJournal admission = <nil>, want a refusal naming "prior RunJournal may still own or require recovery …"` |
-| Red M2, abort arm drops the nil-reservation guard | `69e11c0c1a49ddd30967d15b85562e562b4892809486bf66433130b3aced81a3` | 1 | `clone_abort_proof_with_no_reservation`, with a nil-pointer panic in the guard |
-| Red M3, abort arm drops the proof-equality guard | `99ec092648d6b4bc2a1310aba2189c06fbe01908b64ea27e2a989a9c204c2d19` | 1 | `clone_tombstone_that_differs_from_its_reservation`: `admission = <nil>, want a refusal naming "prior RunJournal's abort tombstone is not an exact fenced pre-effect retirement"` |
-| Red M4, abort arm drops `reservation.Validate()` | `74754a4f39aa281de0a5b4ecb7bcb475c206ddae32f9c78c785e8ac704710c37` | 1 | `reservation_that_no_longer_validates`: the same abort-tombstone refusal |
-| Red M5, abort arm drops the release-proof absence | `b731e579a2af3981987cda03656dd52f038276294fef4d1bbc5a58827e704c4c` | 1 | `release_proof_beside_the_fence_tombstone`: the same abort-tombstone refusal |
-| Red M6, abort arm drops the pre-gate-proof absence | `e77d97a2793f0917cf9151a3121321101cd428a5fc329bb156c93fbfcddcde27` | 1 | `pre-gate_proof_beside_the_fence_tombstone`: the same abort-tombstone refusal |
-| Red M7, pre-gate arm drops the release-proof absence | `21c17e8448c1811d251a256c8e37ef34afbdc260a156fd8c1433a2556b6cba4f` | 1 | `release_proof_beside_the_pre-gate_tombstone`: the pre-gate refusal |
-| Red M8, pre-gate arm drops `proof.Validate()` | `f4705b4510b4eef723733ead0afcfcb2feddbe48e264926706e0c0eb76f45f4e` | 1 | `pre-gate_proof_without_its_removal_disposition`: the pre-gate refusal |
-| Red M9, the pre-fix guard (both dispatch arms deleted) | `8c0920cd719536e7c04c48c83a5e046430f11ed4e712a6438345551daac81a48` | 1 | all three acceptance rows: `retired prior RunJournal was refused as an owner: prior RunJournal may still own or require recovery of a process or leaf` — the wall, reproduced on the delivered fixtures |
-| Red M10, the selector's two branches reordered | `147fc246cae277f40ae55a034f276e81094e840e750e030747a5a2e684e9dfb0` | 1 | `clone_tombstone_that_differs_from_its_reservation` alone: the reservation proof would be selected instead of the preferred clone proof, so the mismatch row's journal is admitted |
+| Green, delivered bytes | §1 `6ddddb8c…` | 0 | 4 acceptance rows and 10 refusal rows PASS (16 subtests); each acceptance row also asserts the daemon's own `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journal |
+| Red M1, dispatcher drops the process marker | `d6b1182354dab9997b50ba2b672d93353a7bfc5804dccb119de4113f27b64f61` | 1 | `process_marker_on_the_fence_tombstone`: `prior RunJournal admission = <nil>, want a refusal naming "prior RunJournal may still own or require recovery …"` |
+| Red M2, abort arm drops the nil-reservation guard | `c40c440ac521b81e524a78fc1df846586d12de75d7a88616d63eb2db56bddc6f` | 1 | `clone_abort_proof_with_no_reservation`, with a nil-pointer panic in the guard |
+| Red M3, abort arm drops the proof-equality guard | `04a272ec868ba15d72792b634791d97e179e7dba6d0ac6820d1cbebd1c8e5fc9` | 1 | `clone_tombstone_that_differs_from_its_reservation`: `admission = <nil>, want a refusal naming "prior RunJournal's abort tombstone is not an exact fenced pre-effect retirement"` |
+| Red M4, abort arm drops `reservation.Validate()` | `3775a7656cdada00854594c93f0ccc3857dc1ac4537c64873ad6ba9b727b1a57` | 1 | `reservation_that_no_longer_validates`: the same abort-tombstone refusal |
+| Red M5, abort arm drops the release-proof absence | `23f05a5e9761979f2d8138364d798b038735f403b17b2e1082f29ca73bd96830` | 1 | `release_proof_beside_the_fence_tombstone`: the same abort-tombstone refusal |
+| Red M6, abort arm drops the pre-gate-proof absence | `b3157c671dd8f0b83649fc374bf7221b5334c6c4c13610fa20f85a24e48aa705` | 1 | `pre-gate_proof_beside_the_fence_tombstone`: the same abort-tombstone refusal |
+| Red M7, pre-gate arm drops the release-proof absence | `535e8a5c7b1ea1a2997c1dba30b3cbf70d19f7e3f41ab99182891425f91a8c1d` | 1 | `release_proof_beside_the_pre-gate_tombstone`: the pre-gate refusal |
+| Red M8, pre-gate arm drops `proof.Validate()` | `5e9a0c951df0c996988cb7b5ed0c5177a423269d58a159be263d00eda2407498` | 1 | `pre-gate_proof_without_its_removal_disposition`: the pre-gate refusal |
+| Red M9, the pre-fix guard (both dispatch arms deleted) | `f6b2367d4eacf8e2e9e05b692f03a4cb56c79b6564524d064392b4427269b7ad` | 1 | all four acceptance rows: `retired prior RunJournal was refused as an owner: prior RunJournal may still own or require recovery of a process or leaf` — the wall, reproduced on the delivered fixtures |
+| Red M10, the selector's two branches reordered | `6dc354af5b324561699246ecd776ef834ad384bdc5489090f2459bba2d7e8543` | 1 | `clone_tombstone_that_differs_from_its_reservation` alone: the reservation proof would be selected instead of the preferred clone proof, so the mismatch row's journal is admitted. The clone-tombstone acceptance row stays green, because its two proofs are equal |
+| Red M11, guard drops the pending-containment term | `7a5500182d4b80cc7381d0725017b63d40d7d9b0a296acad37bd915ad679b939` | 1 | `process_authority_on_the_fence_tombstone` and `launch_handoff_fence_on_the_fence_tombstone` alone: with the term gone the abort arm admits both journals |
+| Red M12, abort arm refuses a clone proof beside the tombstone | `dec55aed9011b128df589da4419fc4f6067dfbcd2824972fb91f95e742cc683f` | 1 | `clone_abort_tombstone_beside_its_reservation` alone: the added conjunct refuses the shape the shared StateDir's own journal has |
 
 Neighbour rows, same environment:
 
 | Row | Command | Exit | Observed |
 | --- | --- | --- | --- |
-| Neighbour predicates | `go test ./e2e -run '^TestLinuxV2' -count=1` | 0 | `ok … daemon/e2e 0.829s` |
-| Whole `e2e` package | `go test ./e2e -count=1` | 0 | `ok … daemon/e2e 1.438s` |
+| Neighbour predicates | `go test ./e2e -run '^TestLinuxV2' -count=1` | 0 | `ok … daemon/e2e 1.012s` |
+| Whole `e2e` package | `go test ./e2e -count=1` | 0 | `ok … daemon/e2e 1.709s` |
 | Vet | `go vet ./e2e` | 0 | no output |
 | Format | `gofmt -l e2e` | 0 | no output |
 
 Every refusal this round claims names the mutant that reddens its own row: M1 pins the dispatcher's
-process-marker conjunct, M2-M8 pin the eight conjuncts of the two new arms, and M10 pins the
-selector's precedence. The acceptance rows are pinned from the other side: M9 (the pre-fix guard)
-reddens all three, and each row's second assertion — the daemon's own admission scan — fails if the
-guard ever admits more than the daemon retires.
+process-marker conjunct, M2–M8 pin the seven conjunct removals of the two tombstone arms, M11 pins the
+`HasPendingContainment` term that carries the authority and handoff refusals after the apply round's
+deletion, and M10 pins the selector's precedence. The acceptance rows are pinned from the other side:
+M9 (the pre-fix guard) reddens all four, M12 reddens the clone-tombstone row alone, and each row's
+second assertion — the daemon's own admission scan — fails if the guard ever admits more than the
+daemon retires.
 
 ## 6. Which userland each property needed (standing rule)
 
@@ -263,11 +306,11 @@ Both new tests live in `daemon/e2e` and run in the `daemon` job's race pass (the
 step, `.github/workflows/ci.yml:1055-1063`, running `test -race -count=1 -timeout 600s -json ./...`
 through `scripts/ci/go-test-json-gate.py`) and locally; the `shared` Bind does not invoke `./e2e`
 with these test names, so it does not execute them. What the Bind *does* execute is the fixed guard
-itself, twice per `shared` run: at the
-`helper_bound` fixture creation over the `reservation_durable` tombstone (acceptance rows' shape,
-`M9`'s counterfactual) and, if the arm reaches it, at the `receipt_persist_failure`/`literal_pid_reuse`
-fixture creation over the `helper_bound` and ACK-loss `helper_bound` tombstones (the
-`removed_empty` shape, acceptance row 2). The pre-gate arm is executed only if the arm reaches
+itself, twice per `shared` run: at the `helper_bound` fixture creation over the `reservation_durable`
+tombstone — the clone-tombstone shape acceptance row 4 pins, which is why that row was added — and, if
+the arm reaches it, at the `receipt_persist_failure`/`literal_pid_reuse` fixture creation over the
+`helper_bound` and ACK-loss `helper_bound` tombstones (the `removed_empty` shape, acceptance row 2).
+The pre-gate arm is executed only if the arm reaches
 `helper_launcher_response_loss` and its final journal carries the pre-gate tombstone; no run has been
 measured there. The refusal rows need a journal whose shape contradicts the guard; no Bind case
 produces one, so they are attributed to the `daemon` job's race pass and to §5.
@@ -276,30 +319,38 @@ produces one, so they are attributed to the `daemon` job's race pass and to §5.
 
 | Gate | Command (working directory) | Exit | Counts |
 | --- | --- | --- | --- |
-| Go rows above | see §5 (`daemon/`, WSL Noble) | per §5 | 3 acceptance rows and 8 refusal rows green; ten mutants red, each at its own named row; neighbour rows, `gofmt` and `vet` green |
+| Go rows above | see §5 (`daemon/`, WSL Noble) | per §5 | 4 acceptance rows and 10 refusal rows green; twelve mutants red, each at its own named row; neighbour rows, `gofmt` and `vet` green |
 | Full Go suite, Windows (`go1.27.4 windows/amd64`) | `go test -count=1 ./...` (`daemon/`) | 0 | 30 rows: 27 `ok`, 3 `[no test files]`, no `FAIL` |
-| Full Go suite, WSL Noble as root (`go1.27.0 linux/amd64`) | `go test -count=1 ./...` (`daemon/`) | 1 | 32 rows: 29 `ok` including `ok … daemon/e2e 2.113s`, 3 `[no test files]`, two failing packages (`internal/platform`, `native/linux-gate/protocol`) with 14 failing test rows |
+| Full Go suite, WSL Noble as root (`go1.27.0 linux/amd64`) | `go test -count=1 ./...` (`daemon/`) | 1 | 32 rows: 29 `ok` including `ok … daemon/e2e 2.633s`, 3 `[no test files]`, two failing packages (`internal/platform`, `native/linux-gate/protocol`) with 14 failing test rows |
 | Attribution, `internal/platform` | the same package at the head and in a `git archive 3d377582 daemon` tree, same environment | 1 and 1 | both: 13 rows of `wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`; `daemon/internal/platform/anchor_shape_table_test.go` sha256 `1f6b070ac0ce9a2a8e036c11fa6212a1c98051cebd5b31e97d593f1163ff0841` identical on both sides |
 | Attribution, `native/linux-gate/protocol` | the same package at the head and in the base tree | 1 and 1 | both: `TestGateFDCensusAllowsStdioAndRejectsUnexpectedDescriptors` alone, the same `phase=fd … closedir … errno=1` census rows |
 | Comment cap | the coordinator's owner comment-policy checker on the scratch commit carrying these bytes | 0 | no added comment block over 2 lines |
-| Changed-file duplication, pinned ceilings | `python scripts/ci/jscpd-changed.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 5 changed files, 1805 scanned sources, 1245 clones in the corpus, 0 tolerated among the added lines, none new; notices that the 6110-line Go test file and the 5895-line `docs/archive/CLOSED-TODO.md` carry added lines jscpd did not scan, both above the pinned `--max-lines 5000` ceiling |
+| Changed-file duplication, pinned ceilings | `python scripts/ci/jscpd-changed.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 5 changed files, 1805 scanned sources, 1245 clones in the corpus, 0 tolerated among the added lines, none new; notices that the 6173-line Go test file and the 5895-line `docs/archive/CLOSED-TODO.md` carry added lines jscpd did not scan, both above the pinned `--max-lines 5000` ceiling |
 | Changed-file duplication, raised ceilings | the same script with `JSCPD_LIMITS` raised to `--max-lines 30000 --max-size 8mb` | 0 | 5 changed files, 1812 scanned sources, 1404 clones, 0 tolerated among the added lines, none new, no notice — every changed file was scanned |
 | Record cleanliness | `python scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 1 changed record passes the root-only check |
 | Citation existence | `python scripts/ci/check-citation-existence.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 1 changed document passes the path and symbol check (744 path citations; the notices are pre-existing ignore-rule notes for the portal and `deps` paths) |
+| Model-routing record sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | 0 | four changed documents pass; `docs/archive/CLOSED-TODO.md` carried 18 host-shaped spellings (the same 18 at `3d377582`), now rendered as `<HOST-PATH>`/`<TMP>` |
 
-The comment cap, both duplication runs, the record check and the citation check read the *committed*
-diff, so they ran on a scratch clone of this branch carrying the delivered bytes of every changed
-file, base `3d377582`; the record's own final append follows that clone commit, so those numbers bind
-the changed-file scope and the §1 content digests rather than a revision that cannot name itself —
-the next commit that touches this record is the deliverable's own. The full-suite rows ran on the
-delivered Go bytes: the changed Go file is `//go:build linux && amd64`, so Windows compiles it out
-entirely and the WSL runs execute it inside `daemon/e2e`, whose `ok` row appears in both runs. Neither
-WSL failure is in the changed scope, and both reproduce at the dispatch base in the same environment.
+The comment cap, both duplication runs, the record check, the citation check and the sanitize sweep
+read the *committed* diff, so they ran on a scratch clone carrying the §1 delivered bytes of every
+changed file, base `3d377582`; the record's own §8 text follows that clone commit, so those numbers
+bind the changed-file scope and the §1 content digests rather than a revision that cannot name
+itself — the next commit that touches this record is the deliverable's own. The sanitize sweep is the
+one row that
+changed a document outside the apply round's findings: `docs/archive/CLOSED-TODO.md` already refused
+`--check --root-only` at the dispatch base (five drive/UNC/POSIX-mount spellings plus thirteen
+host-shaped regression specimens quoted in the sanitizer's own closed record), so those spellings were
+rendered with this step's sanctioned `<HOST-PATH>`/`<TMP>` tokens, keeping each sentence's shape and
+counts and losing only the literal root. The full-suite rows ran on the delivered Go bytes: the
+changed Go file is `//go:build linux && amd64`, so Windows compiles it out entirely and the WSL runs
+execute it inside `daemon/e2e`, whose `ok` row appears in both runs. Neither WSL failure is in the
+changed scope, and both reproduce at the dispatch base in the same environment (`internal/platform` 13
+uid-refusal rows, `native/linux-gate/protocol`'s fd-census pin alone, `e2e` green).
 
 ## 9. Next Bind
 
 The binding receipt must be the conductor's re-Bind on the post-fix bytes: this round changes the
-`daemon/e2e/production_linux_v2_owner_cli_test.go` blob (§1 `812593b9…`) and the plan, so no run that
+`daemon/e2e/production_linux_v2_owner_cli_test.go` blob (§1 `6ddddb8c…`) and the plan, so no run that
 gated #309's `96306f49…` blob can bind it. The three #309 scratch Binds (`46037316453`,
 `46041720955`, `46045331565`; #309 record §7, §9, §10) are BASELINE ONLY: each gated a predecessor
 witness blob, and each records the wall's `:224` guard stop.
@@ -317,12 +368,18 @@ of the fixed rows is §5's; the Bind is the acceptance, not this record.
   guard's accept direction is executed locally, and M9 reproduces the wall on the delivered fixtures,
   but the leg itself waits for the conductor's dispatch. In all three #309 runs the tombstone was the
   only pre-existing journal the guard could name, which is what §3.1's ordering argument rests on.
-- If the arm stops later, the next stop is most likely a shape this fix did not mirror: the bare
-  `LinuxCloneAbortProof` row or the legacy v1 `ContainmentAuthority` + StopReceipt row (§4). Both
-  refuse with the existing ownership message, so the arm fails closed rather than passing silently;
-  `docs/TODO.md` carries the residual item.
+- If the arm stops later, the next stop is most likely a shape this fix did not mirror: the
+  clone-reuse-retired arm, the bare `LinuxCloneAbortProof` row or the legacy v1
+  `ContainmentAuthority` + StopReceipt row (§4). All three refuse with the existing ownership
+  message, so the arm fails closed rather than passing silently; `docs/TODO.md` carries the residual
+  item, and the apply round added the third arm to it.
+- The clone-tombstone acceptance row (row 4) is inferred-reachable in the same sense as the pre-gate
+  one: the guard's selector prefers the clone proof, so the `helper_bound` fixture creation exercises
+  this row's shape only if the preceding leg's journal carries the clone proof
+  `linuxV2VerifyNoTargetCloneAbort` demands; a leg reaching the arm without one selects the
+  reservation proof instead, and row 1's shape is exercised there.
 - The pre-gate acceptance arm is inferred-reachable, not observed.
-  `linuxV2ValidateLauncherReadyLostAckSummary` (`:2364-2403`) permits `released` or
+  `linuxV2ValidateLauncherReadyLostAckSummary` (`:2428-2467`) permits `released` or
   `pre_gate_released` for `helper_launcher_response_loss`; only the second shape reaches the new arm,
   and no run has been measured at that leg.
 - The pre-gate fixture is a literal imported as a journal file (§4.1): the platform is the only issuer
@@ -342,14 +399,14 @@ cited with that file's sha256; digests already in §1 are referenced there, not 
 
 | File | sha256 (delivered) | Anchors checked |
 | --- | --- | --- |
-| `daemon/e2e/production_linux_v2_owner_cli_test.go` | §1 `812593b9…` | selector `:1495-1506` and its precedence note `:1496`; fixture store `:1544-1556`; fixtures `:1563-1567`; tombstone reservation `:1569-1583`; tombstone journal `:1585-1592`; never-created builder `:1594-1612`; removed-empty builder `:1614-1654`; journal-file writer `:1656-1671`; pre-gate builder `:1673-1719`; #309 helper `:1721-1724`; #309 tests `:1726-1787`, `:1813-1844`, `:1877-1904`; acceptance test `:1906-1931` with its guard call `:1926`; refusal test `:1933-2005` with its assertion `:1999-2002`; clone-abort validator `:2007-2034`; leg validator gate `:2083-2184`; launcher-ready summary `:2364-2403`; release arm of the leg validator `:1429-1432`; recovery map `:1153-1161`; journal validator `:1404-1493` with `aborted_no_target` `:1441-1472`; held-stage binding `:1508-1525`; snapshot predicate test `:2763-2819`; guard `:2823-2854` (markers `:2825-2828`, abort dispatch `:2831-2833`, pre-gate dispatch `:2834-2836`, release arm `:2837-2853`); abort helper `:2856-2864`; pre-gate helper `:2866-2871`; claim-only test `:2880-2889`; pid-reuse leg `:3750-4074`; ack-loss legs `:4816-4980`; helper-loss legs `:4982-5229`; receipt leg `:5551-5685` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | §1 `6ddddb8c…` | selector `:1495-1506` and its precedence note `:1496`; fixture store and constructor `:1549-1562`; tombstone reservation `:1564-1578`; leaf-identity builder `:1580-1585`; tombstone journal `:1587-1594`; never-created builder `:1596-1614`; removed-empty builder `:1616-1653`; journal-file writer `:1655-1670`; pre-gate builder `:1672-1715`; clone-tombstone builder `:1717-1781`; #309 helper `:1783-1786`; #309 tests `:1788-1849`, `:1851-1871`, `:1873-1905`, `:1907-1926`, `:1928-1955`; acceptance test `:1957-1987` with its new row `:1964`, snapshot lookup `:1978-1981` and guard call `:1982`; refusal test `:1989-2069` with its new rows `:2002-2009` and assertion `:2063-2066`; clone-abort validator `:2071-2098`; leg validator gate `:2147-2248`; launcher-ready summary `:2428-2467`; `case "released":` `:1414` and `case "pre_gate_released":` `:1429`; recovery map `:1153-1161`; journal validator `:1404-1493` with `aborted_no_target` `:1441-1472`; held-stage binding `:1508-1525`; snapshot predicate test `:2827-2883`; guard `:2887-2917` (markers `:2889`, abort dispatch `:2894-2896`, pre-gate dispatch `:2897-2899`, release arm `:2900-2915`); abort helper `:2919-2927`; pre-gate helper `:2929-2934`; claim-only test `:2943-2952`; pid-reuse leg `:3813-4137`; ack-loss legs `:4879-5043`; helper-loss legs `:5045-5292`; receipt leg `:5614-5748` |
 | `daemon/e2e/production_linux_v2_native_witness_test.go` | §1 `98d4771c…` (dispatch base) | fixture `:1989`; retained-journal snapshot `:2093-2101` with the guard call `:2098` and the message `:2099`; the `:224` subtest invocation; StateDir assertion `:2078-2091`; leaf path `:3601-3603`; physical-release helper `:2738` |
-| `daemon/internal/state/linux_cgroup_journal.go` | §1 `9358c264…` (dispatch base) | retirement predicate `:432-464` (pre-gate arm `:448-452`, abort arm `:453-456`, clone arm `:457-459`, v1 arm `:460-462`); reservation `Validate` `:50-74`; `validateProofs` `:157-176`; abort match `:1094-1131`; never-created producer `:903-916` with its policy comment `:898-902`; preclaim scan `:514-529` |
-| `daemon/internal/state/run_journal.go` | §1 `093d93d9…` (dispatch base) | `HasPendingContainment` `:101-107`; `SaveJournal` `:254-360` with the pre-gate import refusal `:275`, `:343`; journal-file naming `:544-556` |
+| `daemon/internal/state/linux_cgroup_journal.go` | §1 `9358c264…` (dispatch base) | retirement predicate `:432-464` (pre-gate arm `:448-452`, abort arm `:453-456`, clone arm `:457-459`, v1 arm `:460-462`); reservation `Validate` `:50-79`; `validateProofs` `:157-172`; abort match `:1094-1130`; never-created producer `:903-928` with its policy comment `:898-902`; preclaim scan `:514-527` |
+| `daemon/internal/state/run_journal.go` | §1 `093d93d9…` (dispatch base) | `HasPendingContainment` `:104-107`; `SaveJournal` `:254-360` with the pre-gate import refusal `:275`, `:343`; journal-file naming `:544-556` |
 | `daemon/internal/state/linux_clone_validation.go` | — | clone-abort history `:388-409`; `linuxCloneAbortNoActiveOwner` `:439-442` |
 | `daemon/internal/state/cgroup_release_linux.go` | — | pre-gate receipt `:17-52`; pre-gate clear `:149-191` with the tombstone write at `:188` |
 | `daemon/internal/state/linux_cgroup_v2_test.go` | — | the pre-gate receipt fixture `:254-329` with its receipt shape inside it |
 | `scripts/ci/linux-v2-native-acceptance.sh` | §1 `42177bb8…` (dispatch base) | stage-replay leg runner `:2619-2651` with the request cleanup `:2647`; ACK-loss runner `:2677-2721` with its cleanup `:2717`; the #300 isolation note `:3148-3151`; legacy v1 leg `:3212-3217`; shared arm lists `:3298-3303`, `:3305-3306`, `:3309`; `DAEMON_SERVICE_STATE_DIR` `:520` |
 | `.github/workflows/ci.yml` | — | the `daemon_race_tests` step `:1055-1063` |
-| `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md` | §1 `816a0cde…` | §1.4 fixture facts, §2 the dispatcher and the selector item, §3 the refusal rows, §4 the test plan, §5 the out-of-scope residuals — all re-read; the anchors §2 cites in the witness and the daemon predicate are the ones measured in this table |
+| `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md` | §1 `52f5e13c…` | §1.4 fixture facts, §2 the dispatcher, the clone-proof-equal abort shape and the selector item, §3 the refusal rows, §4 the test plan, §5 the out-of-scope residuals — all re-read after the apply round; the anchors §2 cites in the witness and the daemon predicate are the ones measured in this table |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the open Bind and residual entries and the closed stage items; not byte-pinned, because a later unrelated merge moves them |

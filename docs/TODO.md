@@ -2389,9 +2389,9 @@ The goal's stage 1 and stage 2 are delivered (plan
       authentic pi proof stays with `## rf-acc-pi-authentic-turn: the credentialed proof of the
       authentic turn` above.
 
-- [ ] Deferred retirement arms (2026-11-28, record §4, §10): the guard still refuses the two daemon
-      arms no case-set leg leaves in the shared StateDir — a bare `LinuxCloneAbortProof` row and a
-      legacy v1 `ContainmentAuthority` + StopReceipt row
-      (`daemon/internal/state/linux_cgroup_journal.go:457-462`). Either stops a leg with the
+- [ ] Deferred retirement arms (2026-11-28, record §4, §10): the guard still refuses the three daemon
+      arms no case-set leg leaves in the shared StateDir — the clone-reuse-retired arm
+      (`daemon/internal/state/linux_cgroup_journal.go:435-441`), a bare `LinuxCloneAbortProof` row and
+      a legacy v1 `ContainmentAuthority` + StopReceipt row (`:457-462`). Each stops a leg with the
       existing ownership message instead of passing silently. If a future leg reaches one, mirror
       that arm with its own red-capable row, as this slice did for the abort and pre-gate arms.
