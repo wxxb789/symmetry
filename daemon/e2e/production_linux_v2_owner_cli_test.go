@@ -1582,6 +1582,12 @@ func TestLinuxV2PreEffectAbortTombstoneRequiresItsExactShape(t *testing.T) {
 	if err := observed.Validate(); err == nil {
 		t.Fatal("the authority accepted a pre-mkdir tombstone claiming an observed absence")
 	}
+	claimedAbsent := tombstone
+	claimedAbsent.LeafNeverAppeared = true
+	if err := linuxV2ValidatePreEffectAbortTombstone(claimedAbsent); err == nil ||
+		err.Error() != "pre-create abort tombstone reports a target or leaf creation" {
+		t.Fatalf("a tombstone claiming an observed absence was not refused with the target/leaf-creation message: %v", err)
+	}
 	removedEmpty := tombstone
 	removedEmpty.LeafDisposition = authority.LinuxCgroupAbortLeafRemovedEmpty
 	if err := linuxV2ValidatePreEffectAbortTombstone(removedEmpty); err == nil ||
