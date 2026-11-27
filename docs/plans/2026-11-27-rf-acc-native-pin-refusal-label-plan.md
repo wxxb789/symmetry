@@ -1,8 +1,9 @@
 # rf-acc-native-pin-refusal-label — implement plan
 
 Contract: `goal-rf-acc-native-pin-refusal-label.md` (GDD state root, outside the repository).
-Dispatch base and current HEAD: `d45e3298` (`main`). Branch: this goal worktree. The accepted plan is
-the contract plus the residual it closes; this file resolves only the choices the ruling leaves open
+Dispatch base `d45e3298` (`main`); delivered head `76cb92b1`, parent `07452d16`. Branch: this goal
+worktree; every line anchor below is a dispatch-head `d45e3298` anchor. The accepted plan is the
+contract plus the residual it closes; this file resolves only the choices the ruling leaves open
 (which closed vocabulary code the label uses, what the new row asserts, where the evidence lives) and
 points at the measured record. Clause-by-clause results: evidence record
 `docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`.
@@ -29,12 +30,15 @@ points at the measured record. Clause-by-clause results: evidence record
    (`daemon/internal/platform/helper_v2_protocol.go:591`) classifies only through
    `errors.As(err, &subStep)` (`:593-600`), and its default is `linuxOwnerHelperV2ReleaseErrorDetail{Stage: "none"}`
    (`:592`). An untyped error renders `stage=none` (`String()`, `:486-509`).
-3. Every other release failure site already labels at its own call site with the closed
+3. The other labelled release stops already label at their own call site with the closed
    `gate_lifecycle_linux.go:635-639` sub-step vocabulary and `:645-669` arm vocabulary: the clone
-   bootstrap verify at `:918`, the pre-send gate identity at `:944`, the post-send exec-status arms
-   at `:1025-1052` and `:1102-1171`, plus `helper_v2_server.go:1121-1185`.
-4. The pin site at `:928-932` is the one pre-packet refusal that is leg-specific (its input is the
-   leg's own image path; the other pre-packet refusals are program-independent) and unlabelled.
+   bootstrap verify at `:918`, the pre-send gate identity at `:944`, the post-send wait and exec
+   arms at `:1025-1052`, and the clone-release arms at `:1102-1171`, plus
+   `helper_v2_server.go:1121-1185`. Three other outcome-unknown returns in the same RELEASE path
+   stay unlabelled (`:975`, `:998`, `:1032`) and are listed out of scope in §5.
+4. The pin site at `gate_lifecycle_linux.go:928-932` is the one pre-packet refusal that is
+   leg-specific (its input is the leg's own image path; the other pre-packet refusals are
+   program-independent) and unlabelled.
 
 Wrong layer: **`PreparedGate.Release`'s pin call site**, which knows the release context but returns
 the pin's error unwrapped. `pinNativeImage` is the wrong place to label: it is also called for the
@@ -69,9 +73,11 @@ The pre-packet pin refusal occurs before anything is sent and before the gate id
 - **(d) rejected — return `DECISION_NEEDED` and change the C helper or the wire format.** The ruling
   forbids it and it is unnecessary: the detail vocabulary is Go-side.
 
-Errno stays `0`: the refusal is a policy refusal (path shape, node shape), not a named syscall
-failure, and the existing pre-packet wraps (`installed_bootstrap`, `gate_identity`) carry no errno
-either. The arm/wait/read/guest shapes of the new arm are all false, so the detail carries only the
+Errno stays `0` because the wrapper passes zero deliberately for this bounded pre-packet detail
+(the same choice the existing pre-packet wraps `installed_bootstrap` and `gate_identity` make), not
+because the failure cannot be a syscall error: the class includes `ENOTDIR` from the
+parent-component open and `ENOENT` from the image open, each kept inside the pin's own message
+text. The arm/wait/read/guest shapes of the new arm are all false, so the detail carries only the
 stage and the arm.
 
 ### 3.2 Edits
@@ -116,9 +122,12 @@ obsoletes.
    the wrap deleted (new row red), the sub-step constant value swapped (new row and census row red),
    the arm constant value swapped (census row red), the new sub-step dropped from `Validate()`
    (census and validator rows red), the shape table rebound to another sub-step (census row red).
-4. Runner-mirroring demonstration: the two new/extended test binaries built for the resolute chroot
-   replica (`VERSION_CODENAME=resolute`), run red on the base production bytes with the new test
-   bytes and green on the delivered bytes.
+4. Runner-equivalent demonstration in the WSL Ubuntu-24.04 (Noble) userland — no Resolute userland
+   exists on this host, `VERSION_CODENAME=noble`: the protocol test binary (base production bytes
+   plus the final test bytes) runs red, and every row runs green on the delivered bytes. The
+   platform test binary cannot build against the base production bytes — its census and validator
+   rows name `linuxgate.ReleaseSubStepNativeImage` / `ReleaseArmNativeImagePin`, absent there — so
+   the platform assertions redden through the targeted mutants (M3-M5) instead of a base-red run.
 5. Gates binding the handed-over bytes: `gofmt`/`go vet`/full `go test ./...` from `daemon/` in WSL
    and on Windows, focused `-race` on the two changed packages in WSL, `comment-cap` and
    `jscpd-changed` on a scratch-clone commit of the final bytes.
@@ -132,6 +141,9 @@ obsoletes.
 - Every other unlabelled pre-packet refusal (`command.Validate`, `validateReleaseOwnerPipe`,
   `monotonicDeadlineNS`, owner-pipe duplication, `encodeGuardedRelease`): program-independent, out
   of the ruling's scope.
+- The three other unlabelled outcome-unknown returns in the RELEASE path
+  (`gate_lifecycle_linux.go:975`, `:998`, `:1032`; §2 item 3): pre-existing, recorded as residual
+  in the evidence record (§7); unchanged here.
 - `daemon/e2e/**` assertion changes: after #302 the `synthetic_goal_cleanup` leg releases a resolved
   symlink-free image, so no stop exists in the green set to assert a label on; the e2e bytes stay
   untouched and the Bind re-run is the conductor's.
