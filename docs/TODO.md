@@ -2253,13 +2253,9 @@ gone and the worker is released as `/usr/bin/dash`. The re-Bind on the final com
 so the acceptance stays bound on the final bytes (record §Bind 2). The next stop and this goal's
 residual follow.
 
-- [ ] The labelled clone_checkout stop (the next stop of run `45803728792` on `5f744370`) is fixed
-      in the arm's own fixture and its text moved to `docs/archive/CLOSED-TODO.md` under
-      `## rf-acc-synthetic-cleanup-seed: the fixture serves the seed chain to B (2026-11-26)`
-      (goal `rf-acc-synthetic-cleanup-seed`, 2026-11-26, branch
-      `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`; delivered, pending the conductor's
-      Bind). The set's stop after the seed stage stays open under
-      `## rf-acc-synthetic-cleanup-seed: residuals (2026-11-26)` below. Owner: conductor.
+The labelled `clone_checkout` stop from run `45803728792` on `5f744370` moved to
+[the seed fixture closure](archive/CLOSED-TODO.md#rf-acc-synthetic-cleanup-seed-the-fixture-serves-the-seed-chain-to-b-2026-11-26).
+The conductor's re-Bind remains open under the seed residuals below.
 
 - [ ] An unapproved native-image path is still reported without a named stage (2026-11-26, goal
       `rf-acc-synthetic-cleanup-release`): `pinNativeImage`
@@ -2315,19 +2311,12 @@ The first failing line of the `synthetic_goal_cleanup` set (the labelled
 `stage=clone_checkout arm=checkout_receipt wait_class=other guest_stage=seed errno=13` stop, run
 `45803728792` on `5f744370`) was root-caused to the arm's own fixture (goal
 `rf-acc-synthetic-cleanup-seed`, branch `refactor/rf-acc-synthetic-cleanup-seed`, base `8065b96e`):
-the case root was the only ancestor of the clone seed path that B could not open `O_RDONLY`, so the
-B clone bootstrap refused the seed stage with `EACCES`. The arm now grants B read on the case root
-and asserts B's own read access to the case root and the seed root and A's write denial on the case
-root (`fail`-rows in its fixture checks), and the stop's text moved to `docs/archive/CLOSED-TODO.md`
-under
-`## rf-acc-synthetic-cleanup-seed: the fixture serves the seed chain to B (2026-11-26)`. Plan
-`docs/plans/2026-11-26-rf-acc-synthetic-cleanup-seed-plan.md`, record
-`docs/evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md`.
+the `openat` of the case root failed because B had search but not read access. PR #304 scopes the
+B-read ACL to the synthetic set and checks access using Bash's ACL-aware builtin. The round-one
+Bind (`45836765410` on `6526dac9`) failed at the earlier setup check, before the witness; see the
+[evidence record](evidence/rf-acc-synthetic-cleanup-seed-2026-11-26.md).
 
-- [ ] The set's stop after the seed stage is unmeasured (2026-11-26, same goal): the replica rows
-      and the new fixture assertions prove the seed and clone-root walks pass, but whether the arm
-      then runs green or stops later can only be read from the conductor's Bind on the PR head (the
-      case set needs the installed owner, the disposable guest and Control). From that run: the
-      `production_linux_v2_cleanup_witness_test.go:506` line must be gone; a green set exports
-      `synthetic-goal-cleanup.json` with a manifest, and otherwise the next first failing line is
-      recorded verbatim here. Owner: conductor.
+- [ ] Re-Bind the corrected PR head. Confirm the Go witness reaches RELEASE without the exact
+      `:506 … guest_stage=seed errno=13` stop. Record the next failing line verbatim (it may be
+      emitted at the same source line with a different stage), or confirm the green set exports
+      `synthetic-goal-cleanup.json` with a manifest. Owner: conductor.

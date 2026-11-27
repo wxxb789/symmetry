@@ -5679,17 +5679,17 @@ section, whose pointer sentence names this one.
       `daemon/internal/clonebootstrap/filesystem_linux_amd64.go:95`, `:309-345`, per-component
       `O_RDONLY|O_DIRECTORY|O_NOFOLLOW` at `:326`), and the fixture published the case root
       `/opt/symmetry-owner-test/synthetic-goal-cleanup` as `root:A_GID 0751`
-      (`scripts/ci/linux-v2-native-acceptance.sh:589`), so B (`other`) held `--x` and the first
-      `openat` of the walk failed `EACCES`; `openCloneSeed` reported it as
+      (`scripts/ci/linux-v2-native-acceptance.sh:589`), so B (`other`) held `--x` and the `openat`
+      of the case root failed `EACCES`; `openCloneSeed` reported it as
       `open A-owned seed parent without symlinks: permission denied`, the bootstrap returned
       `fail(CloneFailureSeed, …)` (`daemon/internal/clonebootstrap/main_linux_amd64.go:124`, `:126`),
       its command main encoded the failure frame (`daemon/cmd/symmetry-linux-clone-bootstrap/main.go:27`),
       and the helper rendered `guest_stage=seed errno=13`
       (`daemon/native/linux-gate/protocol/gate_lifecycle_linux.go:1108`, `:761-790`). The
-      arm now grants B read on the case root (`:592`), pins the case root's delivered class and
-      asserts B's own read access to the case root and the seed root and A's write denial on the case
-      root (`:1459-1467`), so a re-tightening or a class widening reddens the set before the witness
-      starts; no production byte, witness assertion or containment check changed, and the config
-      stays `root:A 0640` B-unreadable. Red/green measured in the resolute replica and every local
-      gate recorded in the evidence record (delivered, pending the conductor's Bind on the PR head:
-      the record's §7 states the observation that confirms closure).
+      arm now grants B read on the case root only in `synthetic_goal_cleanup` (`:590-594`). The
+      Resolute guard refused the removed case-root B access entry, the removed seed-root B access
+      entry (a separate read assertion), a case-root widening that grants A **write** (`g::rwx`),
+      mode `0755`, and an extra named reader at the same `0751` mode (`:1461-1471`; exact inputs and
+      exits in record §6). No production or Go witness bytes changed in this fix; the config stays
+      B-unreadable at `root:A 0640`. Delivered, pending the conductor's re-Bind: the earlier #304
+      Bind stopped in setup and did not verify RELEASE.

@@ -14,10 +14,10 @@ assertion) and points at the measured evidence. Clause-by-clause results: eviden
 | Change 1: root cause of `guest_stage=seed errno=13` with file:line evidence | Stop recorded by Bind302 (run `45791682543` on `90157ff4`; findings `302-binding-run.md` §3.1) | §2 of this plan + evidence §2: the fixture's case root is the only B-unreadable seed ancestor; reproduced in the resolute replica |
 | Change 1: compare with the green #296 clone legs | `TestInstalledLinuxOwnerCloneCheckoutScratch` (`daemon/native/linux-gate/protocol/clone_integration_linux_test.go:38`) green in every run | Evidence §2.4: same walk code, B-readable ancestors; baseline probe row |
 | Change 1: production defect / AppArmor change → DECISION_NEEDED | `openReadOnlyAPathDirectory` (`daemon/internal/clonebootstrap/filesystem_linux_amd64.go:309`) requires B read on every ancestor; the installed profile carries one `userns,` rule, `flags=(unconfined)` (`daemon/internal/linuxpreflight/preflight_linux.go:224`) | Not a production defect (evidence §2.2); no DECISION_NEEDED |
-| Change 2: fix on the wrong side; never weaken RELEASE resolution, the seed receipt, containment | Fixture `scripts/ci/linux-v2-native-acceptance.sh:589` publishes the case root `root:A_GID 0751` (B traverse-only) | §3: one ACL row + four committed assertion rows (the case-root class pin included); no production byte, no assertion edited |
+| Change 2: fix on the wrong side; never weaken RELEASE resolution, the seed receipt, containment | Fixture `scripts/ci/linux-v2-native-acceptance.sh:589` publishes the case root `root:A_GID 0751` (B traverse-only) | §3: one scoped ACL grant, five guard rows and a regression test; no production or Go witness changes |
 | Acceptance: Bind once on the PR head; the `:506 … errno=13` stop must be gone | The stop is the arm's first failing line | Unmeasurable locally (case set needs the installed owner, guest and Control); the Bind supplies it; evidence §7 states the expected next observation |
-| Owned files | — | The script's `synthetic_goal_cleanup` arm (setup + its own checks), this plan, the evidence record, `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` |
-| Invariants: gates bind the handed-over bytes, comments ≤ 2 lines, red mutant per new branch, full `go test ./...` Windows + WSL, comment-cap | — | Evidence §4-§6 |
+| Owned files | — | The script's `synthetic_goal_cleanup` setup and checks, `scripts/ci/test-linux-v2-evidence.py`, this plan, the evidence record, and the two TODO files |
+| Invariants: gates bind the handed-over bytes, comments ≤ 2 lines, red mutant per new branch | — | Evidence §5, §6 and §8 distinguish the pre-merge characterization from the round-one fix gates |
 
 ## 2. Root cause (Stage 1, summary)
 
@@ -44,18 +44,18 @@ rule with `flags=(unconfined)` and no file rules
 
 ## 3. The change (Stage 2, fixture only)
 
-- `scripts/ci/linux-v2-native-acceptance.sh:592`: B read on the case root
-  (`setfacl -m "u:$B_UID:r-x,m::r-x"`), next to the arm's existing seed/clone ACL rows.
-- `:1459-1467`: four committed assertion rows in the arm's fixture checks — the case root's
-  delivered class is pinned (`root:A_GID` `0751`; any class change, the rejected `0755` included,
-  reddens the pin), B must be able to read the case root and the seed root, and A must not write
-  the case root — so a future "re-tightening" of either path, or a widening of the case root's
-  class, reddens the set before the witness starts. The access rows alone stayed green on a
-  read-type widening; the pin (fix r1) is the row that carries it (record §6).
+- `scripts/ci/linux-v2-native-acceptance.sh:590-594`: grant B read on the case root in
+  `synthetic_goal_cleanup` only. Leave the existing seed/clone ACLs and directory setup in place.
+- `:1461-1471`: use the Bash builtin for B's case-root read, B's separate seed-root read and A's
+  case-root write denial. Pin both the case root's `root:A_GID 0751` metadata and its exact numeric
+  ACL. Resolute guard rows cover deleting either named B access entry (one at a time), a widening
+  that grants A **write** on the case root (`g::rwx`), chmod `0755`, and adding a named reader at
+  the same `0751` mode. The test in `scripts/ci/test-linux-v2-evidence.py` runs the setup and guard
+  blocks for the synthetic and `shared` selections (record §6).
 - Rejected alternatives:
   - (b) mode `0755` on the case root: same capability for B, but it also grants read to every other
-    local user; the ACL keeps `other --x` and matches the arm's existing idiom, and the arm's
-    class pin reddens on this shape (record §6 M-S1).
+    local user; the ACL keeps `other --x`. The owner/group/mode pin refuses the measured `0755`
+    case-root shape (record §6).
   - (c) relocating the seed/clone roots out of the case root: a larger fixture/config change for the
     same property, and it would contradict the witness's fixture-shape assertion
     (`production_linux_v2_cleanup_witness_test.go:209-212`).
@@ -73,10 +73,10 @@ rule with `flags=(unconfined)` and no file rules
    dispatch head (evidence §2.3): the production `openCloneSeed`/`verifyCloneSeed` and
    `openAbsoluteDirectory` refuse the current fixture chain with `errno=13`, accept it after the
    ACL, and accept the production-shaped chain unchanged.
-2. Gates: `bash -n`; the Linux v2 fixture-contract Python tests from `daemon/`; shellcheck
-   (advisory, before/after counts); `gofmt -l`; `GOOS=linux go vet ./...`; `go vet ./...` (Windows);
-   the full `go test ./...` on Windows and in WSL; comment-cap on a scratch-clone commit of the
-   delivered bytes; the case-root class pin's shape matrix and mutant (record §6).
+2. Round-one fix: compare the external and builtin readers in Resolute, execute the actual guard
+   for each named permission mutation, and perform B's read-only, no-follow directory open on the
+   case root with and without its ACL. Run script syntax, affected Python/Go tests, and the committed
+   cleanliness, clone and comment gates on the post-merge subject (record §5, §6 and §8).
 
 ## 5. Out of scope
 

@@ -1,30 +1,27 @@
 # rf-acc-synthetic-cleanup-seed — evidence record
 
-Contract: `goal-rf-acc-synthetic-cleanup-seed.md` (GDD state root, external to the repository).
-Dispatch gate: PR #302, head `8065b96e` (`main`, this branch's base); branch
-`refactor/rf-acc-synthetic-cleanup-seed`. Plan:
-`docs/plans/2026-11-26-rf-acc-synthetic-cleanup-seed-plan.md`. Every number below is measured at the
-delivered bytes unless a row names another revision. The binding acceptance is the conductor's Bind
-on the PR head (the contract allows "the next stop verbatim, or green with
-`synthetic-goal-cleanup.json` exported"); §7 states what that run must show.
+Contract: `goal-rf-acc-synthetic-cleanup-seed.md` (GDD state root, outside the repository).
+Branch: `refactor/rf-acc-synthetic-cleanup-seed`. Dispatch base: PR #302, `8065b96e`. Round-one
+fix base: PR #304, `6526dac9`, including main `07be175e`. Plan:
+`docs/plans/2026-11-26-rf-acc-synthetic-cleanup-seed-plan.md`. Local verification is not the
+credentialed acceptance. The conductor re-Binds the corrected PR head (§7).
 
 ## 1. Subject bytes (sha256)
 
-| File | Dispatch head `8065b96e` | Delivered | Change |
-| --- | --- | --- | --- |
-| `scripts/ci/linux-v2-native-acceptance.sh` | `70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143` | `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` | +12/−0 |
-| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` | identical | untouched |
-| `daemon/internal/clonebootstrap/filesystem_linux_amd64.go` | `86811678e6741923bfd64031a40e0c7e531e46adb0f6f585301900fe919442af` | identical | untouched (production) |
-| `daemon/internal/clonebootstrap/main_linux_amd64.go` | `3fdd0a28f79875c40073e861b2ee67b492d7526611a9a9d536fef1cef3695a70` | identical | untouched (production) |
+| File | Before | Delivered |
+| --- | --- | --- |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` at `6526dac9` | `aac479e5fb80bcd0cc222f1afe96a2e9b010081cc0d2903e84c940e8e61c516d` |
+| `scripts/ci/test-linux-v2-evidence.py` | existing exporter and script tests | `d410828e7de0c5c90f8f7ef8f0559ce9a744ad12187840e0b64b2e822850075d` |
+| `daemon/e2e/production_linux_v2_cleanup_witness_test.go` | `1e7a5d3a05d444ccd1b73e52df943c19978eb7b4faf921ef2e49377a6d378dcb` at `8065b96e` | unchanged |
+| `daemon/internal/clonebootstrap/filesystem_linux_amd64.go` | `86811678e6741923bfd64031a40e0c7e531e46adb0f6f585301900fe919442af` at `8065b96e` | unchanged |
+| `daemon/internal/clonebootstrap/main_linux_amd64.go` | `3fdd0a28f79875c40073e861b2ee67b492d7526611a9a9d536fef1cef3695a70` at `8065b96e` | unchanged |
 
-The dispatch head's script bytes are byte-identical to the script bytes #302's Bind ran
-(`70163ae1…` in findings `302-binding-run.md` §2.1), so the recorded stop and this root cause are
-read at the same revision. No production byte, no witness assertion, no gate and no case-set list
-changed; the delivered change is the script's `synthetic_goal_cleanup` fixture, the plan, this
-record, and the two TODO files. The pre-fix delivery was the same script at
-`ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04` (+10/−0, the implement-stage
-bytes); fix r1 adds the case-root class pin (§3), so the script's delivered bytes are the pinned
-bytes in the table.
+The dispatch fixture script (`70163ae16b80e81bec0aa3ee7e70299c3d739716a037f2d0ad4dd5a3ed57d143`)
+matched the script that ran in #302's Bind (findings `302-binding-run.md` §2.1). Sections 2.1–2.4
+refer to the historical diagnosis; historical script line references are not final delivery anchors.
+No Go source changes in the PR relative to `07be175e`; the post-merge `daemon/` tree is
+`22d5cc959d3b2980b23bd79e6947a31c19dbc728`, distinct from the pre-merge tree. The correction
+changes the acceptance shell, its Python test, and four documents, not the workflow or case-set list.
 
 ## 2. Root cause (Stage 1)
 
@@ -41,7 +38,7 @@ host B kuid with no supplementary groups (`daemon/native/linux-gate/c-gate/gate.
 `setgroups` denied).
 The witness fixture publishes the case root `/opt/symmetry-owner-test/synthetic-goal-cleanup` as
 `root:A_GID 0751` (`scripts/ci/linux-v2-native-acceptance.sh:589` at the dispatch head), so B is the
-`other` class with `--x` only: the `openat(<case root>, `O_RDONLY|O_DIRECTORY`)` fails `EACCES`, and
+`other` class with `--x` only: the `openat(<case root>, O_RDONLY|O_DIRECTORY)` fails `EACCES`, and
 every seed-stage step fails there. `openCloneSeed` wraps it as `open A-owned seed parent without
 symlinks: %w` (`:95-97`); the bootstrap returns `fail(CloneFailureSeed, err)`
 (`daemon/internal/clonebootstrap/main_linux_amd64.go:126`), its command main encodes that as a
@@ -68,7 +65,7 @@ exists and is B-readable; only its chain is not.
   B-unreadable component on both walks.
 - Not a production pin or gate defect: the same `openCloneSeed`/`openAbsoluteDirectory` code is
   green on the #296 clone legs and on the production chain (§2.4), and the failing syscall needs
-  only the fixture's mode to change.
+  only the fixture's access ACL to change.
 - Not AppArmor: the installed per-program profile is exactly one `userns,` rule under
   `flags=(unconfined)` with no file rules and no globs
   (`daemon/internal/linuxpreflight/preflight_linux.go:224-229`), so it cannot produce a path
@@ -141,210 +138,179 @@ case root is therefore not a hardening the guest supports: production's own publ
 on the fixture side; a production change (e.g. walking ancestors `O_PATH`) would weaken the walk for
 every deployment to accommodate one fixture mode.
 
-## 3. The change (Stage 2, fixture only)
+## 3. Fixture correction
 
-- `scripts/ci/linux-v2-native-acceptance.sh:592`: `setfacl -m "u:$B_UID:r-x,m::r-x"` on the case
-  root, beside the arm's existing seed/clone ACL rows, with a 2-line why comment naming the walk.
-- `:1459-1467`: four committed assertion rows in the arm's own fixture checks — the case root's
-  delivered class is pinned (`root:A_GID` mode `0751`), B must be able to read the case root and
-  the seed root, and A must not hold write on the case root — so deleting the grant, re-tightening
-  either path, or widening the case root's class reddens the set before the witness starts (the
-  fix-r1 shape matrix in §6 shows the pin carrying every class change, including the read-type
-  `0755` that leaves all three access rows green). `fail` aborts the case set, and the rows run
-  inside the `synthetic_goal_cleanup` guard, so no other set observes them.
-- Containment unchanged: `config.json` stays `root:A 0640` and B-unreadable (the existing
-  `B unexpectedly read …` refusal row stays), the source stays A-private, the seed keeps `0440` with
-  its ACL mask, and the guest's write-denied checks on every ancestor are untouched. B gains only
-  the directory read the bootstrap itself demands. Rejected alternatives (mode `0755`, relocating
-  the seed/clone roots, the production walk change) are recorded in the plan §3.
+- `scripts/ci/linux-v2-native-acceptance.sh:590-594` grants B read on the case root only in
+  `synthetic_goal_cleanup`. The shared installs and the child ACLs are unchanged. The source,
+  config, and witness are still selected only by the synthetic set; other sets receive no new
+  named case-root grant.
+- `:1461-1471` uses Bash's ACL-aware builtin for B's case-root read, B's separate seed-root read,
+  and A's case-root write denial. The case root must also match both `root:A_GID 0751` and the
+  exact numeric ACL. The positive form of the denial check (`! test -w` inside the guest shell)
+  fails closed if launching the check returns a nonzero status.
+- A valid mode with an unrelated reader could otherwise pass all access rows. The exact ACL rejects
+  that extra entry. The case-root and seed-root read rows require actual B access; their passing
+  alone would not demonstrate how the read was granted, or prove that B can search the seed root.
+- The measured refusals were removal of the case-root B access entry, removal of the seed-root B
+  access entry, a widening that grants A **write** on the case root (`g::rwx`), chmod `0755`, and
+  one extra named reader at the unchanged `0751` mode (§6). The config stays `root:A 0640` and
+  B-unreadable, and the source stays A-private. Production seed receipt checks, ancestor
+  write-denial checks, and RELEASE resolution are unchanged.
 
-## 4. Check before the change — red-first and replacement proof
+## 4. Before-state evidence
 
-The clause test is the `synthetic_goal_cleanup` case set (installed owner, disposable guest,
-Control); it cannot run on this host, so the red-first evidence is (i) the recorded Bind stop
-verbatim (findings §3.1, re-Bind `45803728792` on `5f744370`) and (ii) the replica characterization
-in §2.3, where the *delivered production bytes* refuse the *dispatch-head fixture* with exactly
-`errno=13` and accept it once the fix's ACL is applied. The committed red-first row of this change
-is the case-root read row: the replica probe's red shape is the dispatch-head fixture, where the
-case root is `0751` and B is `other` with `--x` only (`B_TEST red -r 1`), and its green shape is
-the delivered fixture (`B_TEST green -r 0`); the seed-root read row guards the arm's pre-existing
-seed ACL (`u:$B_UID:r-x,m::r-x` since #296), so it was already satisfiable at the dispatch head.
-The rows' in-repo form runs inside the set and aborts it on a regression. The class pin is the
-exception to red-first: the dispatch head's case root is `0751` too, so the pin starts silent and
-its red shape is the mutant row (§6 M-S1); it is the row that carries the read-type widening the
-review measured silent on the three access rows.
+The credentialed #302 re-Bind (run `45803728792` on `5f744370`) reached RELEASE and observed
+`guest_stage=seed errno=13`. The historical probe in §2.3 exercised the production paths before
+and after granting B read. The separate #304 Bind below stopped earlier: the external ACL-blind
+`/usr/bin/test` refused B on the correctly provisioned case root. Section 6 reproduces that setup
+failure using the retained `6526dac9` guard, then proves the correction and individual refusals.
 
-## 5. Local gates
+## 5. Post-merge local checks
 
-| Gate | Command | Exit | Result |
-| --- | --- | --- | --- |
-| script syntax | `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 | no diagnostic |
-| fixture contracts | `(cd daemon && python3 ../scripts/ci/test-linux-v2-{source-subject,go-events,evidence,host-prerequisite-probe,owner-request-keys}.py)` and `python3 scripts/ci/test-rootless-compose-owner-claim.py` | 0 each | 6/6 ok, including the script-parsing evidence test |
-| CI structure pins | `python3 scripts/ci/test-ci-structure-extraction.py`; `python3 scripts/ci/test-ci-changed-path-classifier.py` | 0 each | 2/2 ok |
-| record cleanliness (CI doc gate) | `python scripts/ci/check-record-cleanliness.py --base 8065b96e --head HEAD` in the implement-stage scratch clone | 0 | 1 changed record passes the root-only check; the handover bytes carried 8 host paths and were refused (simplify finding 1, redacted in §8) |
-| citation existence (CI doc gate) | `python scripts/ci/check-citation-existence.py --base 8065b96e --head HEAD` in the implement-stage scratch clone | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices (`CLOSED-TODO.md:737`, `:752`, `:2512`) |
-| shellcheck (advisory, CI's own selection) | `shellcheck --severity=warning --format=gcc scripts/ci/*.sh`, one invocation per file, at the base and at the delivered bytes | 1 both | 20 findings before, 20 after; the same finding set with only the line numbers shifted (+3 above the case-root block, +10 below it); none on an added line |
-| format | `(cd daemon && gofmt -l .)` (WSL) | 0 | no file listed |
-| linux vet | `(cd daemon && GOOS=linux go vet ./...)` (WSL) | 0 | clean log |
-| windows vet | same, `GOOS=windows` (WSL) | 0 | clean log |
-| comment-cap (committed diff) | `python …/comment-cap.py <scratch clone of the delivered code bytes>` | 0 | 5 changed files, no over-cap block; the only added comment is the 2-line why comment |
-| jscpd-changed (delivered range, script + docs) | `python scripts/ci/jscpd-changed.py --base <merge-base> --head HEAD --repo <scratch clone>` | 0 | 5 changed file(s), 1788 scanned source(s), 1245 clone(s) in the corpus, none new among the added lines; re-run at the final bytes below |
-| WSL full suite | `sudo -u accept -i bash -lc 'umask 022; cd daemon && go test -count=1 ./...'` on the delivered tree (ext4) | 0 | 31 `ok` + 3 `[no test files]`, 0 `FAIL`; log sha256 `a32ff914ba5317dd2b9e1dfeb37b561a0e05221c9f6f680ba0f7609347fcaa51` |
-| Windows full suite | `(cd daemon && go test -count=1 ./...)` on the Windows host, Go 1.27.4 | 0 | 27 `ok` + 3 `[no test files]`, 0 `FAIL`; log sha256 `546726f998e03c0c374d97004fcda31939c7c9277cf9ab7f7440d2fc90a8272a` |
-| replica rows | §2.3 commands | 0 each | red/green/baseline observations above |
+All rows use `6526dac9` plus the two executable/test hashes in §1. The daemon input is exactly
+`git archive 6526dac9 daemon` (sha256
+`db4381493cfac6177ea2c21bac37d933a48caa32429f245e77bb9cbbd5e81472`). The full suites for
+this head are CI's responsibility (the daemon job runs the full race suite) and the conductor's
+acceptance record, not this local run. No local full-suite result is claimed.
 
-The script-dependent rows ran on the implement-stage bytes
-(`scripts/ci/linux-v2-native-acceptance.sh` sha256
-`ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04`, +10/−0); every `daemon/` byte
-is identical at the dispatch head, the implement-stage delivery and the final bytes (§1), so the
-Go rows bind the delivered product bytes. Fix r1 adds the case-root class pin (two script lines,
-§3), so every script-dependent gate — script syntax, fixture contracts, comment-cap, jscpd, record
-cleanliness, citation existence and the record-sanitize check — is re-run at the final bytes in
-§8.
+| Platform and command | Exit | Observation |
+| --- | ---: | --- |
+| Host Bash and WSL Bash: `bash -n scripts/ci/linux-v2-native-acceptance.sh` | 0 each | No syntax errors |
+| WSL Python: `python3 -B scripts/ci/test-linux-v2-source-subject.py` and `test-linux-v2-go-events.py` (same invocation) | 0 each | 7 and 6 tests |
+| WSL Python, same invocation: `test-linux-v2-evidence.py`, `test-linux-v2-owner-request-keys.py`, `test-linux-v2-host-prerequisite-probe.py` | 0 each | 57 (including W3), 10 and 17 tests |
+| WSL Python, same invocation: `test-rootless-compose-owner-claim.py`, `test-ci-structure-extraction.py`, `test-ci-changed-path-classifier.py` | 0 each | 9, 72 and 37 tests |
+| Windows, from `daemon/`: `go test -count=1 -v ./e2e -run '^TestRunJournalDiagnosticSnapshotRedactsExecutionCredentials$'` | 0 | 1 pass; log sha256 `5cda0bc3e78c88a8a165222858599dd3276f7824dce30b31224faf99546adddf` |
+| WSL, from `daemon/`: `go test -count=1 -v ./e2e ./internal/clonebootstrap ./native/linux-gate/protocol -run "$focused"` (below) | 0 | 7 top-level passes. The two installed-owner rows compiled but skipped; log sha256 `4db934562551b3cbb2f051338157195dc46b481b5ec2e52632e9d4773adfb276` |
 
-## 6. Adversarial satisfaction
+`focused='^Test(RunJournalDiagnosticSnapshotRedactsExecutionCredentials|LinuxV2CleanupApprovedWorkerProgram|ValidateBStatus.*|CloneBootstrapFailureStageNumbersArePinned|WireLinuxCloneBootstrapRefusals|ProductionLinuxV2CloneCleanupAuthenticatedScratch|ProductionLinuxV2PiNativeProviderAction)$'`
 
-- The two new B-read script rows cannot be satisfied by an unrelated event: `machine_run_as B test -r <dir>`
-  exits non-zero exactly when B's path resolution or read access is denied (measured pair:
-  `B_TEST red -r 1` / `B_TEST green -r 0` on the same script spec), and either row's non-zero exit
-  aborts the case set through `fail`, so a pass requires B to hold real read access — which is the
-  requirement itself, however it is granted (ACL or a wider mode).
-- The A-write row cannot pass vacuously: the same guard installs the config and asserts A reads it
-  and B reads the case and seed roots (`:1449-1468`), so the case root must exist and resolve
-  before the row runs, and `machine_run_as` itself aborts when the guest passwd entry is
-  unreadable. Fix-r1 measured pins as A on this host: delivered → `test -w` exit 1 (silent); a
-  widened group entry (`setfacl -m g::rwx`, which recomputes the mask) → exit 0 (fires); a
-  mask-only `m::rwx` → exit 1, because the group-class access is the group entry intersected with
-  the mask and the entry stays `r-x` — the pin, not this row, carries that shape.
-- The delivered-class pin cannot pass vacuously: it reads the case root the preceding
-  `install`/`setfacl` pair (`:589`, `:592`) provisioned on the same rootfs, and a missing root
-  leaves `%a` empty, so the comparison fails. Fix-r1 measured pins as root (matrix below):
-  delivered `0:52000:751` → silent; `-m 0755` with `:592` kept → `0:52000:755` → fires while all
-  three access rows stay green (B keeps its named `u:` entry, A stays covered by the `r-x` mask);
-  mask-only `m::rwx` → `0:52000:771` → fires; `g::rwx` → `0:52000:771` → fires (the A-write row
-  fires on this shape too); `0750` → `0:52000:750` → fires.
-- The replica rows cannot be satisfied by an unrelated syscall error: the denied shape asserts the
-  exact class (`unix.EACCES`, not any error) and the readable shape requires the complete
-  production seed open and verify (write-denied on every ancestor, identity, digest, path re-bind)
-  and the production clone-root open, so a walk that skipped a check or accepted a writable
-  ancestor fails the row.
-- The case-set observation cannot be vacuous: each dispatch is gated by
-  `scripts/ci/assert-go-test-json.py` on exactly one run and one pass of
-  `TestProductionLinuxV2CloneCleanupAuthenticatedScratch` (`run=1 pass=1 skip=0`, `-count=1`), and
-  the workflow requires the set's exit 0 plus a sanitized manifest — a skipped or unrun witness
-  cannot satisfy the acceptance, and the added fixture rows run before the witness, so a fixture
-  regression cannot be masked by a witness that never starts.
+Earlier runs of syntax and Python fixture gates, advisory ShellCheck, format/vet, full Windows and
+WSL Go suites, and committed doc/duplication/comment gates are **pre-merge characterization**.
+The apply script `ce35bdf3…` was at `365828d3`, not implement `92e6d6d9` (`fb927785…`).
+The pre-merge mode-pin delivery `483c947c` used `78b27275…`. Merging `07be175e` later changed
+five non-doc blobs compared with `483c947c`: the native Go witness, the Control claim provisioner,
+the machine registrar, the owner request writer, and its Python test. None of those old gate rows
+binds the post-merge tree. Section 8 identifies the committed-blob gates for this delivery.
 
-The class pin's fix-r1 shape matrix (`guard-probe.sh`, log sha256
-`d046860256c892b3cb686d1ce20ccb962c8b6f28f2b9dbcde53cd68f1b364583`; `stat` and the row run as
-root, the access rows through `setpriv` at the guest uids; the B-config refusal row was refused in
-every shape and is omitted):
+## 6. Resolute permissions and guard mutants
 
-```
-SHAPE delivered stat=0:52000:751
-ROW delivered pin=silent(0)
-ROW delivered B-read-caseroot=TRUE
-ROW delivered A-write-caseroot=silent(1)
-SHAPE widened stat=0:52000:755
-ROW widened pin=FIRED(1)
-ROW widened B-read-caseroot=TRUE
-ROW widened A-write-caseroot=silent(1)
-SHAPE maskrwx stat=0:52000:771
-ROW maskrwx pin=FIRED(1)
-ROW maskrwx B-read-caseroot=TRUE
-ROW maskrwx A-write-caseroot=silent(1)
-SHAPE groupw stat=0:52000:771
-ROW groupw pin=FIRED(1)
-ROW groupw B-read-caseroot=TRUE
-ROW groupw A-write-caseroot=TRUE(FIRED)
-SHAPE tight stat=0:52000:750
-ROW tight pin=FIRED(1)
-SHAPE nogrant stat=0:52000:751
-ROW nogrant pin=silent(0)
-ROW nogrant B-read-caseroot=FALSE(RED)
+The probe (exit **0**, log sha256 `38ab8e22777931db6a0f79595b7ef8276bb0a878a87549f2c3b24ae1d072783a`)
+ran the two delivered Bash blocks from §1 in a Resolute chroot on ext4. It only replaced
+`machine_run_as` with `setpriv` at the pinned UID/GID and no supplementary groups, and executed
+host fixture commands as the chroot's root. Those substitutions do not emulate permission results.
+This is not a full nspawn, Control, or AppArmor reproduction. Inside the chroot,
+`/usr/bin/grep '^VERSION_CODENAME=' /etc/os-release` returned `VERSION_CODENAME=resolute` and
+`/usr/bin/dpkg-query -S /usr/bin/test` returned `coreutils-from-uutils: /usr/bin/test`, both exit 0.
+
+The commands below omit only the private root paths: `resolute` is the chroot directory and
+`work` is its private fixture parent. Use `root_for <label>` for each case root. Commands in the
+next table ran via `c` (root) or `as` (the row's real credentials):
+
+```bash
+c() { /usr/sbin/chroot "$resolute" "$@"; }
+as() {
+  local id=$1; shift
+  c /usr/bin/setpriv --reuid="$id" --regid="$id" --clear-groups "$@"
+}
+root_for() { printf '%s/%s/opt/symmetry-owner-test/synthetic-goal-cleanup' "$work" "$1"; }
 ```
 
-Mutants (fix r1; the mutation is the whole patch, applied to a scratch copy of the final script
-bytes, run, then the final copy re-run):
+In each row, `$p` is `root_for <label>`, or that path with `/seeds` where shown. Each shape's
+provisioning completed with exit 0; each changed shape is a fresh fixture. The guard stderr is
+prefixed by `Linux v2 native acceptance setup failed: ` for all failed rows.
 
-| id | Mutation | Red probe (verbatim) | Exit | Restored |
-| --- | --- | --- | --- | --- |
-| M-S1 | script `:589`: `-m 0751` → `-m 0755`, `:592` kept (the plan's rejected alternative (b)) | the mutant's provisioning lines executed verbatim as root, then the delivered row text (mutant copy sha256 `caec60220ea9f2de314b91ee969656b39107f6617b96b1d98711054438f9ffdb`, log sha256 `a414393c63ba567a7ac75aae72e3d2567a49d52b31afe12721da439d4df234db`): `provisioned stat=0:52000:755`, `Linux v2 native acceptance setup failed: synthetic cleanup case root must stay root:A mode 0751`, `mutant row rc=1` | 1 | final copy sha256 `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` re-run: `provisioned stat=0:52000:751`, `final row rc=0` |
-
-CI reach: the row runs as root (its `sudo stat`) inside the `synthetic_goal_cleanup` case set of
-the dispatch-only `linux-native-v2-acceptance` workflow's fixture step, before the witness is
-dispatched, so a committed mutant of `:589` reddens CI on the PR head; no mutant row reddens only
-outside CI, so no oracle gap is recorded.
-
-## 7. Residuals and the next stop
-
-The set's stop after the seed stage is unmeasurable on this host (the case set needs the installed
-owner, the disposable guest and Control). The conductor's Bind on this PR head supplies it: the
-`daemon/e2e/production_linux_v2_cleanup_witness_test.go:506` line and its `guest_stage=seed errno=13` detail
-must be gone from the log (the replica rows and the fixture assertions cover both B walks that
-failed); a green set exports `synthetic-goal-cleanup.json` with a manifest, and otherwise the next
-first failing line is recorded verbatim in `docs/TODO.md` under
-`## rf-acc-synthetic-cleanup-seed: residuals (2026-11-26)`. The `:495` termination-fallout line
-(`dial unixpacket: connect: connection refused`) is the same incident's second stop and is expected
-to disappear with a resolved RELEASE (#302 record §2.4). No new residual is created by this change:
-the fix removes the refusing component rather than moving it (the clone-root walk, the next
-fixture-dependent walk in the sequence, is proven passing in §2.3).
-
-## 8. Artifacts and the final-bytes re-measure
-
-Scratch (outside the repository): `path-sha256:74c365bb1069cc6ae0f6f9c2269f40acd67157089b2d30b0aa4b9b2be6087827` on this host retains the probe source, the
-fixture and run scripts, the built probe and the raw logs quoted above, with the WSL-side copies
-under its `wsl-out/` (including `run-probe2.out`, sha256 `f56b9e65…`); the WSL scratch tree
-(`path-sha256:17f43c385b1dacd26a70a4b3c9203c7dc9eeb226759c3c49e4b6ebd9bd1b641b`) was removed after that copy, and the replica additions
-(`/opt/symmetry-owner-test/synthetic-goal-cleanup`, `…/production`, `path-sha256:5c6bf10f2d53df86dd8d92c771d06bdc0c88ea503f2d2593a31427705b4b71a9`) were
-removed after the run, returning `path-sha256:dba63390a9da5f52d3a7ffab205e03c8a75c3c703da0942ac059b6dad88a28ec` to its previous state. The
-final-bytes re-measure of the cheap gates and the scratch-clone commits (comment-cap, jscpd) is
-recorded below. Fix r1 keeps its own scratch at
-`path-sha256:f909eaf6fa5378f3d0e758f291df3f05060daeb349b5757323f78f976c81e2d5` on this host: `guard-probe.sh`
-(sha256 `082641ad5d073104c1db76df81fd302bf2cfde68823fecf26ba84eda17e97f82`) with `guard-probe.log`
-(`d046860256c892b3cb686d1ce20ccb962c8b6f28f2b9dbcde53cd68f1b364583`), `mutant-probe.sh`
-(`1f073b3f03774360bd460b67e016483e151a9aa4a0829ad51b0fadbf79d42c39`) with `mutant-probe.log`
-(`a414393c63ba567a7ac75aae72e3d2567a49d52b31afe12721da439d4df234db`), the branch-diff added doc
-lines extracted for the scoped sanitize check, and the final/mutant script copies
-`linux-v2-native-acceptance.sh.final` (`78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea`)
-and `…mutant` (`caec60220ea9f2de314b91ee969656b39107f6617b96b1d98711054438f9ffdb`); the WSL-side
-probe roots were removed after the run.
-
-Implement-stage final-bytes re-measure (scratch clone of `8065b96e` + the five implement-stage
-delivered files; script sha256 `ce35bdf3810637a1c8aa2606cb192a651c83fcce4edf24085e5b1ad2eadb9a04`):
-
-| Gate | Exit | Result |
+| Shape and change (inside chroot) | Direct observation | Extracted guard |
 | --- | --- | --- |
-| `bash -n` on the delivered script | 0 | no diagnostic |
-| the 8 fixture/structure Python tests above, re-run at the final bytes | 0 each | 8/8 ok |
-| comment-cap on the final-bytes commit | 0 | 5 changed files, no over-cap block (markdown is outside its scan, so the record's later prose edits cannot change the verdict) |
-| jscpd-changed on the final-bytes commit | 0 | 5 changed file(s), 1788 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new (re-run green after every later prose edit; the row's verdict, not its corpus counts, is the gate); notice: `docs/archive/CLOSED-TODO.md` carries added lines but sits above the gate's `--max-lines 5000` ceiling, so it is reported as a notice and never silently skipped (5624 lines at the base, 5659 delivered, unchanged class) |
-| record cleanliness on the final-bytes commit | 0 | 1 changed record passes the root-only check (the handover bytes were refused with 8 host paths, redacted above) |
-| citation existence on the final-bytes commit | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices |
-| A-write row (implement-stage replica, as A) | 0 | delivered shape `test -w` exit 1 (row silent); the fix-r1 matrix below re-measures this row's firing set on the final bytes |
+| `delivered`, original executable | `as 52001 /usr/bin/test -r "$p"` → 1 at the case root and 1 at `/seeds` | Original guard from `6526dac9` → 1: `native B cannot read the synthetic cleanup case root the clone seed path sits under` |
+| `no-case-acl`: `c /usr/bin/setfacl -x u:52001 "$p"` → 0 | `as 52001 /usr/bin/bash -c 'test -r "$1"' bash "$p"` → 1; delivered → 0 | 1: same case-root read diagnostic |
+| `no-seed-acl`: `c /usr/bin/setfacl -x u:52001 "$p/seeds"` → 0 | Same Bash command on `"$p/seeds"` → 1; delivered → 0 | 1: `native B cannot read the synthetic cleanup seed root` |
+| `case-writable`: `c /usr/bin/setfacl -m g::rwx "$p"` → 0, granting A write | `as 52000 /usr/bin/bash -c '! test -w "$1"' bash "$p"` → 1; delivered → 0 | 1: `native A unexpectedly gained write access to the root-controlled synthetic cleanup case root` |
+| `world-readable`: `c /usr/bin/chmod 0755 "$p"` → 0 | `c /usr/bin/stat -c '%u:%g:%a' "$p"` → 0, `0:52000:755`; delivered → 0, `0:52000:751` | 1: `synthetic cleanup case root must stay root:A mode 0751` |
+| `extra-reader`: `c /usr/bin/setfacl -m u:52002:r-x,m::r-x "$p"` → 0 | The same `stat` still reports `0:52000:751` (0). `c /usr/bin/getfacl -cpn -- "$p"` → 0, ACL differs by `user:52002:r-x`; on delivered → 0 with no extra line | 1: `synthetic cleanup case root must have exactly the fixture B-read ACL` |
+| `shared-old` → `shared`: original provisioning → delivered provisioning in non-synthetic set | `c /usr/bin/getfacl -cpn -- "$p"` → 0 both; original had `user:52001:r-x`, delivered had only `user::rwx`, `group::r-x`, and `other::--x`. B's Bash case-root read → 0 originally, 1 delivered | Delivered guard → 0 (not entered) |
+| `delivered`, corrected guard | Case root ACL: `user::rwx`, `user:52001:r-x`, `group::r-x`, `mask::r-x`, `other::--x` | 0 with empty stderr |
 
-Fix r1 re-measured (same commands, the fix-r1 scratch-clone commit of the five delivered files;
-script sha256 `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea`):
+**Actual case-root open (W1)** — command, with the same private-root aliases as above:
 
-| Gate | Exit | Result |
-| --- | --- | --- |
-| `bash -n` on the fix-r1 script (host bash and WSL bash) | 0 both | no diagnostic |
-| the 8 fixture/structure Python tests at the fix-r1 bytes (WSL as `accept`) | 0 each | 8/8 ok; the same tests need a POSIX python (`os.getuid`), so a Windows-host run of the exporter suite is environment-invalid |
-| comment-cap on the fix-r1 commit | 0 | no over-cap block; the fix adds no comment |
-| jscpd-changed on the fix-r1 commit | 0 | 5 changed file(s), 1788 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new; same CLOSED-TODO notice |
-| record cleanliness (`--base 8065b96e --head HEAD`) | 0 | 1 changed record passes the root-only check |
-| citation existence (`--base 8065b96e --head HEAD`) | 0 | 1 changed document passes the path and symbol check (699 path citations); 3 pre-existing ignore-covered notices |
-| record-sanitize root-only check on each changed doc | 0/0/0/1 | the plan, `docs/TODO.md` and this record pass; `docs/archive/CLOSED-TODO.md`'s whole-file check refuses at 18 pre-existing quoted-specimen lines, identical at the dispatch head and the final bytes, and the branch's only hunk `@@ -5624,0 +5625,35 @@` lies past every refused line; the branch-added doc lines, extracted with `git diff -U0` at the final bytes, pass (rc=0) |
-| shellcheck (advisory, CI's own selection: one `shellcheck --severity=warning --format=gcc scripts/ci/*.sh` invocation) | 1 both | 9 findings on the changed script at the pre-fix bytes and 9 at the fix-r1 bytes — the fix-r1 lines are the pre-fix lines shifted by the added block (1502→1504, 1624→1626, 1733→1735, 2121→2123, 2139→2141); none on an added line |
-| class pin matrix and mutant | 0/1 | §6 rows and M-S1: delivered silent; `0755` fires the pin while the three access rows stay green; logs `d0468602…` / `a414393c…` |
+```bash
+as 52001 /usr/bin/perl -MFcntl=:DEFAULT,O_DIRECTORY,O_NOFOLLOW \
+  -e 'sysopen(my $fd, $ARGV[0], O_RDONLY|O_DIRECTORY|O_NOFOLLOW) or do { my $n=0+$!; print STDERR "open errno=$n: $!\n"; exit $n; };' \
+  "$p"
+```
 
-Anchor re-measure at the fix-r1 script bytes (sha256 `78b27275…`, `nl -ba` and `grep -n`): the
-class-establishing sites are `:589` (`install -d … -m 0751`) and `:592` (`setfacl`), both carried
-by the pin at `:1459-1460`; the access rows are `:1461-1467` inside the arm `:1449-1468`; the
-finding's class census over the case-root permission sites returns exactly those two sites.
+The open exited **13** with `open errno=13: Permission denied` on `root_for no-case-acl` and
+**0** with empty stderr on `root_for delivered`. This isolates the access-relevant flags of the
+case-root open, not the full walk (the production walk also sets close-on-exec). W7's unchanged-mode
+pair is `getfacl -cpn` on `extra-reader` versus `delivered`: getter 0 on both, exact-ACL guard
+1 vs. 0. Both proof pairs use the Resolute chroot and the script hash in §1.
 
-Delivered documentation bytes: plan `b38b5ca21549e8cf8b7a1fa2ead5663df15e8f3f051b00a85d1d1cbfaeff8513`
-(89 lines; added by this branch). `docs/TODO.md` and `docs/archive/CLOSED-TODO.md` are cited by content, never by
-sha256: main merges rewrite them — TODO carries the seed goal's residual section (one open item,
-+30/−11) and CLOSED-TODO the closed clone_checkout entry with the stop's first failing line
-verbatim and the `:592`/`:1459-1467` anchors (+35/−0). This record is the fifth delivered file.
+**Committed test.** `SyntheticCleanupGuardTest` in `scripts/ci/test-linux-v2-evidence.py` executes
+the actual provisioning and guard blocks. It supplies command results to isolate Bash control flow,
+then asserts the inner exit, complete diagnostic, and whether the grant ran. The same test evaluated
+against the old script failed (5 assertion failures); unwrapping or inverting either case selector
+failed as well. Removing each of the five permission checks, or replacing its `|| fail` with
+`&& fail`, also failed. All 14 individual source mutations ran in memory with unittest verdict 1;
+restoring the delivered bytes gave unittest verdict 0. The mutation driver exited 0 after asserting
+all these expected failures; that outer exit is not the status of an individual guard.
+
+## 7. Acceptance still pending
+
+The conductor's re-Bind must reach RELEASE and show that the exact `:506 … guest_stage=seed errno=13`
+stop is gone. A later stop can still use the same source line; record the next failing line verbatim
+in the seed residual section of `docs/TODO.md`. If the set is green, confirm export of
+`synthetic-goal-cleanup.json` and the manifest. The local probe cannot establish either result.
+
+## 8. Committed-blob gates
+
+The scratch clone holds `6526dac9` plus the six delivered paths; these checks compare its committed
+blobs with `07be175e`. Use the receipt in the PR body for the resulting scratch commit and exit
+codes (the checks read this record itself). No gate in the earlier pre-merge runs (§5), or in the
+separate failed Bind below, substitutes for these checks.
+
+- `python -B scripts/ci/jscpd-changed.py --repo "$scratch_clone" --base 07be175e --head HEAD`
+- `python -B scripts/ci/check-record-cleanliness.py --repo "$scratch_clone" --base 07be175e --head HEAD`
+- `python -B "$comment_cap" "$scratch_clone" 07be175e`
+
+## Bind — FAILED before the Go witness on PR head `6526dac9`
+
+[Run 45836765410](https://github.com/wxxb789/symmetry/actions/runs/45836765410), attempt 1,
+ran only `synthetic_goal_cleanup` on `db89dc97f0d9109a7c15e14bc580a29df77cbb27`, the PR #304
+head `6526dac9` plus the scratch workflow and shim. The run failed during fixture setup. One push
+created one run (`total_count=1` by run head before and after branch deletion); the temporary
+worktree was removed and the PR head did not change.
+
+First failing line (raw log 2423, 14:16:40.9209399Z):
+
+```text
+Linux v2 native acceptance setup failed: native B cannot read the synthetic cleanup case root the clone seed path sits under
+```
+
+In all 2,563 log lines, `production_linux_v2_cleanup_witness_test.go:506`, `guest_stage=seed errno=13`,
+`production_linux_v2_cleanup_witness_test.go:499`, and `stage=none` each occur **0** times. The
+witness was not reached, so absence of the old frames does not establish that RELEASE now passes
+the seed stage. The class pin was silent; B's case-root read assertion failed before the seed-root
+read and A-write assertions ran. No AppArmor or cleanup test verification row was emitted.
+The conductor re-Binds after this round; this setup abort is not acceptance.
+`synthetic-goal-cleanup.json` did not export, and no manifest passed or was uploaded (log 2424,
+2481). The acceptance-side artifact was the **host prerequisite probe**, not cleanup evidence:
+`linux-v2-host-prerequisite-45836765410-1` (id `15127111028`), ZIP sha256
+`0a6c1ba56155cb431d833102e10491043f9713d0ff93fa27665132ede622d307` (matched the API digest).
+
+### Run-input equality
+
+All 1,900 tracked PR-head entries matched the run head by path, mode, type, and Git object ID.
+The table gives the case-set inputs whose sha256 changed since the
+[PR #302 Bind 3](rf-acc-synthetic-cleanup-release-2026-11-26.md#bind-3); the other measured
+PR-tracked rows, including the cleanup witness and exporter, kept their previous hashes.
+
+| Input | Run head sha256 = PR head sha256 |
+| --- | --- |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `78b272754989625444dedd61f0ab7062ba4abdf2f59107533729135d7d71f8ea` |
+| `scripts/ci/provision-linux-v2-control-claims.exs` | `82668512928ade9ab7d52199d8edd9f62af3bce4e4c4b547f9365c8a5ad0a5e3` |
+| `scripts/ci/register-linux-v2-claim-machine.py` | `f6029087c0acf8c42478018f0f9672fdf7a914a715d4e49d0eb3c3ee128ad773` |
+| `scripts/ci/write-linux-v2-owner-request.py` | `a6d007374c7c4d64a96b0cc9a7fefc73d4120d4dba31f6ce796a30f5730d677a` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `d988ca3bf8a0364f7d2f1c9aabe4cef14b53216e501a6002c49950e18d508abf` |
+
+The two additions are absent at the PR head. Their hashes match PR #302 Bind 3: workflow
+`8beeadf6d00d73dac74a10a49722c9b767dab20010875938c8af5725e8fb389f` (only the plain `case_sets`
+delta from `b0ba2694`) and shim `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`.

@@ -587,9 +587,11 @@ PY
 
 sudo install -d -o root -g root -m 0755 "$rootfs$OWNER_TEST_ROOT" "$rootfs$PRODUCTION_ROOT"
 sudo install -d -o root -g "$A_GID" -m 0751 "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT"
-# The B clone bootstrap opens every seed ancestor O_RDONLY
-# (clonebootstrap/filesystem_linux_amd64.go openReadOnlyAPathDirectory), so B needs read here.
-sudo setfacl -m "u:$B_UID:r-x,m::r-x" "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT"
+if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
+  # The B clone bootstrap opens every seed ancestor O_RDONLY
+  # (clonebootstrap/filesystem_linux_amd64.go openReadOnlyAPathDirectory), so B needs read here.
+  sudo setfacl -m "u:$B_UID:r-x,m::r-x" "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT"
+fi
 sudo install -d -o "$A_UID" -g "$A_GID" -m 0700 \
   "$rootfs$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$rootfs$SYNTHETIC_GOAL_CLEANUP_SEEDS"
 sudo install -d -o "$B_UID" -g "$B_GID" -m 0700 "$rootfs$SYNTHETIC_GOAL_CLEANUP_CLONES"
@@ -1456,15 +1458,17 @@ if [[ "$fixture_case_set" == synthetic_goal_cleanup ]]; then
   if machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_ROOT/config.json"; then
     fail 'native B unexpectedly read the root-controlled synthetic cleanup config'
   fi
+  machine_run_as "$B_USER" "$B_USER" /usr/bin/bash -c 'test -r "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
+    fail 'native B cannot read the synthetic cleanup case root the clone seed path sits under'
+  machine_run_as "$B_USER" "$B_USER" /usr/bin/bash -c 'test -r "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_SEEDS" ||
+    fail 'native B cannot read the synthetic cleanup seed root'
+  machine_run_as "$A_USER" "$A_USER" /usr/bin/bash -c '! test -w "$1"' bash "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
+    fail 'native A unexpectedly gained write access to the root-controlled synthetic cleanup case root'
   [[ "$(sudo stat -c '%u:%g:%a' "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "0:$A_GID:751" ]] ||
     fail 'synthetic cleanup case root must stay root:A mode 0751'
-  machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_ROOT" ||
-    fail 'native B cannot read the synthetic cleanup case root the clone seed path sits under'
-  machine_run_as "$B_USER" "$B_USER" /usr/bin/test -r "$SYNTHETIC_GOAL_CLEANUP_SEEDS" ||
-    fail 'native B cannot read the synthetic cleanup seed root'
-  if machine_run_as "$A_USER" "$A_USER" /usr/bin/test -w "$SYNTHETIC_GOAL_CLEANUP_ROOT"; then
-    fail 'native A unexpectedly gained write access to the root-controlled synthetic cleanup case root'
-  fi
+  expected_synthetic_cleanup_acl=$'user::rwx\nuser:'"$B_UID"$':r-x\ngroup::r-x\nmask::r-x\nother::--x'
+  [[ "$(sudo getfacl -cpn -- "$rootfs$SYNTHETIC_GOAL_CLEANUP_ROOT")" == "$expected_synthetic_cleanup_acl" ]] ||
+    fail 'synthetic cleanup case root must have exactly the fixture B-read ACL'
 fi
 for hold_after in "${OWNER_STAGE_REPLAY_HOLDS[@]}"; do
   stage_config="$fixture_root/stage-replay/$hold_after/config.json"
