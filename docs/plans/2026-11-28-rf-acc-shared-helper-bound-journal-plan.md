@@ -23,7 +23,7 @@ released and safe for a fresh run: prior RunJournal may still own or require rec
 (`daemon/e2e/production_linux_v2_native_witness_test.go:218-227`); the message is raised one helper
 deeper, in `newLinuxV2NativeFixture` (`:2093-2101`, message `:2099`), from
 `linuxV2RequireSafelyReleasedPriorJournal` (`daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606`
-at the dispatch base; the delivered guard is `:2887-2917`).
+at the dispatch base; the delivered guard is `:3140-3169`).
 The guard runs *before* the leg touches the daemon: it is a precondition on the shared StateDir.
 
 Control issues a fresh RunKey per leg (`scripts/ci/provision-linux-v2-control-claims.exs`, schedule
@@ -34,10 +34,10 @@ guard in all three runs (24 green rows, #309 record §7), so the only journal th
 refusing at `helper_bound` is the tombstone that `reservation_durable` left one leg earlier.
 
 That leg's retained shape is fixed by its own validators: recovery is `aborted_no_target`
-(`linuxV2ExpectedStageReplayRecovery` `:1153-1161`), and `linuxV2ValidateStageReplayJournal`
-(`:1404-1493`, `aborted_no_target` arm `:1441-1472`) requires the tombstone to be *retained* with no
+(`linuxV2ExpectedStageReplayRecovery` `:1155-1164`), and `linuxV2ValidateStageReplayJournal`
+(`:1406-1496`, `aborted_no_target` arm `:1443-1474`) requires the tombstone to be *retained* with no
 release proof, no process details and no authority, plus `linuxV2ValidateHeldStageAbortDisposition`
-(`:1508-1525`) binding `reservation_durable` to the `never_created` fence shape. #309's producer is
+(`:1509-1527`) binding `reservation_durable` to the `never_created` fence shape. #309's producer is
 `state.Store.AbortNeverCreatedLinuxCgroupReservation`
 (`daemon/internal/state/linux_cgroup_journal.go:903-928`), whose policy is stated at `:898-902`: the
 tombstone "remains until journal deletion so an unknown write can be replayed with the same proof".
@@ -94,7 +94,7 @@ The fixture neither releases nor reuses the preceding leg's journal, and it must
 
 - each leg gets a fresh RunKey from Control (above), so no leg adopts another's journal;
 - the two `aborted_no_target` legs *require* their retained tombstone
-  (`linuxV2ValidateStageReplayJournal` `:1441-1472`);
+  (`linuxV2ValidateStageReplayJournal` `:1443-1474`);
 - the acceptance script deletes only `request.json`/`replay_request.json` between legs (`:2647`,
   `:2717`) never a journal;
 - the StateDir is fixed by the root-installed OwnerConfig and asserted equal to it
@@ -124,15 +124,19 @@ dispatcher across the daemon's retirement arms, with its physical-release arm un
 1. owner-marker refusal — `HasProcessDetails`, `HasPendingContainment`, `ContainmentUnproven`,
    `ContainmentAuthority`, `ContainmentHandoff`, one literal message
    (`linuxV2PriorJournalOwnershipRefusal`);
-2. abort tombstone → `linuxV2RequireRetiredPriorAbortTombstone`: `ContainmentCgroup.AbortProof`
+2. abort tombstone → `linuxV2RequireRetiredPriorAbortTombstone` (`:3181-3195`): `ContainmentCgroup.AbortProof`
    present and equal to the extracted proof, `reservation.Validate()`
    (which itself runs `linuxCgroupReservationAbortMatches`, so the disposition/helper/launcher
    evidence production demands is included), no release and no pre-gate proof beside it;
-3. pre-gate release tombstone → `linuxV2RequireRetiredPriorPreGateTombstone`: `ContainmentCgroup ==
-   nil`, no release proof, `proof.Validate()`, `SupervisorHandoffVersionV2`,
+3. pre-gate release tombstone → `linuxV2RequireRetiredPriorPreGateTombstone` (`:3207-3213`):
+   `ContainmentCgroup == nil`, no release proof, `proof.Validate()`, `SupervisorHandoffVersionV2`,
    `Receipt.Proof.GateOutcome.Outcome == LinuxCgroupGateOutcomeNeverCreated`;
-4. the unchanged release arm: v2 `StopReceipt`, disposition ∈ {removed, absent_after_receipt} and the
-   exact leaf-absence `Lstat`.
+4. the release arm: v2 `StopReceipt` and disposition ∈ {removed, absent_after_receipt};
+5. every arm's own exact-leaf absence check → `linuxV2RequireAbsentPriorLeaf` (`:3170-3180`): `Lstat`
+   of the arm's leaf name under the configured mount/delegated path, passing only on `os.ErrNotExist`,
+   so a present entry and any other stat error both refuse. The round-2 panel found the two tombstone
+   arms returning before the release arm's `Lstat` and fixed it this way; the enclosing clone proof is
+   validated on the same pass (`linuxV2RequireExactCloneAbortEnclosure` `:3196-3206`).
 
 Mirrored arms are the release arm (`:442-447`), the pre-gate arm (`:448-452`) and the reservation
 abort arm (`:453-456`) of `linuxV2ForeignJournalIsSafelyRetired`
@@ -146,10 +150,16 @@ Three further production arms are deliberately **not** mirrored:
   reuse-abort path (`daemon/internal/state/linux_clone_journal.go:517-518`); the shared arm's case
   sets drive no clone-reuse flow, but unlike the two arms below that exclusion is not derived from a
   producer constraint, so this arm stays a named residual;
-- the `LinuxCloneAbortProof`-only arm (`linux_cgroup_journal.go:457-459`): a cgroup-backed clone
-  abort requires the reservation tombstone beside it (`linuxCloneAbortHistoryMatches`,
-  `daemon/internal/state/linux_clone_validation.go:388-409`), and the bare legacy shape is produced
-  only by the v1-era paths;
+- the `LinuxCloneAbortProof`-only arm (`linux_cgroup_journal.go:457-459`): its cgroup-backed
+  sub-shape requires the reservation tombstone beside it (`linuxCloneAbortHistoryMatches`,
+  `daemon/internal/state/linux_clone_validation.go:388-409`), which the guard above already covers.
+  Its no-cgroup-proof sub-shapes are **not** v1-era-only: the App's post-preparation failure path
+  calls `abortLinuxV2CloneBeforeCheckoutLocked`
+  (`daemon/internal/app/linux_owner_v2_linux.go:785-803`) and the workspace's builder sets
+  `CgroupAbortProof` only when its caller supplies one
+  (`daemon/internal/workspace/linux_clone_linux.go:1051-1069`) — both current v2 code, and the
+  round-2 panel corrected the earlier "v1-era paths" claim here (R311-9). What keeps the arm off the
+  shared StateDir is the arm's leg order, not the producer's era;
 - the legacy v1 `ContainmentAuthority` + StopReceipt arm (`linux_cgroup_journal.go:460-462`): the
   only v1 leg (`run_legacy_v1_replay_witness`, `scripts/ci/linux-v2-native-acceptance.sh:3212-3217`)
   drives `TestProductionLinuxV2LegacyV1ReplayNoV2Receipt`, whose `runLinuxStopResponseLostCase` uses
@@ -159,7 +169,7 @@ Both stay refused with the existing ownership message; §5 names them as residua
 that needs them.
 
 The guard's abort arm reads its proof through the existing selector `linuxV2StageReplayNoTargetAbort`
-(`:1495-1506`). That selector also takes the deferred tidiness item #309 left in `docs/TODO.md`
+(`:1497-1508`). That selector also takes the deferred tidiness item #309 left in `docs/TODO.md`
 whose owner clause names "the next slice that already touches this file": it returned the preferred
 clone proof by overwriting a pointer it had already cloned from the reservation; it now returns the
 preferred clone proof first, else the reservation proof, else nil, cloning only the selected proof.
@@ -167,12 +177,15 @@ The precedence and every result are unchanged, and §4's tests already pin both 
 
 Not weakened, and why:
 
-- the release arm keeps every conjunct and the leaf `Lstat` — no release requirement is relaxed;
+- the release arm keeps every conjunct and its own `Lstat` — no release requirement is relaxed;
 - the tombstone arms demand the daemon's own evidence and refuse any active-owner marker, so a
   tombstone that still owns a process, authority, handoff or scan is refused exactly as before;
+- both tombstone arms are *stricter* than the daemon's predicate in the round-2 directions: they
+  require the exact leaf absent and the enclosing clone proof valid, and refuse rather than pass when
+  either is missing;
 - the leg-level validators that check each leg's *own* journal
-  (`linuxV2ValidateStageReplayJournal` `:1404-1493`, `linuxV2ValidateStageJournalBoundary`,
-  `linuxV2VerifyNoTargetCloneAbort` `:2071-2098`) are untouched, so the replay matrix's per-leg
+  (`linuxV2ValidateStageReplayJournal` `:1406-1496`, `linuxV2ValidateStageJournalBoundary` `:2299-2401`,
+  `linuxV2VerifyNoTargetCloneAbort` `:2223-2251`) are untouched, so the replay matrix's per-leg
   coverage is unchanged; and
 - the acceptance script, the workflow, the exporter and every production package stay
   byte-identical: the `shared` arm and its credential-gated pi leg (1B1) are untouched.
@@ -196,24 +209,33 @@ Not weakened, and why:
   Each row names the guard conjunct that must redden when it is deleted.
 - Scope of the accepted pre-gate arm: `ContainmentCgroup != nil` or a release proof beside the
   pre-gate proof is refused, matching production's arm order (arm 2 requires both to be absent).
-- No new filesystem observation: the tombstone arms add no `Lstat`, so no new environment-dependent
-  assertion is introduced into the CI guest; the leaf absence they imply is the daemon's own
-  documented trust (`:898-902`), and the release arm's existing `Lstat` is unchanged.
+- Current leaf absence was originally *not* observed: the first version of the tombstone arms added no
+  `Lstat`, so a journal whose exact leaf was occupied was still accepted — the round-2 panel's P1. Item
+  5 of §2 fixes it; the arms now `Lstat` the same path the release arm always did, with only two
+  outcomes in the guest (`ENOENT` for a never-created or already-retired leaf, and the release arm's
+  existing `Lstat` was already exercised by the #309 legs), so no new userland requirement attaches
+  (record §6).
 - Adversarial satisfaction: the only real producer of an accepted abort tombstone is the Store's own
   abort CAS under the exact claim fence; a journal that satisfied it without the guarded shape would
   have to carry a valid `authority`-level proof equal to its reservation's stored proof, which the
   Store's own `validateJournal`/`linuxCgroupReservationAbortMatches` chain refuses to persist. The
-  pre-gate literal is likewise admitted only after `SaveJournal` runs the production journal
-  validation, and the equivalence rows re-read both through the daemon's admission scan.
+  pre-gate literal is likewise admitted after the production Store's own *read* validation
+  (`LoadJournal`; `SaveJournal` refuses that tombstone outside its dedicated clear,
+  `daemon/internal/state/run_journal.go:275`, `:343`), and the round-2 fix makes the whole snapshot read
+  the Store's own way (record §4.4). The equivalence rows re-read each shape through the daemon's
+  admission scan; they pin parity **per shape**, not the guard's equality with the whole predicate — the
+  guard is deliberately stricter, and three daemon arms have no row at all (§2, §5).
 
 ## 4. Tests and evidence plan
 
 | New behaviour | Committed red-capable test | Runs where |
 | --- | --- | --- |
-| The never-created tombstone and the removed-empty tombstone are accepted by the guard, and the daemon's own admission scan accepts the same journals | `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` (`daemon/e2e`), driving `AbortNeverCreatedLinuxCgroupReservation`, `AbortLinuxCgroupReservation` and `CheckLinuxV2NativeAdmissionBeforeClaim` | `daemon` job race pass (`go test -race ./...`), local WSL Noble |
-| Each refusal conjunct above is pinned by its own row, and each row reddens when its conjunct is deleted | same test's refusal rows + the mutant runs recorded in the evidence record | same |
-| The pre-gate release tombstone is accepted and any marker/release-proof beside it is refused | same test's pre-gate rows | same |
-| The guard still refuses a claim-only retained row (unchanged guarantee) | existing `TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease` (`:2615-2624` at the dispatch base; delivered `:2943-2952`) | same |
+| The five tombstone shapes are accepted by the guard, and the daemon's own admission scan accepts the same journals | `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` (`daemon/e2e:1976-2008`), driving `AbortNeverCreatedLinuxCgroupReservation`, `AbortLinuxCgroupReservation`, the two clone-abort producers and `CheckLinuxV2NativeAdmissionBeforeClaim` | `daemon` job race pass (`go test -race ./...`), local WSL Noble |
+| Each refusal conjunct above is pinned by its own row, and each row reddens when its conjunct is deleted | `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` (`:2009-2108`) + the mutant rows recorded in the evidence record | same |
+| The pre-gate release tombstone is accepted and any marker/release-proof beside it is refused | the same two tests' pre-gate rows | same |
+| An entry at the exact leaf path, or an uninspectable one, refuses on **every** tombstone arm | `TestLinuxV2RetiredPriorJournalRefusesAPresentLeaf` (`:2109-2172`), one row per arm; red on the pre-fix byte discipline (record §5's M14) | same |
+| A Store-invalid or undecodable prior-journal file is a named snapshot failure, never a skipped row | `TestLinuxV2PriorJournalSnapshotRefusesStoreInvalidRows` (`:2173-2222`) | same |
+| The guard still refuses a claim-only retained row (unchanged guarantee) | existing `TestLinuxV2ClaimOnlyPriorJournalRequiresPhysicalRelease` (`:2615-2624` at the dispatch base; delivered `:3221-3233`) | same |
 
 Evidence plan: run the new rows and the mutants in WSL with exact exit codes; re-run the neighbour
 rows (`TestLinuxV2`, the whole `e2e` package), `go vet`, `gofmt`, the comment cap, `jscpd-changed`,
@@ -228,10 +250,18 @@ conductor's `shared` Bind is the acceptance and the record names what it must re
   and rejected: it widens the production package surface for a fixture precondition, and the
   contract's owned-file scope is the witness and its helpers; the mirror is instead pinned by the
   equivalence rows above so a future drift reddens a named test.
-- The production arms deliberately not mirrored (clone-reuse retired, bare clone abort, legacy v1 stop
-  receipt): no leg of any case set leaves those shapes in the shared StateDir (§2). If a future leg
-  does, it stops with the existing ownership message and the arm is a named residual, not a silent
-  acceptance.
+- The production arms deliberately not mirrored (clone-reuse retired, `LinuxCloneAbortProof`-only,
+  legacy v1 stop receipt): no leg of any case set leaves those shapes in the shared StateDir (§2), and
+  none of them is a v1-era-only shape (the round-2 correction, §2). If a future leg does, it stops with
+  the existing ownership message and the arm is a named residual, not a silent acceptance.
+- The shared arm's own helper-bound tombstone shape (a leaf-bound retirement whose abort proof carries
+  helper reaped/waited evidence): no committed positive fixture reproduces it, because both
+  removed-empty fixtures retire a leaf whose reservation carries no helper — the shape the Store itself
+  writes in that case. The guard accepts the helper-present variant through the same
+  `reservation.Validate()`/`AbortProof.Equal` conjuncts the committed row pins (the leg validator's
+  extra helper demand, `linuxV2ValidatePreEffectAbortTombstone` `:1528-1544`, is a *stage-replay* rule,
+  not a guard rule), but that is an argument, not a fixture. Extending the fixtures is the round-2
+  residual recorded in the goal's record §10 (R311-8).
 - The acceptance script, the workflow, the exporter and the replay stage lists: unchanged; the fix
   needs no fixture or pipeline change, and a script edit would require runner-userland red/green
   proof before the PR opens.

@@ -3748,7 +3748,11 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
 
       **Closed (2026-11-21, branch `fix/sanitizer-json-escape`), with the PR #119 round-5
       follow-up closed in the same change and the fix round of the same day replacing the first
-      design:** the entry's first-named reading, a document-level JSON reading shared by every
+      design:** host-shaped specimens in this entry are shown as the delivered record sanitizer
+      renders them (`<HOST-PATH>`/`<TMP>` where a recorded root stood), because the file-level
+      `--check --root-only` gate requires it; every exit code, refusal and measurement below is that
+      of the **recorded** spelling, which a reader reproduces by substituting the recorded root for
+      the token. The entry's first-named reading, a document-level JSON reading shared by every
       path family (POSIX, drive, UNC, slash-UNC, `file:` URL, root-relative). The second reading
       it names — a tail that stops before an escape-shaped backslash run once a separator has
       been consumed — cannot be correct on its own, and the pins below hold that boundary against
@@ -3761,7 +3765,8 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       location behind a recorded escape is a match in every family, `_root_patterns` stops
       spelling its own copy of the same atom, and the round-5 reproduction
       (`printf '%s' '{"out":"ok\n<HOST-PATH>/runner/work/x failed"}' | … --check --root-only`, exit 0
-      before) now exits 1. (`_COLON_POSIX_PATH` is the one family without the shared atom: its
+      before — the recorded root stands rendered as `<HOST-PATH>` there, and both exit codes are those
+      of the recorded spelling) now exits 1. (`_COLON_POSIX_PATH` is the one family without the shared atom: its
       `(?<=:)` decides between an absolute path and a URL authority from the very next
       character, which no negative set can do.) The text's own JSON structure then decides the
       reading, once per document: a
@@ -4101,7 +4106,8 @@ whole class it names are closed (schema-side included, by the P2-1 amendment rec
       Performance, measured at the delivered bytes (minimum of five in-process runs, one module
       per process, this host; fixtures named with each number). Round 4 (the linear raw look):
       the review's UNC-listing fixture — `json.dumps({"stdout": "\n".join(...N
-      `<HOST-PATH>\\srv\share\dirN` paths...)})` — renders 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines in
+      `<HOST-PATH>\\srv\share\dirN` paths...)})`, its recorded UNC root shown rendered, the numbers
+      those of the recorded spelling — renders 1,000 / 2,000 / 4,000 / 8,000 / 16,000 lines in
       0.053 s / 0.150 s / 0.272 s / 0.597 s / 0.986 s root-only (base tool 0.004 s / 0.009 s /
       0.025 s / 0.036 s / 0.067 s; the r5 round re-measured this fixture's five-size series
       and the fixtures below keep the r4 round's numbers), where the round-3 bytes took
@@ -5861,7 +5867,7 @@ Stage 1 and stage 2 of goal `rf-acc-shared-reservation-durable` are delivered: p
 - [x] Deferred code tidiness (2026-11-28, round-3 records round; the item's own record §4 and §11;
       closed 2026-11-28 by branch `refactor/rf-acc-shared-helper-bound-journal`, record §4.1): the
       no-target proof selector `linuxV2StageReplayNoTargetAbort`
-      (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`) deep-cloned the reservation
+      (`daemon/e2e/production_linux_v2_owner_cli_test.go:1497-1508`) deep-cloned the reservation
       proof first and then overwrote that pointer when the nested clone proof was preferred,
       discarding the first copy. It now returns the preferred clone proof first, else the
       reservation proof, else nil, cloning only the selected proof. The precedence and every result
@@ -5887,10 +5893,19 @@ conductor's `shared` Bind on the PR head and the three deferred retirement arms
       layer is the witness's expectation
       (`daemon/e2e/production_linux_v2_owner_cli_test.go:2585-2606` at the dispatch base): it
       demanded a v2 StopReceipt-backed leaf release for a pre-effect abort that can never carry one.
-      The guard now dispatches on the daemon's own retirement shapes. The superseding goal's
-      `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` drives the production tombstone producers and
-      asserts the daemon's own `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journals,
-      and its `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` pins ten refusal rows, each
-      red under its own mutant (two share the goal record §5 M11 term). No production file,
-      fixture, pipeline or workflow changed, and the pi leg's credential-gated recording (1B1) is
-      untouched.
+      The guard now dispatches on the daemon's own retirement shapes, and after the panel's round-2
+      review every arm also proves the exact leaf path currently absent, refuses a Store-invalid
+      prior-journal row and validates the enclosing clone proof when it selects a clone's nested
+      tombstone (record §4.4). The superseding goal's `TestLinuxV2RetiredPriorJournalAllowsAFreshRun`
+      drives five production tombstone producers and asserts the daemon's own
+      `CheckLinuxV2NativeAdmissionBeforeClaim` accepts the same journals,
+      `TestLinuxV2PriorJournalRetirementRefusesActiveOwners` pins thirteen refusal rows,
+      `TestLinuxV2RetiredPriorJournalRefusesAPresentLeaf` pins the absence check on all five arms and
+      `TestLinuxV2PriorJournalSnapshotRefusesStoreInvalidRows` pins the snapshot's fail-closed reads —
+      each red under its own mutant (the authority and handoff rows share the goal record §5 M11
+      term). The three unmirrored arms are named residuals, and none of them is v1-era-only: the
+      App's post-preparation failure path
+      (`daemon/internal/app/linux_owner_v2_linux.go:785-803`) and the workspace's builder
+      (`daemon/internal/workspace/linux_clone_linux.go:1051-1069`) produce the clone-only shape in
+      current v2 code. No production file, fixture, pipeline or workflow changed, and the pi leg's
+      credential-gated recording (1B1) is untouched.

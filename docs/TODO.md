@@ -2382,7 +2382,8 @@ The goal's stage 1 and stage 2 are delivered (plan
 - [ ] The conductor's `shared` Bind on the PR head (the contract's acceptance): report the case-set
       exit, the `verified …` sequence and its first disagreement, the `helper_bound` leg's outcome
       (expected: no `:224` guard stop, because the guard now retires the retained
-      `reservation_durable` tombstone), the `reservation_durable` row's continued green, the
+      `reservation_durable` tombstone *and* proves its exact leaf absent), the `reservation_durable`
+      row's continued green, the
       credential-gated pi outcome verbatim in the log, its declaration member and the export status,
       the reader Result, and the first unexpected failure if the arm stops later in the replay
       matrix. The leg is CI-only, so no local run substitutes for it (record §2, §7, §10). The
@@ -2391,7 +2392,20 @@ The goal's stage 1 and stage 2 are delivered (plan
 
 - [ ] Deferred retirement arms (2026-11-28, record §4, §10): the guard still refuses the three daemon
       arms no case-set leg leaves in the shared StateDir — the clone-reuse-retired arm
-      (`daemon/internal/state/linux_cgroup_journal.go:435-441`), a bare `LinuxCloneAbortProof` row and
-      a legacy v1 `ContainmentAuthority` + StopReceipt row (`:457-462`). Each stops a leg with the
-      existing ownership message instead of passing silently. If a future leg reaches one, mirror
-      that arm with its own red-capable row, as this slice did for the abort and pre-gate arms.
+      (`daemon/internal/state/linux_cgroup_journal.go:435-441`), the `LinuxCloneAbortProof`-only arm and
+      the legacy v1 `ContainmentAuthority` + StopReceipt row (`:457-462`). None of the three is
+      v1-era-only: the clone-only shape's current v2 producers are the App's post-preparation failure
+      path (`daemon/internal/app/linux_owner_v2_linux.go:785-803`) and the workspace's builder
+      (`daemon/internal/workspace/linux_clone_linux.go:1051-1069`), and what keeps the arm off the
+      shared StateDir is the arm's leg order, not the producer's era (the panel's round-2 correction,
+      record §4). Each stops a leg with the existing ownership message instead of passing silently.
+      If a future leg reaches one, mirror that arm with its own red-capable row, as this slice did for
+      the abort and pre-gate arms.
+
+- [ ] Helper-present retired-reservation fixture (2026-11-28, record §7, §10, R311-8): the shared arm's
+      own `helper_bound` tombstone retires a leaf with helper reaped/waited evidence, and no committed
+      positive fixture reproduces that variant — both removed-empty fixtures write a reservation with
+      no helper, the shape the Store itself writes in that case. The guard accepts the helper-present
+      variant through the conjuncts the committed row pins, but that is an argument, not evidence.
+      Owner: the next slice that needs this fixture; add the row to
+      `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` and its mutant to the record's §5 table.
