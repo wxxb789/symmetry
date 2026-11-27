@@ -14,16 +14,8 @@ import (
 
 func TestNativeImagePinRefusesSymlinkedComponents(t *testing.T) {
 	config := OwnerConfig{AUID: uint32(os.Getuid()), AGID: uint32(os.Getgid())}
-	staging, err := os.MkdirTemp(trustedNativeImagePinBase(t, config), "symmetry-pin-")
-	if err != nil {
-		t.Fatalf("create a trusted native-image staging directory: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(staging) })
-	realDirectory := filepath.Join(staging, "real")
-	if err := os.Mkdir(realDirectory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	image := filepath.Join(realDirectory, "image")
+	staging := stageSymlinkedNativeImageParent(t, config, "symmetry-pin-")
+	image := filepath.Join(staging, "real", "image")
 	if err := os.WriteFile(image, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -35,17 +27,29 @@ func TestNativeImagePinRefusesSymlinkedComponents(t *testing.T) {
 	if err := pinned.close(); err != nil {
 		t.Fatal(err)
 	}
-	linkedDirectory := filepath.Join(staging, "linked")
-	if err := os.Symlink("real", linkedDirectory); err != nil {
-		t.Fatal(err)
-	}
-	assertUnlabelledNativeImagePinRefusal(t, filepath.Join(linkedDirectory, "image"), config,
+	assertUnlabelledNativeImagePinRefusal(t, filepath.Join(staging, "linked", "image"), config,
 		`native-image parent component "linked"`)
 	linkedImage := filepath.Join(staging, "linked-image")
 	if err := os.Symlink(filepath.Join("real", "image"), linkedImage); err != nil {
 		t.Fatal(err)
 	}
 	assertUnlabelledNativeImagePinRefusal(t, linkedImage, config, "is not A-approved")
+}
+
+func stageSymlinkedNativeImageParent(t *testing.T, config OwnerConfig, prefix string) string {
+	t.Helper()
+	staging, err := os.MkdirTemp(trustedNativeImagePinBase(t, config), prefix)
+	if err != nil {
+		t.Fatalf("create a trusted native-image staging directory: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(staging) })
+	if err := os.Mkdir(filepath.Join(staging, "real"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("real", filepath.Join(staging, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	return staging
 }
 
 func TestNativeImagePinVerdictOnTheSystemShell(t *testing.T) {

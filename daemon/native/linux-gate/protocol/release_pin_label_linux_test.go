@@ -15,24 +15,13 @@ import (
 
 func TestPreparedGateReleaseLabelsTheNativeImagePinRefusal(t *testing.T) {
 	config := OwnerConfig{AUID: uint32(os.Getuid()), AGID: uint32(os.Getgid())}
-	t.Run("image without an A-controlled parent", func(t *testing.T) {
+	t.Run("top-level image path", func(t *testing.T) {
 		assertReleasePinRefusalLabel(t, config, fmt.Sprintf("/symmetry-release-pin-%d", os.Getpid()),
 			"must have an A-controlled parent directory")
 	})
 	t.Run("symlinked parent component", func(t *testing.T) {
-		staging, err := os.MkdirTemp(trustedNativeImagePinBase(t, config), "symmetry-release-pin-")
-		if err != nil {
-			t.Fatalf("create a trusted native-image staging directory: %v", err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(staging) })
-		if err := os.Mkdir(filepath.Join(staging, "real"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		linked := filepath.Join(staging, "linked")
-		if err := os.Symlink("real", linked); err != nil {
-			t.Fatal(err)
-		}
-		assertReleasePinRefusalLabel(t, config, filepath.Join(linked, "image"), `parent component "linked"`)
+		staging := stageSymlinkedNativeImageParent(t, config, "symmetry-release-pin-")
+		assertReleasePinRefusalLabel(t, config, filepath.Join(staging, "linked", "image"), `parent component "linked"`)
 	})
 }
 

@@ -5739,8 +5739,9 @@ section, whose pointer sentence names this one.
 ## rf-acc-native-pin-refusal-label: the native-image pin refusal is labelled at RELEASE (2026-11-27)
 
 - [x] An unapproved native-image path was reported without a named stage (moved from `docs/TODO.md`,
-      section `## rf-acc-native-pin-refusal-label: residuals (2026-11-27)`; the class was recorded
-      as the `:499 … (release_outcome_unknown; stage=none)` stop of run `45775969711` on
+      section `## rf-acc-synthetic-cleanup-release: residuals (2026-11-26)`, which this change
+      renames to `## rf-acc-native-pin-refusal-label: residuals (2026-11-27)`; the class was
+      recorded as the `:499 … (release_outcome_unknown; stage=none)` stop of run `45775969711` on
       `ff0975a7`). Root cause and fix (goal `rf-acc-native-pin-refusal-label`, 2026-11-27, base
       `d45e3298`; plan `docs/plans/2026-11-27-rf-acc-native-pin-refusal-label-plan.md`, record
       `docs/evidence/rf-acc-native-pin-refusal-label-2026-11-27.md`): `PreparedGate.Release` pinned

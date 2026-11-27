@@ -23,7 +23,7 @@ points at the measured record. Clause-by-clause results: evidence record
 
 1. The C gate sends nothing for this failure class: `PreparedGate.Release` pins `command.Path`
    before it builds or sends the release packet (`gate_lifecycle_linux.go:928`, before
-   `encodeGuardedRelease` at `:964` and `sendPacketWithRights` at `:987`). No wire or C helper
+   `encodeGuardedRelease` at `:963` and `sendPacketWithRights` at `:984`). No wire or C helper
    vocabulary is involved.
 2. The Go renderer cannot invent a stage: `linuxOwnerHelperV2ReleaseErrorDetailFor`
    (`daemon/internal/platform/helper_v2_protocol.go:591`) classifies only through
