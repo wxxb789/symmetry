@@ -10,7 +10,6 @@ import os
 import pathlib
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -2709,28 +2708,14 @@ CONTROL_CLAIMS_SCRIPT = ACCEPTANCE_SCRIPT.with_name("provision-linux-v2-control-
 CONTROL_PI_PROVIDER_ACTION_DESCRIPTION = re.compile(
     r'"pi_provider_action", "pi-native", :pi, :pi_provider,\n\s*"(?P<description>[^"]*)"\},'
 )
-FIXTURE_HOME_PYTHON_MARKER = 'python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \\\n'
+FIXTURE_HOME_INVOCATION_MARKER = 'python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \\\n'
 FIXED_B_HOME = "/opt/symmetry-owner-test/fixed-b-home"
 FIXED_B_HOME_TASK_TEXT = f"{FIXED_B_HOME}/.pi/agent/APPEND_SYSTEM.md"
-FIXTURE_HOME_ARGUMENTS = (
-    "/home/a",
-    "/a/source",
-    "/clones",
-    "/seeds",
-    "/state",
-    "/share",
-    "pi-model",
-    "opencode-model",
-    "https://provider.invalid/v1",
-    "/api-key",
-    "11111111-1111-1111-1111-111111111111",
-    "22222222-2222-2222-2222-222222222222",
-    "33333333-3333-3333-3333-333333333333",
-    "shared",
-    "/synthetic/source",
-    "/synthetic/seeds",
-    "/synthetic/clones",
+FIXED_SCOPE_PARAGRAPH = (
+    "This leg is fixed-scope: do not explore the repository or run its test suites or gates, "
+    "and return the required final TaskResult JSON object as your only final answer."
 )
+STAGING_CASE_SETS = ("shared", "stale_leaf", "stage_replay_leaf_bound", "codex_containment")
 
 
 def extracted_authenticated_pi_task_block(source: str) -> str:
@@ -2739,97 +2724,102 @@ def extracted_authenticated_pi_task_block(source: str) -> str:
 
 
 def extracted_authenticated_pi_install_block(source: str) -> str:
-    start = source.index('if [[ -n "$authenticated_pi_task_text" ]]; then')
+    start = source.find('if [[ -n "$authenticated_pi_task_text" ]]; then')
+    if start == -1:
+        return ""
     return source[start : source.index("\nfi\n", start) + len("\nfi\n")]
 
 
-def extracted_fixture_home_python(source: str) -> str:
-    start = source.index(FIXTURE_HOME_PYTHON_MARKER) + len(FIXTURE_HOME_PYTHON_MARKER)
-    start = source.index("<<'PY'\n", start) + len("<<'PY'\n")
-    return source[start : source.index("\nPY\n", start)]
+def extracted_fixture_home_invocation(source: str) -> str:
+    start = source.index(FIXTURE_HOME_INVOCATION_MARKER)
+    return source[start : source.index("\nPY\n", start) + len("\nPY\n")]
 
 
-def staged_authenticated_pi_task_text(source: str, root: pathlib.Path, case_set: str) -> str:
-    guard = root / "task-text.sh"
-    guard.write_text(
-        "set -Eeuo pipefail\nfixture_case_set=$1\n"
-        + extracted_authenticated_pi_task_block(source)
-        + '\nprintf "%s" "$authenticated_pi_task_text"\n',
-        encoding="utf-8",
-    )
-    result = subprocess.run(["bash", str(guard), case_set], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise AssertionError(f"the staged task-text guard refused {case_set}: {result.stderr.strip()}")
-    return result.stdout
-
-
-def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
-    failures: list[str] = []
-    try:
-        shared = staged_authenticated_pi_task_text(source, root, "shared")
-        others = {
-            case_set: staged_authenticated_pi_task_text(source, root, case_set)
-            for case_set in ("stale_leaf", "stage_replay_leaf_bound", "codex_containment")
-        }
-    except (AssertionError, ValueError) as error:
-        return [str(error)]
-    if not shared:
-        failures.append("the shared case set stages no authenticated Pi task text")
-    failures.extend(
-        f"the {case_set} case set stages the authenticated Pi task text"
-        for case_set, text in others.items()
-        if text
-    )
-    description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
-    if description is None:
-        failures.append("the Control claim fixture no longer carries the pi_provider_action description")
-    elif shared and description.group("description") not in shared:
-        failures.append("the staged task text does not carry the Control fixture's admitted description")
-
-    python_body = root / "fixture-home.py"
-    python_body.write_text(extracted_fixture_home_python(source), encoding="utf-8")
-    api_key = root / "api-key"
+def staging_script(source: str, root: pathlib.Path, case_set: str) -> pathlib.Path:
+    api_key = root / f"{case_set}-api-key"
     api_key.write_text("sk-fixture-provider-key\n", encoding="utf-8")
-    arguments = list(FIXTURE_HOME_ARGUMENTS)
-    arguments[9] = str(api_key)
-    probe = "Use the real symmetry_resource_sync tool for the configured GitHub repository."
-    for index, task_text in enumerate((probe, "")):
-        fixture_root = root / f"fixture-{index}"
-        fixture_root.mkdir(parents=True)
-        result = subprocess.run(
-            [sys.executable, str(python_body), str(fixture_root), *arguments, task_text],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            failures.append(f"the fixture home writer exited {result.returncode}: {result.stderr.strip()}")
-            continue
-        staged_file = fixture_root / "b-home/.pi/agent/APPEND_SYSTEM.md"
-        if task_text:
-            if not staged_file.exists() or staged_file.read_text(encoding="utf-8") != task_text + "\n":
-                failures.append("the fixture home writer did not stage the exact task text")
-        elif staged_file.exists():
-            failures.append("the fixture home writer staged a task text it was not given")
-
-    install = root / "install.sh"
-    install.write_text(
+    script = root / f"{case_set}-staging.sh"
+    script.write_text(
         "set -Eeuo pipefail\n"
-        f"B_HOME={FIXED_B_HOME}\n"
-        "authenticated_pi_task_text=$1\n"
-        'b_native_credential_files=("$B_HOME/.pi/agent/auth.json")\n'
+        "fixture_root=$1\n"
+        f"fixture_case_set={case_set}\n"
+        "fixture_identity_suffix=${fixture_case_set//_/-}\n"
+        "A_HOME=/home/a\n"
+        "A_SOURCE=/a/source\n"
+        "B_CLONE_ROOT=/clones\n"
+        "SEED_ROOT=/seeds\n"
+        "DAEMON_SERVICE_STATE_DIR=/state\n"
+        "PI_SHARE=/share\n"
+        "SYMMETRY_PI_MODEL=pi-model\n"
+        "SYMMETRY_OPENCODE_MODEL=opencode-model\n"
+        "SYMMETRY_OPENAI_BASE_URL=https://provider.invalid/v1\n"
+        f"native_api_key_file={api_key}\n"
+        "pi_repository_id=11111111-1111-1111-1111-111111111111\n"
+        "opencode_repository_id=22222222-2222-2222-2222-222222222222\n"
+        "pi_durability_repository_id=33333333-3333-3333-3333-333333333333\n"
+        "SYNTHETIC_GOAL_CLEANUP_SOURCE=/synthetic/source\n"
+        "SYNTHETIC_GOAL_CLEANUP_SEEDS=/synthetic/seeds\n"
+        "SYNTHETIC_GOAL_CLEANUP_CLONES=/synthetic/clones\n"
+        + extracted_authenticated_pi_task_block(source)
+        + '\nprintf "%s" "$authenticated_pi_task_text" > "$fixture_root/guard-text"\n'
+        + extracted_fixture_home_invocation(source)
+        + f"B_HOME={FIXED_B_HOME}\n"
+        'b_native_credential_files=("$B_HOME/.pi/agent/settings.json" '
+        '"$B_HOME/.pi/agent/auth.json" "$B_HOME/.pi/agent/models.json")\n'
         + extracted_authenticated_pi_install_block(source)
         + '\nprintf "%s\\n" "${b_native_credential_files[@]}"\n',
         encoding="utf-8",
     )
-    for text, expected in ((probe, True), ("", False)):
-        result = subprocess.run(["bash", str(install), text], capture_output=True, text=True, check=False)
+    return script
+
+
+def staged_home_run(source: str, root: pathlib.Path, case_set: str) -> tuple[subprocess.CompletedProcess, pathlib.Path]:
+    fixture_root = root / f"{case_set}-fixture"
+    fixture_root.mkdir(parents=True)
+    result = subprocess.run(
+        ["bash", str(staging_script(source, root, case_set)), str(fixture_root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result, fixture_root
+
+
+def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
+    failures: list[str] = []
+    description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
+    if description is None:
+        failures.append("the Control claim fixture no longer carries the pi_provider_action description")
+    expected = None if description is None else f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n"
+
+    runs = {case_set: staged_home_run(source, root, case_set) for case_set in STAGING_CASE_SETS}
+    for case_set, (result, _) in runs.items():
         if result.returncode != 0:
-            failures.append(f"the credential-file list rejected the staged task text: {result.stderr.strip()}")
+            failures.append(
+                f"the fixture staging script for {case_set} exited {result.returncode}"
+            )
+    shared_result, shared_root = runs["shared"]
+    if shared_result.returncode == 0:
+        staged_file = shared_root / "b-home/.pi/agent/APPEND_SYSTEM.md"
+        staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
+        if expected is not None and staged != expected:
+            failures.append("the shared case set does not stage the exact authenticated Pi task text")
+        settings_file = shared_root / "b-home/.pi/agent/settings.json"
+        settings = json.loads(settings_file.read_text(encoding="utf-8")) if settings_file.exists() else {}
+        level = settings.get("defaultThinkingLevel")
+        if level != "off":
+            failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
+    for case_set in STAGING_CASE_SETS[1:]:
+        result, fixture_root = runs[case_set]
+        if result.returncode != 0:
             continue
-        listed = FIXED_B_HOME_TASK_TEXT in result.stdout.splitlines()
-        if listed != expected:
-            failures.append("the fixed B home install list does not follow the staged task text")
+        if (fixture_root / "guard-text").read_text(encoding="utf-8"):
+            failures.append(f"the {case_set} case set stages the authenticated Pi task text")
+    if shared_result.returncode == 0 and FIXED_B_HOME_TASK_TEXT not in shared_result.stdout.splitlines():
+        failures.append("the fixed B home install list omits the staged task text")
+    stale_leaf_result, _ = runs["stale_leaf"]
+    if stale_leaf_result.returncode == 0 and FIXED_B_HOME_TASK_TEXT in stale_leaf_result.stdout.splitlines():
+        failures.append("the fixed B home install list stages the task text without it")
     return failures
 
 
@@ -3049,16 +3039,40 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     1,
                 ),
                 claims,
+                (
+                    "the stale_leaf case set stages the authenticated Pi task text",
+                    "the stage_replay_leaf_bound case set stages the authenticated Pi task text",
+                    "the codex_containment case set stages the authenticated Pi task text",
+                    "the fixed B home install list stages the task text without it",
+                ),
             ),
             (
                 "reworded-task-text",
                 source.replace("for the configured GitHub repository", "for the configured resource", 1),
                 claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "deleted-fixed-scope-paragraph",
+                source.replace(f"\n\n{FIXED_SCOPE_PARAGRAPH}", "", 1),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "blank-staging-argument",
+                source.replace(
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
             ),
             (
                 "no-fixture-write",
                 source.replace("    if authenticated_pi_task_text:\n", "    if False:\n", 1),
                 claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
             ),
             (
                 "misplaced-install-target",
@@ -3068,6 +3082,13 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     1,
                 ),
                 claims,
+                ("the fixed B home install list omits the staged task text",),
+            ),
+            (
+                "removed-install-row",
+                source.replace(extracted_authenticated_pi_install_block(source), "", 1),
+                claims,
+                ("the fixed B home install list omits the staged task text",),
             ),
             (
                 "dropped-admitted-description",
@@ -3078,9 +3099,41 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     "Use the configured provider tool, then create and commit one small file.",
                     1,
                 ),
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "removed-control-claim-row",
+                source,
+                claims.replace(
+                    '"pi_provider_action", "pi-native", :pi, :pi_provider,',
+                    '"_removed_", "pi-native", :pi, :pi_provider,',
+                    1,
+                ),
+                ("the Control claim fixture no longer carries the pi_provider_action description",),
+            ),
+            (
+                "dropped-staging-argument",
+                source.replace(
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                (
+                    "the fixture staging script for shared exited 1",
+                    "the fixture staging script for stale_leaf exited 1",
+                    "the fixture staging script for stage_replay_leaf_bound exited 1",
+                    "the fixture staging script for codex_containment exited 1",
+                ),
+            ),
+            (
+                "raised-thinking-level",
+                source.replace('"defaultThinkingLevel": "off"', '"defaultThinkingLevel": "minimal"', 1),
+                claims,
+                ("the staged pi home no longer sets the thinking level off: 'minimal'",),
             ),
         )
-        for name, mutant_source, mutant_claims in mutations:
+        for name, mutant_source, mutant_claims, expected in mutations:
             with self.subTest(mutation=name):
                 self.assertNotEqual(
                     (mutant_source, mutant_claims),
@@ -3089,7 +3142,9 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 )
                 root = self.root / name
                 root.mkdir()
-                self.assertTrue(authenticated_pi_task_failures(mutant_source, mutant_claims, root), name)
+                self.assertEqual(
+                    authenticated_pi_task_failures(mutant_source, mutant_claims, root), list(expected), name
+                )
 
 
 if __name__ == "__main__":

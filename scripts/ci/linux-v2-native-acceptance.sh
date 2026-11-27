@@ -1249,7 +1249,7 @@ else:
     (private_home / ".config/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".local/share/opencode").mkdir(parents=True, mode=0o700)
     (private_home / ".pi/agent/settings.json").write_text(
-        json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "minimal"}),
+        json.dumps({"defaultProvider": "openai", "defaultModel": pi_model, "defaultThinkingLevel": "off"}),
         encoding="utf-8",
     )
     (private_home / ".pi/agent/auth.json").write_text(

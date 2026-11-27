@@ -31,6 +31,10 @@ observation bound, the fixture pin, and what stays out of scope.
    (`$B_HOME/.pi/agent/APPEND_SYSTEM.md`, `docs/configuration.md` in the pinned 1.5.2 release), so
    the model receives the same task the Control fixture admits. Nothing else changes for those legs:
    the same request, the same profile args, the same tools, the same assertions.
+   The fixture's Pi home sets its thinking level to `off`
+   (`$B_HOME/.pi/agent/settings.json`): the production decoder accepts exactly one `text` block in
+   the final assistant message, and a reasoning model at any other level prepends a `thinking`
+   block (fix r1, RP-01; the retained per-arm rows are in the record §3.2).
 3. **The observation bound stays as it is, with the measurement recorded.** The bound is not the
    named side: measured sum in a guest-shaped jail (same model, same pinned Pi release, same argv and
    environment shape, same subject clone, same prompt bytes) an instructed turn settles in 9.5 s and
@@ -48,9 +52,14 @@ way `execution_goal/1` does, (b) the Control *fixture* putting the description i
 (`provision-linux-v2-control-claims.exs`), (c) the acceptance fixture staging Pi's own
 agent-directory append. (a) and (b) are production Control and a non-owned fixture file; the
 contract's owned set is the witness test, its helpers and the acceptance script's `shared` arm, and
-it routes production changes to `DECISION_NEEDED`. (c) is inside the owned set, is scoped to the
-authenticated legs (only the `shared` case set stages it, so the provider-free `pi-durability`
-vehicles keep the turn their cases were designed around), and restores exactly the text the
+it routes production changes to `DECISION_NEEDED`. (c) is inside the owned set and is scoped by
+case set *and by guest*: only the `shared` case set stages it, but one B home serves every leg of a
+guest, so the staged text also reaches the provider-free `pi-durability` stage-replay and ack-loss
+legs that `shared` runs itself — their cases were designed around an instant provider failure,
+their turns now run, they are told to use a brokered `symmetry_resource_sync` tool their profile
+does not authorize (`provider_access=False`), and their post-turn barrier holds
+(`stop_receipt_durable`, `leaf_removed`, `journal_cleared`, the 30-second stop-receipt hold) have
+never been reached in a credentialed run. It restores exactly the text the
 fixture's Control table already carries (`provision-linux-v2-control-claims.exs` `@cases`
 descriptions). Recorded consequence, not hidden: the model is *told* the task by the fixture
 instead of inferring it from the Control goal — the same relationship the product has, where the
@@ -89,7 +98,9 @@ text so it no longer carries the admitted description each redden the row.
   `buildTurnPrompt` bytes (title-only goal + the witness's stub context + the embedded TaskResult
   schema). Arm A: the delivered bytes (no append). Arm B: the delivered bytes plus the staged
   append. Rows: wall time to `agent_settled`, tool calls, the bridge stub's request log, the commit
-  count, the Pi bash-log bytes, the final assistant `stopReason`.
+  count, the Pi bash-log bytes, the final assistant `stopReason`, the final assistant message's
+  content block types, and the production decoder's verdict on that captured message
+  (`DecodeAssistantTaskResult`).
 - Guest: the conductor's Bind re-runs `shared` on the PR head (placeholder credential; the
   credential-gated named outcome is the expected row) and the owner's credentialed cadence is the
   acceptance row for the authenticated turn.
