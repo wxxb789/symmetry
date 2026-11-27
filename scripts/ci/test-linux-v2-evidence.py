@@ -474,6 +474,15 @@ def write_declaration(path: pathlib.Path, document: dict, mode: int = 0o600) -> 
     os.chmod(path, mode)
 
 
+def normalise_case_arm(head: str) -> str:
+    candidate = head.strip().strip("\"'").strip()
+    if candidate.startswith("("):
+        candidate = candidate[1:].strip()
+    if candidate.endswith(")"):
+        candidate = candidate[:-1].strip()
+    return candidate
+
+
 def parse_case_arms(lines: list[str]) -> dict[str, str]:
     arms: dict[str, str] = {}
     pattern = None
@@ -484,7 +493,10 @@ def parse_case_arms(lines: list[str]) -> dict[str, str]:
             if stripped == "esac":
                 break
             head, separator, tail = stripped.partition(")")
-            if not separator or not re.fullmatch(r"[A-Za-z0-9_|*]+", head):
+            if not separator:
+                continue
+            head = normalise_case_arm(head)
+            if not re.fullmatch(r"[A-Za-z0-9_|*]+", head):
                 continue
             pattern, current = head, [tail.strip()]
         else:
@@ -3152,6 +3164,18 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 source.replace(
                     "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
                     "  review_probe) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    1,
+                ),
+                workflow,
+                (
+                    "a case-set arm outside the dispatch block admits a set the dispatcher does not run",
+                ),
+            ),
+            (
+                "allowlist-parenthesised-arm",
+                source.replace(
+                    "  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
+                    "  (review_probe) ;;\n  *) fail 'set SYMMETRY_LINUX_V2_NATIVE_CASE_SET",
                     1,
                 ),
                 workflow,

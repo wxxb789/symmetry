@@ -13,7 +13,7 @@ Plan: `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md`. Shape reference:
 | File | sha256 (delivered) | Change |
 | --- | --- | --- |
 | `scripts/ci/linux-v2-native-acceptance.sh` | `a971ab561de05de300142f7cffab23d5642de5da562dfb6fd5572eaf8696c0ec` | The `shared` case set stages the authenticated Pi legs' task text into the fixed B home's Pi agent directory and installs it under the existing private-file discipline; the same home writer sets `defaultThinkingLevel` to `off` for `shared` and keeps the pre-r1 `minimal` for every other Pi case set (round 2, R29). |
-| `scripts/ci/test-linux-v2-evidence.py` | `312dccd28ed45f0837004e948c0c8c1a4cb7907e0051036f95799abe37280f25` | `authenticated_pi_task_failures` derives its case-set list from the acceptance script's own allowlist (no hand-copied list) and runs the fixture's own guard, home-writer call and install block over every derived set: `shared`'s exact payload and `off` level, every other Pi case set's absent file, pre-r1 `minimal` level and absent install row, and the two containment sets' explicit exemption (no Pi home, no install row). One committed derivation test binds the derived list to the script's dispatch block, to every case-set arm the script carries in any `case "$fixture_case_set" in` block and to the CI workflow matrix; seventeen staging mutants and four case-set-list mutants each assert their own exact failure list. |
+| `scripts/ci/test-linux-v2-evidence.py` | `e5118f435268adc275b68955ba5a306c2c1a60af42e3fc5ad3f14b2a52beb356` | `parse_case_arms` normalises each arm's head — surrounding whitespace, an optional leading `(` or trailing `)` and any quoting — before matching it, so an ordinary Bash spelling such as `(review_probe) ;;` is recognised rather than silently dropped. `authenticated_pi_task_failures` derives its case-set list from the acceptance script's own allowlist (no hand-copied list) and runs the fixture's own guard, home-writer call and install block over every derived set: `shared`'s exact payload and `off` level, every other Pi case set's absent file, pre-r1 `minimal` level and absent install row, and the two containment sets' explicit exemption (no Pi home, no install row). One committed derivation test binds the derived list to the script's dispatch block, to every case-set arm the script carries in any `case "$fixture_case_set" in` block and to the CI workflow matrix; seventeen staging mutants and five case-set-list mutants each assert their own exact failure list. |
 | `docs/plans/2026-11-28-rf-acc-pi-turn-deadline-plan.md` | `bf561a3adb9eaa9ec0bbb699487bdf08f6710328689dc0cfa24d144a1aa8ee68` | This increment's plan (fix r1: the thinking level, the decoder row, the guest-scoped task-text statement; round 2: the R28–R34 wording and scope; round 3: the derived pin, the explicit containment exemption and the 420 s bound label). |
 | `docs/TODO.md` | — (shared doc, cited by content) | Six `rf-acc-pi-turn-deadline: residuals` bullets: the credentialed re-dispatch, `stale_leaf`, the unobserved provider-free turns and holds, the decoder's `subject_hash` stop, the production carriers, and F1 (the unprojected provider `stopReason`). |
 
@@ -206,7 +206,7 @@ text, so no leg asserts anything the fixture did not already admit.
   each. Decoder rows: the pre-fix profile's captured messages are rejected on the block shape
   (`[thinking, text]`), the delivered profile's message passes that gate, and the
   supplied-contract-values payload decodes to `candidate_completion` (§3.2).
-- Mutation rows over `authenticated_pi_task_failures` (seventeen staging mutations and four
+- Mutation rows over `authenticated_pi_task_failures` (seventeen staging mutations and five
   case-set-list mutations, each asserted against the exact failure list it must produce; the
   pristine pair returns `[]`). The pin derives its case-set list from the acceptance script's own
   allowlist, so every mutant runs it over every allowlisted set and a leak into any of them is a
@@ -232,7 +232,7 @@ are verbatim rows:
 - `UNRUN` = `a case-set arm outside the dispatch block admits a set the dispatcher does not run`
 
 The multi-row `<set>` expectations are computed inside the test from the same two derived lists the
-pin uses; the derivation itself carries its own committed test and its four mutants below, so a
+pin uses; the derivation itself carries its own committed test and its five mutants below, so a
 drifted or truncated list reddens there rather than silently shortening a mutant's expectation.
 
 | Mutation | Exact failure list |
@@ -255,12 +255,13 @@ drifted or truncated list reddens there rather than silently shortening a mutant
 | the Control fixture's `pi_provider_action` row renamed | `PROVIDER-ROW` |
 | the invocation's last argument dropped (argument count changed) | the fifteen `RC` rows in allowlist order |
 
-The four case-set-list mutants assert the derivation directly:
+The five case-set-list mutants assert the derivation directly:
 
 | Mutation | Exact failure list |
 | --- | --- |
 | a name appended to the script's allowlist alternation arm (`|synthetic_goal_cleanup) ;;` → `|synthetic_goal_cleanup|review_probe) ;;`) | `the case-set allowlist and the script's own dispatch arms diverged`, then `UNRUN`, then `the case-set allowlist and the workflow case-set matrix diverged` |
 | a standalone `  review_probe) ;;` arm inserted into the script's validation block before its rejecting `*)` arm | `UNRUN` alone |
+| a parenthesised `  (review_probe) ;;` arm inserted into the script's validation block before its rejecting `*)` arm | `UNRUN` alone |
 | a name added to the CI workflow's `case_sets` matrix | `the case-set allowlist and the workflow case-set matrix diverged` |
 | the `native_containment_kind` arm removed for `codex_containment` | `the containment case sets and the writer's containment kinds diverged` |
 
@@ -308,8 +309,7 @@ Two scratch Binds ran; neither is the protected credentialed dispatch, and neith
    full); that subtest was the first non-gated failure.
 2. Round 2 ([run 46049816624](https://github.com/wxxb789/symmetry/actions/runs/46049816624)) on the
    merge head `f6dfea80` is summarised below, not quoted verbatim: both Bind sections condense
-   their receipt files (62 non-blank lines in the round-1 receipt against this record's 20, 60 in
-   the round-2 receipt against 15), so a later change to a receipt file is not visible here.
+   their receipt files, so a later change to a receipt file is not visible here.
    `shared` exits 1 again, but the
    round-1 red is gone: **24** green event-gate rows, including
    `verified TestProductionLinuxV2StageCrashReplayMatrix/reservation_durable: run=1 pass=1 skip=0`
@@ -338,9 +338,11 @@ full committed tree (`scripts/ci/source_subject.py:127-141,209-230`, `index_mode
 that commit and digest into Control provisioning and writes it into the exported credential-gated
 declaration (`scripts/ci/linux-v2-native-acceptance.sh:26-29,1094-1102,2583-2610`,
 `write_credential_gated_declaration`), so this round's changed docs and test file are inputs to that
-digest. Run 46049816624 therefore establishes the **observed** behaviour at its own subject
-`f6dfea80`; it is neither outcome invariance nor evidence equivalence for this head, which needs its
-own Bind. The authenticated outcome remains the owner's credentialed cadence.
+digest. Run 46049816624 therefore establishes the **observed** behaviour at its own hashed subject,
+the scratch commit `30f450a584f405409d3a4b3e71c13a26e590dc40`, whose sole parent is the PR head
+`f6dfea80`; that receipt is observed for that subject only, and the run is neither outcome
+invariance nor evidence equivalence for this head, which needs its own Bind. The authenticated
+outcome remains the owner's credentialed cadence.
 
 ## 8. Gates
 
@@ -366,7 +368,7 @@ receipts were gated on their own heads, named in their own sections.
 | Command (working directory) | Exit | Result |
 | --- | --- | --- |
 | `bash -n scripts/ci/linux-v2-native-acceptance.sh` (repo root, WSL) | 0 | no output |
-| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 77 tests … OK` in 66.1 s (75 before round 3 added the derived-coverage test and the case-set-list mutation test; round 4 adds no test method — it re-points the derivation and its mutant list) |
+| `python3 -B scripts/ci/test-linux-v2-evidence.py` (repo root, WSL) | 0 | `Ran 77 tests … OK` in 66.1 s (75 before round 3 added the derived-coverage test and the case-set-list mutation test; rounds 4 and 5 add no test method — they re-point the derivation and extend its mutant list) |
 | `python3 -B scripts/ci/test-linux-v2-owner-request-keys.py` (repo root, WSL) | 0 | `Ran 10 tests … OK` in 0.3 s |
 | `python3 scripts/ci/model-routing-record-sanitize.py --check --root-only <plan, record, TODO>` (repo root) | 0 / 0 / 0 | all three changed docs pass root-only |
 | `python3 scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base <clone base commit> --head HEAD` | 0 | `1 changed record(s) pass the root-only check` |
@@ -386,7 +388,7 @@ pre-existing byte-identical rows, not a regression of this increment.
 
 Fix r1 receipt: the code-scoped rows above (`bash -n`, the two Python suites) and the doc-scoped
 rows (both sanitizers, `check-record-cleanliness.py`, `comment-cap.py`, `jscpd-changed.py`) ran on
-the final bytes of §1 — the test file and the acceptance script after the RP-01/RP-03 rework and
+the round-1 final bytes of §1 — the test file and the acceptance script after the RP-01/RP-03 rework and
 the plan/record/TODO after their wording fixes — so every implement- and apply-stage receipt for
 those files is superseded by these bytes.
 
@@ -399,7 +401,7 @@ residual) — so the fix-r2 receipt is superseded for those four paths. It still
 script, which this round does not touch, and the two measurement rows are the round-2 ones named in
 the table. Round 3 re-measured no arm.
 
-Fix r4 receipt (this round): the code-scoped rows (`bash -n`, the two Python suites) and the
+Fix r4 receipt (round 4): the code-scoped rows (`bash -n`, the two Python suites) and the
 doc-scoped rows (both sanitizers, `check-record-cleanliness.py`, `comment-cap.py`,
 `jscpd-changed.py`) re-ran on the §1 bytes of this table — the test file with the anchored dispatch
 block, the union-of-arms derivation and its four case-set-list mutants, and the record with the
@@ -408,6 +410,12 @@ provenance qualifiers) — so the fix-r3 receipt is superseded for the test file
 acceptance script is byte-identical to the round-2 bytes (`a971ab56…`), the plan is unchanged from
 round 3 (`bf561a3adb9e…`), and the two measurement rows stay the round-2 ones named in the table.
 This round re-measured no arm.
+
+Fix r5 receipt (this round): the same code- and doc-scoped rows re-ran on the round-5 §1 bytes — the
+test file with the normalised case-arm spelling and its fifth case-set-list mutant, and the record
+with the round-5 corrections (the scratch-commit subject, the two-comparison archival claim and the
+removal of the stale line counts) — so the fix-r4 receipt is superseded for the test file and the
+record. This round re-measured no arm.
 
 CI observation, not a gate of this increment: on the reviewed head `dd9da52f` the `compose` job
 (`.github/workflows/ci.yml:1793-1812`) failed in 41 s inside its smoke step, at the Control image's
@@ -517,14 +525,17 @@ occurrences of the key.
 
 **ROUND 1 / SCRATCH / ACT SUPERSEDED — not the protected credentialed dispatch.** [Run 46046284991](https://github.com/wxxb789/symmetry/actions/runs/46046284991), attempt 1, ran only `shared` with the ratified placeholder credential. The head-filtered Actions census was `total_count=1`. The [evidence ZIP](https://github.com/wxxb789/symmetry/actions/runs/46046284991/artifacts/15222292091) is 4,449 bytes; downloaded SHA-256 `0c70c0d6f54aa9cf045ca1f4cedb630677c2c511314748b05061b0789dc318b0` matches the Actions digest.
 
-**§1 cross-reference correction (round 3, requalified in round 4).** The "§1 bytes" in this receipt
-are the round-1 `dd9da52f` blobs, not the §1 table above, which carries the round-4 bytes. At
+**§1 cross-reference correction (round 3, requalified in rounds 4 and 5).** The "§1 bytes" in this receipt
+are the round-1 `dd9da52f` blobs, not the §1 table above, which carries the round-5 bytes. At
 `dd9da52f` the acceptance script's SHA-256 was
 `0ab1545f4081b73b2114af350e8c2b5a16e2a2dd3e280f1c8480e1d17c2751b6` and the test file's was
-`9335f40c2890…`, so no blob of the current §1 table matches that head. Round 3 compared against the
-**round-2 version** of the §1 table, whose blobs matched `e754b6da` and, unchanged, `f6dfea80` for
-the acceptance script only: the test file was `0b5f3dcd1890…` there and the plan `5cb192855e63…`,
-so neither matched those heads and neither matches the §1 table above. The PR-head column below means the tree
+`9335f40c2890…`, so no blob of the current §1 table matches that head. Round 3 compared the
+**round-2 version** of the §1 table against the two historical commits in two separate steps. That
+version's own three blobs all match those two heads: the acceptance script `a971ab561de05…`, the
+test file `0b5f3dcd1890…` and the plan `5cb192855e63…` are identical in `e754b6da` and `f6dfea80`.
+The §1 table above compared against the same two heads leaves only the acceptance script
+(`a971ab561de05…`) equal, because the test file is now `e5118f435268…` and the plan
+`bf561a3adb9e…`. The PR-head column below means the tree
 the run commit descends from, and the run commit `a75ad21c` adds only the two scratch files to it,
 exactly as the third table column records.
 
