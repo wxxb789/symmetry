@@ -2,12 +2,13 @@
 
 Contract: `goal-rf-acc-owner-loss-capture-exit.md` (GDD state root, outside the repository).
 Dispatch base: `d45e3298` (#305, `main`). Plan:
-`docs/plans/2026-11-27-rf-acc-owner-loss-capture-exit-plan.md`. Local verification is not the
-credentialed acceptance; the conductor re-Binds the PR head (§9). All Go rows below ran from
-`daemon/`: the Linux-tagged rows in WSL Ubuntu-24.04 (`go1.27.0 linux/amd64`), the head-wide
-Windows rows on `go1.27.4 windows/amd64`.
+`docs/plans/2026-11-27-rf-acc-owner-loss-capture-exit-plan.md`.
 
 ## 1. Subject bytes (sha256)
+
+Historical delivered bytes at PR head `fb728c798006e17a5e93eeca0db670ba588cb70b`
+and post-S1 scratch receipt `6935505431d7158ffd6b09f7a1e28c8b046b9f7d`. The archived
+Bind table uses this meaning of “§1 delivered digests.”
 
 | File | Before (`d45e3298`) | Delivered |
 | --- | --- | --- |
@@ -15,12 +16,19 @@ Windows rows on `go1.27.4 windows/amd64`.
 | `daemon/internal/app/linux_owner_witness_linux_test.go` | `f8cdf9b5ff54f5713a157c19e4e805fb6186e1eeb3ee8d272aea39926e42d6a1` | `4aee0ec96c054bc902f313ad7864d893f9f1c44365dc053849f48e24635c5563` |
 | `daemon/e2e/production_linux_v2_owner_cli_test.go` | `1bde11fbcfda1e7175a07f4c8407d69435658426e135b52c9bcc12d350a235f4` | `d62606b97db63e62ddf286426fc8758977170d00a65c7c10039b4377ef3a0f53` |
 
-Every command and overlay mutant in §3, §4 and §6 executed against the delivered bytes above. The
-apply stage re-delivered the e2e row's file (S1: the shared pre-recovery fixtures) and re-ran §4's
-mutants, §5's rows and §6/§7's gates on the post-S1 bytes; the earlier receipt for that one file
-(digest `e0c971dfbaf81ea66adf33c8a4e2af3cecb6692748fd1f9dc7c2b5195c728f75`) is PARTIAL and
-SUPERSEDED. The plan and this record cannot carry their own digests; the scratch-clone receipt in
-§7 binds the seven-path revision it committed, and no stage committed in the working tree.
+Fix-round Go file deltas relative to that subject (§§3–6 cover fresh checks on these bytes):
+
+| File | Fix-round SHA-256 |
+| --- | --- |
+| `daemon/internal/app/linux_owner_witness_linux.go` | `9607c6196f70ca61c35db3a378e76032a13bf76c555f02426b499619924f8953` |
+| `daemon/internal/app/linux_owner_witness_linux_test.go` | `e5c6d99a87068602ce5898e35209d1fa8fd8ce39eb1c7a445d4e1330da64431f` |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `751eaf4d5e4d29852b4fa23e4cec2be85a5b524ad5705f40e3cd2fc322a749a7` |
+
+The implementation receipt `574b9c36` is superseded by `6935505431d7158ffd6b09f7a1e28c8b046b9f7d`.
+Its e2e SHA-256 was `e0c971dfbaf81ea66adf33c8a4e2af3cecb6692748fd1f9dc7c2b5195c728f75`;
+it did not match the post-S1 e2e bytes. The two app files did not change from implementation to
+post-S1. The post-S1 receipt is the verified pre-fix receipt, superseded for the fix-round landing
+decision by the exact-byte receipt in the PR handoff. The Bind is separate (§9).
 
 ## 2. Slice 1 — the early return and why the exit is terminal
 
@@ -58,31 +66,24 @@ already-exited run (`:1305`), so the value is monotone for the life of the run.
 - Therefore, after the first `Control == nil` response for the exact held helper, every later
   `LookupHelper` for the same grant returns the same terminal classification (or `retired` / an
   error) and the only statements that set `Captured`/`OwnerLost`/`StopProof`
-  (`linux_owner_witness_linux.go:2962-2979`) are unreachable. The re-dial can only re-observe the
+  (`captureLinuxV2NativeWitnessOwnerLoss`’s live `Status` arm) are unreachable. The re-dial can only re-observe the
   exit at 250 ms cadence until the 40 s bound.
 
 ### 2.3 What changed
 
-- `captureLinuxV2NativeWitnessOwnerLoss` ends the poll on the first exact-identity terminal exit:
-  `exited := helper.Control == nil && helper.PID == reservation.Helper.PID && helper.Identity ==
-  reservation.Helper.Identity` inside the existing unusable-helper arm
-  (`linux_owner_witness_linux.go:2952-2961`), with the same
-  `anchor returned no live exact held helper for the owner-loss snapshot` error, the same
-  uncaptured snapshot shape, and no other change to the arm or to the live-helper arm
-  (`:2962-2979`, byte-identical statements).
-- A terminal exit for a *different* identity keeps today's poll (the identity equality is not
-  dropped) because a foreign anchor-supplied exit is an anchor-invariant violation, not the held
-  helper's death; widening there would be a second notion of "gone".
-- New seam (production, unexported): `linuxV2NativeWitnessAnchor`
-  (`Discover` + `LookupHelper`) and `linuxV2NativeWitnessOwnerLossAnchor`, whose default returns
-  `owner.anchor` (`:2906-2914`); the capture resolves `Discover`/`LookupHelper` through it. The
-  default body runs in every acceptance leg; the rows in §3 override and restore it. Rationale and
-  the rejected alternatives are in the plan §2.3.
+The first exact terminal exit ends `captureLinuxV2NativeWitnessOwnerLoss` after closing the
+lookup’s local pins. It does not widen terminal classification to a foreign PID / creation
+identity. The 40 s capture budget, 250 ms poll cadence and live `Status` arm are unchanged.
+The snapshot schema is unchanged: terminal on the first observation yields an uncaptured snapshot
+with the held identity, and a partial earlier `Status` observation can still populate fields.
+The exact terminal reason now wins immediately, rather than a later lookup error at the old
+deadline (for example `LinuxOwnerAnchorClient.exchange` rejecting an expired context).
+The unexported `linuxV2NativeWitnessOwnerLossAnchor` defaults to `owner.anchor`; the plan explains
+the test seam. The fix-round change to this production file deletes the seam comment only.
 
-## 3. Slice 1 rows — red-first on the pre-change loop (WSL)
+## 3. Slice 1 — terminal classification rows
 
-Red-first order: the seam landed first (behavior-preserving), the row was added, and the row was
-run against the production bytes that still had no early return:
+Historical red-first run on the seam-only revision (before the early return), exit 1:
 
 ```
 $ go test -count=1 -run '^TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTerminalHelperExit$' ./internal/app
@@ -91,163 +92,116 @@ $ go test -count=1 -run '^TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTe
 FAIL	github.com/wxxb789/symmetry/daemon/internal/app	40.121s
 ```
 
-exit 1. After the early return (delivered bytes):
+With the early return, `TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTerminalHelperExit`
+passed in 0.00 s and verified one dial, the terminal-first field shape and the exact diagnostic.
+The historical `m1_no_early_return` overlay removed the early return and gave 161 dials in
+40.156 s (exit 1); the re-run below is only of the distinct foreign-exit control.
 
-```
-$ go test -count=1 -v -run '^TestLinuxV2NativeWitnessOwnerLossCapture' ./internal/app
---- PASS: TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout (0.26s)
---- PASS: TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTerminalHelperExit (0.00s)
---- PASS: TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit (0.50s)
-ok  	github.com/wxxb789/symmetry/daemon/internal/app	0.785s
-```
+The foreign-helper row now cancels its context from the stub’s second lookup, not from a fixed
+500 ms deadline. It still checks that capture made at least two calls, kept the unproven shape
+and echoed the exact held identity and diagnostic. Cancellation does not supply the desired
+result: the widened terminal result returns before the second lookup can request it.
 
-exit 0. Row facts:
+Fix-round overlay `r4_widen_terminal.json` replaces `daemon/internal/app/linux_owner_witness_linux.go`
+with `r4_widen_terminal.go` (SHA-256 `7918f96b69b695a1cf6faa3782e4292e7973da5e5d44bf4c558c710c6f20579f`).
+Its sole edit is `exited := helper.Control == nil`, dropping the held PID and identity terms.
+`go test -count=1 -timeout 20s -v -overlay=<overlay> -run
+'^TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit$' ./internal/app`
+exited 1: `foreign helper_exited capture dials = 1, want the poll to continue past one classification`.
+The subsequent unoverlaid §6 targeted run exited 0; the foreign exit and exact terminal rows
+passed in 0.25 s and 0.00 s, respectively.
 
-| Row | Input (anchor stub) | Assertions | Delivered observation |
-| --- | --- | --- | --- |
-| `…CaptureStopsAtExactTerminalHelperExit` | held = looked-up = `{20, helper:20:start}`, `Control == nil`, `HelperExit` = `testAppLinuxV2Exit(held, anchor)` | 1 dial; elapsed ≤ 40 s/8; `Captured`/`OwnerLost`/`ReleaseAuthorized` false; `StopProof` nil; version 1; stage + helper identity echoed; `Error` = the pre-change literal | 1 dial, 0.00 s, shape and literal as pinned |
-| `…CaptureKeepsPollingForAnotherHelpersExit` | held `{20, …}` ≠ looked-up `{99, linux:v2:foreign-helper}`, `Control == nil` | ≥ 2 dials; uncaptured; `Error` contains `no live exact held helper`; held identity echoed | 3 dials in a 500 ms context, uncaptured |
+## 4. Slice 2 — stage-replay fixture wiring
 
-The row drives the production function end to end: reservation/helper validation, grant build,
-owner resolution, `Discover` equality, the poll loop and the returned shape. The stub supplies only
-inputs (an anchor identity and a terminal helper); the dial count and elapsed time are the
-production loop's own control flow, so no stub-side short circuit can satisfy the assertion. The
-fixture asserts its own structural validity (`LinuxCgroupReservation.Validate`,
-`LinuxOwnerAnchorGrant.Validate`, `LinuxCgroupExitProof.Validate`) before the run.
+`runProductionLinuxV2StageCrashReplayCase` passes stage, exact marker and journal, named pins,
+and the real waiters to `linuxV2WaitStageReplayPreRecovery` after the App kill and anchor liveness
+check. The shared step derives the snapshot flag, guards both waits on the helper pin and
+returns the same flag used later for snapshot checks. Previously the matrix derived and supplied
+its own Boolean and held the guard outside the step; both were invisible to the local wait rows.
 
-Pre-change comparison for the live-helper arm: `…KeepsTheRecoveryTimeout` (existing row, unchanged)
-still passes, so the recovery-budget contract is untouched.
-
-Mutants (`go test -overlay`, mutant copies in the operator's scratch root, never written into the
-tree; each mutant run's output was read from the guest's own scratch log and is quoted below):
-
-| Mutant | Overlay edit | Row | Result |
-| --- | --- | --- | --- |
-| `m1_no_early_return` | the whole arm reverted to the pre-change body (no `exited`) | `…StopsAtExactTerminalHelperExit` | RED, exit 1, `dials = 161`, 40.156 s — identical to the red-first observation |
-| `m2_widen_terminal` | `exited := helper.Control == nil` (identity terms dropped) | `…KeepsPollingForAnotherHelpersExit` | RED, exit 1, `dials = 1`, 0.020 s |
-
-## 4. Slice 2 — the router call-site pin
-
-### 4.1 What moved
-
-The call site (`daemon/e2e/production_linux_v2_owner_cli_test.go:2057-2062`) now makes one call
-into `linuxV2WaitStageReplayPreRecovery` (`:1207-1227`) with the predicate's value, the two pinned
-fds in a named-field `linuxV2StageReplayPreRecoveryPins`, and the two waiters
-(`linuxV2RequireTargetContainedBeforeRecovery`, `linuxV2WaitPIDFDExited` at
-`production_linux_v2_native_witness_test.go:2721`) whose local rows already exist
-(`TestLinuxV2OwnerLossSnapshotBeforeRecovery` at `production_linux_v2_owner_cli_test.go:2790`,
-local-replica subtests `:2876-2897`). Arms and texts are the pre-change ones:
-
-| `snapshotRequired` / stage | Arm | Bound | Failure text (unchanged) |
-| --- | --- | --- | --- |
-| false, any stage | helper-exit wait on the pinned helper pidfd | `linuxV2OwnerLossStopWait` (90 s) | `A helper did not exit with owner loss after the stage-replay kill: …` |
-| true, `native_release` | target-containment wait on the pinned target pidfd | 90 s | `stage %s: the native target was not contained before recovery: …` |
-| true, `stop_receipt_durable` | no wait | — | — |
-
-The pre-change hazard comment (“Unproven owner-loss stops self-kill the helper within
-linuxOwnerHelperV2StopTimeout, …”) moved with the arm. The call site keeps its
-`if helperPIDFD != nil` guard and a single `t.Fatal(err)`, so both arms' messages are byte-identical
-to the base texts.
-
-### 4.2 Rows (delivered bytes, WSL)
-
-```
-$ go test -count=1 -v -run '^TestLinuxV2StageReplayPreRecoveryWait' ./e2e
---- PASS: TestLinuxV2StageReplayPreRecoveryWaitArms (0.00s)              (8 subtests)
---- PASS: TestLinuxV2StageReplayPreRecoveryWaitFailurePropagates (0.00s)  (2 subtests)
-ok  	github.com/wxxb789/symmetry/daemon/e2e	0.033s
-```
-
-exit 0. `…WaitArms` computes `snapshotRequired` with the real predicate for each stage row and
-asserts the arm set, the fd and the bound each waiter receives, over the eight stage/marker/journal
-combinations of the predicate table (released `native_release`, durable `stop_receipt_durable`,
-not-released `native_release`, `helper_bound`, `launcher_bound`, `gate_bound`, `lease_armed`,
-`checkout_ready`). `…WaitFailurePropagates` asserts both arms wrap their waiter's error
-(`errors.Is` on a sentinel) and that only the selected arm runs. Because the arbitration is one
-function with no branch left at the call site, a swapped, dropped or widened arm is a local failure;
-the row asserts the fd identity and bound each arm receives, and the named-field `pins` literal
-requires the call site to name each fd, while a positional transposition there still compiles and
-stays the guest-only residue disclosed in the plan §3.
-
-### 4.3 Mutants
-
-| Mutant | Overlay edit (`production_linux_v2_owner_cli_test.go` copy) | Result |
+| Inputs | Wait before recovery | Snapshot required |
 | --- | --- | --- |
-| `m3_swap_arms` | the two arm bodies exchanged | RED, exit 1, 9 failing subtests; the `native_release` released row got `helper_exit` want `target_containment`, every unproven row got `target_containment`, and both propagation subtests fail |
-| `m4_drop_unproven_arm` | the unproven arm's wait deleted | RED, exit 1, 7 failing subtests; every unproven row got no arm |
-| `m5_widen_target_arm` | `case stage == "native_release"` → `case snapshotRequired` | RED, exit 1, 1 failing subtest; the `stop_receipt_durable` row got `target_containment` want none |
+| Helper pin and released `native_release` marker | Target containment, 90 s | Yes |
+| Helper pin and `stop_receipt_durable` with durable receipt | None | Yes |
+| Helper pin and any other stage/evidence combination | Helper exit, 90 s | No |
+| No helper pin | None | Determined by stage/evidence, not by the pin |
 
-The apply stage rebuilt the three overlay copies from the post-S1 delivered bytes (copies and digests
-in the stage receipt; each re-applies the same overlay edit as its pre-S1 twin, with `m3` keeping
-the two-line hazard comment with the wait it documents, which the pre-S1 twin had dropped) and re-ran
-them here; the red rows above are those re-runs.
+The wait table tests this step through real stage evidence with recording waiters. It keeps
+the exact arm, fd, and error-propagation checks, and compares each bound against a test-owned
+90 s literal. Added cases cover an absent receipt, both handoff stages, and no helper pin with
+either snapshot decision. The separate 13-row predicate and the snapshot/proof tests keep their
+assertions. The helper response-loss fixture still calls the same predicate for its durable
+receipt check; it only passes references to the same marker and journal instead of copying them.
+The matrix’s actual pin acquisition and kernel waiters still require the guest.
 
-## 5. Assertion inventory — nothing weakened
+### Fix-round overlays
 
-- Slice 1 keeps every guarantee of the changed arm: the unusable-helper classification, the exact
-  error literal, the returned shape, the live-helper arm and the 40 s/250 ms budget constants are
-  unchanged; the only removed work is the unobservable re-dial after a proven reap (§2.2). The
-  recovery-budget row (`…KeepsTheRecoveryTimeout`) and the ordering rows
-  (`…SnapshotPrecedesRecovery`, `…OwnerLossStage`, `…OwnerLossSummaryShape`) are untouched and pass.
-- Slice 2 keeps both arms, both bounds, both failure texts, the `helperPIDFD != nil` guard and the
-  ordering of the calls; the predicate row (`TestLinuxV2StageReplayOwnerLossSnapshotRequired`, 13
-  rows) keeps its values and assertions — the apply stage hoisted its two shared input literals into
-  `linuxV2PreRecoveryReleasedMarker`/`linuxV2PreRecoveryReceiptAuthority`, which `…WaitArms` now also
-  builds from, so the two rows cannot drift apart on that input — and the snapshot row
-  (`TestLinuxV2OwnerLossSnapshotBeforeRecovery`, 16 rows + 3 local pidfd replicas) is unmodified. No
-  existing test was deleted, renamed or relaxed.
-- New assertions and their homes: the two app rows and the two e2e rows are `//go:build linux &&
-  amd64`, so they run in `coverage-daemon` (`go test -count=1 -timeout 1200s
-  -coverprofile=coverage.out ./...`, `.github/workflows/ci.yml:682`, ubuntu) and the `daemon` job's
-  race pass (`go test -race -count=1 -timeout 600s -json ./...`, `:1063`, ubuntu), not in
-  `daemon-windows` (`:1461`, `windows-latest` at `:1402`); the Go vet job runs `go vet ./...`
-  (`:992`). The conductor's Bind case sets `claude_containment` /
-  `codex_containment` execute the changed production arm through
-  `TestProductionLinuxV2StageCrashReplayMatrix/<stage>`
-  (`scripts/ci/linux-v2-native-acceptance.sh:2545,3223-3228`) and the extracted router function on
-  their stage-replay legs, but they do not run the four new local rows: a Bind never executes a
-  `-run` filter that excludes them.
+Each `<name>.json` is a Go overlay replacing `daemon/e2e/production_linux_v2_owner_cli_test.go`
+with the named scratch copy `<name>.go`, with only the edit listed. Invocations used
+`go test -count=1 -timeout 20s -v -overlay=<overlay> -run '^TestLinuxV2StageReplayPreRecoveryWait' ./e2e`.
+
+| Overlay (replacement SHA-256) | Exact edit | Named red observation, exit 1 |
+| --- | --- | --- |
+| `r1_invert_shared_arm` (`99859780ac7cc4194f5b041656e0a122345a15bca2ace518e2006cffdc383c34`) | Negate `linuxV2StageReplayOwnerLossSnapshotRequired(stage, marker, journal)` at the assignment feeding the actual fixture wait selection in the shared step | `…WaitArms/released_native_release_hold_takes_the_snapshot_arm_containment_wait`: `stage native_release pre-recovery wait arms = "helper_exit", want "target_containment" (snapshot required = false)` |
+| `r1_shorten_wait` (`42e1f345382c2aace42d55bf8b6be825849e78bf193b7dd4d6820a0cb6275b33`) | Replace `linuxV2OwnerLossStopWait = 90 * time.Second` with `linuxV2OwnerLossStopWait = time.Second` | `…WaitArms/helper-bound_hold_keeps_the_unproven_helper-exit_wait`: `unproven arm helper-exit wait = pidfd 8 bound 1s, want pidfd 8 bound 1m30s`; released `native_release` also reported `bound 1s` vs `bound 1m30s` |
+| `r1_drop_pin_guard` (`a8be916e8905d78244d0994193b34e1d4cc03cf8dce0b067aea64235faf6130f`) | Delete `if pins.helperPIDFD == nil { return snapshotRequired, nil }` before the switch | `…WaitArms/released_native_release_without_helper_pin_keeps_the_snapshot_without_a_wait`: `stage native_release pre-recovery wait arms = "target_containment", want "" (snapshot required = true)`; the unproven `leaf_removed` row received fd −1 |
+
+Restored green: §6’s unoverlaid targeted run exited 0, including all 13 arm rows and both
+error-propagation subtests. The older `m3_swap_arms`, `m4_drop_unproven_arm` and
+`m5_widen_target_arm` ran against the post-S1 router, not this wiring; those receipts
+are historical and are not the proof for this fix round.
+
+## 5. Assertion homes and environment
+
+| Assertion | Conductor Bind case sets | Linux local / CI home |
+| --- | --- | --- |
+| Exact terminal lookup ends the capture; foreign exit requires a second lookup | No local row; Run 45972088295 exercised live helpers, not the terminal return | `TestLinuxV2NativeWitnessOwnerLossCaptureStopsAtExactTerminalHelperExit` and `TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit` in `daemon/internal/app/linux_owner_witness_linux_test.go` |
+| Arm, pin, fixed 90 s budget, propagated error and returned flag (including absent pin and both handoff stages) | No local row; the matrix exercises the real happy-path waits for its selected stages. The fix-round matrix has not yet been re-bound. | `TestLinuxV2StageReplayPreRecoveryWaitArms` and `TestLinuxV2StageReplayPreRecoveryWaitFailurePropagates` in `daemon/e2e/production_linux_v2_owner_cli_test.go` |
+
+These four top-level local rows are `linux && amd64` and run in the `coverage-daemon` job
+(`.github/workflows/ci.yml:682`) and the `daemon` Linux race pass (`:1063`), not `daemon-windows`.
+The pre-fix Bind selected `TestProductionLinuxV2StageCrashReplayMatrix/<stage>`
+(`scripts/ci/linux-v2-native-acceptance.sh:2545`), which does not select those local rows.
+`TestLinuxV2NativeWitnessOwnerLossCaptureKeepsTheRecoveryTimeout` checks the cleanup budget with
+a substitute capture, not the real live-helper arm. The Bind supplies the live-helper evidence.
+
+Runner-mirror deviation: CI runs Ubuntu 26.04 Resolute; the fix-round assertions are Go logic
+checks, not permission, kernel-readiness, runner-environment or workflow assertions. Recording
+waiters do not poll a pidfd or time a wait, and the foreign-exit result is driven by lookup count.
+No Resolute red/green was run or claimed. WSL printed `VERSION_CODENAME=noble` from
+`/etc/os-release` and used `go1.27.0 linux/amd64` as user `accept` (`umask 022`).
 
 ## 6. Local gates
 
-| Platform and command | Exit | Observation |
-| --- | ---: | --- |
-| WSL: `gofmt -l` on the three changed Go files | 0 | no files listed |
-| WSL: `go vet ./internal/app ./e2e` (base bytes, before edits) | 0 | baseline for attribution |
-| WSL: `go test -count=1 -run '^TestLinuxV2NativeWitnessOwnerLoss' ./internal/app` (base bytes) | 0 | baseline for attribution |
-| WSL: `go test -count=1 -run '^TestLinuxV2StageReplay\|^TestLinuxV2OwnerLossSnapshotBeforeRecovery' ./e2e` (base bytes) | 0 | baseline for attribution |
-| WSL: `go test -count=1 -v -run '^TestLinuxV2NativeWitnessOwnerLossCapture' ./internal/app` | 0 | 3 rows pass (0.00 s / 0.26 s / 0.50 s) |
-| WSL: `go test -count=1 -v -run '^TestLinuxV2StageReplayPreRecoveryWait' ./e2e` | 0 | 10 subtests pass |
-| WSL: `go test -count=1 -run '^TestLinuxV2StageReplay\|^TestLinuxV2OwnerLossSnapshotBeforeRecovery' ./e2e` | 0 | predicate, snapshot and wait rows together |
-| WSL: `go vet ./...` | 0 | full module |
-| WSL as user `accept`, `umask 022`: `go test -count=1 -timeout 900s ./...` | 0 | 31 `ok`, 0 FAIL, 267 s wall |
-| WSL as root: `go test -count=1 -timeout 900s ./...` | 1 | 30 `ok`, 1 FAIL package; `internal/platform`'s 13 `TestLinuxOwnerAnchorShape*`/`…Wire*` tests refuse with the documented root guard (`wire harness requires an unprivileged A process: uid=0 euid=0 gid=0 egid=0`) — the environment row of the established convention, not a code failure |
-| Host (Windows): `go vet ./...` | 0 | full module |
-| Host (Windows): `go test -count=1 -timeout 900s ./...` | 0 | 27 `ok`, 0 FAIL, 232 s wall |
-| WSL as user `accept`, `umask 022` (apply stage, post-S1 bytes): `gofmt -l` on the changed Go file (empty), `go vet ./...`, `go test -count=1 -timeout 900s ./...` | 0 | 31 `ok`, 0 FAIL, 222 s wall |
-| Host (Windows) (apply stage, post-S1 bytes): `go vet ./...`, `go test -count=1 -timeout 900s ./...` | 0 | 27 `ok`, 0 FAIL, 259 s wall (vet included) |
+The post-S1 receipt `6935505431d7158ffd6b09f7a1e28c8b046b9f7d` measured the whole daemon module:
+WSL `go test -count=1 -timeout 900s ./...` exited 0 (31 packages, 222 s wall); Windows exited 0
+(27 packages, 259 s including vet). Those timings and results are historical, not fix-round gates.
+The older implementation timings (WSL 267 s, Windows 232 s, both exit 0) belong to `574b9c36`
+and were already superseded by the post-S1 receipt.
 
-The Windows run cannot compile the three changed files (`//go:build linux && amd64`); it is the
-standing head-wide regression check for the rest of the module and is attributed to CI for the
-Linux-tagged packages. Head-wide suites are CI's own gate as well; neither substitutes for the
-credentialed acceptance (§9).
-
-## 7. Committed-blob gates (scratch clone)
-
-The three Go files, the plan, this record and the two TODO documents were committed in a scratch
-clone of the dispatch base (never in the worktree), and the three committed-blob gates ran against
-that commit; the apply stage re-ran all three on the post-S1 seven-path revision (superseding the
-implement-stage receipt), and the stage receipt names the tested commit and its seven blobs, which
-this record cannot carry without changing the bytes it gates:
+Fix-round results from `daemon/` (Windows Go `go1.27.4 windows/amd64`):
 
 | Command | Exit | Observation |
 | --- | ---: | --- |
-| `python -B scripts/ci/jscpd-changed.py --base d45e3298 --head HEAD` | 0 | 7 changed files, 1794 scanned sources, 1245 clones in the corpus, 0 tolerated and none new among the added lines; the gate notices `daemon/e2e/production_linux_v2_owner_cli_test.go` and `docs/archive/CLOSED-TODO.md` are outside its scan scope, so clones inside them stay unchecked |
-| `python -B scripts/ci/check-record-cleanliness.py --base d45e3298 --head HEAD` | 0 | the changed record passes the root-only sanitizer check; an earlier revision of this record was refused for one guest-log path mention, which the delivered prose does not carry |
-| `python -B "$comment_cap" "$scratch_clone" d45e3298` | 0 | no added comment block exceeds the 2-line cap |
+| Windows and WSL `gofmt -l` on the three Go files in §1 (once per OS) | 0 / 0 | empty output |
+| Windows and WSL `go vet ./internal/app ./e2e` (once per OS) | 0 / 0 | Linux-tagged code compiled in WSL, not on Windows |
+| WSL `go test -count=1 -timeout 20s -v -run '^TestLinuxV2(NativeWitnessOwnerLoss\|StageReplay\|OwnerLossSnapshotBeforeRecovery)' ./internal/app ./e2e` | 0 | app 0.533 s; e2e 0.326 s |
+| WSL `go test -count=1 -timeout 40s ./internal/app ./e2e` | 1 | e2e passed (1.400 s); app reached the imposed timeout in `TestOutputBackpressureRecoversWithOneTruncationMarker`, outside the witness slice. No app package-wide pass claimed. |
+| WSL `go test -count=1 -timeout 20s -run '^TestLinuxV2' ./internal/app` | 0 | All Linux v2 app rows, 6.246 s |
+| WSL `go test -count=1 -timeout 20s ./e2e` | 0 | Affected e2e package, 1.377 s |
 
-The line anchors in this record and the plan were re-measured against the delivered bytes in the
-apply stage; the anchor targets' digests at that measurement:
+## 7. Committed-blob gates (scratch clone)
+
+The pre-fix post-S1 receipt recorded exit 0 for `jscpd-changed.py`, `check-record-cleanliness.py`
+and `comment-cap.py`. The fix-round handoff carries the fresh receipt against the seven final
+paths (including this record and the preserved Bind). The receipt and record digest are external
+so that sealing the document does not invalidate its own gate. The commands in the receipt are
+`jscpd-changed.py --base d45e3298 --head HEAD`,
+`check-record-cleanliness.py --base d45e3298 --head HEAD`, and
+`comment-cap.py <scratch-clone> d45e3298`, plus a direct root-only record check.
+
+Historical anchor and input digest list for the pre-fix receipt; Bind uses this archived list:
+
 `daemon/internal/platform/linux_owner_anchor_linux.go` `1adb63e19df20bdc32db315762206402e5e2f5079b53faddfe8db802befbf331`,
 `daemon/internal/platform/anchor_session.go` `487cfcc104b6704dafe1ee7e604e2fd605f58a23d8d5376b65ebe1d9126e4e00`,
 `daemon/internal/platform/anchor_run.go` `eebec5a3b6ee26866b9a41b8230812cf25f7570c06c8e27d2efd92d6b5b4f112`,
@@ -264,19 +218,46 @@ apply stage; the anchor targets' digests at that measurement:
 
 ## 8. Residuals
 
-- The capture's anchor seam default (`linuxV2NativeWitnessOwnerLossAnchor` returning `owner.anchor`)
-  has no local row: a real `*platform.LinuxOwnerAnchorClient` needs the installed A/B owner
-  configuration, so the one-line default runs only in the credentialed acceptance legs. Filed in
-  `docs/TODO.md` under the goal's section; owner conductor.
-- Deliberate scope, not a defect: non-terminal lookup outcomes (the anchor's `retired` status and
-  transient lookup errors) keep the poll-to-the-40 s-bound behavior; only the proven
-  `helper_exited` classification plus the exact held identity ends the capture early. Recorded as a
-  decision note in `docs/TODO.md`.
+- The real anchor seam default needs the installed A/B configuration; the local capture rows
+  substitute the anchor. The pre-fix Bind ran the real default and recorded live helper proof.
+- Non-terminal outcomes, including `retired` and transient lookup errors, keep the bounded poll.
 
-## 9. Acceptance still pending
+## 9. Acceptance by revision
 
-The conductor's Bind must run `claude_containment` and `codex_containment` once on the PR head and
-record that both sets stay green with the `owner_loss` snapshot still captured (`owner_lost=true`,
-`error` absent, helper-issued stop proof) plus the measured capture budget. No local gate here is
-that acceptance; the delivered bytes changed the executed capture arm, so the Bind is the first
-end-to-end run of the early return.
+**BINDING pre-fix run:** Run 45972088295 binds `fb728c798006e17a5e93eeca0db670ba588cb70b`.
+Both sets passed and preserved the live owner-loss snapshot. The run did not emit capture elapsed
+wall time; the configured budget is not a measurement. The archival Bind below is verbatim.
+The conductor must re-bind the fixed head; this run does not cover the fix-round bytes.
+
+## Bind
+
+[Run 45972088295](https://github.com/wxxb789/symmetry/actions/runs/45972088295), attempt 1:
+`claude_containment` and `codex_containment` both passed, including their
+`StageCrashReplayMatrix/native_release_claude` and `native_release_codex` legs. Both export
+manifests passed with no missing members. The scratch branch and run worktree were removed;
+GitHub reported `total_count=1` for the run head before and after cleanup.
+
+Both exports recorded `captured`, `owner_lost`, and `release_authorized` as `true`, no `error`
+field, and a `helper` stop proof issued by the held helper. The run did not emit capture elapsed
+wall time: 40 s is the configured capture bound, not a Bind measurement. The live-helper
+snapshots do not exercise the terminal-exit return asserted separately in §3.
+
+| Artifact | ID | Downloaded ZIP SHA-256 (matched GitHub digest) |
+| --- | ---: | --- |
+| Native evidence | 15185288278 | `58a8f129929b94132f110a66e22d6cc90e68e003f3d8692147df1d375690f766` |
+| Host prerequisite | 15185995701 | `402b9cff92ec219a80d149744fc37ffabd2a4b8c8a573ffb8b955ef1735d3475` |
+
+Run head `25b820bd221cc969a8dea82e22d257dba459f930` has PR head
+`fb728c798006e17a5e93eeca0db670ba588cb70b` as its parent. The tree diff adds only the two
+scratch-only inputs below; every other repository input is byte-identical.
+
+| Executed input | Run head | PR head |
+| --- | --- | --- |
+| Production witness and e2e caller (`linux_owner_witness_linux.go`, `production_linux_v2_owner_cli_test.go`) | §1 delivered digests | same |
+| E2e witness fixture and native acceptance script | §7 `production_linux_v2_native_witness_test.go` and `linux-v2-native-acceptance.sh` digests | same |
+| `scripts/ci/linux-v2-source-subject.py` | `27fed36a71d46129ce2b713d55b6615573408a37c0dc8cceb9e5918dcaacd452` | same |
+| `scripts/ci/linux-v2-host-prerequisite-probe.sh` | `b8b91f407dd1eb4f79c3a27ef03bb1c5ff2dad7ff5cc6911a1e1d2d7678e9fad` | same |
+| `scripts/ci/linux-v2-native-rootfs-base.sh` | `c8e4972490151e03e6b6c9ea3fa5393a8c348ebf0c9912e1d16770842f7c5866` | same |
+| `.github/actions/contracts-build/action.yml` | `5c49e6cea58e0b0516238378d9dcc0abd6b0382784e351d89a55f057d29f6767` | same |
+| `.github/workflows/scratch-rf-acc-containment-goal-admission.yml` | `3eaada89cf74e116282fe74cfd1fbda8c418197c09f6c29785cd6533060d7f04` | absent |
+| `scripts/ci/scratch-gh-shim` | `507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a` | absent |

@@ -1993,14 +1993,16 @@ The `pi_provider_action`/crash-leg provider-scoped-admission item moved to
 
 - Closed by goal `rf-acc-owner-loss-capture-exit` (2026-11-27): two items of this section — the
       stage-replay router stage→arm mapping pin (round-2 Y3 P3-3) and the owner-loss capture's 40 s
-      re-dial of a terminal `helper_exited` helper (round-4 R2) — delivered and archived under
-      `docs/archive/CLOSED-TODO.md`; the remaining items here stay open.
+      re-dial of a terminal `helper_exited` helper (round-4 R2) — are archived under the separate
+      [router wait](archive/CLOSED-TODO.md#stage-replay-wait-selection) and
+      [terminal helper exit](archive/CLOSED-TODO.md#terminal-helper-exit-during-owner-loss-capture)
+      closures. The remaining items here stay open.
 
 - [ ] The owner-loss capture's anchor seam default has no local row (2026-11-27, goal
       `rf-acc-owner-loss-capture-exit`; record §2.3): the delivered
       `linuxV2NativeWitnessOwnerLossAnchor` returns the real `*platform.LinuxOwnerAnchorClient`
-      (`owner.anchor`) so the four new rows can drive the capture and the router without a live A
-      anchor. Constructing that client needs the installed A/B owner configuration
+      (`owner.anchor`); the two local capture rows substitute a stub for that client.
+      Constructing the real client needs the installed A/B owner configuration
       (`platform.NewLinuxOwnerAnchorClient` reads it and requires the A UID/GID), so the one-line
       default body is executed only by the credentialed acceptance legs
       (`claude_containment`, `codex_containment`), not by a local row. Owner: conductor (accept the

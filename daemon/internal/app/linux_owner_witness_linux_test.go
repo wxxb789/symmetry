@@ -2598,8 +2598,15 @@ func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit(t
 	held := testAppLinuxV2Helper()
 	foreign := authority.LinuxCgroupProcessIdentity{PID: 99, Identity: "linux:v2:foreign-helper"}
 	journal, recovery, stub := linuxV2NativeWitnessOwnerLossTerminalFixture(t, held, foreign)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*linuxV2NativeWitnessOwnerLossPollInterval)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	terminalHelper := stub.helper
+	stub.helper = func() *platform.LinuxOwnerAnchorHelper {
+		if stub.lookups == 2 {
+			cancel()
+		}
+		return terminalHelper()
+	}
 	snapshot := captureLinuxV2NativeWitnessOwnerLoss(ctx, recovery, journal, "native_release")
 	if stub.lookups < 2 {
 		t.Fatalf("foreign helper_exited capture dials = %d, want the poll to continue past one classification", stub.lookups)

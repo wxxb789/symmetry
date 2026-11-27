@@ -2908,7 +2908,6 @@ type linuxV2NativeWitnessAnchor interface {
 	LookupHelper(context.Context, platform.LinuxOwnerAnchorGrant) (*platform.LinuxOwnerAnchorHelper, error)
 }
 
-// This seam is a variable so the terminal helper_exited row can drive the capture without a live A anchor.
 var linuxV2NativeWitnessOwnerLossAnchor = func(owner *linuxV2OwnerResources) linuxV2NativeWitnessAnchor {
 	return owner.anchor
 }
