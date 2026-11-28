@@ -27,6 +27,7 @@ import (
 	"github.com/wxxb789/symmetry/daemon/internal/platform"
 	"github.com/wxxb789/symmetry/daemon/internal/protocol"
 	"github.com/wxxb789/symmetry/daemon/internal/state"
+	"github.com/wxxb789/symmetry/daemon/internal/workspace"
 	linuxgate "github.com/wxxb789/symmetry/daemon/native/linux-gate/protocol"
 	"golang.org/x/sys/unix"
 )
@@ -2618,5 +2619,171 @@ func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit(t
 	if snapshot.Version != 1 || snapshot.Stage != "native_release" ||
 		snapshot.Helper.PID != held.PID || snapshot.Helper.Identity != held.Identity {
 		t.Fatalf("foreign helper_exited capture shape = %#v, want the exact held helper at version 1", snapshot)
+	}
+}
+
+func TestLinuxV2NativeWitnessContextCarriesCanonicalSubjectHash(t *testing.T) {
+	subject := protocol.Subject{
+		ResourceID: "0f8fad5b-d9cb-469f-a165-70867728950e",
+		Commit:     strings.Repeat("1", 40),
+		TreeDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	runKey := linuxV2NativeWitnessRunKey{RunID: "c2-native-context", Generation: 7}
+	witness := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Subject: subject, RunKey: runKey}}
+	want := `{"version":1,"subject":{"resource_id":"0f8fad5b-d9cb-469f-a165-70867728950e",` +
+		`"commit":"1111111111111111111111111111111111111111",` +
+		`"tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},` +
+		`"subject_hash":"sha256:7777b01831c228bb006afaeb0d6097dd33ffa2a012077ab76d63117570b706de",` +
+		`"run_key":{"run_id":"c2-native-context","generation":7}}`
+	got, err := witness.nativeContext()
+	if err != nil {
+		t.Fatalf("native context error = %v, want none for a canonical subject", err)
+	}
+	if string(got) != want {
+		t.Fatalf("native context = %s, want %s", got, want)
+	}
+	hashless := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Subject: protocol.Subject{ResourceID: "sample-resource"}}}
+	refused, err := hashless.nativeContext()
+	if err == nil {
+		t.Fatalf("native context = %s, want the subject-hash refusal for a subject that cannot be hashed", refused)
+	}
+	if refused != nil {
+		t.Fatalf("refused native context = %s, want no payload without the canonical subject hash", refused)
+	}
+	if !errors.Is(err, errLinuxV2NativeWitnessContextSubjectHash) {
+		t.Fatalf("native context error = %v, want the named subject-hash refusal", err)
+	}
+	if !strings.Contains(err.Error(), "owner witness native context subject hash") {
+		t.Fatalf("native context error = %v, want the operation named in the message text", err)
+	}
+}
+
+type linuxV2NativeContextRefusalAdapter struct {
+	kind        harness.Kind
+	startCalls  int
+	lastRequest harness.StartRequest
+	session     *linuxV2NativeContextRefusalSession
+}
+
+func (adapter *linuxV2NativeContextRefusalAdapter) Probe(context.Context) (harness.Capabilities, error) {
+	return harness.Capabilities{Kind: adapter.kind}, nil
+}
+
+func (adapter *linuxV2NativeContextRefusalAdapter) Start(_ context.Context, request harness.StartRequest, _ harness.EventSink) (harness.Session, error) {
+	adapter.startCalls++
+	adapter.lastRequest = request
+	return adapter.session, nil
+}
+
+type linuxV2NativeContextRefusalSession struct {
+	openCalls      int
+	startTurnCalls int
+}
+
+func (*linuxV2NativeContextRefusalSession) ProcessDetails() (int, string) { return 0, "" }
+
+func (session *linuxV2NativeContextRefusalSession) Open(context.Context) (harness.NativeSessionHandle, error) {
+	session.openCalls++
+	return harness.NativeSessionHandle{ID: "linux-v2-native-context-refusal"}, nil
+}
+
+func (session *linuxV2NativeContextRefusalSession) StartTurn(context.Context, harness.TurnRequest) error {
+	session.startTurnCalls++
+	return nil
+}
+
+func (*linuxV2NativeContextRefusalSession) WaitTurn(context.Context) error { return nil }
+
+func (*linuxV2NativeContextRefusalSession) Control(context.Context, harness.ControlRequest) (harness.ControlReceipt, error) {
+	return harness.ControlReceipt{}, nil
+}
+
+func (*linuxV2NativeContextRefusalSession) Wait(context.Context) (harness.TaskResult, error) {
+	return harness.TaskResult{}, nil
+}
+
+func (*linuxV2NativeContextRefusalSession) Close(context.Context) error { return nil }
+
+func linuxV2NativeContextRefusalWitness(t *testing.T, kind harness.Kind) (*daemon, *linuxV2NativeWitnessRun, authority.LinuxCloneGrant, *linuxV2NativeContextRefusalAdapter) {
+	t.Helper()
+	store, err := state.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	key := state.RunKey{RunID: "00000000-0000-4000-8000-000000000077", Generation: 1}
+	// A zero version and variant nibble is refused by protocol.Subject.Validate, so the hash
+	// cannot be computed, while the authority clone validators accept the same string.
+	subject := protocol.Subject{
+		ResourceID: "00000000-0000-0000-0000-000000000078",
+		Commit:     strings.Repeat("a", 40),
+		TreeDigest: "sha256:" + strings.Repeat("b", 64),
+	}
+	intent := authority.LinuxCloneIntent{
+		Version: authority.LinuxCloneVersion, RunID: key.RunID, Generation: key.Generation, BindingKey: "local",
+		ResourceID: subject.ResourceID, BaseCommit: subject.Commit, BaseTreeDigest: subject.TreeDigest,
+		Nonce:    strings.Repeat("c", authority.LinuxCloneNonceBytes*2),
+		SeedPath: "/var/lib/symmetry/seeds/c2-context-refusal.bundle",
+		Target:   "/var/lib/symmetry/checkouts/binding-local/run-" + key.RunID + "/generation-1",
+	}
+	grant := authority.LinuxCloneGrant{Intent: intent, Seed: authority.LinuxCloneSeedReceipt{
+		Version: authority.LinuxCloneVersion, BaseCommit: subject.Commit,
+		Digest: "sha256:" + strings.Repeat("d", 64), Size: 4096, Device: 10, Inode: 11,
+	}}
+	if subject.Validate() == nil || grant.Validate() != nil {
+		t.Fatalf("unhashable-subject fixture = %v / %v, want a refused subject the clone callbacks still admit", subject.Validate(), grant.Validate())
+	}
+	adapter := &linuxV2NativeContextRefusalAdapter{kind: kind, session: &linuxV2NativeContextRefusalSession{}}
+	registry := harness.NewRegistry()
+	if err := registry.Register(kind, adapter); err != nil {
+		t.Fatal(err)
+	}
+	request := linuxV2NativeWitnessRequest{
+		RunKey:  linuxV2NativeWitnessRunKey{RunID: key.RunID, Generation: key.Generation},
+		Subject: subject,
+		Claim: protocol.ClaimResponse{
+			LeaseToken: "lease-c2-context-refusal", LeaseExpiresAt: time.Now().Add(10 * time.Minute),
+			LeaseRemainingMS: 600000, Work: protocol.Work{Goal: "c2 native context refusal"},
+		},
+		Barrier: linuxV2NativeWitnessBarrier{Directory: t.TempDir()},
+	}
+	witness := &linuxV2NativeWitnessRun{
+		ctx: context.Background(), request: request,
+		barrier:        &linuxV2NativeWitnessBarriers{request: request.Barrier, caseName: request.Case, runKey: request.RunKey},
+		cloneWorkspace: &fakeWorkspace{},
+	}
+	return &daemon{store: store, harnessRegistry: registry}, witness, grant, adapter
+}
+
+func TestLinuxV2NativeWitnessLaunchNativeRefusesUnhashableSubjectBeforeStagedStart(t *testing.T) {
+	app, witness, grant, adapter := linuxV2NativeContextRefusalWitness(t, harness.KindPi)
+	err := witness.launchNative(context.Background(), app, app.store, harness.KindPi, config.AgentProfile{},
+		&fakeLinuxV2NativeOwner{kind: harness.KindPi}, workspace.Prepared{}, grant)
+	if !errors.Is(err, errLinuxV2NativeWitnessContextSubjectHash) {
+		t.Fatalf("launchNative() error = %v, want the named subject-hash refusal", err)
+	}
+	if adapter.startCalls != 0 || adapter.lastRequest.Context != nil {
+		t.Fatalf("staged start crossed the refusal: Start calls=%d request context=%v", adapter.startCalls, adapter.lastRequest.Context)
+	}
+	if adapter.session.openCalls != 0 || adapter.session.startTurnCalls != 0 {
+		t.Fatalf("staged session crossed the refusal: Open=%d StartTurn=%d", adapter.session.openCalls, adapter.session.startTurnCalls)
+	}
+}
+
+func TestLinuxV2NativeWitnessLaunchNativeRefusesUnhashableSubjectBeforeTurnDispatch(t *testing.T) {
+	app, witness, grant, adapter := linuxV2NativeContextRefusalWitness(t, harness.KindCodex)
+	err := witness.launchNative(context.Background(), app, app.store, harness.KindCodex, config.AgentProfile{},
+		&fakeLinuxV2NativeOwner{kind: harness.KindCodex}, workspace.Prepared{}, grant)
+	if !errors.Is(err, errLinuxV2NativeWitnessContextSubjectHash) {
+		t.Fatalf("launchNative() error = %v, want the named subject-hash refusal", err)
+	}
+	if adapter.startCalls != 1 || adapter.session.openCalls != 1 {
+		t.Fatalf("turn fixture did not admit the staged transport exactly once: Start=%d Open=%d", adapter.startCalls, adapter.session.openCalls)
+	}
+	if adapter.lastRequest.Context != nil {
+		t.Fatalf("non-Pi start request carried a context: %v", adapter.lastRequest.Context)
+	}
+	if adapter.session.startTurnCalls != 0 {
+		t.Fatalf("launchNative() dispatched %d native turns before refusing the context", adapter.session.startTurnCalls)
 	}
 }

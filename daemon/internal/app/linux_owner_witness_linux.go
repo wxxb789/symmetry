@@ -3761,7 +3761,11 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	}
 	startRequest = harness.PopulateOpencodeRecorderMembers(startRequest)
 	if kind == harness.KindPi {
-		startRequest.Context = witness.nativeContext()
+		contextPayload, contextErr := witness.nativeContext()
+		if contextErr != nil {
+			return contextErr
+		}
+		startRequest.Context = contextPayload
 	}
 	if linuxV2NativeWitnessStagesReleaseFromStartProcess(kind) {
 		startRequest.StartProcess = func(startContext context.Context, invocation execution.Invocation, sink execution.Sink) (harness.NativeProcess, error) {
@@ -3859,10 +3863,14 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 			return errors.New("open pinned Pi owner witness RPC session")
 		}
 		witness.startDetachedChildCapture(startContext, daemon, store)
+		turnContext, contextErr := witness.nativeContext()
+		if contextErr != nil {
+			return contextErr
+		}
 		turnDone := make(chan error, 1)
 		go func() {
 			turnDone <- staged.StartTurn(startContext, harness.TurnRequest{
-				Goal: witness.request.Claim.Work.Goal, Context: witness.nativeContext(),
+				Goal: witness.request.Claim.Work.Goal, Context: turnContext,
 			})
 		}()
 		if witness.request.Barrier.HoldAfter == linuxV2NativeWitnessTurnStage &&
@@ -3945,13 +3953,28 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 	return nil
 }
 
-func (witness *linuxV2NativeWitnessRun) nativeContext() json.RawMessage {
-	encoded, _ := json.Marshal(struct {
-		Version int                        `json:"version"`
-		Subject protocol.Subject           `json:"subject"`
-		RunKey  linuxV2NativeWitnessRunKey `json:"run_key"`
-	}{Version: 1, Subject: witness.request.Subject, RunKey: witness.request.RunKey})
-	return encoded
+var (
+	errLinuxV2NativeWitnessContextSubjectHash = errors.New("owner witness native context subject hash")
+	errLinuxV2NativeWitnessContextMarshal     = errors.New("owner witness native context marshal")
+)
+
+func (witness *linuxV2NativeWitnessRun) nativeContext() (json.RawMessage, error) {
+	subjectHash, err := witness.request.Subject.Hash()
+	// The subject is validated before the witness runs, so this cannot fire on the real path;
+	// failing closed keeps a hash-less, undecodable context from ever reaching the model.
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errLinuxV2NativeWitnessContextSubjectHash, err)
+	}
+	encoded, err := json.Marshal(struct {
+		Version     int                        `json:"version"`
+		Subject     protocol.Subject           `json:"subject"`
+		SubjectHash string                     `json:"subject_hash"`
+		RunKey      linuxV2NativeWitnessRunKey `json:"run_key"`
+	}{Version: 1, Subject: witness.request.Subject, SubjectHash: subjectHash, RunKey: witness.request.RunKey})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errLinuxV2NativeWitnessContextMarshal, err)
+	}
+	return encoded, nil
 }
 
 func (witness *linuxV2NativeWitnessRun) installRunnerBarrierEnvironment() error {
