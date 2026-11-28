@@ -21,13 +21,18 @@ receipts bind the base, the changed-file scope and the content digests (§8).
 
 Byte-identical to the dispatch base: `daemon/e2e/production_linux_v2_native_witness_test.go`
 (`98d4771cf6a3efafc45abab7a8c954a07e58b853858979a5435259e2e4c05d7e`, the digest #309's record §11
-already named), `scripts/ci/linux-v2-native-acceptance.sh`
-(`42177bb8ef119545997dcf3ba274d2a67e1a97abe0741d724c13b9cefcc6b305`), the acceptance workflow, the
-evidence exporter, and every production package (`daemon/internal/state/linux_cgroup_journal.go`
+already named), the acceptance workflow
+(`2d5500ce4b411e979cf974c19028514dceb5a729b3c73e8971add50f55bc27d8`), the evidence exporter
+(`4a5d4098ad7b696208e649c4928f983503eb0b1efa9edb7cd6cb7ea355b66306`), and every production package
+(`daemon/internal/state/linux_cgroup_journal.go`
 `9358c264623f719038ddcfecaab976f3f2e7fde82f28a6a9689662cd167d9b4d`,
 `daemon/internal/state/run_journal.go`
 `093d93d942b1132d6f9b38b962938df3c3388ac4d6db9dec65a689aaabae9316` — both the same digests #309's
-record §11 names). The fix needs no fixture, pipeline or production change.
+record §11 names). **Not** byte-identical: `scripts/ci/linux-v2-native-acceptance.sh` is
+`42177bb8ef119545997dcf3ba274d2a67e1a97abe0741d724c13b9cefcc6b305` at the dispatch base but
+`a971ab561de05de300142f7cffab23d5642de5da562dfb6fd5572eaf8696c0ec` on the delivered bytes, because
+the `origin/main` merge `0394993c` (#310, `606985a8`) brought that file's `+26/−3` into this branch
+(§8, §11). The fix's own delta touches no script, workflow or production file.
 
 ## 2. Contract clause 1 — new or long-standing? Long-standing since #9, and latent by construction
 
@@ -46,7 +51,7 @@ No commit has changed either side since: `git log -S "may still own or require r
 or leaf" -- daemon/e2e` returns only `41e64851`, and
 `git log -S "reservation_durable helper_bound" -- scripts/ci/linux-v2-native-acceptance.sh` returns
 only `41e64851`, so the shared arm's replay order
-(`scripts/ci/linux-v2-native-acceptance.sh:3298-3300`) is unchanged too.
+(`scripts/ci/linux-v2-native-acceptance.sh:3321-3323`) is unchanged too.
 
 The wall is nevertheless *new as an observation*, and the contract's own framing says why: no earlier
 run ever measured a PASS at the preceding hold. Until #309 the `reservation_durable` leg was
@@ -112,17 +117,17 @@ The fixture neither releases nor reuses the preceding leg's journal, and it may 
 - the two `aborted_no_target` legs *require* their retained tombstone
   (`daemon/e2e/production_linux_v2_owner_cli_test.go:1443-1474`);
 - the arm deletes only `request.json`/`replay_request.json` between legs
-  (`scripts/ci/linux-v2-native-acceptance.sh:2647`, `:2717`), never a journal;
+  (`scripts/ci/linux-v2-native-acceptance.sh:2670`, `:2740`), never a journal;
 - the StateDir is fixed by the root-installed OwnerConfig and asserted equal to it
   (`newLinuxV2NativeFixture` `:2078-2091` fails unless `stateDir == owner.StateDir`; the arm pins the
   installed path through its own `DAEMON_SERVICE_STATE_DIR`,
-  `scripts/ci/linux-v2-native-acceptance.sh:520`), so a per-leg StateDir is not available to this
+  `scripts/ci/linux-v2-native-acceptance.sh:528`), so a per-leg StateDir is not available to this
   arm, and deleting the tombstone in the fixture would delete durable control state the product keeps
   for replay.
 
 The precedent for the other direction does not apply: #300 moved the alternate-mount refusal into its
 own case set because its leftover claim-only row is one "no product path retires"
-(`scripts/ci/linux-v2-native-acceptance.sh:3150`); here a product path does retire the tombstone, and
+(`scripts/ci/linux-v2-native-acceptance.sh:3173`); here a product path does retire the tombstone, and
 moving the two abort legs out of the shared arm would drop their sequence coverage, which the
 contract forbids.
 
@@ -191,7 +196,7 @@ Three further daemon arms are deliberately **not** mirrored:
   arm off the shared StateDir is the arm's own leg order (§3.1), never measured here: an earlier
   "pre-v2-era row" claim for it was wrong and the round-2 fix corrected it (R311-9);
 - the legacy v1 `ContainmentAuthority` + StopReceipt arm (`linux_cgroup_journal.go:460-462`): the
-  only v1 leg (`run_legacy_v1_replay_witness`, `scripts/ci/linux-v2-native-acceptance.sh:3212-3217`)
+  only v1 leg (`run_legacy_v1_replay_witness`, `scripts/ci/linux-v2-native-acceptance.sh:3235-3240`)
   drives `TestProductionLinuxV2LegacyV1ReplayNoV2Receipt`, whose `runLinuxStopResponseLostCase` uses
   its own witness state root, not the shared StateDir.
 
@@ -211,8 +216,13 @@ Not weakened:
   (`linuxV2ValidateStageReplayJournal` `:1406-1496`, `linuxV2ValidateStageJournalBoundary`,
   `linuxV2VerifyNoTargetCloneAbort` `:2223-2251`) are untouched, so the replay matrix's per-leg
   coverage is unchanged; and
-- the acceptance script, the workflow, the exporter and every production package are byte-identical
-  to the dispatch base (§1), so the `shared` arm and its credential-gated pi leg (1B1) are untouched.
+- the acceptance workflow, the evidence exporter and every production package are byte-identical to
+  the dispatch base (§1), so the guard's own inputs are unchanged. The acceptance script is **not**
+  (the `origin/main` merge `0394993c` brought #310's `+26/−3` into it, §1), and #310's shared-arm
+  edits — the staged Pi task text, the thinking level and the credential-file list — changed the
+  authenticated Pi turn's inputs, which the `helper_bound` stage never reaches (§7). The fix's own
+  delta touches neither the script nor those inputs, and the two files §1 pins as the guard's inputs
+  (`production_linux_v2_native_witness_test.go`, the state package) are re-measured equal there.
 
 ### 4.1 The fixtures, and why the pre-gate one is a file
 
@@ -500,12 +510,12 @@ would stop the daemon's own admission scan first.
 | Whole `e2e` package, WSL Noble (`go1.27.0 linux/amd64`) | `go test -count=1 ./e2e` (`daemon/`) | 0 | `ok … daemon/e2e 2.071s` |
 | Vet and format | `go vet ./e2e`; `gofmt -l e2e` (both userlands) | 0 / 0 | no output in either |
 | Comment cap | the coordinator's owner comment-policy checker on the scratch commit carrying these bytes | 0 | no added comment block over 2 lines |
-| Changed-file duplication, pinned ceilings | `python scripts/ci/jscpd-changed.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 5 changed files, 1805 scanned sources, 1245 clones in the corpus, 0 tolerated among the added lines, none new; the notices name the 6451-line Go test file and the 5911-line `docs/archive/CLOSED-TODO.md` as outside the configured scope (both above the pinned `--max-lines 5000` ceiling) |
-| Changed-file duplication, raised ceilings | the same script with `JSCPD_LIMITS` raised to `--max-lines 30000 --max-size 8mb` | 0 | 5 changed files, 1812 scanned sources, 1404 clones in the corpus, 0 tolerated among the added lines, none new, no notice — every changed file was scanned |
-| Record cleanliness | `python scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 1 changed record passes the root-only check |
-| Citation existence | `python scripts/ci/check-citation-existence.py --repo <scratch clone> --base 3d377582 --head HEAD` | 0 | 1 changed document passes the path and symbol check (746 path citations; the notices are pre-existing ignore-rule notes for the portal and `deps` paths) |
+| Changed-file duplication, pinned ceilings | `python scripts/ci/jscpd-changed.py --repo <scratch clone> --base 606985a8 --head HEAD` (the merged tree; the original round used `--base 3d377582` on the pre-merge bytes) | 0 | 5 changed files, 1807 scanned sources, 1245 clones in the corpus, 0 tolerated among the added lines, none new; the notices name the 6451-line Go test file and the 5911-line `docs/archive/CLOSED-TODO.md` as outside the configured scope (both above the pinned `--max-lines 5000` ceiling). The two extra scanned sources over the pre-merge receipt's 1805 are the two `rf-acc-pi-turn-deadline` documents the merge added; that earlier `--base 3d377582` receipt is PARTIAL and SUPERSEDED on its input set, whose scope is now 9 changed paths |
+| Changed-file duplication, raised ceilings | the same script with `JSCPD_LIMITS` raised to `--max-lines 30000 --max-size 8mb`, `--base 606985a8 --head HEAD` | 0 | 5 changed files, 1814 scanned sources, 1404 clones in the corpus, 0 tolerated among the added lines, none new, no notice — every changed file was scanned (the pre-merge receipt's 1812/1404 is PARTIAL and SUPERSEDED on the same input set) |
+| Record cleanliness | `python scripts/ci/check-record-cleanliness.py --repo <scratch clone> --base 606985a8 --head HEAD` | 0 | 1 changed record passes the root-only check (the pre-merge `--base 3d377582` receipt's count is the same for this record; the dispatch-base scope carries two changed records, this one and the `rf-acc-pi-turn-deadline` record the merge added) |
+| Citation existence | `python scripts/ci/check-citation-existence.py --repo <scratch clone> --base 606985a8 --head HEAD` | 0 | 1 changed document passes the path and symbol check (746 path citations, re-measured on the merged tree; the notices are pre-existing ignore-rule notes for the portal and `deps` paths) |
 | Model-routing record sanitize | `python scripts/ci/model-routing-record-sanitize.py --check --root-only <each changed doc>` | 0 | the four changed documents pass (the plan, this record, `docs/archive/CLOSED-TODO.md`, `docs/TODO.md`) on the delivered bytes; the apply round rendered `CLOSED-TODO.md`'s host-shaped spellings as `<HOST-PATH>`/`<TMP>` and this round adds none, dropping the one round-2 row that quoted a host command path (§4.5) |
-| Exporter unit suite | `python3 -B scripts/ci/test-linux-v2-evidence.py` (`scripts/ci/`, this host) | 1 | 73 tests, 146 failures + 7 errors — and the *identical* failing-name set at the dispatch base (`git archive 3d377582 scripts`, both runs' sorted `FAIL:`/`ERROR:` lines hash to `d536ac9f…`). The exporter, the acceptance script and the workflow are byte-identical to the base, so this is an environmental failure of this host, not a regression from this change; CI runs the suite in its own job |
+| Exporter unit suite | `python3 -B scripts/ci/test-linux-v2-evidence.py` (`scripts/ci/`, this host) | 1 | 73 tests, 146 failures + 7 errors — and the *identical* failing-name set at the dispatch base (`git archive 3d377582 scripts`, both runs' sorted `FAIL:`/`ERROR:` lines hash to `d536ac9f…`). **PARTIAL and SUPERSEDED on its input set**: the `origin/main` merge `0394993c` took this suite's own file `scripts/ci/test-linux-v2-evidence.py` `01e1fcc21f2fa06e7a725c8a9bb22209b4f92389a6b0de36b75d31a9cdc10e1e` → `35680566c94474aec13136537017dac1707e729f9221a343a3eda3734901604f` (`+651`) and the acceptance script with it, while the exporter proper `scripts/ci/export-linux-v2-redacted-evidence.py` (`4a5d4098ad7b696208e649c4928f983503eb0b1efa9edb7cd6cb7ea355b66306`) and `.github/workflows/ci.yml` (`f3e29fab798f010fb256dd0a49a78711abe232d84b9fc843461aa0d092fc73f7`) are genuinely unchanged at both revisions, and the exporter pipeline those two drive remains unchanged, so this failure's environmental attribution holds for the exporter bytes it was measured on; the refreshed merged-tree run is the Bind section's (`--base 606985a8`). CI runs the suite in its own job |
 | Round-2 full Go suite, Windows (`go1.27.4 windows/amd64`) | `go test -count=1 ./...` (`daemon/`, these bytes) | 0 | every package `ok` or `[no test files]`, no `FAIL`; the changed file is `//go:build linux && amd64`, so this run does not execute it |
 | Apply-round full Go suite, Windows (superseded for the fix bytes) | `go test -count=1 ./...` (`daemon/`, the pre-fix bytes `6ddddb8c…`) | 0 | 30 rows: 27 `ok`, 3 `[no test files]`, no `FAIL` |
 | Apply-round full Go suite, WSL Noble as root (superseded for the fix bytes) | `go test -count=1 ./...` (`daemon/`, the pre-fix bytes) | 1 | 32 rows: 29 `ok` including `ok … daemon/e2e 2.633s`, 3 `[no test files]`, two failing packages (`internal/platform`, `native/linux-gate/protocol`) with 14 failing test rows |
@@ -531,9 +541,16 @@ CI and to the conductor's Bind. Neither WSL failure is in the changed scope, and
 dispatch base in the same environment (`internal/platform` 13 uid-refusal rows,
 `native/linux-gate/protocol`'s fd-census pin alone, `e2e` green).
 
-The branch merged `origin/main` at `606985a8` (#310) as merge commit `0394993c`; every gate receipt
-above was taken on that merged tree, and the record-only commit that adds this sentence supersedes
-them for this record's bytes alone (§4.5's rule).
+The branch merged `origin/main` at `606985a8` (#310) as merge commit `0394993c`, which added four
+paths to this branch's dispatch-base (`3d377582`) scope: `scripts/ci/linux-v2-native-acceptance.sh`,
+`scripts/ci/test-linux-v2-evidence.py` and the two `rf-acc-pi-turn-deadline` documents, so that scope
+is now **9** changed paths rather than 5. The gate receipts above were taken on the branch's own
+pre-merge bytes with `--base 3d377582`; the merge invalidated the receipts whose input set or cited
+file changed — the duplication rows, the record- and citation-count rows, the exporter-suite row and
+§1's acceptance-script digest row — and those are **PARTIAL and SUPERSEDED** by the merged-tree
+re-measurement recorded in the Bind section, which names its own revision (`--base 606985a8`). The
+receipts bound to an unchanged byte set (the Go rows of §5, `ci.yml`'s step, the production and state
+anchors of §11) stand.
 
 ## 9. Next Bind
 
@@ -621,7 +638,221 @@ names for it.
 | `daemon/internal/state/linux_clone_validation.go` | — | clone-abort history `:388-409`; `linuxCloneAbortNoActiveOwner` `:439-442` |
 | `daemon/internal/state/cgroup_release_linux.go` | — | pre-gate receipt `:17-52`; pre-gate clear `:149-191` with the tombstone write at `:188` |
 | `daemon/internal/state/linux_cgroup_v2_test.go` | — | the pre-gate receipt fixture `:254-329` with its receipt shape inside it |
-| `scripts/ci/linux-v2-native-acceptance.sh` | §1 `42177bb8…` (dispatch base) | stage-replay leg runner `:2619-2651` with the request cleanup `:2647`; ACK-loss runner `:2677-2721` with its cleanup `:2717`; the #300 isolation note `:3148-3151`; legacy v1 leg `:3212-3217`; shared arm lists `:3298-3303`, `:3305-3306`, `:3309`; `DAEMON_SERVICE_STATE_DIR` `:520` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | §1 `a971ab56…` (head, via the #310 merge; `42177bb8…` at the dispatch base) | stage-replay leg runner `:2642-2674` with the request cleanup `:2670`; ACK-loss runner `:2700-2744` with its cleanup `:2740`; the #300 isolation note `:3171-3174`; legacy v1 leg `:3235-3240`; shared arm lists `:3321-3326`, `:3328-3329`, `:3332`; `DAEMON_SERVICE_STATE_DIR` `:528` |
 | `.github/workflows/ci.yml` | — | the `daemon_race_tests` step `:1055-1063` |
 | `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md` | §1 `a1c5dce8…` | §1.4 fixture facts, §2 the dispatcher, the clone-proof-equal abort shape and the selector item, §3 the refusal rows, §4 the test plan, §5 the out-of-scope residuals and the round-2 correction note — all re-read on these bytes; the plan's Go-file anchors name this table's ranges, and the two it keeps at their dispatch-base values (the pre-fix guard and the claim-only test) say so |
 | `docs/TODO.md`, `docs/archive/CLOSED-TODO.md` | — | the open Bind and residual entries and the closed stage items; not byte-pinned, because a later unrelated merge moves them |
+
+## Bind
+
+Conductor's scratch Bind on the delivered head `338850f0f1fdee6d0f1c978de3940b1bbd3ababb`
+(`refs/pull/311/head` = the PR branch; unchanged at the pre-flight read, the pre-push guard and the
+two post-deletion reads). One run,
+[`46096737242`](https://github.com/wxxb789/symmetry/actions/runs/46096737242), event `push`,
+attempt 1, run commit `1261db4341d6c23117325e45c65e87a11288f77a`, created `2026-11-28T02:10:20Z`,
+terminal `failure` at `02:15:30Z`; `contracts` job `140829700268` passed and the
+[acceptance job](https://github.com/wxxb789/symmetry/actions/runs/46096737242/job/140829898516)
+failed step 14. The run commit's sole parent is the PR head and its whole tree delta is the two
+ratified scratch files (workflow blob `3e85d193704205f9e1ba1736b13867f6727939cc`, sha256
+`bb6dcaf5e216aa7273dc472d76851fce2eb29cfaa7c335b6939f6053db948e0b`; shim blob
+`6c2598c146e85875c1868515280fcaee8bec110d`, sha256
+`507340af870448533257a82366718f36a010a27c6ef9c5daba94667788ed740a`; both `100644`), so every other
+run-tree path is the PR head's own bytes and the only delta to the ratified pair is the plain
+`case_sets=(shared)` line the run echoes at log 2275–2277.
+
+**The guard no longer refuses the retained tombstone; the leg stops one assertion later.** The three
+strings the #309 Binds reported at the `helper_bound` subtest — `pre-existing RunJournal`,
+`is not physically released`, `may still own or require recovery` — each occur **0** times in the
+4707-line log, as do `prior RunJournal's exact cgroup leaf still exists` and
+`prior RunJournal's clone abort does not enclose`. The leg passes the fresh-run guard and fails at
+
+```text
+production_linux_v2_native_witness_test.go:224: stage helper_bound recovery response failed exact-state assertions: stage helper_bound recovery_state = "unresolved", want "aborted_no_target"
+```
+
+(`production_linux_v2_owner_cli_test.go:2798` reporting `:1346`), with `owner_witness_outcome` and
+`recovery_state` `unresolved`, category `containment_unproven` and owner-witness stderr
+`owner witness containment is unresolved` (`daemon/internal/app/linux_owner_witness_linux.go:2250`);
+the secret-free projection lists three journals, the first retired (`recovery_required:false`) and
+two still requiring recovery. The `:224` frame is the same `t.Run` closure the #309 Binds reported,
+now with a different message, so the delivered guard does retire the prior journal and what fails is
+the replay's own exact-state assertion. **What those bytes alone do not show is whether the stop is
+new; the attribution subsection below measures that on the base bytes.**
+
+### Bind equality
+
+Run-input SHA-256 at the run head equals the PR head for every path but the two scratch files. Only
+the paths the delivered bytes changed are listed, with the base each claim is measured against:
+
+| Input (sha256) | base `3d377582` / `606985a8` | PR head `338850f0` |
+| --- | --- | --- |
+| `daemon/e2e/production_linux_v2_owner_cli_test.go` | `96306f493b8a55a6fddcaa5052679733a3e9fd0e8be2e10e36110a40b4bd4c56` | `09a3d4ca8296a8225e725eeb72cd8ec74eb54af38e6f8691e63c3a1aa518e0af` |
+| `scripts/ci/linux-v2-native-acceptance.sh` | `42177bb8ef119545997dcf3ba274d2a67e1a97abe0741d724c13b9cefcc6b305` | `a971ab561de05de300142f7cffab23d5642de5da562dfb6fd5572eaf8696c0ec` |
+| `daemon/e2e/production_linux_v2_native_witness_test.go` | `98d4771cf6a3efafc45abab7a8c954a07e58b853858979a5435259e2e4c05d7e` | equal |
+| `daemon/internal/state/linux_cgroup_journal.go` | `9358c264623f719038ddcfecaab976f3f2e7fde82f28a6a9689662cd167d9b4d` | equal |
+| `daemon/internal/state/run_journal.go` | `093d93d942b1132d6f9b38b962938df3c3388ac4d6db9dec65a689aaabae9316` | equal |
+
+The `origin/main` merge `0394993c` (#310, `606985a8`) brought `scripts/ci/linux-v2-native-acceptance.sh`
+`42177bb8…` → `a971ab56…` (+26/−3) into this branch and the head carries the merged file; §1 now
+records that in place (it previously claimed the script byte-identical to the dispatch base). The
+other three rows above are re-measured equal, and the guard's own inputs — the fixture, the state
+package, the acceptance script's arms this leg runs — are byte-identical at the base and at the head.
+
+### Bind rows
+
+`shared` exited **1**. Green `verified … run=1 pass=1 skip=0`: **24** rows — log 2491
+`TestProductionLinuxV2UnprovisionedHostRefusal`; 2501–2507 the seven `TestLinuxAppArmor*` rows; 2515
+`TestLinuxLegacyPiProviderBridgeRefusesBeforeProviderAction`; 2516
+`TestLinuxLegacyOpenCodeRefusesBeforeReadinessRequest`; 2517–2523 `TestInstalledLinuxOwner*` and
+`TestCloneCleanupRejectsCrossMountEntry`; 2524–2527 the four
+`TestProductionLinuxV2HookMarkerReaderRejectsHostileEntries*` rows; 3109
+`TestProviderBridgeQualifiedNonDumpablePeerFailsClosedBeforeProviderAction`; 3685–3686
+`TestProductionLinuxV2StageCrashReplayMatrix` and `/reservation_durable` (unchanged, still
+`aborted_no_target`). Non-passing, verbatim: log 3107
+`credential-gated TestProductionLinuxV2PiNativeProviderAction: run=1 pass=0 skip=0` plus the three
+`credential-gated: … is NOT proven: the ratified placeholder provider credential cannot produce an
+authentic Pi provider turn, so this leg is not counted as passed.` lines (3108, 3110, 3111); 4260
+`Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0;
+TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[],
+fail_events=3, invalid_json_lines=0` and 4261 `Required native Go witness did not produce exact
+run/pass/skip=0 events (go test exit=1).`; the `:224` line above; 4559–4561 `Case set shared exited
+1` / `Failed case sets: shared` / `##[error]Process completed with exit code 1.` Export failed at
+4556 (`redacted evidence export failed: pi durability witness is unavailable:
+ack-loss-replay-checkout_ready.json`), so no `shared/manifest.json` exists and there is no manifest
+status; no log line or artifact member carries an `owner_loss` snapshot.
+
+| Artifact | ID | ZIP bytes | SHA-256 (API digest = download) |
+| --- | --- | ---: | --- |
+| `linux-v2-native-evidence-46096737242-1` | `15242749442` | 6755 | `d565b64705b20b504530cf79edb4baf4a917171019ffb6f98e48982a14b7a0c1` |
+| `linux-v2-host-prerequisite-46096737242-1` | `15242998810` | 673 | `3fe10e214aa6795d03aaad73b600da025f076f6f4f187812c6b79e3a393c9397` |
+| `portal-assets` (contracts job only) | `15242489405` | 276004 | `b7f996b16c881f2084e9d1ac9733f979fa9d8655aa4bdda6f7496c5b8b631fbc` |
+
+The evidence ZIP gains a fifth member over #310's four: the failed leg published
+`shared/stage-crash-replay-helper_bound.json` (6335 B, sha256
+`a476fdef2bae82ec1bf804806f06c9828f931aaefa61522949e9aae56d37ad38`) beside
+`shared/credential-gated-legs.json` (807 B, `bf320eec…`), `shared/pi-native-provider-action.json`
+(3224 B, `a791ea4a…`), `shared/stage-crash-replay-reservation_durable.json` (6644 B, `147361e5…`)
+and `shared/unprovisioned-owner-refusal.json` (691 B, `e387a74c…`). The head-filtered Actions API
+returned `total_count=1` at discovery, before the scratch-branch deletion and after the full local
+cleanup, always `46096737242` attempt 1; the leased deletion push removed only the shared scratch
+ref, and no retry or protected dispatch was made.
+
+The four new `daemon/e2e` suites of §5 — the acceptance rows, the refusal rows, the
+`prior RunJournal's exact cgroup leaf still exists` absence check (`:3176`) and the Store-invalid
+snapshot rows — are **not executed by this `shared` case set** (§7's attribution): the Bind reports
+none of them and their home is the PR's `daemon` job. What this run does execute is the guard
+itself, at the `helper_bound` fixture creation over the `reservation_durable` tombstone, which is
+the row the observations above resolve.
+
+Their home did run on these bytes: PR CI run
+[`46096531084`](https://github.com/wxxb789/symmetry/actions/runs/46096531084) on `338850f0`
+completed **success**, its `daemon` job `140829065595` **success**, and the `daemon_race_tests` step
+(`.github/workflows/ci.yml:1055-1063`) log (33381 lines, sha256
+`6d52abb6d545bf78405a98e1b57bf41b04c62b872b6da2c9f603cfcb5d9348cc`) carries
+`ok  github.com/wxxb789/symmetry/daemon/e2e 4.197s`, the five new top-level tests with all their
+subtests (5 acceptance, 13 refusal, 5 present-leaf, 3 snapshot) and zero `--- FAIL` lines. Locally,
+the same 26 subtests over those five tests pass in WSL Noble on the delivered bytes (§5, §8:
+`ok … daemon/e2e 0.651s`); the runner-resident pass above is the CI-side corroboration, not this
+`shared` run.
+
+### The `helper_bound` row is a named unproven result (lesson 176)
+
+**The conductor decides this row's mode; the gate must not count it as a pass; a reader must be able
+to see it was not proven; and the real provider path stays byte-identical.** Four properties:
+
+1. **What decides the outcome is the fixture's hold state, not a credential.** `helper_bound` is
+   dispatched as a *required* stage-replay row — `run_stage_replay_cases "$v2_stage_replay_events"
+   reservation_durable helper_bound …` (`scripts/ci/linux-v2-native-acceptance.sh:3321-3323`) — and
+   its verdict is the witness's own `recovery_state`, read from the run's journal, exactly as the
+   sibling `reservation_durable` row (same call, same case set) read `aborted_no_target` and passed.
+   The failing path consults no provider credential: at the `helper_bound` hold
+   `LauncherGrantPossible == false` with no launcher, gate or provider step
+   (`daemon/internal/execution/linux_owner_v2_linux.go:635-657`), and the run's own member records
+   `provider_action_succeeded:false`, `health_peer_verified:false`.
+2. **The gate must not count it as a pass.** Verbatim, log 4260:
+
+   ```text
+   Go native acceptance event gate failed: bad=TestProductionLinuxV2StageCrashReplayMatrix=run:1,pass:0,skip:0; TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0, skipped=[], fail_events=3, invalid_json_lines=0
+   ```
+3. **A reader must see it was unproven.** This section names the row and its outcome
+   (`run:1,pass:0,skip:0`, `recovery_state = "unresolved"`); §9's earlier expectation ("no `:224`
+   guard stop") is superseded here, and `docs/TODO.md` carries the row as an open residual.
+4. **The real path stays byte-identical.** Every byte that produces this stop — the fixture
+   (`98d4771c…`), the acceptance arms this leg runs (`a971ab56…` at the base and at the head), and
+   the production packages (`daemon/internal/app/linux_owner_witness_linux.go` `9607c619…`,
+   `daemon/internal/app/linux_owner_recovery_linux.go` `6fb072a2…`,
+   `daemon/internal/execution/linux_owner_v2_linux.go` `c5da521d…`,
+   `daemon/internal/state/linux_cgroup_journal.go` `9358c264…`) — is identical at the dispatch base
+   and at the head (§1 and the attribution below), so no provider path moved.
+
+**This row is NOT one of the three credential-gated rows.** The script records exactly three —
+`run_credential_gated_pi_provider_leg` (`:3303`) and the two `record_credential_gated_leg` calls
+(`:3311-3314`). `helper_bound` is a required replay row scored by the same event gate that scored the
+passing `reservation_durable` row; calling it credential-gated would attribute a fixture-state
+refusal to a credential the leg never consults.
+
+### Attribution of the `helper_bound` stop (MEASURED-A)
+
+The inference this section previously stopped at is now measured, by two independent reports in the
+GDD state root's `findings/`: `311-attribution-1.md` (sha256
+`3e8e656c8d18f899b78a971339642dd9ab079d8a43606fc860046bc96d8a839d`, verdict **(A)** with the two
+corrections §8 applies) and `311-flip-probe.md` (sha256
+`eb4570efe6fb69cda908a29a3cebbd87547372d7ff953e0ea02501fb05046ea9`, verdict **MEASURED-A**).
+
+**The stop is pre-existing and only unmasked.** On the base bytes `606985a8` with exactly one
+one-hunk mutant that unblocks the retired-journal guard — commit
+`26f4cab14a0f9cb93a8886213605fd0872aa491a` (parent `606985a8`), mutant blob
+`51e22466ba69d27b01a88a767d6bb2f0574bd845` (sha256
+`2925e061a0a79d67e770c14b8cca6337e8dfc00e057b13c9c97bef53df384ea2`), one function of
+`daemon/e2e/production_linux_v2_owner_cli_test.go` — ran
+[`46098901351`](https://github.com/wxxb789/symmetry/actions/runs/46098901351) and reached a
+**byte-identical** assertion: its log (4707 lines, sha256
+`3d22472e75f936f6ccde0ef5f8031ba81fadd76768f96e0d21d22ba76460263c`) carries the same line 4264 as the
+delivered run, and with the timestamp stripped the two lines compare equal (`cmp` rc 0, re-measured
+while writing this section) — `recovery_state = "unresolved", want "aborted_no_target"`,
+`failure_category = "containment_unproven"`, the same 24 `verified … run=1 pass=1 skip=0` rows and the
+same `Case set shared exited 1`; the three #309 guard-refusal strings occur **0** times in that log
+too. A green `helper_bound` leg on those bytes would overturn the verdict, so **that mutant is the
+one a future reviewer must re-run**.
+
+**The swallowed recovery error now has a measured home (P2).** A second probe — the delivered tree
+plus one log-only mutant, commit `f3d0b33c6cdf3c8551ebeb730d34d0e53da411ee`, run
+[`46099359406`](https://github.com/wxxb789/symmetry/actions/runs/46099359406), log 4695 lines, sha256
+`ad46f56b74537bf15bef196dfadf7b8984485947cd303ec60ea234727192dfdd` — printed the value the witness
+drops at `daemon/internal/app/linux_owner_witness_linux.go:542-557`, verbatim at its log 4257:
+
+```text
+recover v2 owner ba4fa695-5d1f-4114-ba97-569aa70ead2a/1: wait/reap exact no-Prepare RunKey-owned processes: Linux owner anchor returned an invalid run-wide reap page
+```
+
+The chain: the wrapper is raised at `daemon/internal/app/linux_owner_recovery_linux.go:638`
+(`persistRecoveredV2NoPrepareHelperExit`, `:589`, whose `anchor.WaitReapRun` call is `:632`, reached
+via `recoverLinuxV2NoPrepareAbort:420`, `:389`); the innermost refusal is the anchor's run-wide
+reap-page validation at `daemon/internal/platform/linux_owner_anchor_linux.go:799` (`:796-799`).
+Which of that refusal's six conditions tripped is **not identified** — the message does not say — so
+the first step for any daemon change is to surface the error, not to edit the anchor. That code is
+outside this goal's delta (`daemon/e2e/production_linux_v2_owner_cli_test.go` only), so it is a
+`DECISION_NEEDED` recorded in `docs/TODO.md`, not a #311 fix round.
+
+### Merged-tree gate receipts (superseding §8's input-set rows)
+
+On the merged tree — `--base 606985a8 --head` this record's own commit (a scratch-clone commit whose
+parent is `338850f0` and whose only change is this record, so the numbers bind the changed-file
+scope and these content digests rather than a revision that cannot name itself) — the four required
+gates exit **0**:
+
+```text
+jscpd-changed.py --base 606985a8 --head HEAD                exit 0
+jscpd-changed: 5 changed file(s), 1807 scanned source(s), 1245 clone(s) in the corpus, 0 tolerated among the added lines, none new
+check-record-cleanliness.py --base 606985a8 --head HEAD      exit 0  (1 changed record passes the root-only check)
+model-routing-record-sanitize.py --check --root-only <each changed document>  exit 0  (the four changed documents)
+check-citation-existence.py --base 606985a8 --head HEAD      exit 0  (1 changed document, 746 path citations)
+comment-cap.py <scratch clone>                              exit 0
+```
+
+The four required gates are the jscpd line (with its count line), record cleanliness, the sanitize
+sweep and the comment cap; the citation check is added because §8 cites its number. Every counter is
+independent of this record's own wording: the scanned-source count rose by 2 only with the two
+documents the merge added, and the citation count is unchanged (746 at both bases). §8's rows
+measured with `--base 3d377582` on the pre-merge bytes are PARTIAL and SUPERSEDED for the
+input-set rows, and §8 carries these refreshed numbers in place.
