@@ -1111,7 +1111,9 @@ python3 - "$fixture_root" "$A_HOME" "$A_SOURCE" \
   "$SYMMETRY_OPENCODE_MODEL" "$SYMMETRY_OPENAI_BASE_URL" "$native_api_key_file" "$pi_repository_id" \
   "$opencode_repository_id" "$pi_durability_repository_id" "$fixture_identity_suffix" \
   "$SYNTHETIC_GOAL_CLEANUP_SOURCE" "$SYNTHETIC_GOAL_CLEANUP_SEEDS" \
-  "$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<'PY'
+  "$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" \
+  "$source_commit" "$source_tree_digest" <<'PY'
+import hashlib
 import json
 import pathlib
 import sys
@@ -1121,10 +1123,22 @@ import sys
     clone_root, seed_root, owner_state_dir, pi_share, pi_model, opencode_model, openai_base_url, api_key_file,
     pi_repository_id, opencode_repository_id, pi_durability_repository_id, fixture_identity_suffix,
     synthetic_source, synthetic_seeds, synthetic_clones, authenticated_pi_task_text,
+    source_commit, source_tree_digest,
 ) = sys.argv[1:]
 fixture = pathlib.Path(fixture_root)
 # The production decoder accepts one text block; only the shared set runs authenticated Pi legs.
 authenticated_pi_thinking_level = "off" if fixture_identity_suffix == "shared" else "minimal"
+
+# Byte-identical to Go's protocol.Subject.Hash(): the same sorted-key canonical JSON, so the
+# staged value equals the hash the product gate recomputes from this exact request subject.
+def canonical_subject_hash(commit, resource_id, tree_digest):
+    canonical = json.dumps(
+        {"commit": commit, "resource_id": resource_id, "tree_digest": tree_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 def config(kind, profile, model, resource_id, provider_access=None):
     provider_access = kind == "pi" if provider_access is None else provider_access
@@ -1284,8 +1298,16 @@ else:
         encoding="utf-8",
     )
     if authenticated_pi_task_text:
+        # The clause names its subject resource: the shared run also reaches provider-free Pi legs
+        # whose subject resource differs, and those must not read this hash as their own.
         (private_home / ".pi/agent/APPEND_SYSTEM.md").write_text(
-            authenticated_pi_task_text + "\n", encoding="utf-8"
+            authenticated_pi_task_text
+            + "\n\nFor the task whose subject resource_id is "
+            + pi_repository_id
+            + ", the canonical subject_hash of its subject is "
+            + canonical_subject_hash(source_commit, pi_repository_id, source_tree_digest)
+            + ". Set it as the subject_hash field of your final TaskResult JSON object.\n",
+            encoding="utf-8",
         )
     (private_home / ".config/opencode/opencode.json").write_text(
         json.dumps(

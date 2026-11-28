@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
 import itertools
 import json
 import os
@@ -11,6 +12,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import threading
 import unittest
 
 import citest
@@ -2800,6 +2802,32 @@ STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
 STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
 STAGED_PI_HOME_PATH = "b-home/.pi"
 ACCEPTANCE_WORKFLOW = ACCEPTANCE_SCRIPT.parents[2] / ".github/workflows/linux-native-v2-acceptance.yml"
+# The staged clause names its own subject's resource because the shared run also reaches
+# provider-free Pi legs; commit/tree_digest are fixed per run, so the resource identifies it.
+SUBJECT_HASH_SCOPE_PREFIX = (
+    "For the task whose subject resource_id is {resource_id}, the canonical subject_hash of "
+    "its subject is "
+)
+SUBJECT_HASH_CLAUSE = (
+    SUBJECT_HASH_SCOPE_PREFIX + "{subject_hash}. Set it as the "
+    "subject_hash field of your final TaskResult JSON object."
+)
+# A protocol-valid Subject: the renderer/decoder rejects a resource_id whose
+# variant nibble is outside 8/9/a/b (daemon/internal/protocol/goal_subject.go).
+STAGED_SUBJECT_RESOURCE_ID = "11111111-1111-4111-8111-111111111111"
+STAGED_SUBJECT_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+STAGED_SUBJECT_TREE_DIGEST = (
+    "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
+STAGED_SUBJECT = {
+    "resource_id": STAGED_SUBJECT_RESOURCE_ID,
+    "commit": STAGED_SUBJECT_COMMIT,
+    "tree_digest": STAGED_SUBJECT_TREE_DIGEST,
+}
+# Independent literal: protocol.Subject.Hash() for exactly STAGED_SUBJECT, proven
+# by a `go run` probe against daemon/internal/protocol (see the record).
+STAGED_SUBJECT_HASH_LITERAL = "sha256:be38c10cbe4992e53e9954569a23d235966f91a3afa80ea5afd3b651e0b10406"
+SUBJECT_HASH_TOKEN = re.compile(r"sha256:[0-9a-f]{64}(?![0-9a-f])")
 
 
 def extracted_authenticated_pi_task_block(source: str) -> str:
@@ -2838,7 +2866,9 @@ def staging_script(source: str, root: pathlib.Path, case_set: str) -> pathlib.Pa
         "SYMMETRY_OPENCODE_MODEL=opencode-model\n"
         "SYMMETRY_OPENAI_BASE_URL=https://provider.invalid/v1\n"
         f"native_api_key_file={api_key}\n"
-        "pi_repository_id=11111111-1111-1111-1111-111111111111\n"
+        f"source_commit={STAGED_SUBJECT_COMMIT}\n"
+        f"source_tree_digest={STAGED_SUBJECT_TREE_DIGEST}\n"
+        f"pi_repository_id={STAGED_SUBJECT_RESOURCE_ID}\n"
         "opencode_repository_id=22222222-2222-2222-2222-222222222222\n"
         "pi_durability_repository_id=33333333-3333-3333-3333-333333333333\n"
         "SYNTHETIC_GOAL_CLEANUP_SOURCE=/synthetic/source\n"
@@ -2922,12 +2952,396 @@ def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[
     return failures
 
 
+def canonical_subject_hash(commit: str, resource_id: str, tree_digest: str) -> str:
+    canonical = json.dumps(
+        {"commit": commit, "resource_id": resource_id, "tree_digest": tree_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def staged_subject_hash_failures(
+    staged: str | None,
+    request_subject: dict,
+    literal: str = STAGED_SUBJECT_HASH_LITERAL,
+) -> list[str]:
+    tokens = SUBJECT_HASH_TOKEN.findall(staged or "")
+    if len(tokens) != 1:
+        return [
+            "the shared case set's staged task text must carry exactly one subject_hash token, "
+            f"found {len(tokens)}"
+        ]
+    recomputed = canonical_subject_hash(
+        request_subject["commit"], request_subject["resource_id"], request_subject["tree_digest"]
+    )
+    failures = []
+    if recomputed != literal:
+        failures.append(
+            "the staged-subject canonical hash recomputation disagrees with its independent literal"
+        )
+    if tokens[0] != recomputed:
+        failures.append(
+            "the shared case set's staged task text does not carry the canonical subject_hash of the "
+            "request subject"
+        )
+    scope = SUBJECT_HASH_SCOPE_PREFIX.format(resource_id=request_subject["resource_id"])
+    if scope not in (staged or ""):
+        failures.append(
+            "the shared case set's staged subject_hash clause is not scoped to the request subject's "
+            "resource_id, so a provider-free Pi leg could read the provider hash as its own"
+        )
+    return failures
+
+
+# Offline stand-in for provision-linux-v2-control-claims.exs: `prepare` records the
+# requested Subject and `schedule` copies it into the run metadata the request writer reads.
+OFFLINE_CONTROL_STANDIN = '''#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+PI_RESOURCE_ID = "11111111-1111-4111-8111-111111111111"
+OPENCODE_RESOURCE_ID = "22222222-2222-4222-8222-222222222222"
+PI_DURABILITY_RESOURCE_ID = "33333333-3333-4333-8333-333333333333"
+RUN_IDENTITY = {
+    "run_id": "4a2f6c1e-2b3d-4b5a-8c7d-9e0f1a2b3c4d",
+    "task_id": "5b3f7d2f-3c4e-4c6b-9d8e-af1b2c3d4e5f",
+    "generation": 1,
+    "runtime_id": "6c4a8e3a-4d5f-4d7c-8e9f-b01c2d3e4f50",
+    "runtime_epoch": 1,
+    "claim_id": "7d5b9f4b-5e6a-4e8d-9f01-c12d3e4f5061",
+    "work_item_id": "8e6c0a5c-6f7b-4f9e-a012-d23e4f506172",
+}
+RUN_HARNESS = {"pi_provider_action": ("pi", "pi-native")}
+
+
+def write(path, value):
+    target = pathlib.Path(path)
+    target.write_text(json.dumps(value, separators=(",", ":")), encoding="utf-8")
+    target.chmod(0o600)
+
+
+def main():
+    arguments = sys.argv[1:]
+    if len(arguments) < 5 or arguments[0] != "run" or arguments[1] != "--no-start":
+        raise SystemExit("offline Control stand-in received an unsupported invocation")
+    mode = arguments[3]
+    if mode == "prepare":
+        output, _repository, _owner, commit, tree_digest = arguments[4:9]
+        incoming = {"commit": commit, "tree_digest": tree_digest}
+        projection = json.loads(
+            pathlib.Path(__file__).with_name("prepare-projection.json").read_text(encoding="utf-8")
+        )
+        if sorted(projection) != ["commit", "tree_digest"]:
+            raise SystemExit(
+                "prepared subject projection is not one commit/tree_digest map: "
+                + json.dumps(projection)
+            )
+        subject = {}
+        for name, expression in projection.items():
+            if expression in incoming:
+                subject[name] = incoming[expression]
+            elif expression.startswith('"') and expression.endswith('"'):
+                subject[name] = json.loads(expression)
+            else:
+                raise SystemExit("unclassifiable prepared subject projection: " + expression)
+        write(
+            output,
+            {
+                "subject": subject,
+                "pi_repository_resource_id": PI_RESOURCE_ID,
+                "opencode_repository_resource_id": OPENCODE_RESOURCE_ID,
+                "pi_durability_repository_resource_id": PI_DURABILITY_RESOURCE_ID,
+            },
+        )
+        return 0
+    if mode == "schedule":
+        fixture_path, case_name, output = arguments[4:7]
+        fixture = json.loads(pathlib.Path(fixture_path).read_text(encoding="utf-8"))
+        harness, profile = RUN_HARNESS[case_name]
+        write(
+            output,
+            {
+                "version": 1,
+                "case": case_name,
+                "fixture_case": case_name,
+                "harness": harness,
+                **RUN_IDENTITY,
+                "repository_resource_id": fixture["pi_repository_resource_id"],
+                "commit": fixture["subject"]["commit"],
+                "tree_digest": fixture["subject"]["tree_digest"],
+                "agent_profile": profile,
+                "workspace": "native",
+            },
+        )
+        return 0
+    raise SystemExit("offline Control stand-in received an unsupported mode")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+HANDOFF_RUN_METADATA = "run-pi_provider_action.json"
+HANDOFF_REQUEST = "request-pi_provider_action.json"
+SUBJECT_SETUP_MARKER = 'control_fixture="$fixture_root/control-fixture.json"'
+HANDOFF_UNAVAILABLE = "the production subject handoff fixture did not emit a parseable owner request"
+# The offline Control stand-in mirrors exactly these producer-side production lines, so pin them:
+# whatever Control hands the request writer must stay what these lines hand it.
+CONTROL_SCHEDULE_SUBJECT_BINDING = (
+    '      "repository_resource_id" => item["repository_resource_id"],\n'
+    '      "commit" => fixture["subject"]["commit"],\n'
+    '      "tree_digest" => fixture["subject"]["tree_digest"],\n'
+)
+CONTROL_PREPARE_SUBJECT_ARGS = (
+    "provision-linux-v2-control-claims.exs prepare \\\n"
+    '      "$control_fixture" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY_OWNER" \\\n'
+    '      "$source_commit" "$source_tree_digest"'
+)
+CONTROL_GOAL_CASE_RESOURCE_ROLES = (
+    "          case repository_role do\n"
+    "            :pi_provider -> pi_repository.id\n"
+    "            :pi_durability -> pi_durability_repository.id\n"
+    "            :opencode_goal -> opencode_repository.id\n"
+)
+CONTROL_PREPARE_SUBJECT_PROJECTION = (
+    '      "subject" => %{"commit" => commit, "tree_digest" => tree_digest},'
+)
+# Elixir warns on a repeated "subject" key and keeps the LAST entry, so the key itself must be
+# counted: a second projection makes the producer take a value this pin never sees.
+PREPARE_SUBJECT_KEY = '"subject" =>'
+PREPARE_SUBJECT_PROJECTION = re.compile(r'"subject" => %\{(?P<body>[^}]*)\}')
+PREPARE_SUBJECT_PARAMETERS = ("commit", "tree_digest")
+PREPARE_PROJECTION_FILE = "prepare-projection.json"
+
+
+def prepared_subject_projection(claims: str) -> dict[str, str]:
+    keys = claims.count(PREPARE_SUBJECT_KEY)
+    if keys != 1:
+        raise ValueError(f"the prepare output carries {keys} subject keys, not exactly one")
+    matches = list(PREPARE_SUBJECT_PROJECTION.finditer(claims))
+    if len(matches) != 1:
+        raise ValueError(
+            f"the prepare subject key is not one evaluable map projection: {len(matches)} matched"
+        )
+    match = matches[0]
+    projection: dict[str, str] = {}
+    for entry in match.group("body").split(","):
+        key, separator, value = entry.partition("=>")
+        if not separator:
+            raise ValueError(f"unclassifiable projection entry {entry.strip()!r}")
+        try:
+            name = json.loads(key.strip())
+        except json.JSONDecodeError:
+            raise ValueError(f"unclassifiable projection key {key.strip()!r}") from None
+        if name not in PREPARE_SUBJECT_PARAMETERS or name in projection:
+            raise ValueError(f"unexpected projection key {name!r}")
+        projection[name] = value.strip()
+    if set(projection) != set(PREPARE_SUBJECT_PARAMETERS):
+        raise ValueError(f"projected keys are {sorted(projection)}")
+    return projection
+
+
+def extracted_subject_setup(source: str) -> str:
+    invocation = extracted_fixture_home_invocation(source)
+    start = source.index(SUBJECT_SETUP_MARKER)
+    return source[start : source.index(FIXTURE_HOME_INVOCATION_MARKER) + len(invocation)]
+
+
+def extracted_prepare_owner_request(source: str) -> str:
+    # extracted_bash_function stops at the first column-0 `}`, which is the receipt
+    # context dict inside a heredoc, so bound the function by its successor instead.
+    start = source.index("prepare_owner_request() {\n")
+    end = source.index("\nowner_witness_case_identity() {\n", start)
+    return source[start : end + 1]
+
+
+def claim_response(run: dict) -> dict:
+    resource_id = run["repository_resource_id"]
+    return {
+        "run_id": run["run_id"],
+        "generation": run["generation"],
+        "claim_id": run["claim_id"],
+        "lease_token": "fixture-lease-token",
+        "work": {
+            "agent_profile": run["agent_profile"],
+            "workspace": run["workspace"],
+            "required_capabilities": {"provider_access": True},
+            "input": {
+                "schema_version": "symmetry.admission.v1",
+                "subject": {
+                    "resource_id": resource_id,
+                    "commit": run["commit"],
+                    "tree_digest": run["tree_digest"],
+                },
+                "provider_scope": {
+                    "resource_ids": [resource_id],
+                    "operations_by_resource": {resource_id: ["resource.sync"]},
+                    "change_target": None,
+                },
+            },
+        },
+        "provider_access": {
+            "path": "/api/v1/provider-actions",
+            "token": "fixture-provider-token",
+            "grants": [
+                {
+                    "resource_id": resource_id,
+                    "provider": "github",
+                    "kind": "repository",
+                    "operations": ["resource.sync"],
+                }
+            ],
+        },
+    }
+
+
+def subject_handoff_script(source: str) -> str:
+    preamble = [
+        "set -Eeuo pipefail",
+        "repo=$1",
+        "fixture_root=$2",
+        "control_url=$3",
+        "machine_token_file=$4",
+        "GITHUB_REPOSITORY=wxxb789/symmetry",
+        "GITHUB_REPOSITORY_OWNER=wxxb789",
+        f"GITHUB_SHA={STAGED_SUBJECT_COMMIT}",
+        f"source_commit={STAGED_SUBJECT_COMMIT}",
+        f"source_tree_digest={STAGED_SUBJECT_TREE_DIGEST}",
+        "fixture_case_set=shared",
+        "fixture_identity_suffix=shared",
+        "A_HOME=$fixture_root/a-home",
+        "A_SOURCE=$fixture_root/a-source",
+        "B_CLONE_ROOT=$fixture_root/clones",
+        "SEED_ROOT=$fixture_root/seeds",
+        "DAEMON_SERVICE_STATE_DIR=$fixture_root/state",
+        "PI_SHARE=$fixture_root/share",
+        "SYMMETRY_PI_MODEL=pi-model",
+        "SYMMETRY_OPENCODE_MODEL=opencode-model",
+        "SYMMETRY_OPENAI_BASE_URL=https://provider.invalid/v1",
+        "native_api_key_file=$fixture_root/api-key",
+        "SYNTHETIC_GOAL_CLEANUP_SOURCE=$fixture_root/synthetic/source",
+        "SYNTHETIC_GOAL_CLEANUP_SEEDS=$fixture_root/synthetic/seeds",
+        "SYNTHETIC_GOAL_CLEANUP_CLONES=$fixture_root/synthetic/clones",
+        "A_GID=$(id -g)",
+        "A_USER=a",
+        "B_USER=b",
+        "rootfs=$fixture_root/rootfs",
+        "OWNER_REQUEST_ROOT=$fixture_root/owner-requests",
+        "OWNER_BARRIER_ROOT=$fixture_root/barriers",
+        "OWNER_CONTROL_RECEIPT_CONTEXT_ROOT=$fixture_root/context",
+        "evidence_secret_values_file=$fixture_root/secret-values",
+        'mkdir -p "$A_HOME" "$A_SOURCE" "$B_CLONE_ROOT" "$SEED_ROOT" '
+        '"$DAEMON_SERVICE_STATE_DIR" "$PI_SHARE" "$SYNTHETIC_GOAL_CLEANUP_SOURCE" '
+        '"$SYNTHETIC_GOAL_CLEANUP_SEEDS" "$SYNTHETIC_GOAL_CLEANUP_CLONES" "$OWNER_REQUEST_ROOT" '
+        '"$OWNER_BARRIER_ROOT" "$OWNER_CONTROL_RECEIPT_CONTEXT_ROOT" "$fixture_root/bin"',
+        'printf \'sk-fixture-provider-key\\n\' > "$native_api_key_file"',
+        'printf \'#!/bin/sh\\nexec python3 "%s" "$@"\\n\' "$fixture_root/offline-control.py" '
+        '> "$fixture_root/bin/mix"',
+        'chmod 0755 "$fixture_root/bin/mix"',
+        'export PATH="$fixture_root/bin:$PATH"',
+        'fail() { printf \'Linux v2 native acceptance setup failed: %s\\n\' "$1" >&2; exit 1; }',
+        'stage_owner_request_file() { [[ -f "$1" ]] || fail "owner request source missing"; }',
+        extracted_authenticated_pi_task_block(source),
+        extracted_subject_setup(source),
+        extracted_prepare_owner_request(source),
+        'prepare_owner_request pi_provider_action pi_provider_action '
+        '"$fixture_root/pi-provider-action.json" "$OWNER_BARRIER_ROOT/pi_provider_action" '
+        '"$OWNER_REQUEST_ROOT/pi_provider_action.json"',
+    ]
+    return "\n".join(preamble) + "\n"
+
+
+def subject_handoff(
+    source: str, root: pathlib.Path, projection: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], pathlib.Path]:
+    fixture_root = root / "subject-handoff"
+    fixture_root.mkdir(parents=True)
+    (fixture_root / "offline-control.py").write_text(OFFLINE_CONTROL_STANDIN, encoding="utf-8")
+    (fixture_root / PREPARE_PROJECTION_FILE).write_text(
+        json.dumps(projection, separators=(",", ":")), encoding="utf-8"
+    )
+    machine_token_file = fixture_root / "machine-token"
+    machine_token_file.write_text("fixture-machine-token\n", encoding="utf-8")
+    script = root / "subject-handoff.sh"
+    script.write_text(subject_handoff_script(source), encoding="utf-8")
+    run_metadata = fixture_root / HANDOFF_RUN_METADATA
+
+    class ClaimHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *arguments: object) -> None:
+            pass
+
+        def do_PUT(self) -> None:
+            run = json.loads(run_metadata.read_text(encoding="utf-8"))
+            body = json.dumps(claim_response(run), separators=(",", ":")).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ClaimHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                str(script),
+                str(ACCEPTANCE_SCRIPT.parents[2]),
+                str(fixture_root),
+                f"http://127.0.0.1:{server.server_port}",
+                str(machine_token_file),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    return result, fixture_root
+
+
 def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
     failures: list[str] = []
+    if CONTROL_SCHEDULE_SUBJECT_BINDING not in claims:
+        failures.append(
+            "the Control fixture no longer binds the scheduled run subject to the prepared subject"
+        )
+    if CONTROL_PREPARE_SUBJECT_ARGS not in source:
+        failures.append(
+            "the acceptance provisioning call no longer hands the prepared subject arguments to Control"
+        )
+    if CONTROL_GOAL_CASE_RESOURCE_ROLES not in claims:
+        failures.append(
+            "the Control fixture no longer routes the pi_provider goal case to the Pi repository"
+        )
+    if CONTROL_PREPARE_SUBJECT_PROJECTION not in claims:
+        failures.append(
+            "the Control fixture's prepared subject projection no longer copies the prepare subject"
+        )
+    projection: dict[str, str] | None = None
+    try:
+        projection = prepared_subject_projection(claims)
+    except ValueError as error:
+        failures.append(
+            f"the Control fixture's prepared subject projection could not be evaluated: {error}"
+        )
     description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
     if description is None:
         failures.append("the Control claim fixture no longer carries the pi_provider_action description")
-    expected = None if description is None else f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n"
+    expected = (
+        None
+        if description is None
+        else (
+            f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n\n"
+            f"{SUBJECT_HASH_CLAUSE.format(resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=STAGED_SUBJECT_HASH_LITERAL)}\n"
+        )
+    )
 
     case_sets = acceptance_case_set_allowlist(source)
     containment_sets = acceptance_containment_case_sets(source)
@@ -2945,6 +3359,20 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
             staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
             if expected is not None and staged != expected:
                 failures.append("the shared case set does not stage the exact authenticated Pi task text")
+            if projection is not None:
+                handoff_result, handoff_root = subject_handoff(source, root / "handoff", projection)
+                request_file = handoff_root / HANDOFF_REQUEST
+                handoff_staged_file = handoff_root / STAGED_TASK_TEXT_PATH
+                if handoff_result.returncode != 0 or not request_file.exists():
+                    failures.append(HANDOFF_UNAVAILABLE)
+                else:
+                    request_subject = json.loads(request_file.read_text(encoding="utf-8"))["subject"]
+                    handoff_staged = (
+                        handoff_staged_file.read_text(encoding="utf-8")
+                        if handoff_staged_file.exists()
+                        else None
+                    )
+                    failures.extend(staged_subject_hash_failures(handoff_staged, request_subject))
             level = staged_thinking_level(fixture_root)
             if level != "off":
                 failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
@@ -3178,6 +3606,85 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
         claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(authenticated_pi_task_failures(source, claims, self.root), [])
+
+    def test_staged_subject_hash_recomputation_refuses_unclassifiable_text(self) -> None:
+        canonical = canonical_subject_hash(
+            STAGED_SUBJECT["commit"], STAGED_SUBJECT["resource_id"], STAGED_SUBJECT["tree_digest"]
+        )
+        self.assertEqual(canonical, STAGED_SUBJECT_HASH_LITERAL)
+        scope = SUBJECT_HASH_SCOPE_PREFIX.format(resource_id=STAGED_SUBJECT_RESOURCE_ID)
+        clause = SUBJECT_HASH_CLAUSE.format(
+            resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=canonical
+        )
+        self.assertEqual(staged_subject_hash_failures(clause, STAGED_SUBJECT), [])
+        for text in (None, "no digest here"):
+            self.assertEqual(
+                staged_subject_hash_failures(text, STAGED_SUBJECT),
+                [
+                    "the shared case set's staged task text must carry exactly one subject_hash "
+                    "token, found 0"
+                ],
+            )
+        self.assertEqual(
+            staged_subject_hash_failures(clause + " sha256:" + "0" * 64, STAGED_SUBJECT),
+            [
+                "the shared case set's staged task text must carry exactly one subject_hash token, "
+                "found 2"
+            ],
+        )
+        self.assertEqual(
+            staged_subject_hash_failures(
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash="sha256:" + "0" * 64
+                ),
+                STAGED_SUBJECT,
+            ),
+            [
+                "the shared case set's staged task text does not carry the canonical subject_hash "
+                "of the request subject"
+            ],
+        )
+        self.assertEqual(
+            staged_subject_hash_failures(
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=canonical + "f"
+                ),
+                STAGED_SUBJECT,
+            ),
+            [
+                "the shared case set's staged task text must carry exactly one subject_hash token, "
+                "found 0"
+            ],
+        )
+        self.assertEqual(
+            staged_subject_hash_failures(
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash="sha256:" + "0" * 64
+                ),
+                STAGED_SUBJECT,
+                "sha256:" + "0" * 64,
+            ),
+            [
+                "the staged-subject canonical hash recomputation disagrees with its independent literal",
+                "the shared case set's staged task text does not carry the canonical subject_hash "
+                "of the request subject",
+            ],
+        )
+        unscoped = clause.replace(scope, "The canonical subject_hash of this task's subject is ")
+        for text in (
+            unscoped,
+            SUBJECT_HASH_CLAUSE.format(
+                resource_id="22222222-2222-4222-8222-222222222222", subject_hash=canonical
+            ),
+        ):
+            self.assertEqual(
+                staged_subject_hash_failures(text, STAGED_SUBJECT),
+                [
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own"
+                ],
+            )
 
     def test_case_set_coverage_is_derived_from_the_script_and_the_workflow(self) -> None:
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
@@ -3424,18 +3931,26 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             (
                 "blank-staging-argument",
                 source.replace(
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text"',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" ""',
                     1,
                 ),
                 claims,
-                ("the shared case set does not stage the exact authenticated Pi task text",),
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text must carry exactly one subject_hash token, "
+                    "found 0",
+                ),
             ),
             (
                 "no-fixture-write",
                 source.replace("    if authenticated_pi_task_text:\n", "    if False:\n", 1),
                 claims,
-                ("the shared case set does not stage the exact authenticated Pi task text",),
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text must carry exactly one subject_hash token, "
+                    "found 0",
+                ),
             ),
             (
                 "misplaced-install-target",
@@ -3475,10 +3990,89 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ("the Control claim fixture no longer carries the pi_provider_action description",),
             ),
             (
+                "schedule-subject-unbound",
+                source,
+                claims.replace(
+                    '      "commit" => fixture["subject"]["commit"],\n', "", 1
+                ),
+                (
+                    "the Control fixture no longer binds the scheduled run subject to the "
+                    "prepared subject",
+                ),
+            ),
+            (
+                "swapped-goal-case-repository",
+                source,
+                claims.replace(
+                    ":pi_provider -> pi_repository.id",
+                    ":pi_provider -> opencode_repository.id",
+                    1,
+                ),
+                (
+                    "the Control fixture no longer routes the pi_provider goal case to the "
+                    "Pi repository",
+                ),
+            ),
+            (
+                "prepared-subject-tree-digest-literal",
+                source,
+                claims.replace(
+                    '"subject" => %{"commit" => commit, "tree_digest" => tree_digest}',
+                    '"subject" => %{"commit" => commit, "tree_digest" => "sha256:'
+                    + "0" * 63
+                    + '1"}',
+                    1,
+                ),
+                (
+                    "the Control fixture's prepared subject projection no longer copies the "
+                    "prepare subject",
+                    "the staged-subject canonical hash recomputation disagrees with its "
+                    "independent literal",
+                    "the shared case set's staged task text does not carry the canonical "
+                    "subject_hash of the request subject",
+                ),
+            ),
+            (
+                "duplicate-subject-projection",
+                source,
+                claims.replace(
+                    CONTROL_PREPARE_SUBJECT_PROJECTION,
+                    CONTROL_PREPARE_SUBJECT_PROJECTION
+                    + "\n"
+                    + '      "subject" => %{"commit" => commit, "tree_digest" => "sha256:'
+                    + "0" * 63
+                    + '1"},',
+                    1,
+                ),
+                (
+                    "the Control fixture's prepared subject projection could not be evaluated: "
+                    "the prepare output carries 2 subject keys, not exactly one",
+                ),
+            ),
+            (
+                "swapped-provision-subject-tree-digest",
+                source.replace(
+                    '      "$source_commit" "$source_tree_digest"\n)',
+                    "      \"$source_commit\" \"sha256:"
+                    + "0" * 63
+                    + "1\"\n)",
+                    1,
+                ),
+                claims,
+                (
+                    "the acceptance provisioning call no longer hands the prepared subject "
+                    "arguments to Control",
+                    "the staged-subject canonical hash recomputation disagrees with its "
+                    "independent literal",
+                    "the shared case set's staged task text does not carry the canonical "
+                    "subject_hash of the request subject",
+                ),
+            ),
+            (
                 "dropped-staging-argument",
                 source.replace(
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text"',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES"',
                     1,
                 ),
                 claims,
@@ -3498,6 +4092,108 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     "the fixture staging script for stale_journal_fence exited 1",
                     "the fixture staging script for stale_journal_subject exited 1",
                     "the fixture staging script for synthetic_goal_cleanup exited 1",
+                ),
+            ),
+            (
+                "staged-noncanonical-subject-hash",
+                source.replace(
+                    "canonical_subject_hash(source_commit, pi_repository_id, source_tree_digest)",
+                    '"sha256:" + "0" * 64',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
+                ),
+            ),
+            (
+                "reworded-subject-hash-clause",
+                source.replace(
+                    ". Set it as the subject_hash field of your final TaskResult JSON object.",
+                    ". Record it as the subject_hash field of your final TaskResult JSON object.",
+                    1,
+                ),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "unscoped-subject-hash-clause",
+                source.replace(
+                    '            + "\\n\\nFor the task whose subject resource_id is "\n'
+                    "            + pi_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    '            + "\\n\\nThe canonical subject_hash of this task\'s subject is "\n',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own",
+                ),
+            ),
+            (
+                "misdirected-subject-hash-scope",
+                source.replace(
+                    "            + pi_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    "            + pi_durability_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own",
+                ),
+            ),
+            (
+                "blank-subject-commit-argument",
+                source.replace(
+                    '"$source_commit" "$source_tree_digest" <<\'PY\'',
+                    '"" "$source_tree_digest" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
+                ),
+            ),
+            (
+                "post-provision-rebind",
+                source.replace(
+                    FIXTURE_HOME_INVOCATION_MARKER,
+                    f"source_commit='f123456789abcdef0123456789abcdef01234567'\n"
+                    + FIXTURE_HOME_INVOCATION_MARKER,
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
+                ),
+            ),
+            (
+                "prepare-subject-divergence",
+                source.replace(
+                    '      "$source_commit" "$source_tree_digest"\n)',
+                    "      \"f123456789abcdef0123456789abcdef01234567\" \"$source_tree_digest\"\n)",
+                    1,
+                ),
+                claims,
+                (
+                    "the acceptance provisioning call no longer hands the prepared subject "
+                    "arguments to Control",
+                    "the staged-subject canonical hash recomputation disagrees with its independent literal",
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
                 ),
             ),
         )
