@@ -197,7 +197,7 @@ text to equal the Control claim's `pi_provider_action` description plus the fixe
 and extend the pin with the recomputation row of §3, without widening the guard.
 
 C2 — product side (second). Owned files: `daemon/internal/app/linux_owner_witness_linux.go`
-(`nativeContext()` `:3948-3954`; both call sites, `:3764` and `:3865`, change with this slice: the
+(`nativeContext()` `:3961-3978`; both call sites, `:3764` and `:3866-3868`, change with this slice: the
 intermediate panic was replaced with fail-closed propagation of the named sentinel, so a subject
 that cannot be hashed reaches neither dispatch boundary — amended 2026-11-28 after two independent
 reviews of `78e064ea`, `findings/rf-acc-pi-carrier-c2-opus-review-1.md` and
