@@ -78,7 +78,7 @@ that may only decrease (plan §10; the W6-10 Credo ratchet applies the second mo
   selected-project hook, settle-poll removal, error-reason coverage, test-only seam removal,
   jsdom/browser split, platform dead helpers, capture-fixture consolidation, source-subject
   single implementation, model-routing split.
-- **W6 — tail micro-waves (12 planned slices; W6-12 split at the W6 reconcile; W6-03 HOLD for its
+- **W6 — tail micro-waves (13 planned slices; W6-12 split at the W6 reconcile; W6-03 HOLD for its
   re-draft after W4-12c, W6-06 for an owner re-scope)**: CI structure finalization, browser-spec
   wiring, `isGoTestBinary` fork removal, opencode promote-or-drop (parked under D1), containment
   convergence phase 2 (blocked under D3), cmd extraction, frontend route splitting, dead protocol
@@ -302,7 +302,7 @@ re-verifies against the bound contract, and the tables below carry the bound sta
 | A5 | Read-cache keys + change→reads invalidation in one frontend module (Opus cand. 6) | #245 | merged (2026-11-22T10:17:47Z) |
 | A6 | Raw-byte strictness fixtures in the shared manifest + one Go decode entry (Opus cand. 9) | #250 | merged (2026-11-22T17:01:17Z) — owner ruling L2=b (PR body) |
 
-### Tail W6 — micro-waves (12 planned; W6-12 split; W6-03 merged, W6-06 06a merged)
+### Tail W6 — micro-waves (13 planned; W6-12 split; W6-03 merged, W6-06 06a merged)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
@@ -320,6 +320,7 @@ re-verifies against the bound contract, and the tables below carry the bound sta
 | W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | #275 | split recorded at the W6 reconcile; both halves delivered in #275 (2026-11-24T04:52:28Z) |
 | W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | #275 | merged (2026-11-24T04:52:28Z) |
 | W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | #275 | merged (2026-11-24T04:52:28Z) |
+| W6-13 | Lockfile-registry gate: zero tarball keys + proven canonical install registry → named "unproven by URL" (exit 0, not verified); zero + non-canonical or unknown registry → exit 2; recorded off-policy entry → exit 1 under unchanged policy; replace three live-lockfile test inputs with fixtures | — | not dispatched (contract not yet bound) |
 
 ### Blocked, parked and dropped items
 
@@ -655,6 +656,61 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   whose ids have no row in this file (#273 `rf-a3-adapter-policy-kind-vocabulary`, #253
   `rf-k4-schema-stripped-map`, #262 `rf-w3-17-migration-tests-async`, #256 `rf-w5-02a`) are
   recorded goal-0010 slices — they carry no table row and no amendment-log entry here.
+
+- **2026-11-28 — T2: fund W6-13, the lockfile-registry gate repair.** At `ea54bc91`
+  (unchanged at `1ced43d0`) the gate checks 405 recorded tarball URLs and exits 0; #315 at
+  `924fc804` omits those clauses, changes only the jscpd subtree in the remaining lockfile, and
+  exits 2 under the existing gate. pnpm can omit reconstructible URLs; this does not prove which
+  registry generated #315. For a usable lockfile with zero `tarball` keys, read the committed
+  `.npmrc` that the guarded pnpm install consumes at its workspace root. Permit exit 0 only when
+  the declaration is present and the install context establishes canonical resolution for the
+  default and every applicable scoped or named route. If the declaration is missing, malformed,
+  not consumed, overridden, or insufficient to establish any applicable route, exit 2. A host
+  probe, command-line assertion supplied only to the gate, or pnpm default is not evidence. The
+  named `unproven by URL` line identifies the lockfile, the canonical registry and the declaration
+  in the guarded context; it is not a verified URL pass.
+
+  The narrow owned-file exception is the new, credential-free root `.npmrc`, the existing
+  provenance invocation blocks where necessary, and `docker/control.Dockerfile` to copy those same
+  declaration bytes into `/workspace` before `RUN pnpm install --frozen-lockfile` and bind the
+  check to that image install. Verify consumption by pinned pnpm in the actual contexts, including
+  both callers of the contracts action and Control at the workspace root. Removing the Dockerfile
+  copy, or routing a used scope to a noncanonical registry while leaving the default canonical,
+  must prevent the named exit-0 outcome. No other registry configuration, dependency pins,
+  lockfiles, install commands or flags, action steps, CI suites, or exit-1 host-policy thresholds
+  change. Preserve the existing positive recorded-URL verdict and unusable-lockfile refusal. Do
+  not add a gate to the two presently ungated host installs.
+
+  A recorded invalid or off-policy entry still exits 1 with unchanged thresholds and diagnostics.
+  **Testimony limit:** When the lockfile records no tarball URLs, the gate cannot bind any individual
+  package to a tarball URL. It reports the effective install registry only; it does not establish
+  which registry generated the lockfile, verify integrity, or attest to what bytes were fetched.
+  **Fixture detail:** Replace each of the three live-lockfile test inputs with a deterministic
+  fixture preserving its original guarantee, including default-path coverage, with its own red
+  mutant. Keep the PyYAML differential fixture nonempty and add a separate named zero-URL arm.
+  An empty or collection-valued `tarball` is a recorded entry, not the zero-key case. The positive
+  recorded-URL behavior and its output stay byte-identical.
+  **Scope and order:** No Mix/Hex work. This slice addresses the observed stop on #314–#318 without
+  lockfile regeneration; green jobs require new evidence. W6-13 follows W6-12b in the serialized
+  Tail W6 `ci.yml` writer lane, from current main, with no overlapping writer. Tail W6 goes from
+  12 to 13 planned slices. W6-14 is not bound by this entry. No dispatch before W6-13's own
+  contract is independently reviewed and bound.
+
+  **Authority:** the owner's standing authorization (2026-11-21). **Independent review:**
+  `findings/0010-t2-amendment-review-5.md` (APPROVE for recording W6-13), reviewing
+  `findings/0010-unregistered-slices.md` at SHA-256
+  `47a1f7806cb2d17382c2af1d35cb74224737910f8e41b557b6cb6e515b53cfa8`
+  against `origin/main` `1ced43d0e4a617327a03418124ea0177a9cdc83c`. Under T2, this amendment
+  takes effect only upon recording this independent review by reference in this entry.
+  It records the scope decision, not a bound implementation contract or a verified CI result.
+
+- **2026-11-28 — Factual attribution only; no slice registration.** Attribute #262 (W3-17),
+  #256 (W5-02a), #273 (A3) and #253 (K4) to goal 0010 without registering them as compliant.
+  The four PRs merged, but their dispatch-contract digests are absent from their PR bodies and
+  historical binding was not established. Defer the table, count and decision edits until the
+  owner rules. Any prospective rebind must be independently verified and dated as new evidence,
+  with the original omission retained. This entry does not establish D3 acceptance or alter
+  any owner decision.
 
 ## Known follow-ups
 
