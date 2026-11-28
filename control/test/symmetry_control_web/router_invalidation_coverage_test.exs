@@ -8,7 +8,7 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
   pipeline plugs nor their order, and reading them from the router source would
   keep the promise green after a plug was dropped from a pipeline. So each
   route's scope chain is executed the way the dispatcher executes it — the
-  closure `Router.__match_route__/3` returns, run on a conn authenticated for
+  prepare value `Router.__match_route__/3` returns, run on a conn authenticated for
   the route's scope — and the invalidation its `before_send` publishes is what
   the assertion reads. A route whose chain carries no plug publishes nothing
   and is refused unless `@non_publishing` names it.
@@ -80,7 +80,7 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
   end
 
   # The dispatcher hands the matcher the path segments it matched; the prepare
-  # closure and pipe chain below are the ones it then runs, every pipe_through
+  # step and pipe chain below are the ones it then runs, every pipe_through
   # of the route's scope included.
   defp run_scope_chain({verb, path}, machine_token) do
     segments = concrete_segments(path)
@@ -94,7 +94,7 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
       |> Map.put(:secret_key_base, Endpoint.config(:secret_key_base))
       |> authenticate(metadata.pipe_through, machine_token)
 
-    conn = pipeline.(prepare.(conn, metadata))
+    conn = pipeline.(prepare_conn(conn, metadata, prepare))
 
     if conn.halted or conn.state != :unset do
       flunk(
@@ -105,6 +105,17 @@ defmodule SymmetryControlWeb.RouterInvalidationCoverageTest do
     end
 
     send_resp(conn, 200, "")
+  end
+
+  # Phoenix 1.8.17 returns {private, assigns} where 1.8.16 returned a prepare closure for
+  # Route.prepare/3; the arg list stays in a variable so no Refactor.Apply finding is added.
+  defp prepare_conn(conn, metadata, prepare) when is_function(prepare, 2) do
+    prepare.(conn, metadata)
+  end
+
+  defp prepare_conn(conn, metadata, prepare) do
+    args = [conn, metadata, prepare]
+    apply(Phoenix.Router.Route, :prepare, args)
   end
 
   defp authenticate(conn, pipes, machine_token) do
