@@ -2409,3 +2409,83 @@ The goal's stage 1 and stage 2 are delivered (plan
       variant through the conjuncts the committed row pins, but that is an argument, not evidence.
       Owner: the next slice that needs this fixture; add the row to
       `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` and its mutant to the record's §5 table.
+
+## rf-acc-pi-turn-deadline: residuals (2026-11-28)
+
+The authenticated-turn task text is now staged by the acceptance fixture
+(`scripts/ci/linux-v2-native-acceptance.sh`), and the `shared` Pi home's thinking level is off —
+every other Pi case set keeps its pre-r1 `minimal`. `authenticated_pi_task_failures`
+(`scripts/ci/test-linux-v2-evidence.py`) derives its case-set list from the script's own allowlist
+and runs the fixture over every derived set: the staging, its Control-fixture agreement, the
+thinking level, the absence of the staged file and of its fixed-B-home install row for every
+non-`shared` set, and the two containment sets' explicit exemption (no Pi home, no install row).
+Record: `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
+
+- [ ] Credentialed re-dispatch of the `shared` pi legs. Owner: conductor and owner. The row that
+      must be green is `TestProductionLinuxV2PiNativeProviderAction` in a credentialed run
+      (placeholder runs keep the credential-gated outcome). If a different leg stops first, its
+      verbatim stop is the next goal.
+- [ ] `stale_leaf` in a credentialed run: the fixture stages the real provider credential into a
+      vehicle whose case was designed around an instant provider failure, so its 30-second
+      stop-receipt hold is unproven (`wait for exact durable stop receipt: owner-witness command did
+      not reach its requested durable stage`, `stale_leaf` in run 45974323458, log lines 9749 and
+      10031). The staged append is not one of its inputs: the delivered pin asserts the file is
+      neither staged nor installed for any non-`shared` case set, so this increment does not change
+      that vehicle's prompt exposure; what remains unproven is whether a credentialed launch of it
+      reaches a turn, or its hold. The other provider-free `pi-durability` case sets share the
+      credential exposure but were not observed to fail in that run — `stage_replay_create_started`,
+      `stage_replay_leaf_bound`,
+      `stage_replay_launcher_bound`, `ack_loss_launcher_bound` and `migration` all exited 0 — so
+      treat their turns and holds as exposed and unobserved until a credentialed run sees them. The
+      Pi staging home serves a whole guest, so the fix is per case set — stage the ratified
+      placeholder credential for the case sets whose vehicles are provider-free (`stale_leaf`,
+      `migration`, `stage_replay_*`, `ack_loss_*`) and keep the real credential for `shared`, or
+      bound those holds to the fixture's own admission deadline. Owner: the next goal's implementer;
+      evidence in the record's next-stop section.
+- [ ] The production decoder rejects the model's TaskResult on `subject_hash` before any leg can
+      pass: the witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`)
+      hands the model a subject without its canonical hash and the embedded schema states no hash
+      rule. Measured on the retained arm carrier (record §3.2): the JSON payload extracted from the
+      `sup1` arm's final message decodes to `candidate_completion` once the exact subject and
+      `subject_hash` are supplied in the task text — a diagnostic on an extracted payload, not a
+      delivered-arm result (`goal-0006i` precedent: "the exact contract values must be supplied in
+      the task text").
+      Carriers are the fixture's staged task text (this increment's mechanism, values computed from
+      the resolved subject) or a product-side carrier in the witness context. Owner: conductor
+      (`DECISION_NEEDED`).
+- [ ] The `shared` set's provider-free `pi-durability` stage-replay legs (holds
+      `stop_receipt_durable`, `leaf_removed`, `journal_cleared`) have never been observed in a
+      credentialed run: the 45974323458 `shared` arm aborted at the first authenticated leg. With
+      the staged task text those legs are exposed to the prompt text, but neither a turn nor a
+      post-turn assertion has been observed in a credentialed run; whether either is reached on a
+      real provider turn is the credentialed re-dispatch's third observation. Owner: conductor.
+- decision note — production-side carriers for the same text, for `DECISION_NEEDED` if the fixture
+      carrier is ever retired: `control/lib/symmetry_control/goals/admission.ex:418,573` sets a
+      goal-admitted task's `goal` to the Goal title while the WorkItem route composes
+      `execution_goal/1` = title + description (`control/lib/symmetry_control/workspaces.ex:684,765`),
+      and the witness's `nativeContext()` (`daemon/internal/app/linux_owner_witness_linux.go:3948`)
+      replaces Control's context envelope with a subject/run-key stub. Either change would carry the
+      text for every native harness instead of the fixture's pi legs only.
+- [ ] F1 — the provider `stopReason` reaches the persisted diagnostic unprojected: `normalAssistantStop`
+      formats it with `%q` into `ErrUnexpectedAssistantStop` (`daemon/internal/harness/pi/rpc.go:853-860`)
+      while its sibling `errorMessage` goes through `projectStopErrorMessage`, so an oversized reason is
+      bounded only by the decoder's `defaultMaxRecordBytes` (`:19`, applied at `:212`). Product-side, out
+      of this fixture chain's scope. Owner: the next slice that touches `daemon/internal/harness/pi/rpc.go`.
+- [ ] Frozen arm-parser guard residual 1 — two arms on one physical line are not split. Insert
+      `  shared) ;; review_probe) ;;` just before the validator's rejecting default, all other lines
+      intact. The real Bash validator accepts `review_probe`, while `parse_case_arms`
+      (`scripts/ci/test-linux-v2-evidence.py:491-535`) reads only the first `)` as the arm header and
+      folds the trailing `;;` into the `shared` body, so the derivation and the exporter each return
+      `[]` (exits `0/0/0/0`). Non-blocking: the conductor froze the round-7 arm-parser guard, and this
+      variant is absent from the unchanged delivered shell, whose pristine validator rejects
+      `review_probe`. Reference: `findings/310-opus-review-7.md` ("Two bounded break attempts",
+      attempt 1). Owner: the next slice that touches the arm parser.
+- [ ] Frozen arm-parser guard residual 2 — the rejecting default's body need only *contain* `fail`.
+      Change the validator's final `*) fail 'set SYMMETRY…' ;;` to `*) true || fail 'set SYMMETRY…' ;;`,
+      message unchanged. Bash then accepts `review_probe` (the `fail` never runs), while
+      `CASE_ARM_REJECTION` and the exactly-one-rejecting-default count
+      (`scripts/ci/test-linux-v2-evidence.py:488,2914`) still see one body containing `fail`; the
+      derivation and the exporter each return `[]` (exits `0/0/0/0`). Non-blocking, same conductor
+      freeze; a future guard would require the exact unconditional rejecting body or run the actual
+      validator for a negative control. Reference: `findings/310-opus-review-7.md`, attempt 2. Owner:
+      the next slice that touches the arm parser.
