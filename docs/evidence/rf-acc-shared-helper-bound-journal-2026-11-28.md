@@ -3,7 +3,8 @@
 Goal `rf-acc-shared-helper-bound-journal` (contract under the GDD contracts root, ruled by the
 conductor 2026-11-28; dispatch gate `3d377582` = #309). Branch
 `refactor/rf-acc-shared-helper-bound-journal`, dispatch base
-`3d377582065255b47531861701967a407581d74d`. Plan
+`3d377582065255b47531861701967a407581d74d`; the delivered head is this branch's PR head at
+bind/merge time, not a digest pinned here (§8 records the merge). Plan
 `docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md`. Shape reference:
 `docs/evidence/rf-acc-shared-reservation-durable-2026-11-27.md` (committed, tested,
 allowlisted-evidence increment). The digests below bind the delivered bytes; the stage's own gate
@@ -529,6 +530,10 @@ scope the fix round gates that package whole in both userlands and attributes he
 CI and to the conductor's Bind. Neither WSL failure is in the changed scope, and both reproduce at the
 dispatch base in the same environment (`internal/platform` 13 uid-refusal rows,
 `native/linux-gate/protocol`'s fd-census pin alone, `e2e` green).
+
+The branch merged `origin/main` at `606985a8` (#310) as merge commit `0394993c`; every gate receipt
+above was taken on that merged tree, and the record-only commit that adds this sentence supersedes
+them for this record's bytes alone (§4.5's rule).
 
 ## 9. Next Bind
 
