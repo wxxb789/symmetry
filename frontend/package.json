@@ -18,7 +18,7 @@
     "@tanstack/react-router": "1.170.46",
     "effect": "3.22.4",
     "lucide-react": "1.70.0",
-    "phoenix": "1.8.16",
+    "phoenix": "1.8.17",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },
