@@ -2634,16 +2634,25 @@ func TestLinuxV2NativeWitnessContextCarriesCanonicalSubjectHash(t *testing.T) {
 		`"tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},` +
 		`"subject_hash":"sha256:7777b01831c228bb006afaeb0d6097dd33ffa2a012077ab76d63117570b706de",` +
 		`"run_key":{"run_id":"c2-native-context","generation":7}}`
-	if got := string(witness.nativeContext()); got != want {
+	got, err := witness.nativeContext()
+	if err != nil {
+		t.Fatalf("native context error = %v, want none for a canonical subject", err)
+	}
+	if string(got) != want {
 		t.Fatalf("native context = %s, want %s", got, want)
 	}
 	hashless := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Subject: protocol.Subject{ResourceID: "sample-resource"}}}
-	func() {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("native context emitted a payload for a subject that cannot be hashed")
-			}
-		}()
-		_ = hashless.nativeContext()
-	}()
+	refused, err := hashless.nativeContext()
+	if err == nil {
+		t.Fatalf("native context = %s, want the subject-hash refusal for a subject that cannot be hashed", refused)
+	}
+	if refused != nil {
+		t.Fatalf("refused native context = %s, want no payload without the canonical subject hash", refused)
+	}
+	if !errors.Is(err, errLinuxV2NativeWitnessContextSubjectHash) {
+		t.Fatalf("native context error = %v, want the named subject-hash refusal", err)
+	}
+	if !strings.Contains(err.Error(), "owner witness native context subject hash") {
+		t.Fatalf("native context error = %v, want the operation named in the message text", err)
+	}
 }
