@@ -3059,12 +3059,23 @@ HANDOFF_RUN_METADATA = "run-pi_provider_action.json"
 HANDOFF_REQUEST = "request-pi_provider_action.json"
 SUBJECT_SETUP_MARKER = 'control_fixture="$fixture_root/control-fixture.json"'
 HANDOFF_UNAVAILABLE = "the production subject handoff fixture did not emit a parseable owner request"
-# The offline Control stand-in mirrors exactly these production lines, so pin them:
-# whatever the stand-in hands the request writer must stay what Control hands it.
+# The offline Control stand-in mirrors exactly these producer-side production lines, so pin them:
+# whatever Control hands the request writer must stay what these lines hand it.
 CONTROL_SCHEDULE_SUBJECT_BINDING = (
     '      "repository_resource_id" => item["repository_resource_id"],\n'
     '      "commit" => fixture["subject"]["commit"],\n'
     '      "tree_digest" => fixture["subject"]["tree_digest"],\n'
+)
+CONTROL_PREPARE_SUBJECT_ARGS = (
+    "provision-linux-v2-control-claims.exs prepare \\\n"
+    '      "$control_fixture" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY_OWNER" \\\n'
+    '      "$source_commit" "$source_tree_digest"'
+)
+CONTROL_GOAL_CASE_RESOURCE_ROLES = (
+    "          case repository_role do\n"
+    "            :pi_provider -> pi_repository.id\n"
+    "            :pi_durability -> pi_durability_repository.id\n"
+    "            :opencode_goal -> opencode_repository.id\n"
 )
 
 
@@ -3232,6 +3243,14 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
     if CONTROL_SCHEDULE_SUBJECT_BINDING not in claims:
         failures.append(
             "the Control fixture no longer binds the scheduled run subject to the prepared subject"
+        )
+    if CONTROL_PREPARE_SUBJECT_ARGS not in source:
+        failures.append(
+            "the acceptance provisioning call no longer hands the prepared subject arguments to Control"
+        )
+    if CONTROL_GOAL_CASE_RESOURCE_ROLES not in claims:
+        failures.append(
+            "the Control fixture no longer routes the pi_provider goal case to the Pi repository"
         )
     description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
     if description is None:
@@ -3876,6 +3895,38 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
             ),
             (
+                "swapped-goal-case-repository",
+                source,
+                claims.replace(
+                    ":pi_provider -> pi_repository.id",
+                    ":pi_provider -> opencode_repository.id",
+                    1,
+                ),
+                (
+                    "the Control fixture no longer routes the pi_provider goal case to the "
+                    "Pi repository",
+                ),
+            ),
+            (
+                "swapped-provision-subject-tree-digest",
+                source.replace(
+                    '      "$source_commit" "$source_tree_digest"\n)',
+                    "      \"$source_commit\" \"sha256:"
+                    + "0" * 63
+                    + "1\"\n)",
+                    1,
+                ),
+                claims,
+                (
+                    "the acceptance provisioning call no longer hands the prepared subject "
+                    "arguments to Control",
+                    "the staged-subject canonical hash recomputation disagrees with its "
+                    "independent literal",
+                    "the shared case set's staged task text does not carry the canonical "
+                    "subject_hash of the request subject",
+                ),
+            ),
+            (
                 "dropped-staging-argument",
                 source.replace(
                     '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text"',
@@ -3962,6 +4013,8 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
                 claims,
                 (
+                    "the acceptance provisioning call no longer hands the prepared subject "
+                    "arguments to Control",
                     "the staged-subject canonical hash recomputation disagrees with its independent literal",
                     "the shared case set's staged task text does not carry the canonical subject_hash "
                     "of the request subject",
