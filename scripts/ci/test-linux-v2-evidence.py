@@ -2800,6 +2800,16 @@ STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
 STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
 STAGED_PI_HOME_PATH = "b-home/.pi"
 ACCEPTANCE_WORKFLOW = ACCEPTANCE_SCRIPT.parents[2] / ".github/workflows/linux-native-v2-acceptance.yml"
+SUBJECT_HASH_CLAUSE = (
+    "The canonical subject_hash of this task's subject is {subject_hash}. Set it as the "
+    "subject_hash field of your final TaskResult JSON object."
+)
+STAGED_SUBJECT_RESOURCE_ID = "11111111-1111-1111-1111-111111111111"
+STAGED_SUBJECT_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+STAGED_SUBJECT_TREE_DIGEST = (
+    "sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
+STAGED_SUBJECT_HASH_LITERAL = "sha256:133b94b7b9334d356abdba2a9c36310d9549afbfe13d9bdc876dea5bcf1ab1e1"
 
 
 def extracted_authenticated_pi_task_block(source: str) -> str:
@@ -2838,7 +2848,9 @@ def staging_script(source: str, root: pathlib.Path, case_set: str) -> pathlib.Pa
         "SYMMETRY_OPENCODE_MODEL=opencode-model\n"
         "SYMMETRY_OPENAI_BASE_URL=https://provider.invalid/v1\n"
         f"native_api_key_file={api_key}\n"
-        "pi_repository_id=11111111-1111-1111-1111-111111111111\n"
+        f"source_commit={STAGED_SUBJECT_COMMIT}\n"
+        f"source_tree_digest={STAGED_SUBJECT_TREE_DIGEST}\n"
+        f"pi_repository_id={STAGED_SUBJECT_RESOURCE_ID}\n"
         "opencode_repository_id=22222222-2222-2222-2222-222222222222\n"
         "pi_durability_repository_id=33333333-3333-3333-3333-333333333333\n"
         "SYNTHETIC_GOAL_CLEANUP_SOURCE=/synthetic/source\n"
@@ -2922,12 +2934,52 @@ def acceptance_case_set_derivation_failures(source: str, workflow: str) -> list[
     return failures
 
 
+def canonical_subject_hash(commit: str, resource_id: str, tree_digest: str) -> str:
+    canonical = json.dumps(
+        {"commit": commit, "resource_id": resource_id, "tree_digest": tree_digest},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def staged_subject_hash_failures(staged: str | None) -> list[str]:
+    tokens = re.findall(r"sha256:[0-9a-f]{64}", staged or "")
+    if len(tokens) != 1:
+        return [
+            "the shared case set's staged task text must carry exactly one subject_hash token, "
+            f"found {len(tokens)}"
+        ]
+    recomputed = canonical_subject_hash(
+        STAGED_SUBJECT_COMMIT, STAGED_SUBJECT_RESOURCE_ID, STAGED_SUBJECT_TREE_DIGEST
+    )
+    failures = []
+    if recomputed != STAGED_SUBJECT_HASH_LITERAL:
+        failures.append(
+            "the staged-subject canonical hash recomputation disagrees with its independent literal"
+        )
+    if tokens[0] != recomputed:
+        failures.append(
+            "the shared case set's staged task text does not carry the canonical subject_hash of the "
+            "request subject"
+        )
+    return failures
+
+
 def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path) -> list[str]:
     failures: list[str] = []
     description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
     if description is None:
         failures.append("the Control claim fixture no longer carries the pi_provider_action description")
-    expected = None if description is None else f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n"
+    expected = (
+        None
+        if description is None
+        else (
+            f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n\n"
+            f"{SUBJECT_HASH_CLAUSE.format(subject_hash=STAGED_SUBJECT_HASH_LITERAL)}\n"
+        )
+    )
 
     case_sets = acceptance_case_set_allowlist(source)
     containment_sets = acceptance_containment_case_sets(source)
@@ -2945,6 +2997,7 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
             staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
             if expected is not None and staged != expected:
                 failures.append("the shared case set does not stage the exact authenticated Pi task text")
+            failures.extend(staged_subject_hash_failures(staged))
             level = staged_thinking_level(fixture_root)
             if level != "off":
                 failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
@@ -3178,6 +3231,38 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
         claims = CONTROL_CLAIMS_SCRIPT.read_text(encoding="utf-8")
         self.assertEqual(authenticated_pi_task_failures(source, claims, self.root), [])
+
+    def test_staged_subject_hash_recomputation_refuses_unclassifiable_text(self) -> None:
+        canonical = canonical_subject_hash(
+            STAGED_SUBJECT_COMMIT, STAGED_SUBJECT_RESOURCE_ID, STAGED_SUBJECT_TREE_DIGEST
+        )
+        self.assertEqual(canonical, STAGED_SUBJECT_HASH_LITERAL)
+        clause = SUBJECT_HASH_CLAUSE.format(subject_hash=canonical)
+        self.assertEqual(staged_subject_hash_failures(clause), [])
+        for text in (None, "no digest here"):
+            self.assertEqual(
+                staged_subject_hash_failures(text),
+                [
+                    "the shared case set's staged task text must carry exactly one subject_hash "
+                    "token, found 0"
+                ],
+            )
+        self.assertEqual(
+            staged_subject_hash_failures(clause + " sha256:" + "0" * 64),
+            [
+                "the shared case set's staged task text must carry exactly one subject_hash token, "
+                "found 2"
+            ],
+        )
+        self.assertEqual(
+            staged_subject_hash_failures(
+                SUBJECT_HASH_CLAUSE.format(subject_hash="sha256:" + "0" * 64)
+            ),
+            [
+                "the shared case set's staged task text does not carry the canonical subject_hash "
+                "of the request subject"
+            ],
+        )
 
     def test_case_set_coverage_is_derived_from_the_script_and_the_workflow(self) -> None:
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
@@ -3424,18 +3509,26 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             (
                 "blank-staging-argument",
                 source.replace(
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text"',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" ""',
                     1,
                 ),
                 claims,
-                ("the shared case set does not stage the exact authenticated Pi task text",),
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text must carry exactly one subject_hash token, "
+                    "found 0",
+                ),
             ),
             (
                 "no-fixture-write",
                 source.replace("    if authenticated_pi_task_text:\n", "    if False:\n", 1),
                 claims,
-                ("the shared case set does not stage the exact authenticated Pi task text",),
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text must carry exactly one subject_hash token, "
+                    "found 0",
+                ),
             ),
             (
                 "misplaced-install-target",
@@ -3477,8 +3570,8 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             (
                 "dropped-staging-argument",
                 source.replace(
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text" <<\'PY\'',
-                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" <<\'PY\'',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES" "$authenticated_pi_task_text"',
+                    '"$SYNTHETIC_GOAL_CLEANUP_CLONES"',
                     1,
                 ),
                 claims,
@@ -3498,6 +3591,44 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     "the fixture staging script for stale_journal_fence exited 1",
                     "the fixture staging script for stale_journal_subject exited 1",
                     "the fixture staging script for synthetic_goal_cleanup exited 1",
+                ),
+            ),
+            (
+                "staged-noncanonical-subject-hash",
+                source.replace(
+                    "canonical_subject_hash(source_commit, pi_repository_id, source_tree_digest)",
+                    '"sha256:" + "0" * 64',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
+                ),
+            ),
+            (
+                "reworded-subject-hash-clause",
+                source.replace(
+                    ". Set it as the subject_hash field of your final TaskResult JSON object.",
+                    ". Record it as the subject_hash field of your final TaskResult JSON object.",
+                    1,
+                ),
+                claims,
+                ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "blank-subject-commit-argument",
+                source.replace(
+                    '"$source_commit" "$source_tree_digest" <<\'PY\'',
+                    '"" "$source_tree_digest" <<\'PY\'',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged task text does not carry the canonical subject_hash "
+                    "of the request subject",
                 ),
             ),
         )
