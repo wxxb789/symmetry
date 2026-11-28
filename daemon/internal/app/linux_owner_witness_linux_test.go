@@ -2620,3 +2620,30 @@ func TestLinuxV2NativeWitnessOwnerLossCaptureKeepsPollingForAnotherHelpersExit(t
 		t.Fatalf("foreign helper_exited capture shape = %#v, want the exact held helper at version 1", snapshot)
 	}
 }
+
+func TestLinuxV2NativeWitnessContextCarriesCanonicalSubjectHash(t *testing.T) {
+	subject := protocol.Subject{
+		ResourceID: "0f8fad5b-d9cb-469f-a165-70867728950e",
+		Commit:     strings.Repeat("1", 40),
+		TreeDigest: "sha256:" + strings.Repeat("0", 64),
+	}
+	runKey := linuxV2NativeWitnessRunKey{RunID: "c2-native-context", Generation: 7}
+	witness := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Subject: subject, RunKey: runKey}}
+	want := `{"version":1,"subject":{"resource_id":"0f8fad5b-d9cb-469f-a165-70867728950e",` +
+		`"commit":"1111111111111111111111111111111111111111",` +
+		`"tree_digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},` +
+		`"subject_hash":"sha256:7777b01831c228bb006afaeb0d6097dd33ffa2a012077ab76d63117570b706de",` +
+		`"run_key":{"run_id":"c2-native-context","generation":7}}`
+	if got := string(witness.nativeContext()); got != want {
+		t.Fatalf("native context = %s, want %s", got, want)
+	}
+	hashless := &linuxV2NativeWitnessRun{request: linuxV2NativeWitnessRequest{Subject: protocol.Subject{ResourceID: "sample-resource"}}}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("native context emitted a payload for a subject that cannot be hashed")
+			}
+		}()
+		_ = hashless.nativeContext()
+	}()
+}

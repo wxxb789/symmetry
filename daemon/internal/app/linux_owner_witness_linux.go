@@ -3946,11 +3946,21 @@ func (witness *linuxV2NativeWitnessRun) launchNative(
 }
 
 func (witness *linuxV2NativeWitnessRun) nativeContext() json.RawMessage {
-	encoded, _ := json.Marshal(struct {
-		Version int                        `json:"version"`
-		Subject protocol.Subject           `json:"subject"`
-		RunKey  linuxV2NativeWitnessRunKey `json:"run_key"`
-	}{Version: 1, Subject: witness.request.Subject, RunKey: witness.request.RunKey})
+	subjectHash, err := witness.request.Subject.Hash()
+	// The subject is validated before the witness runs, so this cannot fire on the real path;
+	// failing closed here keeps a hash-less context from ever reaching the model.
+	if err != nil {
+		panic(fmt.Errorf("owner witness native context subject hash: %w", err))
+	}
+	encoded, err := json.Marshal(struct {
+		Version     int                        `json:"version"`
+		Subject     protocol.Subject           `json:"subject"`
+		SubjectHash string                     `json:"subject_hash"`
+		RunKey      linuxV2NativeWitnessRunKey `json:"run_key"`
+	}{Version: 1, Subject: witness.request.Subject, SubjectHash: subjectHash, RunKey: witness.request.RunKey})
+	if err != nil {
+		panic(fmt.Errorf("owner witness native context marshal: %w", err))
+	}
 	return encoded
 }
 
