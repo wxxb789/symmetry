@@ -197,8 +197,12 @@ text to equal the Control claim's `pi_provider_action` description plus the fixe
 and extend the pin with the recomputation row of §3, without widening the guard.
 
 C2 — product side (second). Owned files: `daemon/internal/app/linux_owner_witness_linux.go`
-(`nativeContext()` `:3948-3954`; both call sites, `:3764` and `:3865`, already read it, so no call
-site changes) and a red-capable test in the same package or the witness e2e test. Change: add
+(`nativeContext()` `:3948-3954`; both call sites, `:3764` and `:3865`, change with this slice: the
+intermediate panic was replaced with fail-closed propagation of the named sentinel, so a subject
+that cannot be hashed reaches neither dispatch boundary — amended 2026-11-28 after two independent
+reviews of `78e064ea`, `findings/rf-acc-pi-carrier-c2-opus-review-1.md` and
+`findings/rf-acc-pi-carrier-c2-deepseek-audit-1.md`, both state-dir relative) and a red-capable test
+in the same package or the witness e2e test. Change: add
 `subject_hash`, and no other field, to the `nativeContext()` payload, computed with
 `witness.request.Subject.Hash()` (`daemon/internal/protocol/goal_subject.go:81-87`). The subject is
 validated before the witness runs (`daemon/e2e/production_linux_v2_native_witness_test.go:1682-1683`),
