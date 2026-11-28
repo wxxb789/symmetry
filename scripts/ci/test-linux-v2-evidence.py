@@ -2802,8 +2802,14 @@ STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
 STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
 STAGED_PI_HOME_PATH = "b-home/.pi"
 ACCEPTANCE_WORKFLOW = ACCEPTANCE_SCRIPT.parents[2] / ".github/workflows/linux-native-v2-acceptance.yml"
+# The staged clause must name its own subject's resource: the shared run also reaches
+# provider-free Pi legs with a different subject resource, which must not read this value.
+SUBJECT_HASH_SCOPE_PREFIX = (
+    "For the task whose subject resource_id is {resource_id}, the canonical subject_hash of "
+    "its subject is "
+)
 SUBJECT_HASH_CLAUSE = (
-    "The canonical subject_hash of this task's subject is {subject_hash}. Set it as the "
+    SUBJECT_HASH_SCOPE_PREFIX + "{subject_hash}. Set it as the "
     "subject_hash field of your final TaskResult JSON object."
 )
 # A protocol-valid Subject: the renderer/decoder rejects a resource_id whose
@@ -2980,6 +2986,12 @@ def staged_subject_hash_failures(
             "the shared case set's staged task text does not carry the canonical subject_hash of the "
             "request subject"
         )
+    scope = SUBJECT_HASH_SCOPE_PREFIX.format(resource_id=request_subject["resource_id"])
+    if scope not in (staged or ""):
+        failures.append(
+            "the shared case set's staged subject_hash clause is not scoped to the request subject's "
+            "resource_id, so a provider-free Pi leg could read the provider hash as its own"
+        )
     return failures
 
 
@@ -3018,10 +3030,22 @@ def main():
     mode = arguments[3]
     if mode == "prepare":
         output, _repository, _owner, commit, tree_digest = arguments[4:9]
+        incoming = {"commit": commit, "tree_digest": tree_digest}
+        projection = json.loads(
+            pathlib.Path(__file__).with_name("prepare-projection.json").read_text(encoding="utf-8")
+        )
+        subject = {}
+        for name, expression in projection.items():
+            if expression in incoming:
+                subject[name] = incoming[expression]
+            elif expression.startswith('"') and expression.endswith('"'):
+                subject[name] = json.loads(expression)
+            else:
+                raise SystemExit("unclassifiable prepared subject projection: " + expression)
         write(
             output,
             {
-                "subject": {"commit": commit, "tree_digest": tree_digest},
+                "subject": subject,
                 "pi_repository_resource_id": PI_RESOURCE_ID,
                 "opencode_repository_resource_id": OPENCODE_RESOURCE_ID,
                 "pi_durability_repository_resource_id": PI_DURABILITY_RESOURCE_ID,
@@ -3077,6 +3101,33 @@ CONTROL_GOAL_CASE_RESOURCE_ROLES = (
     "            :pi_durability -> pi_durability_repository.id\n"
     "            :opencode_goal -> opencode_repository.id\n"
 )
+CONTROL_PREPARE_SUBJECT_PROJECTION = (
+    '      "subject" => %{"commit" => commit, "tree_digest" => tree_digest},'
+)
+PREPARE_SUBJECT_PROJECTION = re.compile(r'"subject" => %\{(?P<body>[^}]*)\}')
+PREPARE_SUBJECT_PARAMETERS = ("commit", "tree_digest")
+PREPARE_PROJECTION_FILE = "prepare-projection.json"
+
+
+def prepared_subject_projection(claims: str) -> dict[str, str]:
+    match = PREPARE_SUBJECT_PROJECTION.search(claims)
+    if match is None:
+        raise ValueError("the fixture carries no prepared subject projection")
+    projection: dict[str, str] = {}
+    for entry in match.group("body").split(","):
+        key, separator, value = entry.partition("=>")
+        if not separator:
+            raise ValueError(f"unclassifiable projection entry {entry.strip()!r}")
+        try:
+            name = json.loads(key.strip())
+        except json.JSONDecodeError:
+            raise ValueError(f"unclassifiable projection key {key.strip()!r}") from None
+        if name not in PREPARE_SUBJECT_PARAMETERS or name in projection:
+            raise ValueError(f"unexpected projection key {name!r}")
+        projection[name] = value.strip()
+    if set(projection) != set(PREPARE_SUBJECT_PARAMETERS):
+        raise ValueError(f"projected keys are {sorted(projection)}")
+    return projection
 
 
 def extracted_subject_setup(source: str) -> str:
@@ -3190,11 +3241,14 @@ def subject_handoff_script(source: str) -> str:
 
 
 def subject_handoff(
-    source: str, root: pathlib.Path
+    source: str, root: pathlib.Path, projection: dict[str, str]
 ) -> tuple[subprocess.CompletedProcess[str], pathlib.Path]:
     fixture_root = root / "subject-handoff"
     fixture_root.mkdir(parents=True)
     (fixture_root / "offline-control.py").write_text(OFFLINE_CONTROL_STANDIN, encoding="utf-8")
+    (fixture_root / PREPARE_PROJECTION_FILE).write_text(
+        json.dumps(projection, separators=(",", ":")), encoding="utf-8"
+    )
     machine_token_file = fixture_root / "machine-token"
     machine_token_file.write_text("fixture-machine-token\n", encoding="utf-8")
     script = root / "subject-handoff.sh"
@@ -3252,6 +3306,17 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
         failures.append(
             "the Control fixture no longer routes the pi_provider goal case to the Pi repository"
         )
+    if CONTROL_PREPARE_SUBJECT_PROJECTION not in claims:
+        failures.append(
+            "the Control fixture's prepared subject projection no longer copies the prepare subject"
+        )
+    projection: dict[str, str] = {}
+    try:
+        projection = prepared_subject_projection(claims)
+    except ValueError as error:
+        failures.append(
+            f"the Control fixture's prepared subject projection could not be evaluated: {error}"
+        )
     description = CONTROL_PI_PROVIDER_ACTION_DESCRIPTION.search(claims)
     if description is None:
         failures.append("the Control claim fixture no longer carries the pi_provider_action description")
@@ -3260,7 +3325,7 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
         if description is None
         else (
             f"{description.group('description')}\n\n{FIXED_SCOPE_PARAGRAPH}\n\n"
-            f"{SUBJECT_HASH_CLAUSE.format(subject_hash=STAGED_SUBJECT_HASH_LITERAL)}\n"
+            f"{SUBJECT_HASH_CLAUSE.format(resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=STAGED_SUBJECT_HASH_LITERAL)}\n"
         )
     )
 
@@ -3280,7 +3345,7 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
             staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
             if expected is not None and staged != expected:
                 failures.append("the shared case set does not stage the exact authenticated Pi task text")
-            handoff_result, handoff_root = subject_handoff(source, root / "handoff")
+            handoff_result, handoff_root = subject_handoff(source, root / "handoff", projection)
             request_file = handoff_root / HANDOFF_REQUEST
             handoff_staged_file = handoff_root / STAGED_TASK_TEXT_PATH
             if handoff_result.returncode != 0 or not request_file.exists():
@@ -3532,7 +3597,10 @@ class CredentialGatedFixtureTest(unittest.TestCase):
             STAGED_SUBJECT["commit"], STAGED_SUBJECT["resource_id"], STAGED_SUBJECT["tree_digest"]
         )
         self.assertEqual(canonical, STAGED_SUBJECT_HASH_LITERAL)
-        clause = SUBJECT_HASH_CLAUSE.format(subject_hash=canonical)
+        scope = SUBJECT_HASH_SCOPE_PREFIX.format(resource_id=STAGED_SUBJECT_RESOURCE_ID)
+        clause = SUBJECT_HASH_CLAUSE.format(
+            resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=canonical
+        )
         self.assertEqual(staged_subject_hash_failures(clause, STAGED_SUBJECT), [])
         for text in (None, "no digest here"):
             self.assertEqual(
@@ -3551,7 +3619,10 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         )
         self.assertEqual(
             staged_subject_hash_failures(
-                SUBJECT_HASH_CLAUSE.format(subject_hash="sha256:" + "0" * 64), STAGED_SUBJECT
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash="sha256:" + "0" * 64
+                ),
+                STAGED_SUBJECT,
             ),
             [
                 "the shared case set's staged task text does not carry the canonical subject_hash "
@@ -3560,7 +3631,10 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         )
         self.assertEqual(
             staged_subject_hash_failures(
-                SUBJECT_HASH_CLAUSE.format(subject_hash=canonical + "f"), STAGED_SUBJECT
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash=canonical + "f"
+                ),
+                STAGED_SUBJECT,
             ),
             [
                 "the shared case set's staged task text must carry exactly one subject_hash token, "
@@ -3569,7 +3643,9 @@ class CredentialGatedFixtureTest(unittest.TestCase):
         )
         self.assertEqual(
             staged_subject_hash_failures(
-                SUBJECT_HASH_CLAUSE.format(subject_hash="sha256:" + "0" * 64),
+                SUBJECT_HASH_CLAUSE.format(
+                    resource_id=STAGED_SUBJECT_RESOURCE_ID, subject_hash="sha256:" + "0" * 64
+                ),
                 STAGED_SUBJECT,
                 "sha256:" + "0" * 64,
             ),
@@ -3579,6 +3655,21 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 "of the request subject",
             ],
         )
+        unscoped = clause.replace(scope, "The canonical subject_hash of this task's subject is ")
+        for text in (
+            unscoped,
+            SUBJECT_HASH_CLAUSE.format(
+                resource_id="22222222-2222-4222-8222-222222222222", subject_hash=canonical
+            ),
+        ):
+            self.assertEqual(
+                staged_subject_hash_failures(text, STAGED_SUBJECT),
+                [
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own"
+                ],
+            )
 
     def test_case_set_coverage_is_derived_from_the_script_and_the_workflow(self) -> None:
         source = ACCEPTANCE_SCRIPT.read_text(encoding="utf-8")
@@ -3908,6 +3999,25 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
             ),
             (
+                "prepared-subject-tree-digest-literal",
+                source,
+                claims.replace(
+                    '"subject" => %{"commit" => commit, "tree_digest" => tree_digest}',
+                    '"subject" => %{"commit" => commit, "tree_digest" => "sha256:'
+                    + "0" * 63
+                    + '1"}',
+                    1,
+                ),
+                (
+                    "the Control fixture's prepared subject projection no longer copies the "
+                    "prepare subject",
+                    "the staged-subject canonical hash recomputation disagrees with its "
+                    "independent literal",
+                    "the shared case set's staged task text does not carry the canonical "
+                    "subject_hash of the request subject",
+                ),
+            ),
+            (
                 "swapped-provision-subject-tree-digest",
                 source.replace(
                     '      "$source_commit" "$source_tree_digest"\n)',
@@ -3975,6 +4085,40 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                 ),
                 claims,
                 ("the shared case set does not stage the exact authenticated Pi task text",),
+            ),
+            (
+                "unscoped-subject-hash-clause",
+                source.replace(
+                    '            + "\\n\\nFor the task whose subject resource_id is "\n'
+                    "            + pi_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    '            + "\\n\\nThe canonical subject_hash of this task\'s subject is "\n',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own",
+                ),
+            ),
+            (
+                "misdirected-subject-hash-scope",
+                source.replace(
+                    "            + pi_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    "            + pi_durability_repository_id\n"
+                    '            + ", the canonical subject_hash of its subject is "\n',
+                    1,
+                ),
+                claims,
+                (
+                    "the shared case set does not stage the exact authenticated Pi task text",
+                    "the shared case set's staged subject_hash clause is not scoped to the request "
+                    "subject's resource_id, so a provider-free Pi leg could read the provider hash "
+                    "as its own",
+                ),
             ),
             (
                 "blank-subject-commit-argument",

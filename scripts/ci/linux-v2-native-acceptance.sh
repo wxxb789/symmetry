@@ -1298,9 +1298,13 @@ else:
         encoding="utf-8",
     )
     if authenticated_pi_task_text:
+        # The clause names its subject resource: the shared run also reaches provider-free Pi legs
+        # whose subject resource differs, and those must not read this hash as their own.
         (private_home / ".pi/agent/APPEND_SYSTEM.md").write_text(
             authenticated_pi_task_text
-            + "\n\nThe canonical subject_hash of this task's subject is "
+            + "\n\nFor the task whose subject resource_id is "
+            + pi_repository_id
+            + ", the canonical subject_hash of its subject is "
             + canonical_subject_hash(source_commit, pi_repository_id, source_tree_digest)
             + ". Set it as the subject_hash field of your final TaskResult JSON object.\n",
             encoding="utf-8",
