@@ -2802,8 +2802,8 @@ STAGED_TASK_TEXT_PATH = "b-home/.pi/agent/APPEND_SYSTEM.md"
 STAGED_SETTINGS_PATH = "b-home/.pi/agent/settings.json"
 STAGED_PI_HOME_PATH = "b-home/.pi"
 ACCEPTANCE_WORKFLOW = ACCEPTANCE_SCRIPT.parents[2] / ".github/workflows/linux-native-v2-acceptance.yml"
-# The staged clause must name its own subject's resource: the shared run also reaches
-# provider-free Pi legs with a different subject resource, which must not read this value.
+# The staged clause names its own subject's resource because the shared run also reaches
+# provider-free Pi legs; commit/tree_digest are fixed per run, so the resource identifies it.
 SUBJECT_HASH_SCOPE_PREFIX = (
     "For the task whose subject resource_id is {resource_id}, the canonical subject_hash of "
     "its subject is "
@@ -3034,6 +3034,11 @@ def main():
         projection = json.loads(
             pathlib.Path(__file__).with_name("prepare-projection.json").read_text(encoding="utf-8")
         )
+        if sorted(projection) != ["commit", "tree_digest"]:
+            raise SystemExit(
+                "prepared subject projection is not one commit/tree_digest map: "
+                + json.dumps(projection)
+            )
         subject = {}
         for name, expression in projection.items():
             if expression in incoming:
@@ -3104,15 +3109,24 @@ CONTROL_GOAL_CASE_RESOURCE_ROLES = (
 CONTROL_PREPARE_SUBJECT_PROJECTION = (
     '      "subject" => %{"commit" => commit, "tree_digest" => tree_digest},'
 )
+# Elixir warns on a repeated "subject" key and keeps the LAST entry, so the key itself must be
+# counted: a second projection makes the producer take a value this pin never sees.
+PREPARE_SUBJECT_KEY = '"subject" =>'
 PREPARE_SUBJECT_PROJECTION = re.compile(r'"subject" => %\{(?P<body>[^}]*)\}')
 PREPARE_SUBJECT_PARAMETERS = ("commit", "tree_digest")
 PREPARE_PROJECTION_FILE = "prepare-projection.json"
 
 
 def prepared_subject_projection(claims: str) -> dict[str, str]:
-    match = PREPARE_SUBJECT_PROJECTION.search(claims)
-    if match is None:
-        raise ValueError("the fixture carries no prepared subject projection")
+    keys = claims.count(PREPARE_SUBJECT_KEY)
+    if keys != 1:
+        raise ValueError(f"the prepare output carries {keys} subject keys, not exactly one")
+    matches = list(PREPARE_SUBJECT_PROJECTION.finditer(claims))
+    if len(matches) != 1:
+        raise ValueError(
+            f"the prepare subject key is not one evaluable map projection: {len(matches)} matched"
+        )
+    match = matches[0]
     projection: dict[str, str] = {}
     for entry in match.group("body").split(","):
         key, separator, value = entry.partition("=>")
@@ -3310,7 +3324,7 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
         failures.append(
             "the Control fixture's prepared subject projection no longer copies the prepare subject"
         )
-    projection: dict[str, str] = {}
+    projection: dict[str, str] | None = None
     try:
         projection = prepared_subject_projection(claims)
     except ValueError as error:
@@ -3345,19 +3359,20 @@ def authenticated_pi_task_failures(source: str, claims: str, root: pathlib.Path)
             staged = staged_file.read_text(encoding="utf-8") if staged_file.exists() else None
             if expected is not None and staged != expected:
                 failures.append("the shared case set does not stage the exact authenticated Pi task text")
-            handoff_result, handoff_root = subject_handoff(source, root / "handoff", projection)
-            request_file = handoff_root / HANDOFF_REQUEST
-            handoff_staged_file = handoff_root / STAGED_TASK_TEXT_PATH
-            if handoff_result.returncode != 0 or not request_file.exists():
-                failures.append(HANDOFF_UNAVAILABLE)
-            else:
-                request_subject = json.loads(request_file.read_text(encoding="utf-8"))["subject"]
-                handoff_staged = (
-                    handoff_staged_file.read_text(encoding="utf-8")
-                    if handoff_staged_file.exists()
-                    else None
-                )
-                failures.extend(staged_subject_hash_failures(handoff_staged, request_subject))
+            if projection is not None:
+                handoff_result, handoff_root = subject_handoff(source, root / "handoff", projection)
+                request_file = handoff_root / HANDOFF_REQUEST
+                handoff_staged_file = handoff_root / STAGED_TASK_TEXT_PATH
+                if handoff_result.returncode != 0 or not request_file.exists():
+                    failures.append(HANDOFF_UNAVAILABLE)
+                else:
+                    request_subject = json.loads(request_file.read_text(encoding="utf-8"))["subject"]
+                    handoff_staged = (
+                        handoff_staged_file.read_text(encoding="utf-8")
+                        if handoff_staged_file.exists()
+                        else None
+                    )
+                    failures.extend(staged_subject_hash_failures(handoff_staged, request_subject))
             level = staged_thinking_level(fixture_root)
             if level != "off":
                 failures.append(f"the staged pi home no longer sets the thinking level off: {level!r}")
@@ -4015,6 +4030,23 @@ class CredentialGatedFixtureTest(unittest.TestCase):
                     "independent literal",
                     "the shared case set's staged task text does not carry the canonical "
                     "subject_hash of the request subject",
+                ),
+            ),
+            (
+                "duplicate-subject-projection",
+                source,
+                claims.replace(
+                    CONTROL_PREPARE_SUBJECT_PROJECTION,
+                    CONTROL_PREPARE_SUBJECT_PROJECTION
+                    + "\n"
+                    + '      "subject" => %{"commit" => commit, "tree_digest" => "sha256:'
+                    + "0" * 63
+                    + '1"},',
+                    1,
+                ),
+                (
+                    "the Control fixture's prepared subject projection could not be evaluated: "
+                    "the prepare output carries 2 subject keys, not exactly one",
                 ),
             ),
             (
