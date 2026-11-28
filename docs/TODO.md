@@ -2372,15 +2372,82 @@ The goal's stage 1 and stage 2 are delivered (plan
       for it (record §5, §7, §10). The authentic pi proof stays with
       `## rf-acc-pi-authentic-turn: the credentialed proof of the authentic turn` above.
 
-- [ ] Deferred code tidiness (2026-11-28, round-3 records round; record §4, §11): the no-target
-      proof selector `linuxV2StageReplayNoTargetAbort` deep-clones the reservation proof first and
-      then, when the nested clone proof is present and preferred, overwrites that pointer and
-      discards the first copy (`daemon/e2e/production_linux_v2_owner_cli_test.go:1495-1506`). No
-      result or precedence changes: the selected value is identical and the discarded copy
-      participates in no assertion. Deferred because a code change would void the round-3 binding
-      run for the delivered Go blob (`96306f49…`); the fix is to return the preferred clone proof
-      first, else the reservation proof, else nil, cloning only the selected proof. Owner: the next
-      slice that already touches this file.
+## rf-acc-shared-helper-bound-journal: the fresh-run guard on the retained tombstone (2026-11-28)
+
+The goal's stage 1 and stage 2 are delivered (plan
+`docs/plans/2026-11-28-rf-acc-shared-helper-bound-journal-plan.md`, record
+`docs/evidence/rf-acc-shared-helper-bound-journal-2026-11-28.md`). The closed part moved to
+`docs/archive/CLOSED-TODO.md`. The conductor's `shared` Bind has since run (2026-11-28) and the rows
+below replace this item's original expectation.
+
+- [ ] The conductor's `shared` Bind on the PR head (the contract's acceptance): report the case-set
+      exit, the `verified …` sequence and its first disagreement, the `helper_bound` leg's outcome
+      (expected: no `:224` guard stop, because the guard now retires the retained
+      `reservation_durable` tombstone *and* proves its exact leaf absent), the `reservation_durable`
+      row's continued green, the
+      credential-gated pi outcome verbatim in the log, its declaration member and the export status,
+      the reader Result, and the first unexpected failure if the arm stops later in the replay
+      matrix. The leg is CI-only, so no local run substitutes for it (record §2, §7, §10). The
+      authentic pi proof stays with `## rf-acc-pi-authentic-turn: the credentialed proof of the
+      authentic turn` above. **Ran 2026-11-28 on head `338850f0`**: run `46096737242`,
+      `Case set shared exited 1`; the `:224` guard stop is gone and the leg stops one assertion
+      later on the `helper_bound` row (`recovery_state = "unresolved", want "aborted_no_target"`), so
+      the acceptance this item describes is still unmet — the residual below carries it.
+
+- [ ] The `helper_bound` stage-replay row is unproven and stops the `shared` arm one assertion past
+      the fixed guard (2026-11-28; run `46096737242`, log line 4264; attribution probe run
+      `46098901351` on base `606985a8` with the single guard-unblocking mutant `26f4cab1`, and the
+      swallowed-error probe run `46099359406`; record §Bind). The stop is **pre-existing** — the
+      mutant reaches a byte-identical assertion (`cmp` rc 0 after timestamp strip; 24 identical
+      `verified …` rows) — and the event gate scores it
+      `bad=…TestProductionLinuxV2StageCrashReplayMatrix/helper_bound=run:1,pass:0,skip:0`, so it is a
+      named unproven row, never a pass. The `helper_bound` leg has never been green in any run.
+      Re-run `26f4cab1` (mutant blob `51e22466…`, sha256 `2925e061…`, plus the two ratified scratch
+      files with `case_sets=(shared)`) before trusting any green claim there. Owner: the conductor's
+      next `shared` Bind after the daemon gap below is addressed.
+
+- [ ] The witness drops the recovery error that leaves `helper_bound` unresolved
+      (`daemon/internal/app/linux_owner_witness_linux.go:542-557`; 2026-11-28, record §Bind).
+      Measured chain (log-only mutant run `46099359406`): `recover v2 owner <id>/1: wait/reap exact
+      no-Prepare RunKey-owned processes: Linux owner anchor returned an invalid run-wide reap page`,
+      raised at `daemon/internal/app/linux_owner_recovery_linux.go:638`
+      (`persistRecoveredV2NoPrepareHelperExit` `:589`, its `anchor.WaitReapRun` `:632`, reached via
+      `recoverLinuxV2NoPrepareAbort:420`), with the innermost refusal at
+      `daemon/internal/platform/linux_owner_anchor_linux.go:796-799`. Which of that refusal's six
+      conditions tripped is **not identified**, so the first step is to surface the error, not to
+      edit the anchor. That code is outside #311's delta, so it is a `DECISION_NEEDED`. Owner: the
+      next daemon slice that owns `linux_owner_recovery_linux.go` or the owner witness.
+
+- [ ] Deferred retirement arms (2026-11-28, record §4, §10): the guard still refuses the three daemon
+      arms no case-set leg leaves in the shared StateDir — the clone-reuse-retired arm
+      (`daemon/internal/state/linux_cgroup_journal.go:435-441`), the `LinuxCloneAbortProof`-only arm and
+      the legacy v1 `ContainmentAuthority` + StopReceipt row (`:457-462`). None of the three is
+      v1-era-only: the clone-only shape's current v2 producers are the App's post-preparation failure
+      path (`daemon/internal/app/linux_owner_v2_linux.go:785-803`) and the workspace's builder
+      (`daemon/internal/workspace/linux_clone_linux.go:1051-1069`), and what keeps the arm off the
+      shared StateDir is the arm's leg order, not the producer's era (the panel's round-2 correction,
+      record §4). Each stops a leg with the existing ownership message instead of passing silently.
+      If a future leg reaches one, mirror that arm with its own red-capable row, as this slice did for
+      the abort and pre-gate arms.
+
+- [ ] Helper-present retired-reservation fixture (2026-11-28, record §7, §10, R311-8): the shared arm's
+      own `helper_bound` tombstone retires a leaf with helper reaped/waited evidence, and no committed
+      positive fixture reproduces that variant — both removed-empty fixtures write a reservation with
+      no helper, the shape the Store itself writes in that case. The guard accepts the helper-present
+      variant through the conjuncts the committed row pins, but that is an argument, not evidence.
+      Owner: the next slice that needs this fixture; add the row to
+      `TestLinuxV2RetiredPriorJournalAllowsAFreshRun` and its mutant to the record's §5 table.
+
+- [ ] #311's carried-forward review residual, two P3 items (2026-11-28; independent review
+      `findings/311-opus-review-2.md`). (1) Record wording and one anchor still to correct in a
+      later records pass: the record gives `:2052` for the added positive row, actually
+      `daemon/e2e/production_linux_v2_owner_cli_test.go:1984`; it says M19 reddens the clone-backed
+      row "alone", contrary to its own five-row table; and it says §7's guard runs "twice per
+      `shared` run", while `daemon/e2e/production_linux_v2_native_witness_test.go:2093-2101` visits
+      every retained journal. (2) `linuxV2SnapshotStoreJournals` stitches a tolerant read and a
+      separate canonical listing; one strict listing/read would make the candidate boundary
+      unambiguous — no canonical-input failure was found, so this is a tidiness item. Owner: the next
+      slice that touches this record or that snapshot.
 
 ## rf-acc-pi-turn-deadline: residuals (2026-11-28)
 
