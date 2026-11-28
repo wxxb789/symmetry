@@ -2528,3 +2528,31 @@ Record: `docs/evidence/rf-acc-pi-turn-deadline-2026-11-28.md`.
       freeze; a future guard would require the exact unconditional rejecting body or run the actual
       validator for a negative control. Reference: `findings/310-opus-review-7.md`, attempt 2. Owner:
       the next slice that touches the arm parser.
+
+## rf-acc-pi-subject-hash-carrier: the frozen projection-key residual (2026-11-28)
+
+The C1 slice (`scripts/ci/linux-v2-native-acceptance.sh`, `scripts/ci/test-linux-v2-evidence.py`)
+stages the canonical `subject_hash` of the request subject and binds it to the request this pin
+re-evaluates from the production artifacts. The delivered construction demands exactly one
+`"subject"` key in the `prepare` output and evaluates that projection. The owner declared a rule-193
+freeze on that construction's class for PR #319, so the variant below is carried here instead of
+fixed in that PR; the unmodified head is unaffected by it.
+
+- [ ] Frozen projection-key residual — a legal-Elixir-whitespace duplicate `subject` projection
+      defeats the textual key count. Reproduction: at
+      `scripts/ci/provision-linux-v2-control-claims.exs:210` re-spell the existing entry's key as
+      `"subject"  => %{"commit" => commit, "tree_digest" => tree_digest},` (two spaces before `=>`)
+      and append a second entry `"subject" => %{"commit" => commit, "tree_digest" =>`
+      `"sha256:0000000000000000000000000000000000000000000000000000000000000001"},`. Elixir prints
+      `warning: key "subject" will be overridden in map` and keeps the LAST entry, while
+      `prepared_subject_projection()` (`scripts/ci/test-linux-v2-evidence.py:3120-3124`) counts the
+      literal spelling `"subject" =>` (`:3114`, `:3121`): the count stays one,
+      `authenticated_pi_task_failures(...)` returns `[]` and the gate is `OK`, yet a real `prepare`
+      schedules the second digest and the real writer puts it into
+      `request-pi_provider_action.json` — the request then carries a digest the staged text does not,
+      which is the false green the pin exists to refuse. Required fix direction: count the KEYS in
+      the actual `prepare` output map (or parse that map) instead of counting one textual spelling
+      of the key. Owner: the next slice that touches the projection evaluator in
+      `scripts/ci/test-linux-v2-evidence.py`. Reference:
+      `findings/rf-acc-pi-carrier-c1-opus-review-4.md` (state-dir relative), Sol round 4 —
+      SHIP-WITH-NITS with this item frozen-nonblocking.
