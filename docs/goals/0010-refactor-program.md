@@ -1,7 +1,8 @@
 # 0010 - Refactor program
 
-Status: **active** — started 2026-11-21 under the owner's mandate, recorded mid-program (wave W1
-complete; W2 mostly merged, the rest in review).
+Status: **active** — started 2026-11-21 under the owner's mandate, recorded mid-program; the
+2026-11-28 T1 refresh below shows every recorded slice merged apart from the D3-blocked W5-02 and
+W6-05, the held W4-23 and W6-06's undispatched 06b.
 **Owner-authorized amendable** under the three-tier policy below: T1 status refreshes are
 conductor-only and logged; T2 scope, slice, Done-when and decision changes take effect only after
 an independent review recorded in the [Amendment log](#amendment-log); and T3 closes only on an
@@ -77,7 +78,7 @@ that may only decrease (plan §10; the W6-10 Credo ratchet applies the second mo
   selected-project hook, settle-poll removal, error-reason coverage, test-only seam removal,
   jsdom/browser split, platform dead helpers, capture-fixture consolidation, source-subject
   single implementation, model-routing split.
-- **W6 — tail micro-waves (12 planned slices; W6-12 split at the W6 reconcile; W6-03 HOLD for its
+- **W6 — tail micro-waves (13 planned slices; W6-12 split at the W6 reconcile; W6-03 HOLD for its
   re-draft after W4-12c, W6-06 for an owner re-scope)**: CI structure finalization, browser-spec
   wiring, `isGoTestBinary` fork removal, opencode promote-or-drop (parked under D1), containment
   convergence phase 2 (blocked under D3), cmd extraction, frontend route splitting, dead protocol
@@ -156,9 +157,10 @@ this program.
 
 ## Status
 
-State re-derived on 2026-11-22 from `gh`, the contracts and the live branches at `origin/main`
-`c7ee8a4c`, gh snapshot `2026-11-21T16:10Z` (the round-6 T1 refresh logged below). "Pipeline" =
-dispatched work with no PR yet: the set is now empty (A4 is dispatched in its worktree). "Gated
+State re-derived on 2026-11-28 from `gh`, the contracts and the live branches at `origin/main`
+`ea54bc91`, gh snapshot `2026-11-28T05:43Z` (the T1 refresh logged below). "Pipeline" =
+dispatched work with no PR yet: the set is empty (no slice PR is open; the only open PRs are
+seven dependabot bumps, #312-#318). "Gated
 on X" lists the merge-first set at this
 snapshot; the contracts are the authority and every gate is re-derived at dispatch. The W4
 and W5 reconciles under independent two-model review are recorded (reconcile reports, parts a
@@ -197,7 +199,7 @@ re-verifies against the bound contract, and the tables below carry the bound sta
 | W1-13 | Control-web served-document gates for the four ungated reads | #145 | merged |
 | W1-14 | Control-core dead-surface deletion (F11) | #139 | merged |
 
-### Wave 2 — abstraction/dedup I (17 slices, W2-12 split) — in flight
+### Wave 2 — abstraction/dedup I (17 slices, W2-12 split) — complete
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
@@ -214,128 +216,130 @@ re-verifies against the bound contract, and the tables below carry the bound sta
 | W2-11 | Typed error identities (DP S-3) | #160 | merged |
 | W2-12 | Wire primitives + strict-decode parity (DR S3) | — | superseded by W2-12a/W2-12b (split at contract review) |
 | W2-12a | Wire validator family (split of W2-12) | #153 | merged |
-| W2-12b | Operator client relocated to its test-only callers (split of W2-12) | #178 | in review |
+| W2-12b | Operator client relocated to its test-only callers (split of W2-12) | #178 | merged (2026-11-21T17:59:58Z) |
 | W2-13 | Harness shared session scaffolding 5a (DR S5a) | #155 | merged |
 | W2-14 | `authority.go` split + clone/equal unification (DR S8) | #158 | merged |
 | W2-15 | Served-value helper module (FE S2) | #164 | merged |
 | W2-16 | Clone-aliasing reflection test (DP S-9) | #152 | merged |
-| W2-17 | Coverage plane (D14; moved from W1-01) | #186 | in review (next in the `ci.yml` lane; W2-01 merged) |
+| W2-17 | Coverage plane (D14; moved from W1-01) | #186 | merged (2026-11-21T16:54:40Z) |
 
 ### Wave 3 — abstraction/dedup II + medium-risk (16 slices)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W3-01 | Changed-path classifier extraction + corpus single source (SC S2) | — | gated on W2-17 (#186) (`ci.yml` serialization; W2-01 #188 merged) |
+| W3-01 | Changed-path classifier extraction + corpus single source (SC S2) | #212 | merged (2026-11-21T21:52:07Z) |
 | W3-02 | Response builder + per-operation request-shape table (DP S-4) | #196 | merged |
 | W3-03 | Elixir fixture extraction batch 2 — web + integrations (T1 cont.) | #192 | merged |
-| W3-04 | Probe/registry dedup, cycle-free (DR S6) | #187 | in review |
-| W3-05 | Notification reconnect seam + fake-agent exit path (DR S11) | #181 | in review |
+| W3-04 | Probe/registry dedup, cycle-free (DR S6) | #187 | merged (2026-11-21T16:27:04Z) |
+| W3-05 | Notification reconnect seam + fake-agent exit path (DR S11) | #181 | merged (2026-11-21T17:33:01Z) |
 | W3-06 | Witness-writer error propagation (DR S12) | #166 | merged |
-| W3-07 | Error-cause wrapping + capacity split (DA S4) | #200 | in review (W2-09 #165 merged) |
-| W3-08 | Unexport unused state surface + test-only options (DA S8) | — | gated on W3-07 (#200, in review); W2-09 #165 merged |
-| W3-09 | Errcheck triage part 1 — app recovery paths (DA S7a) | — | gated on W3-07 (#200); must land before W4-01 |
-| W3-10 | Result dispatch flattening (CCS5) | #202 | in review — gate W2-07 (#184) merged |
-| W3-11 | Narrow HTTP rescue (CCS9b) | #179 | in review |
+| W3-07 | Error-cause wrapping + capacity split (DA S4) | #200 | merged (2026-11-21T19:36:41Z); follow-up #215 (2026-11-21T22:18:06Z) |
+| W3-08 | Unexport unused state surface + test-only options (DA S8) | #214 | merged (2026-11-21T20:46:47Z) |
+| W3-09 | Errcheck triage part 1 — app recovery paths (DA S7a) | #216 | merged (2026-11-21T22:30:15Z) |
+| W3-10 | Result dispatch flattening (CCS5) | #202 | merged (2026-11-21T20:04:23Z) |
+| W3-11 | Narrow HTTP rescue (CCS9b) | #179 | merged (2026-11-21T17:18:37Z) |
 | W3-12 | UI primitives + resource-dialog collapse (FE S4+S9) | #190 | merged |
-| W3-13 | HTTP boundary unify (FE S5) | #204 | in review (W3-12 #190 merged) |
-| W3-14 | ExUnit async conversion (TC-E) | — | queued — W3-03 (#192) merged |
-| W3-15 | Giant-test split (TC-H) | — | gated on W3-08, W3-10 (#202), W3-14 (W2-09 #165 merged) |
+| W3-13 | HTTP boundary unify (FE S5) | #204 | merged (2026-11-21T21:24:55Z) |
+| W3-14 | ExUnit async conversion (TC-E) | #211 | merged (2026-11-21T18:42:59Z) |
+| W3-15 | Giant-test split (TC-H) | #217 | merged (2026-11-21T22:50:01Z) |
 | W3-16 | `scripts/ci` defect repairs + visible PyYAML oracle (SC S8) | #180 | merged |
 
 ### Wave 4 — structural refactors (16 planned; W4-15 split; arch-decision-2 additions bound)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W4-01 | `startGoalAdmission` phase split (DA S13) | — | held (arch-decision-2 BOUND); lane after W4-17b; gated on W3-09; W3-08 landed or rebased; W4-15b co-writes `goal_admission.go:802-829` |
-| W4-02 | Session objects for supervisor/anchor loops (DP S-5) | — | queued — W3-02 (#196) merged; before W5-01 |
+| W4-01 | `startGoalAdmission` phase split (DA S13) | #234 | merged (2026-11-22T05:43:38Z) |
+| W4-02 | Session objects for supervisor/anchor loops (DP S-5) | #210 | merged (2026-11-21T21:39:11Z) |
 | W4-03 | Execution `Start`/`closeContainmentAttempt` decomposition (DR S7) | #193 | merged |
-| W4-04 | Workspace walkers + subject guards (DR S10) | #191 | in review (no open-PR gate) |
-| W4-05 | Linux v2 finalize pipeline unification (DR S9, D6) | #206 | in review (W4-03 merged) |
-| W4-06 | `provider_access` intent-context unification (CCS8) | #189 | in review |
-| W4-07 | `goals.ex` facade split phase 1 (CCS7) | — | held (arch-decision-2 BOUND); gated on W2-07 (#184 merged) + W3-10 (#202 open); W3-14, W3-15 land before it (O18 writer order) |
-| W4-08 | ChatPage decomposition (FE S7) | — | gated on W4-11 (frontend serial order) |
-| W4-09 | Api reads/writes split (FE S6) | — | gated on W4-08 |
-| W4-10 | Refusal/outcome classification module (FE S3) | — | gated on W4-09 |
-| W4-11 | Frontend test-harness consolidation + MSW (FE S10, D13) | — | gated on W3-13 (#204, in review); W3-12 (#190) and the consolidated npm bump (#183) merged; head of the frontend serial order |
+| W4-04 | Workspace walkers + subject guards (DR S10) | #191 | merged (2026-11-21T18:16:04Z) |
+| W4-05 | Linux v2 finalize pipeline unification (DR S9, D6) | #206 | merged (2026-11-21T20:31:53Z) |
+| W4-06 | `provider_access` intent-context unification (CCS8) | #189 | merged (2026-11-21T17:47:37Z) |
+| W4-07 | `goals.ex` facade split phase 1 (CCS7) | #233 | merged (2026-11-22T05:16:23Z) |
+| W4-08 | ChatPage decomposition (FE S7) | #232 | merged (2026-11-22T03:08:25Z) |
+| W4-09 | Api reads/writes split (FE S6) | #239 | merged (2026-11-22T06:22:42Z) |
+| W4-10 | Refusal/outcome classification module (FE S3) | #241 | merged (2026-11-22T08:56:31Z) |
+| W4-11 | Frontend test-harness consolidation + MSW (FE S10, D13) | #220 | merged (2026-11-22T01:00:36Z) |
 | W4-12 | Go test-double extraction part 1 (TC-G) | — | superseded by W4-12a/W4-12b/W4-12c (arch-decision-2 BOUND split) |
-| W4-12a | App `journalStore` interface satisfied directly by `*state.Store` (split of W4-12) | — | held (arch-decision-2 BOUND); lane after W4-01; gated on W3-15 + W3-08 |
-| W4-12b | `apptest.FaultStore` replaces the 25 nil-in-prod `options` mirrors (split of W4-12) | — | held (arch-decision-2 BOUND); after W4-12a; gated on W3-15 + W3-08 |
-| W4-12c | One `Recorder` port for the durable callbacks of `execution.Invocation` + `harness.StartRequest` (split of W4-12) | — | held (arch-decision-2 BOUND); after W4-12b and W4-15b; one writer with W4-03/W4-05 on `execution/**` |
-| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | — | held (arch-decision-2 BOUND); gated on W4-22, W4-15b (after W4-15a), W3-04 (#187), W3-15, #178; re-derive contract at dispatch |
-| W4-14 | Browser fixture consolidation (TC-I) | #205 | in review (W2-01 merged) |
+| W4-12a | App `journalStore` interface satisfied directly by `*state.Store` (split of W4-12) | #244 | merged (2026-11-22T11:27:37Z) |
+| W4-12b | `apptest.FaultStore` replaces the 25 nil-in-prod `options` mirrors (split of W4-12) | #257 | merged (2026-11-23T02:13:11Z) |
+| W4-12c | One `Recorder` port for the durable callbacks of `execution.Invocation` + `harness.StartRequest` (split of W4-12) | #263 | merged (2026-11-23T07:21:43Z) |
+| W4-13 | Wall-clock burn-down part 1 — Go deadlines (TC-F) | #267 | merged (2026-11-23T12:39:21Z) |
+| W4-14 | Browser fixture consolidation (TC-I) | #205 | merged (2026-11-21T20:16:14Z) |
 | W4-15 | Harness staged driver 5b — split at the W4 reconcile | — | superseded by W4-15a/W4-15b |
-| W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | — | gated on W3-04 (#187) + W3-15 |
-| W4-15c | Claude adapter + promotion probe moved to `harness/claude`; close permanence; root shadow constructors dropped (Gemini cand. 04) | — | dispatchable after W4-15a (after #187/W3-04 + W3-15); W4-15b dispatches after it |
-| W4-15b | Harness staged driver 5b (DR S5b) | — | held (arch-decision-2 BOUND); gated on W4-15c (after W4-15a); co-writer W4-01 |
-| W4-16 | Python test harness: git fixture + citest (SC S5 + T8) | — | gated on W3-01 (W3-16 #180 merged) |
-| W4-17a | Command-queue module out of `daemon` (A1a) | #201 | in review — may land once its PR review re-verifies against the bound contract; lane 1 (R1); no wait for W3-15 (O19 recorded rebase) |
-| W4-17b | Run-lifecycle state machine with guarded transitions (A1b) | — | dispatchable after W4-17a merges + #185 merges (arch-decision-2 BOUND; O20, O27) |
-| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | #197 | in review — may land once its PR review re-verifies against the bound contract; W3-09 dispatches after it |
-| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | #198 | in review — may land once its PR review re-verifies against the bound contract (R7 stop rule) |
-| W4-21 | `state.go` domain-journal sub-ledgers over one `Store` core (deepening per R8; Gemini §3.2 B5) | — | dispatchable after #165 (W2-09) → W3-07 → W3-08; W4-12a (effectively held, O27); W3-15 before the `state_test.go` split; arch-decision-2 BOUND |
-| W4-22 | #185 response-loss consumer: record the recovery seal on the in-process stop (behaviour slice) | — | held (arch-decision-2 BOUND); after W4-12c; before W4-13; needs #185 + durable-transition and independent review |
+| W4-15a | Harness JSONL decoder leaf (`internal/harness/linejson`) | #222 | merged (2026-11-22T01:41:50Z) |
+| W4-15c | Claude adapter + promotion probe moved to `harness/claude`; close permanence; root shadow constructors dropped (Gemini cand. 04) | #236 | merged (2026-11-22T05:42:58Z) |
+| W4-15b | Harness staged driver 5b (DR S5b) | #243 | merged (2026-11-22T11:56:03Z) |
+| W4-16 | Python test harness: git fixture + citest (SC S5 + T8) | #224 | merged (2026-11-22T02:34:45Z) |
+| W4-17a | Command-queue module out of `daemon` (A1a) | #201 | merged (2026-11-21T17:06:43Z) |
+| W4-17b | Run-lifecycle state machine with guarded transitions (A1b) | #213 | merged (2026-11-21T22:06:09Z) |
+| W4-19 | Linux host verifiers extracted to `internal/linuxpreflight` | #197 | merged (2026-11-21T19:11:57Z) |
+| W4-20 | linux-gate protocol split: wire codec + /proc identity vs gate lifecycle | #198 | merged (2026-11-21T18:57:25Z) |
+| W4-21 | `state.go` domain-journal sub-ledgers over one `Store` core (deepening per R8; Gemini §3.2 B5) | #255 | merged (2026-11-23T00:15:33Z) |
+| W4-22 | #185 response-loss consumer: record the recovery seal on the in-process stop (behaviour slice) | #266 | merged (2026-11-23T10:50:17Z) |
 | W4-23 | Fenced Linux v2 journal view over `LinuxV2JournalCallbacks` (diagnose-first; O1/O3) | — | HOLD — stub; drafted after W4-12c merges and re-measures (O1/O3); arch-decision-2 BOUND; conductor approval |
 
-### Wave 5 — high-risk programs (13 planned; W5-07 and W5-13 dropped; W5-18 held)
+### Wave 5 — high-risk programs (13 planned; W5-07 and W5-13 dropped)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W5-01 | Witness scaffolding converge-in-place: one gate, no build tag (DP S-7, D4) | — | queued — see contract (#160, #137 and dependabot #167/#169/#170/#172 merged; W5-09 lands before this slice; W3-02 (#196) merged, W4-02 next; W4-13 and #178 pending; dependabot #168/#171; W3-01 before any `ci.yml` edit) |
+| W5-01 | Witness scaffolding converge-in-place: one gate, no build tag (DP S-7, D4) | #219 | merged (2026-11-22T00:03:06Z) |
 | W5-02 | Containment convergence phase 1: v2 mandatory on Linux (DP S-11a, D3) | — | blocked (D3) |
-| W5-03 | ChatPage/scope-hook follow-ups (FE S7b + S8) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 (#164 merged); after A5 (R12) |
-| W5-04 | Goal-settle poll removal + wait budgets (FE S11 + TC-J) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 (#164 merged); after A5 (R12) |
-| W5-05 | Error-reason coverage + fallback counter (CW-9) | — | gated on W3-14 (W3-03 #192 and #163 merged) |
-| W5-06 | Test-only seam removal (CW-12 remainder) | #199 | in review — rebase at dispatch (W3-03/W3-14 touch the oracle test only) |
+| W5-03 | ChatPage/scope-hook follow-ups (FE S7b + S8) | #249 | merged (2026-11-22T15:09:37Z) |
+| W5-04 | Goal-settle poll removal + wait budgets (FE S11 + TC-J) | #251 | merged (2026-11-22T16:47:40Z) |
+| W5-05 | Error-reason coverage + fallback counter (CW-9) | #225 | merged (2026-11-22T03:20:32Z) |
+| W5-06 | Test-only seam removal (CW-12 remainder) | #199 | merged (2026-11-21T19:24:21Z) |
 | W5-07 | Descendant-monitor state machine (DP S-10) | — | dropped (W5 reconcile, decision D) |
-| W5-08 | jsdom/browser layer split (TC-K, D15) | — | gated on W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W4-14 → W5-03 + W5-04 (#164 merged) |
-| W5-09 | Platform dead test-only helpers (DP S-8) | #203 | in review — lands before W5-01 |
-| W5-10 | Harness capture fixture consolidation (TC-M, D10) | — | gated on W3-04 (#187) → W3-15 → W4-15a → W4-15b → W4-13 (W2-13 merged); runbook check at dispatch |
-| W5-11 | Source-subject single implementation (SC S9) | — | gated on W4-16 (W3-16 #180 merged) |
-| W5-12 | model-routing module split (SC S10) | — | gated on W4-16 (W3-16 #180 merged); W5-11 no longer a dependency (decision E) |
+| W5-08 | jsdom/browser layer split (TC-K, D15) | #254 | merged (2026-11-23T00:29:32Z) |
+| W5-09 | Platform dead test-only helpers (DP S-8) | #203 | merged (2026-11-21T19:50:33Z) |
+| W5-10 | Harness capture fixture consolidation (TC-M, D10) | #271 | merged (2026-11-23T15:15:30Z) |
+| W5-11 | Source-subject single implementation (SC S9) | #238 | merged (2026-11-22T05:29:43Z) |
+| W5-12 | model-routing module split (SC S10) | #242 | merged (2026-11-22T11:42:16Z) |
 | W5-13 | ST1005 genuine-case mechanical slice (D8) | — | dropped (W5 reconcile, decision G) |
-| W5-14 | `goals.ex` concept split phase 2: Settlement/Recovery/Admission/Commands modules (CCS7 cont.) | — | dispatchable after W4-07 (HOLD); `goals_test.exs` order W3-10 → W3-14 → W3-15 → W4-07 → W5-14 (O18) |
-| W5-16 | `codex/adapter.go` split: cancel-tracker state machine + RPC session + translator (Gemini §3.2 C13) | — | dispatchable after W4-15b and W4-12c; re-measure after W4-15b (O8); one writer with W4-13 on `codex/*_test.go` |
-| W5-18 | `orchestration.ex` concept split (renamed from W4-18 at arch-decision-2) | — | held — requires a reviewed `docs/design/core.md:18-19` amendment first |
-| A4 | Core work-item start/cancel/retry eligibility served by `PortalJSON` (Opus cand. 4) | — | pipeline (no PR) — #184 (W2-07) and #190 merged, or the oracle baselines re-measured; before W6-09 and W5-15 |
-| A5 | Read-cache keys + change→reads invalidation in one frontend module (Opus cand. 6) | — | queued — dispatch after W4-10 merges; between W4-11 and W5-03/W5-04 |
-| A6 | Raw-byte strictness fixtures in the shared manifest + one Go decode entry (Opus cand. 9) | — | HOLD — owner sign-off on the Go decode tightening; #178 (W2-12b); W1-09 stable |
+| W5-14 | `goals.ex` concept split phase 2: Settlement/Recovery/Admission/Commands modules (CCS7 cont.) | #248 | merged (2026-11-22T16:34:52Z) |
+| W5-16 | `codex/adapter.go` split: cancel-tracker state machine + RPC session + translator (Gemini §3.2 C13) | #265 | merged (2026-11-23T10:14:21Z) |
+| W5-18 | `orchestration.ex` concept split (renamed from W4-18 at arch-decision-2) | #258 | merged (2026-11-23T00:56:49Z) — after the `docs/design/core.md` amendment (#246, 2026-11-22T13:31:59Z) |
+| A4 | Core work-item start/cancel/retry eligibility served by `PortalJSON` (Opus cand. 4) | #209 | merged (2026-11-21T21:11:57Z) |
+| A5 | Read-cache keys + change→reads invalidation in one frontend module (Opus cand. 6) | #245 | merged (2026-11-22T10:17:47Z) |
+| A6 | Raw-byte strictness fixtures in the shared manifest + one Go decode entry (Opus cand. 9) | #250 | merged (2026-11-22T17:01:17Z) — owner ruling L2=b (PR body) |
 
-### Tail W6 — micro-waves (12 planned; W6-12 split, W6-03/W6-06 HOLD)
+### Tail W6 — micro-waves (13 planned; W6-12 split; W6-03 merged, W6-06 06a merged)
 
 | Slice | Purpose | PR | State |
 | --- | --- | --- | --- |
-| W6-01 | CI structure finalization: inline program extraction + contracts composite action | — | queued — gates: W2-01 (#188), #137 and #180 merged; W2-17 (#186) in review; W3-01 after it; dependabot #168/#171 merge-first; `ci.yml` lane W6-01 → W6-02 → W6-10 → W6-12b |
-| W6-02 | Browser spec wiring per D7 | — | gated on W2-01 → W4-14 → {W5-03, W5-04} → W5-08 → W6-01; render gate green on `main` |
-| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | — | HOLD (arch-decision-2 BOUND: capability supplied by W4-12c's Recorder handoff-capability query — O5/V7; contract re-drafted after W4-12c merges, W4-12b precedes it); then #160 → W3-02 → W4-02; W5-09 → W5-01 (both) → W6-03 |
-| W6-04 | opencode promote-or-drop | — | unfrozen (Q6=F2); Phase-1 promotion amendment: Windows surface + Linux containment gate |
+| W6-01 | CI structure finalization: inline program extraction + contracts composite action | #237 | merged (2026-11-22T04:53:22Z) |
+| W6-02 | Browser spec wiring per D7 | #260 | merged (2026-11-23T05:52:55Z) |
+| W6-03 | `isGoTestBinary` fork removal (DP P-05, D4) | #269 | merged (2026-11-23T14:30:39Z) |
+| W6-04 | opencode promote-or-drop | #298 | Phase 1 merged (2026-11-26T07:14:05Z) — Windows surface promoted behind the pinned PE; Linux admission remains fail-closed pending a green dispatched `opencode_native_health` row |
 | W6-05 | Containment convergence phase 2: delete the legacy generation (DP S-11b, D3) | — | blocked (D3) |
-| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | — | HOLD — owner re-scope (Q7/A0) + 06a/06b split; W6-05-dependency removal proposed by arch-decision-2, owner confirmation pending (owner question 2); W4-20 file layout bound (re-derive citations); launcher root-cause diagnosis first (R14) |
-| W6-07 | Frontend route code splitting (FE S13) | — | gated on #164 (merged) → W3-12 → W4-11 → W4-08 → W4-09 → W4-10 → W5-03 + W5-04 → W4-14 → W5-08; stale-chunk policy set by the W6 reconcile |
-| W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | — | gated on #178 (#165 merged); W3-07/W3-08/W3-15/W4-01/W4-04/W4-12/W4-13 land first or rebase (recorded per writer); no design amendment (`proto: none`) |
-| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | — | gated on #163 and W3-03 (#192, both merged) → W5-05, W3-14, the frontend chain through W5-08 and W6-02; A4 (core work-item eligibility; arch-decision-2 BOUND — #184 (W2-07) and #190 merged, or the oracle baselines re-measured; both merged, A4 in pipeline) first; mandate slice — carries the same-PR `protocol.md`/`frontend.md` amendment |
-| W6-10 | Elixir lint/coverage flips | — | gated on W6-11, W6-01/W6-02, W2-17 and the control writers W3-14/W5-05/W5-06/W6-09 (W2-01 and W3-03 merged); credo gate ratchets against a committed baseline (W6 reconcile) |
-| W6-11 | Styler adoption + duplication burn-down (D12, D16) | — | gated on W2-17 and every W2-W5 control-source writer (see contract) + W6-09; lands before W6-10/W6-12 |
-| W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | — | split recorded at the W6 reconcile (W6-12a + W6-12b); the 12a/12b contracts are written before dispatch |
-| W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | — | split recorded at the W6 reconcile; contract pending — gated on W4-13, W5-04, W6-03, W6-09, W6-11 + writers W4-04/W3-05 (#181)/W4-06 (W4-03 merged); before W6-12b |
-| W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | — | split recorded at the W6 reconcile; contract pending — gated on W6-10, W6-12a, W6-11; the flips target what W2-01 lands (formatter table + duration-p95 script; variance measured first) |
+| W6-06 | cmd extraction: launcher handshake + clone-bootstrap (DR S13) | #252 (06a) | 06a merged (2026-11-22T15:53:05Z); 06b not dispatched (no PR) |
+| W6-07 | Frontend route code splitting (FE S13) | #261 | merged (2026-11-23T04:07:25Z) |
+| W6-08 | Dead protocol API deletion: goal-envelope family (DR F-07, D5) | #231 | merged (2026-11-22T03:32:44Z) |
+| W6-09 | Remove always-null `GoalAttentionFeed.unavailable` (CW S12, D2) | #264 | merged (2026-11-23T09:08:03Z) |
+| W6-10 | Elixir lint/coverage flips | #274 | merged (2026-11-24T01:26:56Z) |
+| W6-11 | Styler adoption + duplication burn-down (D12, D16) | #268 | merged (2026-11-23T13:44:14Z) |
+| W6-12 | Wall-clock burn-down part 2 + duration/coverage ratchets (TC-F/TC-B cont.) | #275 | split recorded at the W6 reconcile; both halves delivered in #275 (2026-11-24T04:52:28Z) |
+| W6-12a | Wall-clock burn-down part 2 — test files only, no `ci.yml` | #275 | merged (2026-11-24T04:52:28Z) |
+| W6-12b | Ratchet flips + jscpd step (last `ci.yml` writer) | #275 | merged (2026-11-24T04:52:28Z) |
+| W6-13 | Lockfile-registry gate: zero tarball keys + proven canonical install registry → named "unproven by URL" (exit 0, not verified); zero + non-canonical or unknown registry → exit 2; recorded off-policy entry → exit 1 under unchanged policy; replace three live-lockfile test inputs with fixtures | — | not dispatched (contract not yet bound) |
 
 ### Blocked, parked and dropped items
 
 - **W5-02 — blocked (D3).** Unblock: (1) an owner-approved design amendment updating
   `docs/design/harness.md` for the OmO/OMP/generic/workspace Linux-owner policy and the host
   prerequisites, and (2) a dispatched `linux-native-v2-acceptance` run green for each kind's exact
-  binary on a qualifying host. One dispatch exists (2026-11-19): the protected acceptance job
-  never completed — cancelled while awaiting approval — so there are zero green runs. Do not
-  dispatch before both conditions exist.
+  binary on a qualifying host. Six dispatches exist (2026-11-19 to 2026-11-27): one cancelled
+  while awaiting approval and five failed, so there are zero green runs. Do not dispatch before
+  both conditions exist.
 - **W6-05 — blocked (D3).** Unblock: W5-02's amendment and green per-kind acceptance, plus the
   phase-1 soak; the plan's W5-07 dependency is moot — W5-07 was dropped and its monitor code
   stays the deferred live path until a future convergence. W6-06 (cmd extraction) stays HOLD;
   the arch-decision-2 removal of its W6-05 dependency (no code dependency) is proposed and
   awaits owner confirmation (owner question 2).
 - **W6-04 — unfrozen (Q6=F2).** Phase 0 landed the 2.4.1 re-anchor
-  (`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`); Phase 1 is the promotion amendment (D1
-  row). Linux admission stays fail-closed until the dispatched `opencode_native_health` row is
-  green; the frozen `shared` OpenCode legs' F2-exclusion is re-anchored with the D3 amendment.
+  (`docs/evidence/rf-acc-opencode-reeval-2026-11-25.md`); Phase 1 merged as #298
+  (2026-11-26T07:14:05Z), promoting the Windows surface behind the pinned PE. Linux admission
+  stays fail-closed until the dispatched `opencode_native_health` row is green; the frozen
+  `shared` OpenCode legs' F2-exclusion is re-anchored with the D3 amendment.
 - **W5-07 — dropped (W5 reconcile, decision D).** The single terminal-predicate acceptance already
   holds at base (`endsMonitor()`), and the re-scope could not compile inside the owned set; no
   branch, no reservation; the existing monitor code stays the deferred live path.
@@ -643,6 +647,70 @@ stays verbatim apart from its provenance header and one placeholder normalizatio
   Delivered as branch `refactor/comment-policy-sweep` (sweep commits `16a7e7d3`/`0399d5f1` +
   `origin/main` merges + the apply-stage and review-fix record changes): committed on the branch,
   not yet merged, so no status row above moves on this entry's account.
+- **2026-11-28 — T1 status refresh.** Conductor-side T1 corrections to the `## Status` tables and
+  the facts in that section; no scope, slice, Done-when or decision text changed. Status rows were
+  re-derived from `gh` and the live branches at `origin/main` `ea54bc91` (previous snapshot
+  `c7ee8a4c`), gh snapshot `2026-11-28T05:43Z`: 67 slice rows changed state; the only open PRs are
+  seven dependabot bumps (#312-#318). Two facts could not be derived from `gh`: (1) the status of
+  W6-06's owner re-scope (Q7/A0) — no PR or run evidence exists; (2) whether the four merged PRs
+  whose ids have no row in this file (#273 `rf-a3-adapter-policy-kind-vocabulary`, #253
+  `rf-k4-schema-stripped-map`, #262 `rf-w3-17-migration-tests-async`, #256 `rf-w5-02a`) are
+  recorded goal-0010 slices — they carry no table row and no amendment-log entry here.
+
+- **2026-11-28 — T2: fund W6-13, the lockfile-registry gate repair.** At `ea54bc91`
+  (unchanged at `1ced43d0`) the gate checks 405 recorded tarball URLs and exits 0; #315 at
+  `924fc804` omits those clauses, changes only the jscpd subtree in the remaining lockfile, and
+  exits 2 under the existing gate. pnpm can omit reconstructible URLs; this does not prove which
+  registry generated #315. For a usable lockfile with zero `tarball` keys, read the committed
+  `.npmrc` that the guarded pnpm install consumes at its workspace root. Permit exit 0 only when
+  the declaration is present and the install context establishes canonical resolution for the
+  default and every applicable scoped or named route. If the declaration is missing, malformed,
+  not consumed, overridden, or insufficient to establish any applicable route, exit 2. A host
+  probe, command-line assertion supplied only to the gate, or pnpm default is not evidence. The
+  named `unproven by URL` line identifies the lockfile, the canonical registry and the declaration
+  in the guarded context; it is not a verified URL pass.
+
+  The narrow owned-file exception is the new, credential-free root `.npmrc`, the existing
+  provenance invocation blocks where necessary, and `docker/control.Dockerfile` to copy those same
+  declaration bytes into `/workspace` before `RUN pnpm install --frozen-lockfile` and bind the
+  check to that image install. Verify consumption by pinned pnpm in the actual contexts, including
+  both callers of the contracts action and Control at the workspace root. Removing the Dockerfile
+  copy, or routing a used scope to a noncanonical registry while leaving the default canonical,
+  must prevent the named exit-0 outcome. No other registry configuration, dependency pins,
+  lockfiles, install commands or flags, action steps, CI suites, or exit-1 host-policy thresholds
+  change. Preserve the existing positive recorded-URL verdict and unusable-lockfile refusal. Do
+  not add a gate to the two presently ungated host installs.
+
+  A recorded invalid or off-policy entry still exits 1 with unchanged thresholds and diagnostics.
+  **Testimony limit:** When the lockfile records no tarball URLs, the gate cannot bind any individual
+  package to a tarball URL. It reports the effective install registry only; it does not establish
+  which registry generated the lockfile, verify integrity, or attest to what bytes were fetched.
+  **Fixture detail:** Replace each of the three live-lockfile test inputs with a deterministic
+  fixture preserving its original guarantee, including default-path coverage, with its own red
+  mutant. Keep the PyYAML differential fixture nonempty and add a separate named zero-URL arm.
+  An empty or collection-valued `tarball` is a recorded entry, not the zero-key case. The positive
+  recorded-URL behavior and its output stay byte-identical.
+  **Scope and order:** No Mix/Hex work. This slice addresses the observed stop on #314–#318 without
+  lockfile regeneration; green jobs require new evidence. W6-13 follows W6-12b in the serialized
+  Tail W6 `ci.yml` writer lane, from current main, with no overlapping writer. Tail W6 goes from
+  12 to 13 planned slices. W6-14 is not bound by this entry. No dispatch before W6-13's own
+  contract is independently reviewed and bound.
+
+  **Authority:** the owner's standing authorization (2026-11-21). **Independent review:**
+  `findings/0010-t2-amendment-review-5.md` (APPROVE for recording W6-13), reviewing
+  `findings/0010-unregistered-slices.md` at SHA-256
+  `47a1f7806cb2d17382c2af1d35cb74224737910f8e41b557b6cb6e515b53cfa8`
+  against `origin/main` `1ced43d0e4a617327a03418124ea0177a9cdc83c`. Under T2, this amendment
+  takes effect only upon recording this independent review by reference in this entry.
+  It records the scope decision, not a bound implementation contract or a verified CI result.
+
+- **2026-11-28 — Factual attribution only; no slice registration.** Attribute #262 (W3-17),
+  #256 (W5-02a), #273 (A3) and #253 (K4) to goal 0010 without registering them as compliant.
+  The four PRs merged, but their dispatch-contract digests are absent from their PR bodies and
+  historical binding was not established. Defer the table, count and decision edits until the
+  owner rules. Any prospective rebind must be independently verified and dated as new evidence,
+  with the original omission retained. This entry does not establish D3 acceptance or alter
+  any owner decision.
 
 ## Known follow-ups
 
